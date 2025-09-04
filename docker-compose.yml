@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai_curation_db
+    environment:
+      POSTGRES_DB: ai_curation_db
+      POSTGRES_USER: curation_user
+      POSTGRES_PASSWORD: curation_pass
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - ai_curation_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curation_user -d ai_curation_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: ai_curation_backend
+    environment:
+      DATABASE_URL: postgresql://curation_user:curation_pass@postgres:5432/ai_curation_db
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./backend/app:/app/app
+      - ./uploads:/app/uploads
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ai_curation_network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: ai_curation_frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - ai_curation_network
+
+networks:
+  ai_curation_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    external: true
+  uploads:
+    external: true
