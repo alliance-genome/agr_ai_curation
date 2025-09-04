@@ -89,14 +89,29 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
     // Inject highlight styles
     const styleSheet = iframeDoc.createElement('style');
     styleSheet.id = 'highlight-styles';
-    styleSheet.textContent = HIGHLIGHT_COLORS.map((color, index) => `
+    styleSheet.textContent = `
+      /* Reset mark elements to not affect text positioning */
+      mark {
+        display: inline !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        line-height: inherit !important;
+        font: inherit !important;
+        letter-spacing: inherit !important;
+        position: static !important;
+        border: none !important;
+        outline: none !important;
+        text-decoration: none !important;
+      }
+      
+      /* Apply background colors to mark elements */
+      ${HIGHLIGHT_COLORS.map((color, index) => `
       .pdf-highlight-${index} {
         background-color: ${color} !important;
-        color: #000 !important;
-        padding: 1px 2px;
-        border-radius: 2px;
+        color: inherit !important;
       }
-    `).join('\n');
+      `).join('\n')}
+    `;
     iframeDoc.head.appendChild(styleSheet);
     
     debug.pdfHighlight('Styles injected into iframe');
