@@ -10,7 +10,8 @@ import {
 import EntitiesTab from './tabs/EntitiesTab';
 import AnnotationsTab from './tabs/AnnotationsTab';
 import MetadataTab from './tabs/MetadataTab';
-import ConfigTab from './tabs/ConfigTab';
+import TestTab from './tabs/TestTab';
+import { PdfTextData } from '../types/pdf';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -38,13 +39,31 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
-function CurationPanel() {
+interface CurationPanelProps {
+  onHighlight?: (searchTerm: string) => void;
+  onClearHighlights?: () => void;
+  pdfTextData?: PdfTextData | null;
+}
+
+function CurationPanel({ onHighlight, onClearHighlights, pdfTextData }: CurationPanelProps) {
   const [value, setValue] = useState(0);
   const [entityCount, setEntityCount] = useState(0);
-  const [annotationCount] = useState(3); // Demo data
+  const [annotationCount, setAnnotationCount] = useState(3); // Demo data
+  
+  // Check localStorage for annotations viewed state
+  const [annotationsViewed, setAnnotationsViewed] = useState(() => {
+    return localStorage.getItem('annotationsViewed') === 'true';
+  });
 
   const handleChange = (_event: React.SyntheticEvent, newValue: number) => {
     setValue(newValue);
+    
+    // Clear annotation count when the Annotations tab is clicked
+    if (newValue === 1 && !annotationsViewed) {
+      setAnnotationsViewed(true);
+      // Save to localStorage so it persists across refreshes
+      localStorage.setItem('annotationsViewed', 'true');
+    }
   };
 
   return (
@@ -66,13 +85,13 @@ function CurationPanel() {
           />
           <Tab 
             label={
-              <Badge badgeContent={annotationCount} color="primary">
+              <Badge badgeContent={annotationsViewed ? 0 : annotationCount} color="primary">
                 <Typography>Annotations</Typography>
               </Badge>
             }
           />
           <Tab label="Metadata" />
-          <Tab label="Config" />
+          <Tab label="TEST" />
         </Tabs>
       </Box>
 
@@ -87,7 +106,7 @@ function CurationPanel() {
           <MetadataTab />
         </TabPanel>
         <TabPanel value={value} index={3}>
-          <ConfigTab />
+          <TestTab onHighlight={onHighlight} onClearHighlights={onClearHighlights} />
         </TabPanel>
       </Box>
     </Paper>

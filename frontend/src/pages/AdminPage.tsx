@@ -11,9 +11,16 @@ import {
   Alert,
   Snackbar,
   IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Switch,
+  FormControlLabel,
 } from '@mui/material';
 import { ArrowBack, Save } from '@mui/icons-material';
 import axios from 'axios';
+import { debug } from '../utils/debug';
 
 interface Settings {
   openai_api_key: string;
@@ -30,7 +37,7 @@ function AdminPage() {
   const [settings, setSettings] = useState<Settings>({
     openai_api_key: '',
     anthropic_api_key: '',
-    default_model: 'gpt-4',
+    default_model: 'gpt-4o',
     max_tokens: 2048,
     temperature: 0.7,
     database_url: '',
@@ -61,6 +68,12 @@ function AdminPage() {
       [field]: value,
     });
     setDirty(true);
+    
+    // Update debug mode immediately if that's what changed
+    if (field === 'debug_mode') {
+      debug.setEnabled(value as boolean);
+      debug.settings(`Debug mode ${value ? 'enabled' : 'disabled'}`);
+    }
   };
 
   const handleSave = async () => {
@@ -131,13 +144,29 @@ function AdminPage() {
           </Typography>
           
           <Box sx={{ display: 'grid', gap: 2, mb: 3, gridTemplateColumns: '1fr 1fr' }}>
-            <TextField
-              fullWidth
-              label="Default Model"
-              value={settings.default_model}
-              onChange={handleChange('default_model')}
-              helperText="Default AI model to use"
-            />
+            <FormControl fullWidth>
+              <InputLabel>Default Model</InputLabel>
+              <Select
+                value={settings.default_model}
+                label="Default Model"
+                onChange={(e) => {
+                  setSettings({
+                    ...settings,
+                    default_model: e.target.value,
+                  });
+                  setDirty(true);
+                }}
+              >
+                <MenuItem value="gpt-4o">GPT-4o</MenuItem>
+                <MenuItem value="gpt-4o-mini">GPT-4o Mini</MenuItem>
+                <MenuItem value="gpt-4-turbo">GPT-4 Turbo</MenuItem>
+                <MenuItem value="gpt-4">GPT-4</MenuItem>
+                <MenuItem value="gpt-3.5-turbo">GPT-3.5 Turbo</MenuItem>
+                <MenuItem value="claude-3-opus">Claude 3 Opus</MenuItem>
+                <MenuItem value="claude-3-sonnet">Claude 3 Sonnet</MenuItem>
+                <MenuItem value="claude-3-haiku">Claude 3 Haiku</MenuItem>
+              </Select>
+            </FormControl>
             
             <TextField
               fullWidth
@@ -173,6 +202,66 @@ function AdminPage() {
             helperText="PostgreSQL connection string"
             sx={{ mb: 3 }}
           />
+
+          <Divider sx={{ my: 3 }} />
+
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            Developer Options
+          </Typography>
+          
+          <Box sx={{ mb: 3 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.debug_mode}
+                  onChange={(e) => {
+                    const newValue = e.target.checked;
+                    setSettings({ ...settings, debug_mode: newValue });
+                    setDirty(true);
+                    debug.setEnabled(newValue);
+                    debug.settings(`Debug mode ${newValue ? 'enabled' : 'disabled'}`);
+                  }}
+                  color="primary"
+                />
+              }
+              label="Debug Mode"
+            />
+            <Typography variant="body2" color="text.secondary" sx={{ ml: 7 }}>
+              {settings.debug_mode ? 
+                'Console debugging is active. Check browser console for detailed logs.' : 
+                'Enable to see detailed debugging information in browser console.'}
+            </Typography>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+          
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Reset Options
+          </Typography>
+          
+          <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                localStorage.removeItem('annotationsViewed');
+                setSnackbar({ open: true, message: 'Annotations badge reset. Refresh the page to see it.', severity: 'success' });
+              }}
+            >
+              Reset Annotations Badge
+            </Button>
+            
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                localStorage.clear();
+                setSnackbar({ open: true, message: 'All local storage cleared. Refresh the page to see changes.', severity: 'success' });
+              }}
+            >
+              Clear All Local Storage
+            </Button>
+          </Box>
 
           <Button
             variant="contained"

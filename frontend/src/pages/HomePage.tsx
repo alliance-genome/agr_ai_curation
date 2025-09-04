@@ -3,17 +3,69 @@ import { Home as HomeIcon, AdminPanelSettings as AdminIcon, Brightness4, Brightn
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
-import PdfViewer from '../components/PdfViewer';
+import { useEffect, useRef, useState } from 'react';
+import PdfViewerMultiColorFixed from '../components/PdfViewerMultiColorFixed';
 import ChatInterface from '../components/ChatInterface';
 import CurationPanel from '../components/CurationPanel';
+import { PdfTextData } from '../types/pdf';
 
 interface HomePageProps {
   toggleColorMode: () => void;
 }
 
+const PANEL_SIZES_KEY = 'alliance-panel-sizes';
+
 function HomePage({ toggleColorMode }: HomePageProps) {
   const navigate = useNavigate();
   const theme = useTheme();
+  const panelGroupRef = useRef<any>(null);
+  const [highlightTerms, setHighlightTerms] = useState<string[]>([]);
+  const [pdfTextData, setPdfTextData] = useState<PdfTextData | null>(null);
+  const [currentPdfUrl, setCurrentPdfUrl] = useState<string>('/api/uploads/sample_fly_publication.pdf');
+
+  // Load saved panel sizes from localStorage
+  const getSavedPanelSizes = () => {
+    const saved = localStorage.getItem(PANEL_SIZES_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Save panel sizes to localStorage when they change
+  const handlePanelResize = (sizes: number[]) => {
+    localStorage.setItem(PANEL_SIZES_KEY, JSON.stringify(sizes));
+  };
+
+  // Handle highlight requests from the TEST tab
+  const handleHighlight = (searchTerm: string) => {
+    setHighlightTerms(prev => [...prev, searchTerm]);
+  };
+
+  const handleClearHighlights = () => {
+    setHighlightTerms([]);
+  };
+
+  // Handle PDF text extraction
+  const handlePdfTextExtracted = (textData: PdfTextData) => {
+    setPdfTextData(textData);
+    console.log('PDF text extracted:', {
+      totalPages: textData.totalPages,
+      fullTextLength: textData.fullText.length,
+      firstPageSample: textData.fullText.substring(0, 200)
+    });
+  };
+
+  // Handle PDF URL change
+  const handlePdfUrlChange = (url: string) => {
+    setCurrentPdfUrl(url);
+    // Clear highlights when PDF changes
+    setHighlightTerms([]);
+  };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -53,9 +105,23 @@ function HomePage({ toggleColorMode }: HomePageProps) {
       </AppBar>
 
       <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden' }}>
-        <PanelGroup direction="horizontal" style={{ height: '100%' }}>
-          <Panel defaultSize={33} minSize={20} maxSize={50}>
-            <PdfViewer />
+        <PanelGroup 
+          direction="horizontal" 
+          style={{ height: '100%' }}
+          onLayout={handlePanelResize}
+          ref={panelGroupRef}
+        >
+          <Panel 
+            defaultSize={getSavedPanelSizes()?.[0] || 33} 
+            minSize={20} 
+            maxSize={50}
+          >
+            <PdfViewerMultiColorFixed 
+              highlightTerms={highlightTerms} 
+              onTextExtracted={handlePdfTextExtracted}
+              onPdfUrlChange={handlePdfUrlChange}
+              pdfUrl={currentPdfUrl}
+            />
           </Panel>
           
           <PanelResizeHandle 
@@ -73,8 +139,12 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             }}
           />
           
-          <Panel defaultSize={34} minSize={20} maxSize={60}>
-            <ChatInterface />
+          <Panel 
+            defaultSize={getSavedPanelSizes()?.[1] || 34} 
+            minSize={20} 
+            maxSize={60}
+          >
+            <ChatInterface pdfTextData={pdfTextData} />
           </Panel>
           
           <PanelResizeHandle 
@@ -92,8 +162,16 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             }}
           />
           
-          <Panel defaultSize={33} minSize={20} maxSize={50}>
-            <CurationPanel />
+          <Panel 
+            defaultSize={getSavedPanelSizes()?.[2] || 33} 
+            minSize={20} 
+            maxSize={50}
+          >
+            <CurationPanel 
+              onHighlight={handleHighlight} 
+              onClearHighlights={handleClearHighlights}
+              pdfTextData={pdfTextData}
+            />
           </Panel>
         </PanelGroup>
       </Box>

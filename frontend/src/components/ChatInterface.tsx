@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import { Send, Clear, Person, SmartToy } from '@mui/icons-material';
 import axios from 'axios';
+import { PdfTextData } from '../types/pdf';
 
 interface Message {
   id: string;
@@ -21,7 +22,11 @@ interface Message {
   timestamp: Date;
 }
 
-function ChatInterface() {
+interface ChatInterfaceProps {
+  pdfTextData?: PdfTextData | null;
+}
+
+function ChatInterface({ pdfTextData }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);

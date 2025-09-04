@@ -3,6 +3,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useMemo, useState, useEffect } from 'react';
 import HomePage from './pages/HomePage';
 import AdminPage from './pages/AdminPage';
+import DebugBadge from './components/DebugBadge';
+import { debug } from './utils/debug';
+import axios from 'axios';
 
 function App() {
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
@@ -12,6 +15,26 @@ function App() {
     if (savedMode) {
       setMode(savedMode);
     }
+    
+    // Initialize debug mode from settings
+    const initDebugMode = async () => {
+      try {
+        const response = await axios.get('/api/settings');
+        if (response.data.debug_mode) {
+          debug.setEnabled(true);
+          debug.log('APP', 'Debug mode enabled from settings');
+        }
+      } catch (error) {
+        // If settings fail to load, check localStorage
+        const localDebug = localStorage.getItem('debug_mode') === 'true';
+        if (localDebug) {
+          debug.setEnabled(true);
+          debug.log('APP', 'Debug mode enabled from localStorage');
+        }
+      }
+    };
+    
+    initDebugMode();
   }, []);
 
   const theme = useMemo(
@@ -71,6 +94,7 @@ function App() {
           <Route path="/admin" element={<AdminPage />} />
         </Routes>
       </BrowserRouter>
+      <DebugBadge />
     </ThemeProvider>
   );
 }

@@ -35,7 +35,7 @@ async def get_settings(db: Session = Depends(get_db)):
     defaults = {
         "openai_api_key": "",
         "anthropic_api_key": "",
-        "default_model": "gpt-4",
+        "default_model": "gpt-4o",
         "max_tokens": 2048,
         "temperature": 0.7,
         "database_url": "",

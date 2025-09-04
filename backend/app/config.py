@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./test_database.db")
     
     # Model Settings
-    default_model: str = "gpt-4"
+    default_model: str = "gpt-4o"
     max_tokens: int = 2048
     temperature: float = 0.7
     
