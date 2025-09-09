@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Box,
   TextField,
@@ -6,12 +6,11 @@ import {
   Typography,
   Paper,
   Divider,
-  IconButton,
   Chip,
   Stack,
   Alert,
-} from '@mui/material';
-import { Search, Clear, Highlight } from '@mui/icons-material';
+} from "@mui/material";
+import { Search, Clear, Highlight } from "@mui/icons-material";
 
 interface TestTabProps {
   onHighlight?: (searchTerm: string) => void;
@@ -19,7 +18,7 @@ interface TestTabProps {
 }
 
 function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
   const [activeHighlights, setActiveHighlights] = useState<string[]>([]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -31,7 +30,7 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
       if (!activeHighlights.includes(searchTerm.trim())) {
         setActiveHighlights([...activeHighlights, searchTerm.trim()]);
       }
-      setSearchTerm('');
+      setSearchTerm("");
     }
   };
 
@@ -43,18 +42,21 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
   };
 
   const handleRemoveHighlight = (term: string) => {
-    setActiveHighlights(activeHighlights.filter(h => h !== term));
+    setActiveHighlights(activeHighlights.filter((h) => h !== term));
     // In a real implementation, we'd also remove just this highlight from the PDF
   };
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 2 }}>
+    <Box
+      sx={{ height: "100%", display: "flex", flexDirection: "column", p: 2 }}
+    >
       <Typography variant="h6" gutterBottom>
         PDF Text Highlighting
       </Typography>
-      
+
       <Alert severity="info" sx={{ mb: 2 }}>
-        Enter text to highlight in the PDF. Multiple terms can be highlighted simultaneously.
+        Enter text to highlight in the PDF. Multiple terms can be highlighted
+        simultaneously.
       </Alert>
 
       <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
@@ -69,10 +71,12 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
             size="small"
             sx={{ mb: 2 }}
             InputProps={{
-              startAdornment: <Search sx={{ color: 'text.secondary', mr: 1 }} />,
+              startAdornment: (
+                <Search sx={{ color: "text.secondary", mr: 1 }} />
+              ),
             }}
           />
-          
+
           <Stack direction="row" spacing={1}>
             <Button
               type="submit"
@@ -82,7 +86,7 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
             >
               Highlight
             </Button>
-            
+
             <Button
               variant="outlined"
               startIcon={<Clear />}
@@ -101,7 +105,7 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
         <Typography variant="subtitle2" gutterBottom>
           Active Highlights ({activeHighlights.length})
         </Typography>
-        
+
         {activeHighlights.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
             No active highlights
@@ -128,41 +132,41 @@ function TestTab({ onHighlight, onClearHighlights }: TestTabProps) {
         <Typography variant="subtitle2" gutterBottom>
           Quick Highlight Options
         </Typography>
-        
+
         <Stack spacing={1}>
           <Button
             variant="outlined"
             size="small"
             onClick={() => {
               if (onHighlight) {
-                onHighlight('gene');
-                setActiveHighlights([...activeHighlights, 'gene']);
+                onHighlight("gene");
+                setActiveHighlights([...activeHighlights, "gene"]);
               }
             }}
           >
             Highlight "gene"
           </Button>
-          
+
           <Button
             variant="outlined"
             size="small"
             onClick={() => {
               if (onHighlight) {
-                onHighlight('protein');
-                setActiveHighlights([...activeHighlights, 'protein']);
+                onHighlight("protein");
+                setActiveHighlights([...activeHighlights, "protein"]);
               }
             }}
           >
             Highlight "protein"
           </Button>
-          
+
           <Button
             variant="outlined"
             size="small"
             onClick={() => {
               if (onHighlight) {
-                onHighlight('mutation');
-                setActiveHighlights([...activeHighlights, 'mutation']);
+                onHighlight("mutation");
+                setActiveHighlights([...activeHighlights, "mutation"]);
               }
             }}
           >

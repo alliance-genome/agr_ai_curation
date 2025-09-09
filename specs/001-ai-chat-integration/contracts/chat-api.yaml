@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: AI Chat Integration API
+  version: 1.0.0
+  description: Enhanced chat API with AI provider integration and streaming support
+
+paths:
+  /chat/:
+    post:
+      summary: Send chat message and receive AI response
+      description: Send a message to AI and receive either immediate or streaming response
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  maxLength: 10000
+                  minLength: 1
+                  description: User's message content
+                  example: "What is biological curation?"
+                history:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ChatMessage"
+                  description: Previous conversation context
+                  default: []
+                session_id:
+                  type: string
+                  format: uuid
+                  description: Session identifier to maintain conversation context
+                  example: "123e4567-e89b-12d3-a456-426614174000"
+                provider:
+                  type: string
+                  enum: ["openai", "gemini"]
+                  default: "openai"
+                  description: AI provider to use for response generation
+                model:
+                  type: string
+                  description: Specific model to use (provider-dependent)
+                  example: "gpt-4o"
+                stream:
+                  type: boolean
+                  default: false
+                  description: Whether to stream the response
+      responses:
+        "200":
+          description: Successful chat response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "500":
+          description: AI service error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /chat/stream:
+    post:
+      summary: Send chat message and receive streaming AI response
+      description: Send a message to AI and receive Server-Sent Events stream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  maxLength: 10000
+                  minLength: 1
+                session_id:
+                  type: string
+                  format: uuid
+                provider:
+                  type: string
+                  enum: ["openai", "gemini"]
+                  default: "openai"
+                model:
+                  type: string
+                  example: "gpt-4o"
+      responses:
+        "200":
+          description: Streaming response started
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+              example: |
+                data: {"delta": "Hello", "session_id": "123...", "provider": "openai", "model": "gpt-4o", "is_complete": false}
+
+                data: {"delta": " there!", "session_id": "123...", "provider": "openai", "model": "gpt-4o", "is_complete": false}
+
+                data: {"delta": "", "session_id": "123...", "provider": "openai", "model": "gpt-4o", "is_complete": true}
+        "422":
+          description: Validation error
+        "500":
+          description: AI service error
+
+  /chat/models:
+    get:
+      summary: Get available AI models
+      description: Retrieve list of available models for each provider
+      responses:
+        "200":
+          description: Available models by provider
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  openai:
+                    type: array
+                    items:
+                      type: string
+                    example: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
+                  gemini:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+                    description: "Gemini models accessed via OpenAI-compatible endpoints"
+
+components:
+  schemas:
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: ["user", "assistant"]
+          description: Message sender role
+        content:
+          type: string
+          description: Message content
+          example: "Hello, how can I help with biological curation?"
+
+    ChatResponse:
+      type: object
+      required:
+        - response
+        - session_id
+        - provider
+        - model
+      properties:
+        response:
+          type: string
+          description: AI-generated response text
+          example: "Biological curation involves the process of organizing, validating, and maintaining biological data..."
+        session_id:
+          type: string
+          format: uuid
+          description: Session identifier
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        provider:
+          type: string
+          enum: ["openai", "gemini"]
+          description: AI provider that generated the response
+        model:
+          type: string
+          description: Specific model that generated the response
+          example: "gpt-4o"
+        is_streaming:
+          type: boolean
+          description: Whether this response was generated via streaming
+          default: false
+
+    StreamingChatResponse:
+      type: object
+      required:
+        - delta
+        - session_id
+        - provider
+        - model
+        - is_complete
+      properties:
+        delta:
+          type: string
+          description: Incremental text chunk
+          example: "Hello"
+        session_id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        provider:
+          type: string
+          enum: ["openai", "gemini"]
+        model:
+          type: string
+          example: "gpt-4o"
+        is_complete:
+          type: boolean
+          description: True when streaming is finished
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "AI service temporarily unavailable"

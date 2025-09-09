@@ -66,6 +66,50 @@ dmypy.json
 .pyre/
 .ruff_cache/
 
+# Sensitive files and keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*_rsa
+*_dsa
+*_ed25519
+*_ecdsa
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.ssh/
+credentials*
+config.local.*
+secrets.*
+!.secrets.baseline
+
+# Backup files that might contain sensitive data
+*.backup
+*.bak
+*.swp
+*.tmp
+*~
+
+# Local configuration that might contain secrets
+local_settings.py
+local_config.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database dumps and exports (might contain sensitive data)
+*.sql
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+
 # Misc
 .tmp/
 temp/
@@ -73,3 +117,12 @@ tmp/
 *.pid
 .lock
 package-lock.json.backup
+
+# Pre-commit
+.pre-commit-cache/
+
+# Spec-driven development toolkit
+.claude/
+memory/
+scripts/
+templates/

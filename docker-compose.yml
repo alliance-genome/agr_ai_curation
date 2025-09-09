@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   postgres:
@@ -32,6 +32,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
       - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
       - ./uploads:/app/uploads
     ports:
       - "8002:8000"
@@ -56,9 +57,3 @@ services:
 networks:
   ai_curation_network:
     driver: bridge
-
-volumes:
-  postgres_data:
-    external: true
-  uploads:
-    external: true

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from "react";
 import {
   Box,
   Paper,
@@ -6,29 +6,28 @@ import {
   Typography,
   CircularProgress,
   Alert,
-} from '@mui/material';
-import {
-  Upload,
-  Refresh,
-} from '@mui/icons-material';
-import { debug } from '../utils/debug';
+} from "@mui/material";
+import { Upload, Refresh } from "@mui/icons-material";
+import { debug } from "../utils/debug";
 
-// Color palette for different highlight terms
-const HIGHLIGHT_COLORS = [
-  '#ffd54f', // Amber
-  '#80deea', // Cyan
-  '#c5e1a5', // Light Green
-  '#f48fb1', // Pink
-  '#ce93d8', // Purple
-  '#90caf9', // Blue
-  '#ffcc80', // Orange
-  '#bcaaa4', // Brown
+// Default color palette for different highlight terms (fallback)
+const DEFAULT_HIGHLIGHT_COLORS = [
+  "#ffd54f", // Amber
+  "#80deea", // Cyan
+  "#c5e1a5", // Light Green
+  "#f48fb1", // Pink
+  "#ce93d8", // Purple
+  "#90caf9", // Blue
+  "#ffcc80", // Orange
+  "#bcaaa4", // Brown
 ];
 
-interface HighlightTerm {
-  term: string;
-  color: string;
-  className: string;
+const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
+const SETTINGS_KEY = "alliance-user-settings";
+
+interface HighlightSettings {
+  highlightOpacity: number;
+  highlightColors: string[];
 }
 
 interface PdfViewerMultiColorFixedProps {
@@ -38,58 +37,280 @@ interface PdfViewerMultiColorFixedProps {
   pdfUrl?: string;
 }
 
-function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfUrlChange, pdfUrl }: PdfViewerMultiColorFixedProps) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [currentPdfUrl, setCurrentPdfUrl] = useState(pdfUrl || '/api/uploads/sample_fly_publication.pdf');
+function PdfViewerMultiColorFixed({
+  highlightTerms = [],
+  onPdfUrlChange,
+  pdfUrl,
+}: PdfViewerMultiColorFixedProps) {
+  debug.pdfHighlight(
+    "🚀 COMPONENT: PdfViewerMultiColorFixed function called/rendered",
+  );
+  debug.pdfHighlight("🚀 COMPONENT: Props received:", {
+    highlightTerms,
+    pdfUrl,
+  });
+
+  const [loading, setLoading] = useState(() => {
+    debug.pdfHighlight("🚀 COMPONENT: useState loading initialized");
+    return false;
+  });
+  const [error, setError] = useState<string | null>(() => {
+    debug.pdfHighlight("🚀 COMPONENT: useState error initialized");
+    return null;
+  });
+  const [currentPdfUrl, setCurrentPdfUrl] = useState(() => {
+    const url = pdfUrl || "/api/uploads/sample_fly_publication.pdf";
+    debug.pdfHighlight(
+      "🚀 COMPONENT: useState currentPdfUrl initialized to:",
+      url,
+    );
+    return url;
+  });
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pdfLoaded, setPdfLoaded] = useState(false);
+  const [pdfLoaded, setPdfLoaded] = useState(() => {
+    debug.pdfHighlight("🚀 COMPONENT: useState pdfLoaded initialized to false");
+    return false;
+  });
+  const [highlightSettings, setHighlightSettings] = useState<HighlightSettings>(
+    () => {
+      const initialSettings = {
+        highlightOpacity: DEFAULT_HIGHLIGHT_OPACITY,
+        highlightColors: DEFAULT_HIGHLIGHT_COLORS,
+      };
+      debug.pdfHighlight(
+        "🚀 COMPONENT: useState highlightSettings initialized:",
+        initialSettings,
+      );
+      return initialSettings;
+    },
+  );
+
+  // Store highlightTerms in a ref to avoid closure issues
+  const highlightTermsRef = useRef(highlightTerms);
+  useEffect(() => {
+    debug.pdfHighlight(
+      "🚀 COMPONENT: useEffect for highlightTermsRef update running, terms:",
+      highlightTerms,
+    );
+    highlightTermsRef.current = highlightTerms;
+  }, [highlightTerms]);
+
+  // Load settings from localStorage and listen for changes
+  useEffect(() => {
+    debug.pdfHighlight(
+      "🔧 PDF COMPONENT: useEffect for loading settings is running",
+    );
+
+    const loadSettings = () => {
+      debug.pdfHighlight("🔧 PDF COMPONENT: loadSettings function called");
+      debug.pdfHighlight(
+        "🔧 Loading settings from localStorage on PDF component mount",
+      );
+      const savedSettings = localStorage.getItem(SETTINGS_KEY);
+      debug.pdfHighlight(
+        "🔧 PDF COMPONENT: Retrieved from localStorage:",
+        savedSettings,
+      );
+
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings);
+          debug.pdfHighlight("🔧 PDF COMPONENT: Parsed settings:", parsed);
+
+          const loadedSettings = {
+            highlightOpacity:
+              parsed.highlightOpacity || DEFAULT_HIGHLIGHT_OPACITY,
+            highlightColors: parsed.highlightColors || DEFAULT_HIGHLIGHT_COLORS,
+          };
+          debug.pdfHighlight(
+            "🔧 PDF COMPONENT: Setting loaded highlight settings:",
+            loadedSettings,
+          );
+          setHighlightSettings(loadedSettings);
+
+          // Update CSS styles in iframe immediately after loading settings
+          debug.pdfHighlight(
+            "🔧 PDF COMPONENT: Updating CSS styles with loaded settings",
+          );
+          setTimeout(() => {
+            if (iframeRef.current?.contentDocument) {
+              updateHighlightStyles(
+                iframeRef.current.contentDocument,
+                loadedSettings,
+              );
+            }
+          }, 100);
+        } catch (e) {
+          debug.pdfHighlight(
+            "❌ PDF COMPONENT: Failed to parse saved settings:",
+            e,
+          );
+        }
+      } else {
+        debug.pdfHighlight(
+          "🔧 PDF COMPONENT: No saved settings found, using defaults",
+        );
+      }
+    };
+
+    // Load settings on mount
+    debug.pdfHighlight("🔧 PDF COMPONENT: About to call loadSettings()");
+    loadSettings();
+
+    // Listen for settings changes
+    const handleSettingsChange = (event: any) => {
+      debug.pdfHighlight(
+        "🔧 PDF COMPONENT: Settings change event received:",
+        event.detail,
+      );
+      if (event.detail) {
+        const newSettings = {
+          highlightOpacity:
+            event.detail.highlightOpacity || DEFAULT_HIGHLIGHT_OPACITY,
+          highlightColors:
+            event.detail.highlightColors || DEFAULT_HIGHLIGHT_COLORS,
+        };
+        debug.pdfHighlight(
+          "🔧 PDF COMPONENT: Setting new highlight settings:",
+          newSettings,
+        );
+        setHighlightSettings(newSettings);
+
+        // Re-apply highlights with new settings if PDF is loaded
+        if (pdfLoaded && highlightTermsRef.current.length > 0) {
+          debug.pdfHighlight(
+            "🔧 PDF COMPONENT: Re-applying highlights with new settings",
+          );
+          setTimeout(() => {
+            clearAllHighlights();
+            setTimeout(() => applyHighlights(), 100);
+          }, 50);
+        } else {
+          debug.pdfHighlight("🔧 PDF COMPONENT: Not re-applying highlights:", {
+            pdfLoaded,
+            termsLength: highlightTermsRef.current.length,
+          });
+        }
+      } else {
+        debug.pdfHighlight(
+          "❌ PDF COMPONENT: Settings change event has no detail",
+        );
+      }
+    };
+
+    debug.pdfHighlight(
+      "🔧 PDF COMPONENT: Adding settingsChanged event listener",
+    );
+    window.addEventListener("settingsChanged", handleSettingsChange);
+    return () => {
+      debug.pdfHighlight(
+        "🔧 PDF COMPONENT: Removing settingsChanged event listener",
+      );
+      window.removeEventListener("settingsChanged", handleSettingsChange);
+    };
+  }, [pdfLoaded]);
 
   // Initialize PDF viewer on mount
   useEffect(() => {
+    debug.pdfHighlight(
+      "🚀 COMPONENT: useEffect for PDF viewer initialization running",
+    );
+    debug.pdfHighlight(
+      "🚀 COMPONENT: currentPdfUrl for initialization:",
+      currentPdfUrl,
+    );
     if (currentPdfUrl) {
+      debug.pdfHighlight(
+        "🚀 COMPONENT: Calling loadPdfInViewer with:",
+        currentPdfUrl,
+      );
       loadPdfInViewer(currentPdfUrl);
+    } else {
+      debug.pdfHighlight("🚀 COMPONENT: No currentPdfUrl, skipping PDF load");
     }
   }, []);
 
   // Load PDF in viewer
   const loadPdfInViewer = (url: string) => {
+    debug.pdfHighlight("🚀 COMPONENT: loadPdfInViewer called with:", url);
     setLoading(true);
     setError(null);
     setPdfLoaded(false);
     debug.pdfRender(`Loading PDF in multi-color viewer: ${url}`);
-    
+    debug.pdfHighlight(
+      "🚀 COMPONENT: Set loading=true, error=null, pdfLoaded=false",
+    );
+
     if (iframeRef.current) {
       const viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`;
+      debug.pdfHighlight("🚀 COMPONENT: Setting iframe src to:", viewerUrl);
       iframeRef.current.src = viewerUrl;
-      
+
       if (onPdfUrlChange) {
+        debug.pdfHighlight("🚀 COMPONENT: Calling onPdfUrlChange with:", url);
         onPdfUrlChange(url);
+      } else {
+        debug.pdfHighlight("🚀 COMPONENT: No onPdfUrlChange callback provided");
       }
+    } else {
+      debug.pdfHighlight("❌ COMPONENT: iframeRef.current is null!");
     }
   };
 
   // Inject mark.js and styles into iframe
   const injectMarkJsAndStyles = (iframeDoc: Document) => {
     // Check if already injected
-    if (iframeDoc.getElementById('mark-js-script')) {
+    if (iframeDoc.getElementById("mark-js-script")) {
+      // Update styles if they exist but settings may have changed
+      updateHighlightStyles(iframeDoc);
       return;
     }
 
     // Inject mark.js script
-    const markScript = iframeDoc.createElement('script');
-    markScript.id = 'mark-js-script';
-    markScript.src = 'https://cdn.jsdelivr.net/npm/mark.js@8.11.1/dist/mark.min.js';
+    const markScript = iframeDoc.createElement("script");
+    markScript.id = "mark-js-script";
+    markScript.src =
+      "https://cdn.jsdelivr.net/npm/mark.js@8.11.1/dist/mark.min.js";
     markScript.onload = () => {
-      debug.pdfHighlight('mark.js loaded in iframe');
+      debug.pdfHighlight("mark.js loaded in iframe");
     };
     iframeDoc.head.appendChild(markScript);
 
-    // Inject highlight styles
-    const styleSheet = iframeDoc.createElement('style');
-    styleSheet.id = 'highlight-styles';
-    styleSheet.textContent = `
+    // Inject initial highlight styles
+    updateHighlightStyles(iframeDoc);
+
+    debug.pdfHighlight("mark.js and styles injected into iframe");
+  };
+
+  // Update highlight styles in iframe
+  const updateHighlightStyles = (
+    iframeDoc: Document,
+    customSettings?: HighlightSettings,
+  ) => {
+    const settingsToUse = customSettings || highlightSettings;
+    debug.pdfHighlight("🔍 updateHighlightStyles called");
+    debug.pdfHighlight("🔍 Using settings:", settingsToUse);
+    debug.pdfHighlight(
+      "🔍 Colors count:",
+      settingsToUse.highlightColors.length,
+    );
+    debug.pdfHighlight("🔍 Opacity value:", settingsToUse.highlightOpacity);
+    debug.pdfHighlight("🔍 Colors array:", settingsToUse.highlightColors);
+
+    let styleSheet = iframeDoc.getElementById(
+      "highlight-styles",
+    ) as HTMLStyleElement;
+    if (!styleSheet) {
+      debug.pdfHighlight("🔍 Creating new style sheet");
+      styleSheet = iframeDoc.createElement("style");
+      styleSheet.id = "highlight-styles";
+      iframeDoc.head.appendChild(styleSheet);
+    } else {
+      debug.pdfHighlight("🔍 Using existing style sheet");
+    }
+
+    const generatedCSS = `
       /* Reset mark elements to not affect text positioning */
       mark {
         display: inline !important;
@@ -103,66 +324,201 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
         outline: none !important;
         text-decoration: none !important;
       }
-      
-      /* Apply background colors to mark elements */
-      ${HIGHLIGHT_COLORS.map((color, index) => `
+
+      /* Apply background colors to mark elements - make them very vibrant */
+      ${settingsToUse.highlightColors
+        .map((color, index) => {
+          // Make highlights much more vibrant - use higher opacity
+          const makeVibrant = (hex: string, baseOpacity: number) => {
+            // For vibrant highlighting, boost opacity significantly (min 0.8)
+            const vibrancy = Math.max(0.8, Math.min(1.0, baseOpacity + 0.3));
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${vibrancy})`;
+          };
+
+          return `
       .pdf-highlight-${index} {
-        background-color: ${color} !important;
+        background-color: ${makeVibrant(color, settingsToUse.highlightOpacity)} !important;
         color: inherit !important;
-      }
-      `).join('\n')}
+        font-weight: inherit !important;
+        text-shadow: none !important;
+        position: static !important;
+        z-index: auto !important;
+        box-decoration-break: clone !important;
+        -webkit-box-decoration-break: clone !important;
+      }`;
+        })
+        .join("\n")}
     `;
-    iframeDoc.head.appendChild(styleSheet);
-    
-    debug.pdfHighlight('Styles injected into iframe');
+
+    debug.pdfHighlight("🔍 Generated CSS length:", generatedCSS.length);
+    debug.pdfHighlight(
+      "🔍 Generated CSS sample:",
+      generatedCSS.substring(0, 300) + "...",
+    );
+
+    styleSheet.textContent = generatedCSS;
+
+    debug.pdfHighlight(
+      "🔍 Style sheet updated, textContent length:",
+      styleSheet.textContent.length,
+    );
+    debug.pdfHighlight(
+      "🔍 Style sheet in DOM head:",
+      !!iframeDoc.head.contains(styleSheet),
+    );
+
+    // Verify the styles are actually applied
+    const allStyleSheets = Array.from(iframeDoc.styleSheets);
+    debug.pdfHighlight(
+      "🔍 Total stylesheets in iframe:",
+      allStyleSheets.length,
+    );
+
+    debug.pdfHighlight("✅ Highlight styles updated");
   };
 
   // Apply highlights using mark.js
-  const applyHighlights = () => {
-    if (!iframeRef.current?.contentWindow || highlightTerms.length === 0) return;
-    
+  const applyHighlights = (specificTextLayer?: HTMLElement) => {
+    // Use ref to get current highlight terms to avoid closure issues
+    const currentTerms = highlightTermsRef.current;
+
+    if (!iframeRef.current?.contentWindow || currentTerms.length === 0) {
+      debug.pdfHighlight(
+        `Cannot apply highlights - iframe: ${!!iframeRef.current?.contentWindow}, terms: ${currentTerms.length}`,
+      );
+      return;
+    }
+
     try {
       const iframeWindow = iframeRef.current.contentWindow as any;
       const iframeDoc = iframeWindow.document;
-      
+
       // Wait for mark.js to be available
       if (!iframeWindow.Mark) {
-        debug.pdfHighlight('Mark.js not yet loaded, retrying...');
-        setTimeout(applyHighlights, 500);
+        debug.pdfHighlight("Mark.js not yet loaded, retrying...");
+        setTimeout(() => applyHighlights(specificTextLayer), 500);
         return;
       }
-      
-      // Get all text layers
-      const textLayers = iframeDoc.querySelectorAll('.textLayer');
-      
-      debug.pdfHighlight(`Found ${textLayers.length} text layers`);
-      
-      textLayers.forEach((textLayer: HTMLElement, pageIndex: number) => {
-        // Clear existing highlights
+
+      // If a specific text layer is provided, only highlight that one
+      // Otherwise, highlight all text layers
+      const textLayers = specificTextLayer
+        ? [specificTextLayer]
+        : Array.from(iframeDoc.querySelectorAll(".textLayer"));
+
+      debug.pdfHighlight(
+        `Processing ${textLayers.length} text layer(s), specific layer: ${!!specificTextLayer}`,
+      );
+
+      textLayers.forEach((textLayer, index) => {
+        const element = textLayer as HTMLElement;
+        const pageDiv = element.closest(".page");
+        const pageNum = pageDiv
+          ? pageDiv.getAttribute("data-page-number")
+          : "unknown";
+
+        // Log text layer content info
+        const textContent = element.textContent || "";
+        debug.pdfHighlight(
+          `Processing text layer ${index + 1}, page ${pageNum}, text length: ${textContent.length}`,
+        );
+
+        // Check if this text layer already has the correct highlights
+        const existingMarks = element.querySelectorAll("mark");
+        const hasCorrectHighlights =
+          existingMarks.length > 0 &&
+          currentTerms.every((term) =>
+            Array.from(existingMarks).some((mark) =>
+              mark.textContent?.toLowerCase().includes(term.toLowerCase()),
+            ),
+          );
+
+        if (hasCorrectHighlights && !specificTextLayer) {
+          debug.pdfHighlight(
+            `Page ${pageNum}: Already has correct highlights, skipping`,
+          );
+          return;
+        }
+
+        debug.pdfHighlight(
+          `Page ${pageNum}: Clearing existing marks (found ${existingMarks.length})`,
+        );
+
+        // Clear existing highlights before applying new ones
         const markInstance = new iframeWindow.Mark(textLayer);
         markInstance.unmark();
-        
+
+        debug.pdfHighlight(
+          `Page ${pageNum}: Applying highlights for terms: ${currentTerms.join(", ")}`,
+        );
+
         // Apply highlights for each term
-        highlightTerms.forEach((term, termIndex) => {
-          const className = `pdf-highlight-${termIndex % HIGHLIGHT_COLORS.length}`;
-          
+        currentTerms.forEach((term, termIndex) => {
+          const className = `pdf-highlight-${termIndex % highlightSettings.highlightColors.length}`;
+          const expectedColor =
+            highlightSettings.highlightColors[
+              termIndex % highlightSettings.highlightColors.length
+            ];
+          const expectedOpacity = highlightSettings.highlightOpacity;
+
+          debug.pdfHighlight(`🎨 Page ${pageNum}: Searching for "${term}"...`);
+          debug.pdfHighlight(
+            `🎨 Page ${pageNum}: Using className "${className}"`,
+          );
+          debug.pdfHighlight(
+            `🎨 Page ${pageNum}: Expected color: ${expectedColor}, opacity: ${expectedOpacity}`,
+          );
+          debug.pdfHighlight(
+            `🎨 Page ${pageNum}: Available colors: ${highlightSettings.highlightColors.length}`,
+          );
+
           markInstance.mark(term, {
             className: className,
             caseSensitive: false,
             separateWordSearch: false,
             acrossElements: true,
             done: (counter: number) => {
-              if (counter > 0) {
-                debug.pdfHighlight(`Highlighted ${counter} instances of "${term}" on page ${pageIndex + 1}`);
+              debug.pdfHighlight(
+                `✅ Page ${pageNum}: Found and highlighted ${counter} instances of "${term}" with class "${className}"`,
+              );
+
+              // Check if the marks were actually created with the right class
+              const createdMarks = element.querySelectorAll(
+                `mark.${className}`,
+              );
+              debug.pdfHighlight(
+                `🔍 Page ${pageNum}: Created ${createdMarks.length} mark elements with class "${className}"`,
+              );
+
+              if (createdMarks.length > 0) {
+                const firstMark = createdMarks[0] as HTMLElement;
+                const computedStyle = window.getComputedStyle(firstMark);
+                debug.pdfHighlight(
+                  `🔍 Page ${pageNum}: First mark computed backgroundColor: ${computedStyle.backgroundColor}`,
+                );
+                debug.pdfHighlight(
+                  `🔍 Page ${pageNum}: First mark computed opacity: ${computedStyle.opacity}`,
+                );
+                debug.pdfHighlight(
+                  `🔍 Page ${pageNum}: First mark classList: ${Array.from(firstMark.classList).join(", ")}`,
+                );
               }
-            }
+            },
+            noMatch: () => {
+              debug.pdfHighlight(
+                `❌ Page ${pageNum}: No matches found for "${term}"`,
+              );
+            },
           });
         });
       });
-      
-      debug.pdfHighlight('All highlights applied');
+
+      debug.pdfHighlight("Highlights application complete");
     } catch (error) {
-      debug.error('PDF_HIGHLIGHT', 'Error applying highlights:', error);
+      debug.error("PDF_HIGHLIGHT", "Error applying highlights:", error);
     }
   };
 
@@ -171,36 +527,87 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
     const handleIframeLoad = () => {
       setLoading(false);
       setPdfLoaded(true);
-      debug.pdfRender('PDF viewer loaded');
-      
+      debug.pdfRender("PDF viewer loaded");
+
       if (iframeRef.current?.contentWindow) {
         const iframeWindow = iframeRef.current.contentWindow;
         const iframeDoc = iframeWindow.document;
-        
+
         // Inject mark.js and styles
         injectMarkJsAndStyles(iframeDoc);
-        
+
         // Wait for PDF.js to initialize
         const checkInterval = setInterval(() => {
           try {
-            const PDFViewerApplication = (iframeWindow as any).PDFViewerApplication;
+            const PDFViewerApplication = (iframeWindow as any)
+              .PDFViewerApplication;
             if (PDFViewerApplication && PDFViewerApplication.eventBus) {
               clearInterval(checkInterval);
-              
-              // Listen for page rendered events
-              PDFViewerApplication.eventBus.on('pagerendered', () => {
-                debug.pdfHighlight('Page rendered, applying highlights');
-                setTimeout(applyHighlights, 100);
+
+              // Listen for text layer rendered events - this is the key event
+              // It fires for EACH page as its text layer is rendered
+              PDFViewerApplication.eventBus.on(
+                "textlayerrendered",
+                (event: any) => {
+                  debug.pdfHighlight(
+                    `Text layer rendered for page ${event.pageNumber}`,
+                  );
+
+                  // Find the text layer for this specific page
+                  setTimeout(() => {
+                    const pageDiv = iframeDoc.querySelector(
+                      `.page[data-page-number="${event.pageNumber}"]`,
+                    );
+                    debug.pdfHighlight(
+                      `Page div found for page ${event.pageNumber}: ${!!pageDiv}`,
+                    );
+
+                    if (pageDiv) {
+                      const textLayer = pageDiv.querySelector(
+                        ".textLayer",
+                      ) as HTMLElement;
+                      debug.pdfHighlight(
+                        `Text layer found for page ${event.pageNumber}: ${!!textLayer}`,
+                      );
+
+                      if (textLayer) {
+                        // Log text content sample
+                        const textContent = textLayer.textContent || "";
+                        debug.pdfHighlight(
+                          `Page ${event.pageNumber} text sample (first 200 chars): ${textContent.substring(0, 200)}`,
+                        );
+                        debug.pdfHighlight(
+                          `Page ${event.pageNumber} contains "gene": ${textContent.toLowerCase().includes("gene")}`,
+                        );
+
+                        debug.pdfHighlight(
+                          `Applying highlights to page ${event.pageNumber}`,
+                        );
+                        applyHighlights(textLayer);
+                      } else {
+                        debug.pdfHighlight(
+                          `ERROR: Text layer not found for page ${event.pageNumber}`,
+                        );
+                      }
+                    } else {
+                      debug.pdfHighlight(
+                        `ERROR: Page div not found for page ${event.pageNumber}`,
+                      );
+                    }
+                  }, 50); // Small delay to ensure text layer is fully rendered
+                },
+              );
+
+              // Also listen for document loaded to apply initial highlights
+              PDFViewerApplication.eventBus.on("documentloaded", () => {
+                debug.pdfHighlight(
+                  "Document fully loaded, applying initial highlights",
+                );
+                setTimeout(() => applyHighlights(), 500);
               });
-              
-              // Listen for text layer rendered events
-              PDFViewerApplication.eventBus.on('textlayerrendered', () => {
-                debug.pdfHighlight('Text layer rendered, applying highlights');
-                setTimeout(applyHighlights, 100);
-              });
-              
-              // Initial highlight application
-              setTimeout(applyHighlights, 1000);
+
+              // Initial highlight application for visible pages
+              setTimeout(() => applyHighlights(), 1000);
             }
           } catch (e) {
             // Still waiting...
@@ -211,22 +618,62 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
 
     const iframe = iframeRef.current;
     if (iframe) {
-      iframe.addEventListener('load', handleIframeLoad);
-      return () => iframe.removeEventListener('load', handleIframeLoad);
+      iframe.addEventListener("load", handleIframeLoad);
+      return () => iframe.removeEventListener("load", handleIframeLoad);
     }
   }, []);
+
+  // Clear all highlights function
+  const clearAllHighlights = () => {
+    if (!iframeRef.current?.contentWindow) return;
+
+    try {
+      const iframeWindow = iframeRef.current.contentWindow as any;
+      const iframeDoc = iframeWindow.document;
+
+      // Wait for mark.js to be available
+      if (!iframeWindow.Mark) {
+        debug.pdfHighlight("Mark.js not available for clearing");
+        return;
+      }
+
+      // Get all text layers and clear highlights
+      const textLayers = iframeDoc.querySelectorAll(".textLayer");
+      debug.pdfHighlight(
+        `Clearing highlights from ${textLayers.length} text layers`,
+      );
+
+      textLayers.forEach((textLayer: HTMLElement) => {
+        const markInstance = new iframeWindow.Mark(textLayer);
+        markInstance.unmark();
+      });
+
+      debug.pdfHighlight("All highlights cleared");
+    } catch (error) {
+      debug.error("PDF_HIGHLIGHT", "Error clearing highlights:", error);
+    }
+  };
 
   // Re-apply highlights when terms change
   useEffect(() => {
     if (pdfLoaded) {
-      debug.pdfHighlight(`Terms changed, re-applying highlights: ${highlightTerms.join(', ')}`);
-      applyHighlights();
+      if (highlightTermsRef.current.length === 0) {
+        debug.pdfHighlight("No highlight terms, clearing all highlights");
+        clearAllHighlights();
+      } else {
+        debug.pdfHighlight(
+          `Terms changed, re-applying highlights: ${highlightTermsRef.current.join(", ")}`,
+        );
+        // First clear all, then apply new highlights
+        clearAllHighlights();
+        setTimeout(() => applyHighlights(), 100);
+      }
     }
   }, [highlightTerms, pdfLoaded]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && file.type === 'application/pdf') {
+    if (file && file.type === "application/pdf") {
       debug.pdfRender(`User uploaded PDF: ${file.name}`);
       const fileUrl = URL.createObjectURL(file);
       setCurrentPdfUrl(fileUrl);
@@ -235,15 +682,29 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
   };
 
   const handleReset = () => {
-    debug.pdfRender('Resetting to sample PDF');
-    const defaultUrl = '/api/uploads/sample_fly_publication.pdf';
+    debug.pdfRender("Resetting to sample PDF");
+    const defaultUrl = "/api/uploads/sample_fly_publication.pdf";
     setCurrentPdfUrl(defaultUrl);
     loadPdfInViewer(defaultUrl);
   };
 
+  debug.pdfHighlight(
+    "🚀 COMPONENT: Rendering PdfViewerMultiColorFixed, current state:",
+    {
+      loading,
+      error,
+      currentPdfUrl,
+      pdfLoaded,
+      highlightSettings,
+      highlightTermsLength: highlightTerms.length,
+    },
+  );
+
   return (
-    <Paper sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 2 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+    <Paper
+      sx={{ height: "100%", display: "flex", flexDirection: "column", p: 2 }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
           PDF Viewer (Multi-Color)
         </Typography>
@@ -252,7 +713,7 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
           type="file"
           accept="application/pdf"
           ref={fileInputRef}
-          style={{ display: 'none' }}
+          style={{ display: "none" }}
           onChange={handleFileUpload}
         />
 
@@ -280,7 +741,7 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
           <Typography variant="subtitle2" gutterBottom>
             Highlighting:
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
             {highlightTerms.map((term, index) => (
               <Box
                 key={term}
@@ -288,9 +749,13 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
                   px: 1,
                   py: 0.5,
                   borderRadius: 1,
-                  backgroundColor: HIGHLIGHT_COLORS[index % HIGHLIGHT_COLORS.length],
-                  color: '#000',
-                  fontSize: '0.875rem',
+                  backgroundColor:
+                    highlightSettings.highlightColors[
+                      index % highlightSettings.highlightColors.length
+                    ],
+                  opacity: highlightSettings.highlightOpacity,
+                  color: "#000",
+                  fontSize: "0.875rem",
                 }}
               >
                 {term}
@@ -300,26 +765,27 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
         </Box>
       )}
 
-
       <Box
         sx={{
           flexGrow: 1,
-          overflow: 'hidden',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'flex-start',
-          bgcolor: 'grey.100',
-          position: 'relative',
+          overflow: "hidden",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "flex-start",
+          bgcolor: "grey.100",
+          position: "relative",
         }}
       >
         {loading && (
-          <Box sx={{ 
-            position: 'absolute', 
-            top: '50%', 
-            left: '50%', 
-            transform: 'translate(-50%, -50%)',
-            zIndex: 1000
-          }}>
+          <Box
+            sx={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 1000,
+            }}
+          >
             <CircularProgress />
           </Box>
         )}
@@ -333,9 +799,9 @@ function PdfViewerMultiColorFixed({ highlightTerms = [], onTextExtracted, onPdfU
         <iframe
           ref={iframeRef}
           style={{
-            width: '100%',
-            height: '100%',
-            border: 'none',
+            width: "100%",
+            height: "100%",
+            border: "none",
           }}
           title="PDF Viewer"
         />

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS entities (
     name VARCHAR(255) NOT NULL,
     type VARCHAR(50) NOT NULL,
     synonyms JSONB DEFAULT '[]'::jsonb,
-    references JSONB DEFAULT '[]'::jsonb,
+    "references" JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS chat_history (
     session_id VARCHAR(255),
     role VARCHAR(20),
     content TEXT,
+    model_provider VARCHAR(50) DEFAULT NULL,
+    model_name VARCHAR(100) DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
