@@ -4,13 +4,21 @@ import {
   Paper,
   TextField,
   IconButton,
-  Button,
   Avatar,
   Typography,
   CircularProgress,
   Alert,
+  ToggleButton,
+  Divider,
+  Tooltip,
 } from "@mui/material";
-import { Send, Clear, SmartToy } from "@mui/icons-material";
+import {
+  Send,
+  Clear,
+  SmartToy,
+  Stream,
+  StreamOutlined,
+} from "@mui/icons-material";
 import axios from "axios";
 import { PdfTextData } from "../types/pdf";
 import ModelSelector from "./ModelSelector";
@@ -140,7 +148,11 @@ function ChatInterface({}: ChatInterfaceProps) {
                         const newMessages = [...prev];
                         const lastMessage = newMessages[newMessages.length - 1];
                         if (lastMessage && lastMessage.role === "assistant") {
-                          lastMessage.content += parsed.delta;
+                          // Create a new object to ensure React detects the change
+                          newMessages[newMessages.length - 1] = {
+                            ...lastMessage,
+                            content: lastMessage.content + parsed.delta,
+                          };
                         }
                         return newMessages;
                       });
@@ -151,7 +163,11 @@ function ChatInterface({}: ChatInterfaceProps) {
                         const newMessages = [...prev];
                         const lastMessage = newMessages[newMessages.length - 1];
                         if (lastMessage && lastMessage.role === "assistant") {
-                          lastMessage.isStreaming = false;
+                          // Create a new object to ensure React detects the change
+                          newMessages[newMessages.length - 1] = {
+                            ...lastMessage,
+                            isStreaming: false,
+                          };
                         }
                         return newMessages;
                       });
@@ -249,39 +265,115 @@ function ChatInterface({}: ChatInterfaceProps) {
 
   return (
     <Paper
-      sx={{ height: "100%", display: "flex", flexDirection: "column", p: 2 }}
+      sx={{
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        p: 0,
+        overflow: "hidden",
+      }}
+      elevation={0}
     >
-      <Box sx={{ display: "flex", alignItems: "center", mb: 2, gap: 2 }}>
-        <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          AI Assistant
-        </Typography>
-        <ModelSelector onModelChange={handleModelChange} disabled={loading} />
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => setStreamingEnabled(!streamingEnabled)}
-          color={streamingEnabled ? "primary" : "inherit"}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          p: 2,
+          borderBottom: 1,
+          borderColor: "divider",
+          bgcolor: "background.default",
+        }}
+      >
+        <Box
+          sx={{ display: "flex", alignItems: "center", gap: 1, flexGrow: 1 }}
         >
-          {streamingEnabled ? "Streaming ON" : "Streaming OFF"}
-        </Button>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<Clear />}
-          onClick={handleClear}
-          disabled={messages.length === 0}
-        >
-          Clear
-        </Button>
+          <SmartToy color="primary" />
+          <Typography variant="h6">AI Assistant</Typography>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <ModelSelector onModelChange={handleModelChange} disabled={loading} />
+          <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+          <Tooltip
+            title={
+              streamingEnabled ? "Streaming enabled" : "Streaming disabled"
+            }
+          >
+            <ToggleButton
+              value="streaming"
+              selected={streamingEnabled}
+              onChange={() => setStreamingEnabled(!streamingEnabled)}
+              size="small"
+              disabled={loading}
+              sx={{
+                px: 2,
+                borderRadius: 1,
+                textTransform: "none",
+              }}
+            >
+              {streamingEnabled ? <Stream /> : <StreamOutlined />}
+              <Typography variant="body2" sx={{ ml: 1 }}>
+                Stream
+              </Typography>
+            </ToggleButton>
+          </Tooltip>
+          <Tooltip title="Clear conversation">
+            <IconButton
+              onClick={handleClear}
+              disabled={messages.length === 0}
+              size="small"
+              sx={{
+                ml: 1,
+                color: "text.secondary",
+                "&:hover": {
+                  color: "error.main",
+                  bgcolor: (theme) => `${theme.palette.error.main}10`,
+                },
+              }}
+            >
+              <Clear />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       {error && (
-        <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
+        <Alert
+          severity="error"
+          onClose={() => setError(null)}
+          sx={{ mx: 2, mt: 2 }}
+        >
           {error}
         </Alert>
       )}
 
-      <Box sx={{ flexGrow: 1, overflow: "auto", mb: 2, px: 2 }}>
+      <Box
+        sx={{
+          flexGrow: 1,
+          overflow: "auto",
+          p: 3,
+          bgcolor: "background.default",
+        }}
+      >
+        {messages.length === 0 && (
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              color: "text.secondary",
+            }}
+          >
+            <SmartToy sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+            <Typography variant="h6" gutterBottom>
+              Start a conversation
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Ask me about biological curation or any topic you need help with
+            </Typography>
+          </Box>
+        )}
         {messages.map((message) => (
           <StreamingMessage
             key={message.id}
@@ -293,52 +385,103 @@ function ChatInterface({}: ChatInterfaceProps) {
           />
         ))}
         {loading && messages[messages.length - 1]?.role !== "assistant" && (
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 2 }}>
-            <Avatar sx={{ bgcolor: "grey.600", width: 32, height: 32 }}>
-              <SmartToy />
+          <Box
+            sx={{
+              display: "flex",
+              gap: 1.5,
+              alignItems: "center",
+              mt: 3,
+              ml: 1,
+            }}
+          >
+            <Avatar
+              sx={{
+                bgcolor: "primary.light",
+                width: 36,
+                height: 36,
+              }}
+            >
+              <SmartToy fontSize="small" />
             </Avatar>
-            <CircularProgress size={20} />
-            <Typography variant="body2" color="text.secondary">
-              Thinking...
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <CircularProgress size={16} thickness={5} />
+              <Typography variant="body2" color="text.secondary">
+                Thinking...
+              </Typography>
+            </Box>
           </Box>
         )}
         <div ref={messagesEndRef} />
       </Box>
 
-      <Box sx={{ display: "flex", gap: 1 }}>
-        <TextField
-          fullWidth
-          multiline
-          maxRows={4}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder="Type your message..."
-          disabled={loading}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              borderRadius: 2,
-            },
-          }}
-        />
-        <IconButton
-          color="primary"
-          onClick={handleSend}
-          disabled={!input.trim() || loading}
-          sx={{
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-            "&:hover": {
-              bgcolor: "primary.dark",
-            },
-            "&:disabled": {
-              bgcolor: "action.disabledBackground",
-            },
-          }}
-        >
-          <Send />
-        </IconButton>
+      <Box
+        sx={{
+          p: 2,
+          borderTop: 1,
+          borderColor: "divider",
+          bgcolor: "background.paper",
+        }}
+      >
+        <Box sx={{ display: "flex", gap: 1.5 }}>
+          <TextField
+            fullWidth
+            multiline
+            maxRows={4}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type your message..."
+            disabled={loading}
+            variant="outlined"
+            size="small"
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                borderRadius: 2,
+                bgcolor: "background.default",
+                "&:hover": {
+                  "& .MuiOutlinedInput-notchedOutline": {
+                    borderColor: "primary.main",
+                  },
+                },
+                "&.Mui-focused": {
+                  "& .MuiOutlinedInput-notchedOutline": {
+                    borderColor: "primary.main",
+                  },
+                },
+              },
+            }}
+          />
+          <Tooltip title="Send message">
+            <span>
+              <IconButton
+                color="primary"
+                onClick={handleSend}
+                disabled={!input.trim() || loading}
+                sx={{
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  width: 44,
+                  height: 44,
+                  "&:hover": {
+                    bgcolor: "primary.dark",
+                    transform: "scale(1.05)",
+                  },
+                  "&:disabled": {
+                    bgcolor: "action.disabledBackground",
+                    color: "action.disabled",
+                  },
+                  transition: "all 0.2s",
+                }}
+              >
+                {loading ? (
+                  <CircularProgress size={20} color="inherit" />
+                ) : (
+                  <Send />
+                )}
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
       </Box>
     </Paper>
   );

@@ -91,7 +91,7 @@ class TestChatPostContract:
             response.status_code == 422
         ), f"Expected 422 for message too long, got {response.status_code}"
 
-    @pytest.mark.xfail(reason="AI service not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys for real AI response")
     def test_chat_post_successful_ai_response(self):
         """Test that POST /chat/ returns actual AI response (not stub)"""
         request_data = {

@@ -1,5 +1,14 @@
 import React, { useEffect, useState, useRef } from "react";
 import ReactMarkdown from "react-markdown";
+import {
+  Box,
+  Typography,
+  Avatar,
+  Chip,
+  Paper,
+  CircularProgress,
+} from "@mui/material";
+import { Person, SmartToy } from "@mui/icons-material";
 
 interface StreamingMessageProps {
   content: string;
@@ -19,7 +28,9 @@ const StreamingMessage: React.FC<StreamingMessageProps> = ({
   timestamp,
   modelInfo,
 }) => {
-  const [displayedContent, setDisplayedContent] = useState("");
+  const [displayedContent, setDisplayedContent] = useState(
+    isStreaming ? "" : content,
+  );
   const contentRef = useRef<HTMLDivElement>(null);
   const streamIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -82,7 +93,6 @@ const StreamingMessage: React.FC<StreamingMessageProps> = ({
     return new Intl.DateTimeFormat("en-US", {
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
     }).format(date);
   };
 
@@ -90,120 +100,199 @@ const StreamingMessage: React.FC<StreamingMessageProps> = ({
     if (!modelInfo) return null;
 
     const providerColors = {
-      openai: "bg-green-100 text-green-800",
-      gemini: "bg-blue-100 text-blue-800",
-    };
+      openai: "success",
+      gemini: "info",
+    } as const;
 
-    const colorClass =
+    const color =
       providerColors[modelInfo.provider as keyof typeof providerColors] ||
-      "bg-gray-100 text-gray-800";
+      "default";
 
     return (
-      <span
-        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colorClass}`}
-      >
-        {modelInfo.model}
-      </span>
+      <Chip
+        label={modelInfo.model}
+        size="small"
+        color={color}
+        variant="outlined"
+        sx={{ height: 20, fontSize: "0.75rem" }}
+      />
     );
   };
 
+  const isUser = role === "user";
+
   return (
-    <div className={`message ${role} mb-4`}>
-      <div
-        className={`flex ${role === "user" ? "justify-end" : "justify-start"}`}
+    <Box
+      sx={{
+        display: "flex",
+        gap: 2,
+        mb: 3,
+        flexDirection: isUser ? "row-reverse" : "row",
+      }}
+    >
+      <Avatar
+        sx={{
+          bgcolor: isUser ? "primary.main" : "grey.200",
+          width: 36,
+          height: 36,
+          flexShrink: 0,
+        }}
       >
-        <div className={`max-w-3xl ${role === "user" ? "order-2" : ""}`}>
-          {/* Message header */}
-          <div
-            className={`flex items-center gap-2 mb-1 ${role === "user" ? "justify-end" : ""}`}
-          >
-            <span className="text-sm font-medium text-gray-700">
-              {role === "user" ? "You" : "Assistant"}
-            </span>
-            {role === "assistant" && modelInfo && getModelBadge()}
-            {timestamp && (
-              <span className="text-xs text-gray-500">
-                {formatTimestamp(timestamp)}
-              </span>
-            )}
-            {isStreaming && (
-              <span className="inline-flex items-center">
-                <span className="animate-pulse text-xs text-gray-500">
-                  Typing
-                </span>
-                <span className="flex space-x-1 ml-1">
-                  <span
-                    className="w-1 h-1 bg-gray-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "0ms" }}
-                  ></span>
-                  <span
-                    className="w-1 h-1 bg-gray-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "150ms" }}
-                  ></span>
-                  <span
-                    className="w-1 h-1 bg-gray-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "300ms" }}
-                  ></span>
-                </span>
-              </span>
-            )}
-          </div>
+        {isUser ? <Person fontSize="small" /> : <SmartToy fontSize="small" />}
+      </Avatar>
 
-          {/* Message content */}
-          <div
-            ref={contentRef}
-            className={`
-              px-4 py-2 rounded-lg
-              ${
-                role === "user"
-                  ? "bg-blue-500 text-white"
-                  : "bg-gray-100 text-gray-800 border border-gray-200"
-              }
-              ${isStreaming ? "min-h-[2rem]" : ""}
-            `}
-          >
-            {role === "assistant" ? (
-              <ReactMarkdown
-                components={{
-                  p: ({ children }) => (
-                    <p className="mb-2 last:mb-0">{children}</p>
-                  ),
-                  code: ({ children, ...props }) => {
-                    const match = /language-(\w+)/.exec(props.className || "");
-                    const inline = !match;
-                    return inline ? (
-                      <code className="bg-gray-200 px-1 py-0.5 rounded text-sm">
-                        {children}
-                      </code>
-                    ) : (
-                      <code className="block bg-gray-800 text-gray-100 p-2 rounded text-sm overflow-x-auto">
-                        {children}
-                      </code>
-                    );
-                  },
-                  ul: ({ children }) => (
-                    <ul className="list-disc pl-4 mb-2">{children}</ul>
-                  ),
-                  ol: ({ children }) => (
-                    <ol className="list-decimal pl-4 mb-2">{children}</ol>
-                  ),
-                  li: ({ children }) => <li className="mb-1">{children}</li>,
-                }}
-              >
-                {displayedContent || (isStreaming ? "..." : "")}
-              </ReactMarkdown>
-            ) : (
-              <div className="whitespace-pre-wrap">{displayedContent}</div>
-            )}
+      <Box sx={{ maxWidth: "70%", minWidth: 0 }}>
+        {/* Message header */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            mb: 0.5,
+            flexDirection: isUser ? "row-reverse" : "row",
+          }}
+        >
+          <Typography variant="subtitle2" color="text.secondary">
+            {isUser ? "You" : "Assistant"}
+          </Typography>
+          {!isUser && modelInfo && getModelBadge()}
+          {timestamp && (
+            <Typography variant="caption" color="text.disabled">
+              {formatTimestamp(timestamp)}
+            </Typography>
+          )}
+          {isStreaming && !isUser && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+              <CircularProgress size={12} thickness={5} />
+              <Typography variant="caption" color="text.disabled">
+                Responding
+              </Typography>
+            </Box>
+          )}
+        </Box>
 
-            {/* Cursor for streaming */}
-            {isStreaming && role === "assistant" && (
-              <span className="inline-block w-2 h-4 bg-gray-600 animate-pulse ml-0.5"></span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+        {/* Message content */}
+        <Paper
+          ref={contentRef}
+          elevation={0}
+          sx={{
+            p: 2,
+            bgcolor: isUser ? "primary.main" : "#f5f5f5",
+            color: isUser ? "primary.contrastText" : "#000000",
+            borderRadius: 2,
+            borderTopLeftRadius: isUser ? 16 : 4,
+            borderTopRightRadius: isUser ? 4 : 16,
+            position: "relative",
+            minHeight: isStreaming ? "2rem" : "auto",
+            border: 1,
+            borderColor: isUser ? "primary.dark" : "divider",
+          }}
+        >
+          {!isUser ? (
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => (
+                  <Typography
+                    variant="body2"
+                    paragraph
+                    sx={{ mb: 1.5, "&:last-child": { mb: 0 } }}
+                  >
+                    {children}
+                  </Typography>
+                ),
+                code: ({ children, className }) => {
+                  const match = /language-(\w+)/.exec(className || "");
+                  const inline = !match;
+                  return inline ? (
+                    <Box
+                      component="code"
+                      sx={{
+                        px: 0.75,
+                        py: 0.25,
+                        borderRadius: 0.5,
+                        bgcolor: "grey.200",
+                        color: "text.primary",
+                        fontSize: "0.875rem",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {children}
+                    </Box>
+                  ) : (
+                    <Box
+                      component="pre"
+                      sx={{
+                        p: 2,
+                        borderRadius: 1,
+                        bgcolor: "grey.900",
+                        color: "grey.100",
+                        overflow: "auto",
+                        fontSize: "0.875rem",
+                        fontFamily: "monospace",
+                        my: 1.5,
+                      }}
+                    >
+                      <code>{children}</code>
+                    </Box>
+                  );
+                },
+                ul: ({ children }) => (
+                  <Box component="ul" sx={{ pl: 2, my: 1 }}>
+                    {children}
+                  </Box>
+                ),
+                ol: ({ children }) => (
+                  <Box component="ol" sx={{ pl: 2, my: 1 }}>
+                    {children}
+                  </Box>
+                ),
+                li: ({ children }) => (
+                  <Typography component="li" variant="body2" sx={{ mb: 0.5 }}>
+                    {children}
+                  </Typography>
+                ),
+                strong: ({ children }) => (
+                  <Box component="strong" sx={{ fontWeight: 600 }}>
+                    {children}
+                  </Box>
+                ),
+                em: ({ children }) => (
+                  <Box component="em" sx={{ fontStyle: "italic" }}>
+                    {children}
+                  </Box>
+                ),
+              }}
+            >
+              {displayedContent || (isStreaming ? "..." : "")}
+            </ReactMarkdown>
+          ) : (
+            <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+              {displayedContent}
+            </Typography>
+          )}
+
+          {/* Cursor for streaming */}
+          {isStreaming && !isUser && (
+            <Box
+              component="span"
+              sx={{
+                display: "inline-block",
+                width: 2,
+                height: 16,
+                bgcolor: "text.primary",
+                ml: 0.5,
+                animation: "blink 1s infinite",
+                "@keyframes blink": {
+                  "0%": { opacity: 1 },
+                  "50%": { opacity: 0 },
+                  "100%": { opacity: 1 },
+                },
+              }}
+            />
+          )}
+        </Paper>
+      </Box>
+    </Box>
   );
 };
 

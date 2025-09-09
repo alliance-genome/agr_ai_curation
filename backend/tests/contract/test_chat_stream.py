@@ -14,7 +14,6 @@ client = TestClient(app)
 class TestChatStreamContract:
     """Contract tests for POST /chat/stream endpoint"""
 
-    @pytest.mark.xfail(reason="Streaming endpoint not yet implemented")
     def test_chat_stream_request_schema(self):
         """Test that POST /chat/stream accepts the correct request schema"""
         request_data = {
@@ -27,7 +26,6 @@ class TestChatStreamContract:
         response = client.post("/chat/stream", json=request_data)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
-    @pytest.mark.xfail(reason="Streaming endpoint not yet implemented")
     def test_chat_stream_minimal_request(self):
         """Test that POST /chat/stream works with minimal required fields"""
         request_data = {"message": "Hello"}
@@ -35,7 +33,7 @@ class TestChatStreamContract:
         response = client.post("/chat/stream", json=request_data)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
-    @pytest.mark.xfail(reason="Streaming endpoint not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys for streaming response")
     def test_chat_stream_response_format(self):
         """Test that POST /chat/stream returns Server-Sent Events format"""
         request_data = {

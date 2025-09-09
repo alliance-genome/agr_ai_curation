@@ -13,13 +13,11 @@ client = TestClient(app)
 class TestChatModelsContract:
     """Contract tests for GET /chat/models endpoint"""
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_chat_models_get_request(self):
         """Test that GET /chat/models responds successfully"""
         response = client.get("/chat/models")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_chat_models_response_schema(self):
         """Test that GET /chat/models returns the correct response schema"""
         response = client.get("/chat/models")
@@ -49,7 +47,6 @@ class TestChatModelsContract:
         for model in expected_gemini_models:
             assert model in data["gemini"], f"Gemini models should include {model}"
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_chat_models_no_parameters(self):
         """Test that GET /chat/models doesn't require any parameters"""
         # Should work without any query parameters
@@ -60,14 +57,12 @@ class TestChatModelsContract:
         response = client.get("/chat/models?unexpected=param")
         assert response.status_code == 200
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_chat_models_response_content_type(self):
         """Test that GET /chat/models returns JSON content type"""
         response = client.get("/chat/models")
         assert response.status_code == 200
         assert "application/json" in response.headers.get("content-type", "")
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_chat_models_caching_headers(self):
         """Test that GET /chat/models includes appropriate caching headers"""
         response = client.get("/chat/models")

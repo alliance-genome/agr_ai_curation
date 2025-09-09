@@ -14,7 +14,7 @@ client = TestClient(app)
 class TestAIChatModels:
     """Integration tests for AI model selection functionality"""
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     @pytest.mark.skipif(
         not os.getenv("GEMINI_API_KEY"), reason="Gemini API key not configured"
     )
@@ -37,7 +37,7 @@ class TestAIChatModels:
         assert "stub response" not in data["response"].lower()
         assert len(data["response"]) > 10
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_switch_between_providers(self):
         """Test switching between OpenAI and Gemini providers"""
         session_id = "provider-switch-test"
@@ -73,7 +73,7 @@ class TestAIChatModels:
             assert gemini_data["provider"] == "gemini"
             assert gemini_data["model"] == "gemini-1.5-flash"
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_model_selection_within_provider(self):
         """Test switching between models within the same provider"""
         # Test different OpenAI models
@@ -93,7 +93,6 @@ class TestAIChatModels:
                 data = response.json()
                 assert data["model"] == model
 
-    @pytest.mark.xfail(reason="Models endpoint not yet implemented")
     def test_get_available_models(self):
         """Test retrieving list of available models"""
         response = client.get("/chat/models")
@@ -113,7 +112,7 @@ class TestAIChatModels:
         assert "gemini-1.5-pro" in data["gemini"]
         assert "gemini-1.5-flash" in data["gemini"]
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_default_model_selection(self):
         """Test that default model is used when not specified"""
         request_data = {
@@ -129,7 +128,7 @@ class TestAIChatModels:
         assert data["provider"] == "openai"  # Default provider
         assert data["model"] == "gpt-4o"  # Default model
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_invalid_model_for_provider(self):
         """Test error handling for invalid model-provider combinations"""
         # Try to use OpenAI model with Gemini provider

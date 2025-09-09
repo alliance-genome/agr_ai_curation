@@ -51,7 +51,6 @@ class TestChatPersistence:
         db.commit()
         db.close()
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
     def test_conversation_saved_to_database(self):
         """Test that both user and AI messages are saved"""
         session_id = str(uuid.uuid4())
@@ -95,7 +94,6 @@ class TestChatPersistence:
         assert len(ai_msg.content) > 0
         assert "stub response" not in ai_msg.content.lower()
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
     def test_conversation_history_retrieval(self):
         """Test that conversation history can be retrieved"""
         session_id = str(uuid.uuid4())
@@ -137,7 +135,6 @@ class TestChatPersistence:
         assert history[2].content == "Second message"
         assert history[4].content == "Third message"
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
     def test_session_id_generation(self):
         """Test that session ID is auto-generated if not provided"""
         request_data = {
@@ -168,7 +165,7 @@ class TestChatPersistence:
 
         assert len(messages) >= 1
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_multiple_sessions_isolation(self):
         """Test that different sessions are properly isolated"""
         session1 = str(uuid.uuid4())
@@ -219,7 +216,7 @@ class TestChatPersistence:
         assert ai_msg1.model_provider == "openai"
         assert ai_msg2.model_provider == "gemini"
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys")
     def test_model_metadata_persistence(self):
         """Test that model provider and name are correctly persisted"""
         session_id = str(uuid.uuid4())

@@ -1,5 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { ChevronDown } from "lucide-react";
+import {
+  FormControl,
+  Select,
+  MenuItem,
+  SelectChangeEvent,
+  ListItemText,
+  ListItemIcon,
+  Chip,
+  Typography,
+  Box,
+  Divider,
+} from "@mui/material";
+import { AutoAwesome, Psychology } from "@mui/icons-material";
 
 interface Model {
   id: string;
@@ -17,11 +29,9 @@ interface ModelSelectorProps {
 const ModelSelector: React.FC<ModelSelectorProps> = ({
   onModelChange,
   disabled = false,
-  className = "",
 }) => {
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
-  const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -123,88 +133,112 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return descriptions[modelId] || "";
   };
 
-  const handleModelSelect = (model: Model) => {
-    setSelectedModel(model);
-    onModelChange(model.provider, model.id);
-    setIsOpen(false);
+  const handleModelSelect = (event: SelectChangeEvent) => {
+    const modelId = event.target.value;
+    const model = models.find((m) => `${m.provider}-${m.id}` === modelId);
+    if (model) {
+      setSelectedModel(model);
+      onModelChange(model.provider, model.id);
+    }
   };
 
-  const getProviderColor = (provider: string): string => {
-    return provider === "openai" ? "text-green-600" : "text-blue-600";
+  const getProviderIcon = (provider: string) => {
+    return provider === "openai" ? (
+      <Psychology sx={{ fontSize: 20 }} />
+    ) : (
+      <AutoAwesome sx={{ fontSize: 20 }} />
+    );
+  };
+
+  const getProviderColor = (provider: string) => {
+    return provider === "openai" ? "success" : "info";
   };
 
   if (loading) {
     return (
-      <div
-        className={`inline-flex items-center px-3 py-2 text-sm text-gray-500 ${className}`}
-      >
+      <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
         Loading models...
-      </div>
+      </Typography>
     );
   }
 
-  return (
-    <div className={`relative inline-block text-left ${className}`}>
-      <button
-        type="button"
-        onClick={() => !disabled && setIsOpen(!isOpen)}
-        disabled={disabled}
-        className={`
-          inline-flex items-center justify-between w-full px-3 py-2 text-sm
-          bg-white border border-gray-300 rounded-md shadow-sm
-          ${disabled ? "cursor-not-allowed opacity-50" : "hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"}
-        `}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-      >
-        <div className="flex items-center">
-          {selectedModel && (
-            <>
-              <span
-                className={`mr-2 font-medium ${getProviderColor(selectedModel.provider)}`}
-              >
-                {selectedModel.provider === "openai" ? "OpenAI" : "Gemini"}
-              </span>
-              <span className="text-gray-700">{selectedModel.name}</span>
-            </>
-          )}
-        </div>
-        <ChevronDown
-          className={`ml-2 h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
-        />
-      </button>
+  const groupedModels = models.reduce(
+    (acc, model) => {
+      if (!acc[model.provider]) {
+        acc[model.provider] = [];
+      }
+      acc[model.provider].push(model);
+      return acc;
+    },
+    {} as Record<string, Model[]>,
+  );
 
-      {isOpen && (
-        <div className="absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
-          {models.map((model) => (
-            <button
-              key={`${model.provider}-${model.id}`}
-              onClick={() => handleModelSelect(model)}
-              className={`
-                w-full text-left px-3 py-2 hover:bg-gray-100
-                ${selectedModel?.id === model.id && selectedModel?.provider === model.provider ? "bg-gray-50" : ""}
-              `}
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <span
-                    className={`font-medium ${getProviderColor(model.provider)}`}
-                  >
-                    {model.provider === "openai" ? "OpenAI" : "Gemini"}
-                  </span>
-                  <span className="ml-2 text-gray-900">{model.name}</span>
-                </div>
-                {model.description && (
-                  <span className="text-xs text-gray-500">
-                    {model.description}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+  return (
+    <FormControl size="small" sx={{ minWidth: 280 }}>
+      <Select
+        value={
+          selectedModel ? `${selectedModel.provider}-${selectedModel.id}` : ""
+        }
+        onChange={handleModelSelect}
+        disabled={disabled}
+        displayEmpty
+        renderValue={(selected) => {
+          if (!selected || !selectedModel) {
+            return (
+              <Typography color="text.secondary">Select a model</Typography>
+            );
+          }
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Chip
+                icon={getProviderIcon(selectedModel.provider)}
+                label={
+                  selectedModel.provider === "openai" ? "OpenAI" : "Gemini"
+                }
+                size="small"
+                color={getProviderColor(selectedModel.provider)}
+                sx={{ height: 24 }}
+              />
+              <Typography variant="body2">{selectedModel.name}</Typography>
+            </Box>
+          );
+        }}
+        sx={{
+          "& .MuiSelect-select": {
+            py: 1,
+          },
+        }}
+      >
+        {Object.entries(groupedModels)
+          .map(([provider, providerModels], index) => [
+            index > 0 && <Divider key={`divider-${provider}`} />,
+            <MenuItem key={`header-${provider}`} disabled>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontWeight: 600 }}
+              >
+                {provider === "openai" ? "OpenAI Models" : "Gemini Models"}
+              </Typography>
+            </MenuItem>,
+            ...providerModels.map((model) => (
+              <MenuItem
+                key={`${model.provider}-${model.id}`}
+                value={`${model.provider}-${model.id}`}
+              >
+                <ListItemIcon>{getProviderIcon(model.provider)}</ListItemIcon>
+                <ListItemText
+                  primary={model.name}
+                  secondary={model.description}
+                  primaryTypographyProps={{ variant: "body2" }}
+                  secondaryTypographyProps={{ variant: "caption" }}
+                />
+              </MenuItem>
+            )),
+          ])
+          .flat()}
+      </Select>
+    </FormControl>
   );
 };
 

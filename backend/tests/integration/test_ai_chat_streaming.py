@@ -16,7 +16,7 @@ client = TestClient(app)
 class TestAIChatStreaming:
     """Integration tests for streaming AI chat functionality"""
 
-    @pytest.mark.xfail(reason="Streaming not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys for streaming")
     @pytest.mark.skipif(
         not os.getenv("OPENAI_API_KEY"), reason="OpenAI API key not configured"
     )
@@ -70,7 +70,7 @@ class TestAIChatStreaming:
         full_response = "".join(chunk["delta"] for chunk in chunks_received)
         assert len(full_response) > 0
 
-    @pytest.mark.xfail(reason="Streaming not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys for streaming")
     def test_streaming_with_gemini(self):
         """Test streaming works with Gemini provider via OpenAI compatibility"""
         if not os.getenv("GEMINI_API_KEY"):
@@ -104,7 +104,6 @@ class TestAIChatStreaming:
             assert chunk["provider"] == "gemini"
             assert chunk["model"] == "gemini-2.0-flash"
 
-    @pytest.mark.xfail(reason="Streaming not yet implemented")
     def test_streaming_latency(self):
         """Test streaming response latency meets performance goals"""
         request_data = {"message": "Say hello", "provider": "openai", "model": "gpt-4o"}
@@ -139,7 +138,6 @@ class TestAIChatStreaming:
                 avg_inter_chunk_time < 0.5
             ), f"Inter-chunk time {avg_inter_chunk_time}s exceeds 500ms goal"
 
-    @pytest.mark.xfail(reason="Streaming not yet implemented")
     def test_streaming_error_handling(self):
         """Test streaming handles errors gracefully"""
         # Test with message that might cause issues
@@ -171,7 +169,7 @@ class TestAIChatStreaming:
 
                 assert len(chunks) > 0
 
-    @pytest.mark.xfail(reason="Streaming not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid API keys for streaming")
     def test_streaming_session_persistence(self):
         """Test that streaming responses are saved to chat history"""
         session_id = "streaming-persistence-test"

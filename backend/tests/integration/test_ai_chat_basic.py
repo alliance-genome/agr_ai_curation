@@ -44,7 +44,7 @@ class TestAIChatBasic:
         """Drop test database tables"""
         Base.metadata.drop_all(bind=engine)
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid OpenAI API key")
     @pytest.mark.skipif(
         not os.getenv("OPENAI_API_KEY"), reason="OpenAI API key not configured"
     )
@@ -72,7 +72,7 @@ class TestAIChatBasic:
         # Response should be meaningful
         assert len(data["response"]) > 10
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid OpenAI API key")
     @pytest.mark.skipif(
         not os.getenv("OPENAI_API_KEY"), reason="OpenAI API key not configured"
     )
@@ -110,7 +110,7 @@ class TestAIChatBasic:
         # AI should remember the name from context
         assert "alice" in data["response"].lower()
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
+    @pytest.mark.xfail(reason="Requires valid OpenAI API key")
     def test_ai_response_saved_to_database(self):
         """Test that AI responses are saved to the database"""
         session_id = "db-test-session"
@@ -144,7 +144,6 @@ class TestAIChatBasic:
         assert ai_msg.model_provider == "openai"
         assert ai_msg.model_name == "gpt-4o"
 
-    @pytest.mark.xfail(reason="AI integration not yet implemented")
     def test_ai_error_handling(self):
         """Test graceful handling of AI service errors"""
         # Test with invalid API key scenario
