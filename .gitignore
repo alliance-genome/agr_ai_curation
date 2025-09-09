@@ -45,6 +45,7 @@ htmlcov/
 # Docker
 postgres_data/
 postgres_backups/
+uploads/
 *.sql.gz
 
 # Python
@@ -126,3 +127,4 @@ package-lock.json.backup
 memory/
 scripts/
 templates/
+specs/
