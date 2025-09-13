@@ -18,7 +18,7 @@ import { useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import { useRef, useState } from "react";
 import PdfViewerMultiColorFixed from "../components/PdfViewerMultiColorFixed";
-import ChatInterface from "../components/ChatInterface";
+import AgentInterface from "../components/AgentInterface";
 import CurationPanel from "../components/CurationPanel";
 import { PdfTextData } from "../types/pdf";
 import { debug } from "../utils/debug";
@@ -198,7 +198,7 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             minSize={20}
             maxSize={60}
           >
-            <ChatInterface pdfTextData={pdfTextData} />
+            <AgentInterface pdfTextData={pdfTextData} />
           </Panel>
 
           <PanelResizeHandle
