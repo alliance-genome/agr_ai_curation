@@ -3,6 +3,7 @@ from ..models import Settings
 from ..config import get_settings
 import json
 
+
 async def initialize_settings():
     """Initialize database settings from .env file on first run"""
     db = SessionLocal()
@@ -11,10 +12,10 @@ async def initialize_settings():
         existing_settings = db.query(Settings).first()
         if existing_settings:
             return  # Settings already initialized
-        
+
         # Get settings from .env
         config = get_settings()
-        
+
         # Define initial settings
         initial_settings = {
             "openai_api_key": config.openai_api_key,
@@ -23,14 +24,14 @@ async def initialize_settings():
             "max_tokens": str(config.max_tokens),
             "temperature": str(config.temperature),
             "database_url": config.database_url,
-            "debug_mode": json.dumps(config.debug_mode)
+            "debug_mode": json.dumps(config.debug_mode),
         }
-        
+
         # Add settings to database
         for key, value in initial_settings.items():
             setting = Settings(key=key, value=value)
             db.add(setting)
-        
+
         db.commit()
         print("Settings initialized from .env file")
     except Exception as e:

@@ -82,6 +82,7 @@ paths = [
     '''\.env\.example$''',       # Example env file is OK
     '''README\.md$''',           # Documentation
     '''\.md$''',                 # Markdown files (but be careful)
+    '''frontend/public/pdfjs/''', # PDF.js library files
 ]
 
 # File extensions to ignore

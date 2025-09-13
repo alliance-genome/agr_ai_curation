@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
-import { Box, Chip, Fade, IconButton } from '@mui/material';
-import { BugReport, Close } from '@mui/icons-material';
-import { debug } from '../utils/debug';
+import { useState, useEffect } from "react";
+import { Box, Chip, Fade, IconButton } from "@mui/material";
+import { BugReport, Close } from "@mui/icons-material";
+import { debug } from "../utils/debug";
 
 function DebugBadge() {
   const [isDebugEnabled, setIsDebugEnabled] = useState(false);
@@ -33,14 +33,14 @@ function DebugBadge() {
         <IconButton
           onClick={() => setIsMinimized(false)}
           sx={{
-            position: 'fixed',
+            position: "fixed",
             bottom: 16,
             right: 16,
             zIndex: 9999,
-            backgroundColor: 'warning.main',
-            color: 'warning.contrastText',
-            '&:hover': {
-              backgroundColor: 'warning.dark',
+            backgroundColor: "warning.main",
+            color: "warning.contrastText",
+            "&:hover": {
+              backgroundColor: "warning.dark",
             },
             boxShadow: 3,
           }}
@@ -56,12 +56,12 @@ function DebugBadge() {
     <Fade in timeout={300}>
       <Box
         sx={{
-          position: 'fixed',
+          position: "fixed",
           bottom: 20,
           right: 20,
           zIndex: 9999,
-          display: 'flex',
-          alignItems: 'center',
+          display: "flex",
+          alignItems: "center",
           gap: 1,
         }}
       >
@@ -74,8 +74,8 @@ function DebugBadge() {
           deleteIcon={<Close />}
           sx={{
             boxShadow: 4,
-            fontWeight: 'bold',
-            fontSize: '0.875rem',
+            fontWeight: "bold",
+            fontSize: "0.875rem",
           }}
         />
       </Box>

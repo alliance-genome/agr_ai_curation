@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 import {
   Box,
   TextField,
@@ -16,9 +16,9 @@ import {
   IconButton,
   Chip,
   Paper,
-} from '@mui/material';
-import { Add, Delete } from '@mui/icons-material';
-import axios from 'axios';
+} from "@mui/material";
+import { Add, Delete } from "@mui/icons-material";
+import axios from "axios";
 
 interface Entity {
   id: string;
@@ -34,10 +34,10 @@ interface EntitiesTabProps {
 
 function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
   const [entities, setEntities] = useState<Entity[]>([]);
-  const [name, setName] = useState('');
-  const [type, setType] = useState('gene');
-  const [synonyms, setSynonyms] = useState('');
-  const [references, setReferences] = useState('');
+  const [name, setName] = useState("");
+  const [type, setType] = useState("gene");
+  const [synonyms, setSynonyms] = useState("");
+  const [references, setReferences] = useState("");
 
   useEffect(() => {
     fetchEntities();
@@ -49,10 +49,10 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
 
   const fetchEntities = async () => {
     try {
-      const response = await axios.get('/api/entities');
+      const response = await axios.get("/api/entities");
       setEntities(response.data);
     } catch (error) {
-      console.error('Failed to fetch entities:', error);
+      console.error("Failed to fetch entities:", error);
     }
   };
 
@@ -62,47 +62,56 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
     const newEntity = {
       name,
       type,
-      synonyms: synonyms.split(',').map(s => s.trim()).filter(s => s),
-      references: references.split(',').map(r => r.trim()).filter(r => r),
+      synonyms: synonyms
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s),
+      references: references
+        .split(",")
+        .map((r) => r.trim())
+        .filter((r) => r),
     };
 
     try {
-      const response = await axios.post('/api/entities', newEntity);
+      const response = await axios.post("/api/entities", newEntity);
       setEntities([...entities, response.data]);
       // Reset form
-      setName('');
-      setSynonyms('');
-      setReferences('');
-      setType('gene');
+      setName("");
+      setSynonyms("");
+      setReferences("");
+      setType("gene");
     } catch (error) {
-      console.error('Failed to add entity:', error);
+      console.error("Failed to add entity:", error);
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await axios.delete(`/api/entities/${id}`);
-      setEntities(entities.filter(e => e.id !== id));
+      setEntities(entities.filter((e) => e.id !== id));
     } catch (error) {
-      console.error('Failed to delete entity:', error);
+      console.error("Failed to delete entity:", error);
     }
   };
 
   const getTypeColor = (type: string) => {
-    const colors: Record<string, 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
-      gene: 'primary',
-      protein: 'secondary',
-      allele: 'success',
-      strain: 'warning',
-      phenotype: 'info',
+    const colors: Record<
+      string,
+      "primary" | "secondary" | "success" | "warning" | "info"
+    > = {
+      gene: "primary",
+      protein: "secondary",
+      allele: "success",
+      strain: "warning",
+      phenotype: "info",
     };
-    return colors[type] || 'default';
+    return colors[type] || "default";
   };
 
   return (
     <Box>
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr 1fr' }}>
+        <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
           <TextField
             fullWidth
             label="Entity Name"
@@ -110,7 +119,7 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
             onChange={(e) => setName(e.target.value)}
             size="small"
           />
-          
+
           <FormControl fullWidth size="small">
             <InputLabel>Type</InputLabel>
             <Select
@@ -133,7 +142,7 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
             onChange={(e) => setSynonyms(e.target.value)}
             size="small"
           />
-          
+
           <TextField
             fullWidth
             label="References (comma-separated)"
@@ -142,7 +151,7 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
             size="small"
           />
         </Box>
-        
+
         <Button
           variant="contained"
           startIcon={<Add />}
@@ -176,8 +185,8 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
                     color={getTypeColor(entity.type)}
                   />
                 </TableCell>
-                <TableCell>{entity.synonyms.join(', ')}</TableCell>
-                <TableCell>{entity.references.join(', ')}</TableCell>
+                <TableCell>{entity.synonyms.join(", ")}</TableCell>
+                <TableCell>{entity.references.join(", ")}</TableCell>
                 <TableCell align="right">
                   <IconButton
                     size="small"
