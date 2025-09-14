@@ -23,9 +23,7 @@ import {
 import {
   Send,
   Clear,
-  SmartToy,
   Stream,
-  StreamOutlined,
   ExpandMore,
   Science,
   Biotech,
@@ -97,6 +95,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
   const [includeEntities, setIncludeEntities] = useState(true);
   const [includeAnnotations, setIncludeAnnotations] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [messageHistory, setMessageHistory] = useState<any[]>([]); // Store PydanticAI message history
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -124,7 +123,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
 
     // Prepare context if we have PDF data or selected text
     const context = {
-      document_text: pdfTextData?.text || undefined,
+      document_text: pdfTextData?.fullText || undefined,
       selected_text: selectedText || undefined,
     };
 
@@ -136,6 +135,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
       include_entities: includeEntities,
       include_annotations: includeAnnotations,
       model_preference: `${selectedProvider}:${selectedModel}`,
+      message_history: messageHistory.length > 0 ? messageHistory : undefined,
     };
 
     try {
@@ -203,6 +203,20 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
 
                     // Handle different types of streaming updates
                     if (parsed.type === "text") {
+                      // Full text update (replaces content)
+                      setMessages((prev) => {
+                        const newMessages = [...prev];
+                        const lastMessage = newMessages[newMessages.length - 1];
+                        if (lastMessage && lastMessage.role === "assistant") {
+                          newMessages[newMessages.length - 1] = {
+                            ...lastMessage,
+                            content: parsed.content,
+                          };
+                        }
+                        return newMessages;
+                      });
+                    } else if (parsed.type === "text_delta") {
+                      // Delta text update (appends content)
                       setMessages((prev) => {
                         const newMessages = [...prev];
                         const lastMessage = newMessages[newMessages.length - 1];
@@ -227,6 +241,18 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
                         ...currentOutput,
                         ...parsed.metadata,
                       };
+                    } else if (parsed.type === "history") {
+                      // Message history update - store for next request
+                      if (parsed.metadata?.messages) {
+                        setMessageHistory(parsed.metadata.messages);
+                      }
+                    } else if (parsed.type === "event") {
+                      // General event from the agent
+                      console.log(
+                        "Agent event:",
+                        parsed.content,
+                        parsed.metadata,
+                      );
                     } else if (parsed.type === "complete") {
                       setMessages((prev) => {
                         const newMessages = [...prev];
@@ -255,6 +281,11 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
 
         if (response.data.session_id && !sessionId) {
           setSessionId(response.data.session_id);
+        }
+
+        // Update message history for next request
+        if (response.data.message_history) {
+          setMessageHistory(response.data.message_history);
         }
 
         const assistantMessage: AgentMessage = {
@@ -309,6 +340,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
     setMessages([]);
     setSessionId(null);
     setError(null);
+    setMessageHistory([]);
   };
 
   const handleModelChange = (provider: string, model: string) => {
