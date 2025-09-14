@@ -51,7 +51,8 @@ repos:
             node_modules/.*|
             \.git/.*|
             venv/.*|
-            __pycache__/.*
+            __pycache__/.*|
+            \.claude/hooks/pydantic_ai_.*_docs\.txt$
           )$
 
   # GitLeaks for additional secret detection
@@ -59,6 +60,10 @@ repos:
     rev: v8.18.4
     hooks:
       - id: gitleaks
+        exclude: |
+          (?x)^(
+            \.claude/hooks/pydantic_ai_.*_docs\.txt$
+          )$
 
   # Python formatting
   - repo: https://github.com/psf/black
