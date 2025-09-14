@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "name": "PydanticAI Documentation Reminder",
+        "description": "Reminds to check PydanticAI documentation when editing PydanticAI code",
+        "script": ".claude/hooks/check_pydantic_ai.py",
+        "matchers": [
+          {
+            "tool": "(Edit|MultiEdit|Write)"
+          }
+        ]
+      }
+    ]
+  }
+}

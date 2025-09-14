@@ -123,7 +123,6 @@ package-lock.json.backup
 .pre-commit-cache/
 
 # Spec-driven development toolkit
-.claude/
 memory/
 scripts/
 templates/
