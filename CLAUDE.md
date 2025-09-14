@@ -111,6 +111,25 @@ alembic downgrade -1    # Rollback one migration
 - [ ] Rate limiting on AI endpoints
 - [ ] Dependencies audited (`npm audit`, `pip-audit`)
 
+## Pre-commit Hook Policy
+
+**NEVER skip pre-commit hooks without investigation.** When a pre-commit hook fails:
+
+1. **STOP and investigate** the failure reason
+2. **Inform the user** about what failed and why
+3. **Fix the issue** if possible (formatting, linting, etc.)
+4. **Ask for guidance** if the fix is unclear or risky
+5. **Document the resolution** in commit message if needed
+
+Common pre-commit hooks and how to handle failures:
+
+- **detect-secrets**: May indicate hardcoded secrets - investigate and remove
+- **black/prettier**: Auto-formatting issues - run the formatter
+- **flake8/eslint**: Code quality issues - fix the violations
+- **mypy**: Type checking errors - correct type annotations
+
+Only proceed without hooks in exceptional cases WITH explicit user approval and clear documentation of why.
+
 ## AI Service Integration
 
 ### OpenAI Configuration

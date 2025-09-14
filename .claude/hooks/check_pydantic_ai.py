@@ -100,20 +100,35 @@ def main():
         message = {
             "user_message": f"""⚠️ PydanticAI code detected (pattern: '{trigger[:50]}...')
 
-You are editing code that uses PydanticAI. Please ensure you're using the modern PydanticAI 1.0.6+ API.
+You are working with PydanticAI code. Before proceeding with any edits:
 
-IMPORTANT: Use the Grep tool to search through .claude/hooks/pydantic_ai_1.0.6_docs.txt for the correct API usage patterns. Common changes in v1.0.6:
-- Use 'output_type' instead of 'result_type' in Agent initialization
-- Use 'stream_text(delta=True)' for delta streaming
-- Message history is now built-in, not a separate handler
-- Check the documentation file for more details about the specific pattern you're working with.
+📚 MANDATORY DOCUMENTATION CHECK:
+You MUST search the local PydanticAI docs at: {docs_file}
 
-Example search commands:
-- Grep for 'stream_text' in .claude/hooks/pydantic_ai_1.0.6_docs.txt
-- Grep for 'output_type' in .claude/hooks/pydantic_ai_1.0.6_docs.txt
-- Grep for the specific pattern you're implementing
+REQUIRED ACTIONS:
+1. Use Grep to search for the specific PydanticAI object/function/pattern you're working with
+2. When found, use sufficient context flags (-A 30 -B 30 or more) to read the COMPLETE section
+3. For complex topics, search multiple related terms to ensure full understanding
 
-Continue with your edit, but please verify the API usage is correct."""
+WHY THIS MATTERS:
+- The documentation contains critical implementation details and examples
+- Reading partial sections may lead to incorrect implementations
+- The complete context often includes important caveats and best practices
+
+SEARCH STRATEGY:
+- Start with the exact class/function name: '{trigger[:30]}'
+- Use generous context: grep -A 50 -B 50 "pattern" {docs_file}
+- For multiline examples, increase context further (-A 100 -B 20)
+- Search related terms if the main search doesn't provide enough detail
+
+Common v1.0.6 patterns to verify:
+- Agent initialization with 'output_type' (not 'result_type')
+- Streaming with 'stream_text(delta=True)'
+- Built-in message history support
+- Tool registration patterns
+- Dependency injection approaches
+
+⚠️ DO NOT proceed with edits until you've thoroughly reviewed the relevant documentation sections."""
         }
         print(json.dumps(message))
 
