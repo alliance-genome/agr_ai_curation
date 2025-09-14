@@ -6,7 +6,7 @@ Replaces the old chat endpoints with structured agent-based interactions.
 
 import logging
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -25,6 +25,8 @@ from ..agents.models import (
     EntityExtractionOutput,
     StreamingUpdate,
 )
+from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_core import to_jsonable_python
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,11 +63,23 @@ async def biocurate(
             },
         )
 
+        # Deserialize message history if provided
+        message_history = None
+        if request.message_history:
+            try:
+                message_history = ModelMessagesTypeAdapter.validate_python(
+                    request.message_history
+                )
+            except Exception as e:
+                logger.warning(f"Failed to deserialize message history: {e}")
+
         # Process request
         if request.stream:
             # For streaming, return a different response type
             return StreamingResponse(
-                _stream_response(agent, request.message, deps),
+                _stream_response(
+                    agent, request.message, deps, session_id, message_history
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -75,16 +89,22 @@ async def biocurate(
             )
         else:
             # Regular processing
-            output = await agent.process(request.message, deps)
+            output, new_messages = await agent.process(
+                request.message, deps, message_history=message_history
+            )
 
             # Get usage if available
             usage = await agent.get_usage()
+
+            # Serialize message history for response
+            serialized_history = to_jsonable_python(new_messages)
 
             return AgentResponse(
                 output=output,
                 session_id=session_id,
                 usage=usage,
                 model=model,
+                message_history=serialized_history,
             )
 
     except ValueError as e:
@@ -152,8 +172,18 @@ async def biocurate_stream(
             },
         )
 
+        # Deserialize message history if provided
+        message_history = None
+        if request.message_history:
+            try:
+                message_history = ModelMessagesTypeAdapter.validate_python(
+                    request.message_history
+                )
+            except Exception as e:
+                logger.warning(f"Failed to deserialize message history: {e}")
+
         return StreamingResponse(
-            _stream_response(agent, request.message, deps, session_id),
+            _stream_response(agent, request.message, deps, session_id, message_history),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -175,13 +205,14 @@ async def _stream_response(
     message: str,
     deps: BioCurationDependencies,
     session_id: Optional[str] = None,
+    message_history: Optional[List] = None,
 ):
     """
     Generate SSE stream for agent responses.
     """
     try:
         # Process with streaming
-        async for update in agent._process_stream(message, deps):
+        async for update in agent._process_stream(message, deps, message_history):
             # Convert to SSE format
             data = {
                 "type": update.type,

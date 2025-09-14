@@ -7,12 +7,13 @@ annotation suggestions, and contextual analysis of scientific documents.
 
 import os
 import logging
-from typing import Optional, List, Dict, Any, AsyncIterator
+from typing import Optional, List, Dict, Any, AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
 import time
 
 from pydantic_ai import Agent, RunContext, ModelRetry
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -55,6 +56,8 @@ class BioCurationAgent:
         self,
         model: str = "openai:gpt-4o",
         system_prompt: Optional[str] = None,
+        max_history_messages: int = 20,
+        enable_history_summary: bool = True,
     ):
         """
         Initialize the BioCuration agent.
@@ -62,9 +65,13 @@ class BioCurationAgent:
         Args:
             model: The AI model to use (e.g., "openai:gpt-4o", "google-gla:gemini-1.5-flash")
             system_prompt: Optional custom system prompt
+            max_history_messages: Maximum messages to keep in history
+            enable_history_summary: Whether to summarize old messages
         """
         self.model = model
         self.system_prompt = system_prompt
+        self.max_history_messages = max_history_messages
+        self.enable_history_summary = enable_history_summary
 
         # Default system prompt for biocuration
         if self.system_prompt is None:
@@ -96,13 +103,33 @@ When suggesting annotations:
 Always maintain scientific accuracy and clarity in your responses.
 """
 
+        # Set up history processors
+        history_processors = []
+        if self.max_history_messages > 0:
+            history_processors.append(self._keep_recent_messages)
+        if self.enable_history_summary:
+            history_processors.append(self._summarize_old_messages)
+
         # Create the PydanticAI agent
         self.agent = Agent(
             model,
             deps_type=BioCurationDependencies,
-            result_type=BioCurationOutput,
+            output_type=BioCurationOutput,
             system_prompt=self.system_prompt,
+            history_processors=history_processors if history_processors else None,
         )
+
+        # Create summary agent if enabled
+        if self.enable_history_summary:
+            # TODO: Make summary model configurable via Settings page
+            # For now, use a cheaper model for summaries
+            summary_model = os.getenv("SUMMARY_MODEL", "openai:gpt-4o-mini")
+            self.summary_agent = Agent(
+                summary_model,
+                system_prompt="""Summarize this biological curation conversation.
+Focus on: identified entities, key findings, annotation suggestions.
+Keep the summary concise and technical.""",
+            )
 
         # Register agent tools
         self._register_tools()
@@ -198,12 +225,67 @@ Always maintain scientific accuracy and clarity in your responses.
             validator = validations.get(entity_type, lambda x: True)
             return validator(entity_text)
 
+    async def _keep_recent_messages(
+        self, messages: List[ModelMessage]
+    ) -> List[ModelMessage]:
+        """
+        History processor to keep only recent messages.
+
+        Args:
+            messages: Full message history
+
+        Returns:
+            Filtered message list
+        """
+        if len(messages) > self.max_history_messages:
+            # Keep the system prompt (first message) and recent messages
+            return messages[:1] + messages[-(self.max_history_messages - 1) :]
+        return messages
+
+    async def _summarize_old_messages(
+        self, messages: List[ModelMessage]
+    ) -> List[ModelMessage]:
+        """
+        History processor to summarize old messages when history gets long.
+
+        Args:
+            messages: Full message history
+
+        Returns:
+            Messages with old ones summarized
+        """
+        # Only summarize if we have more than 2x the max messages
+        threshold = self.max_history_messages * 2
+        if len(messages) > threshold and hasattr(self, "summary_agent"):
+            try:
+                # Take the oldest messages to summarize (keep recent ones intact)
+                messages_to_summarize = messages[
+                    1 : threshold // 2
+                ]  # Skip system prompt
+                recent_messages = messages[threshold // 2 :]
+
+                # Create a summary of old messages
+                summary_result = await self.summary_agent.run(
+                    "Summarize the key points from this conversation",
+                    message_history=messages_to_summarize,
+                )
+
+                # Return system prompt + summary + recent messages
+                return messages[:1] + summary_result.new_messages() + recent_messages
+            except Exception as e:
+                logger.warning(f"Failed to summarize messages: {e}")
+                # Fall back to just keeping recent messages
+                return await self._keep_recent_messages(messages)
+
+        return messages
+
     async def process(
         self,
         message: str,
         deps: Optional[BioCurationDependencies] = None,
         stream: bool = False,
-    ) -> BioCurationOutput:
+        message_history: Optional[List[ModelMessage]] = None,
+    ):
         """
         Process a curation request.
 
@@ -211,9 +293,11 @@ Always maintain scientific accuracy and clarity in your responses.
             message: The user's message or query
             deps: Dependencies for the agent
             stream: Whether to stream the response
+            message_history: Previous conversation messages
 
         Returns:
-            BioCurationOutput with structured results
+            For non-streaming: tuple of (BioCurationOutput, new_messages for history)
+            For streaming: AsyncIterator of StreamingUpdate objects
         """
         if deps is None:
             deps = BioCurationDependencies()
@@ -223,13 +307,18 @@ Always maintain scientific accuracy and clarity in your responses.
         try:
             if stream:
                 # Stream processing (returns async iterator)
-                return await self._process_stream(message, deps)
+                return await self._process_stream(message, deps, message_history)
             else:
                 # Regular processing
-                result = await self.agent.run(message, deps=deps)
+                result = await self.agent.run(
+                    message,
+                    deps=deps,
+                    message_history=message_history,
+                )
 
-                # Add processing metadata
+                # The result.output is already a BioCurationOutput
                 output = result.output
+                # Add processing metadata
                 output.processing_time = time.time() - start_time
                 output.model_used = self.model
 
@@ -242,7 +331,7 @@ Always maintain scientific accuracy and clarity in your responses.
                         output.response,
                     )
 
-                return output
+                return output, result.new_messages()
 
         except Exception as e:
             logger.error(f"Error processing curation request: {e}")
@@ -252,6 +341,8 @@ Always maintain scientific accuracy and clarity in your responses.
         self,
         message: str,
         deps: BioCurationDependencies,
+        message_history: Optional[List[ModelMessage]] = None,
+        use_delta: bool = True,
     ) -> AsyncIterator[StreamingUpdate]:
         """
         Process with streaming updates.
@@ -259,23 +350,29 @@ Always maintain scientific accuracy and clarity in your responses.
         Args:
             message: The user's message
             deps: Dependencies
+            message_history: Previous conversation messages
+            use_delta: Whether to stream deltas (more efficient)
 
         Yields:
             StreamingUpdate objects
         """
-        async with self.agent.run_stream(message, deps=deps) as run:
-            # Stream text updates
-            async for text in run.stream_text():
+        async with self.agent.run_stream(
+            message,
+            deps=deps,
+            message_history=message_history,
+        ) as run:
+            # Stream text updates (use delta for efficiency)
+            async for text in run.stream_text(delta=use_delta):
                 yield StreamingUpdate(
-                    type="text",
+                    type="text_delta" if use_delta else "text",
                     content=text,
                 )
 
             # Get final result
             result = await run.result()
-            output = result.output
+            output = result.output if hasattr(result, "output") else result
 
-            # Stream entities
+            # Stream entities as they're found
             for entity in output.entities:
                 yield StreamingUpdate(
                     type="entity",
@@ -290,6 +387,17 @@ Always maintain scientific accuracy and clarity in your responses.
                     content=annotation.text,
                     metadata=annotation.model_dump(),
                 )
+
+            # Send message history for client storage
+            from pydantic_core import to_jsonable_python
+
+            yield StreamingUpdate(
+                type="history",
+                content="",
+                metadata={
+                    "messages": to_jsonable_python(result.new_messages()),
+                },
+            )
 
             # Final metadata
             yield StreamingUpdate(
@@ -356,7 +464,8 @@ Always maintain scientific accuracy and clarity in your responses.
         import asyncio
 
         loop = asyncio.get_event_loop()
-        return loop.run_until_complete(self.process(message, deps))
+        output, _ = loop.run_until_complete(self.process(message, deps))
+        return output
 
     async def get_usage(self) -> Dict[str, Any]:
         """Get usage statistics for the agent"""

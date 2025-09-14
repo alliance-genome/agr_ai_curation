@@ -161,9 +161,9 @@ class CurationContext(BaseModel):
 class StreamingUpdate(BaseModel):
     """Update for streaming responses"""
 
-    type: Literal["text", "entity", "annotation", "metadata"] = Field(
-        description="Type of update"
-    )
+    type: Literal[
+        "text", "text_delta", "entity", "annotation", "metadata", "history", "event"
+    ] = Field(description="Type of update")
     content: str = Field(description="Content of the update")
     metadata: Optional[Dict[str, Any]] = Field(
         None, description="Additional metadata for the update"
@@ -193,6 +193,9 @@ class AgentRequest(BaseModel):
     model_preference: Optional[str] = Field(
         None, description="Preferred AI model to use"
     )
+    message_history: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Serialized message history for conversation context"
+    )
 
 
 class AgentResponse(BaseModel):
@@ -204,4 +207,7 @@ class AgentResponse(BaseModel):
     model: str = Field(description="Model that was used")
     timestamp: datetime = Field(
         default_factory=datetime.utcnow, description="Response timestamp"
+    )
+    message_history: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Updated message history for next request"
     )
