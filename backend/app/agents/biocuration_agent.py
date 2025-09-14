@@ -64,10 +64,11 @@ class BioCurationAgent:
             system_prompt: Optional custom system prompt
         """
         self.model = model
+        self.system_prompt = system_prompt
 
         # Default system prompt for biocuration
-        if system_prompt is None:
-            system_prompt = """
+        if self.system_prompt is None:
+            self.system_prompt = """
 You are an expert biological curator assistant specializing in analyzing scientific literature
 and extracting structured information. Your role is to:
 
@@ -99,15 +100,12 @@ Always maintain scientific accuracy and clarity in your responses.
         self.agent = Agent(
             model,
             deps_type=BioCurationDependencies,
-            output_type=BioCurationOutput,
-            system_prompt=system_prompt,
+            result_type=BioCurationOutput,
+            system_prompt=self.system_prompt,
         )
 
         # Register agent tools
         self._register_tools()
-
-        # Register dynamic instructions
-        self._register_instructions()
 
     def _register_tools(self):
         """Register tools that the agent can use"""
@@ -199,45 +197,6 @@ Always maintain scientific accuracy and clarity in your responses.
 
             validator = validations.get(entity_type, lambda x: True)
             return validator(entity_text)
-
-    def _register_instructions(self):
-        """Register dynamic instructions based on context"""
-
-        @self.agent.instructions
-        async def add_context_instructions(
-            ctx: RunContext[BioCurationDependencies],
-        ) -> str:
-            """Add instructions based on the current context"""
-            instructions = []
-
-            if ctx.deps.context:
-                if ctx.deps.context.document_type:
-                    instructions.append(
-                        f"You are analyzing a {ctx.deps.context.document_type}."
-                    )
-
-                if ctx.deps.context.selected_text:
-                    instructions.append(
-                        f"Focus on the selected text: '{ctx.deps.context.selected_text[:100]}...'"
-                    )
-
-                if ctx.deps.context.existing_annotations:
-                    instructions.append(
-                        f"There are {len(ctx.deps.context.existing_annotations)} existing annotations to consider."
-                    )
-
-            if ctx.deps.user_preferences:
-                if "focus_entities" in ctx.deps.user_preferences:
-                    focus = ctx.deps.user_preferences["focus_entities"]
-                    instructions.append(f"Pay special attention to: {', '.join(focus)}")
-
-                if "confidence_threshold" in ctx.deps.user_preferences:
-                    threshold = ctx.deps.user_preferences["confidence_threshold"]
-                    instructions.append(
-                        f"Only report findings with confidence >= {threshold}"
-                    )
-
-            return "\n".join(instructions) if instructions else ""
 
     async def process(
         self,

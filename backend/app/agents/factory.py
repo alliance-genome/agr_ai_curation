@@ -11,9 +11,6 @@ from typing import Dict, Optional, Union, List
 from enum import Enum
 
 from pydantic_ai import Agent
-from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.models.google import GoogleModel
 
 from .biocuration_agent import BioCurationAgent, BioCurationDependencies
 from .models import BioCurationOutput, EntityExtractionOutput
@@ -172,7 +169,7 @@ class AgentFactory:
 
             agent = Agent(
                 model,
-                output_type=EntityExtractionOutput,
+                result_type=EntityExtractionOutput,
                 system_prompt="""
 You are a specialized entity extraction agent focused on identifying
 biological entities in scientific text. Extract:
@@ -200,7 +197,7 @@ Rate your confidence based on context clarity.
     def create_custom_agent(
         cls,
         model: str,
-        output_type: type,
+        result_type: type,
         system_prompt: str,
         deps_type: Optional[type] = None,
     ) -> Agent:
@@ -209,7 +206,7 @@ Rate your confidence based on context clarity.
 
         Args:
             model: Model identifier
-            output_type: Pydantic model for output validation
+            result_type: Pydantic model for output validation
             system_prompt: System prompt for the agent
             deps_type: Optional dependency type
 
@@ -220,7 +217,7 @@ Rate your confidence based on context clarity.
 
         agent = Agent(
             model,
-            output_type=output_type,
+            result_type=result_type,
             system_prompt=system_prompt,
             deps_type=deps_type,
         )
