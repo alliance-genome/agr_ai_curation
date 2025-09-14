@@ -123,7 +123,5 @@ package-lock.json.backup
 .pre-commit-cache/
 
 # Spec-driven development toolkit
-memory/
-scripts/
-templates/
-specs/
+# Commented out to track specs folder for feature specifications
+# specs/
