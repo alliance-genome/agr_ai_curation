@@ -6,6 +6,7 @@ Replaces the traditional chat interface with structured, type-safe agents.
 """
 
 from .biocuration_agent import BioCurationAgent, BioCurationDependencies
+from .entity_extraction_agent import EntityExtractionAgent
 from .models import (
     BioCurationOutput,
     EntityExtractionOutput,
@@ -17,6 +18,7 @@ from .factory import AgentFactory
 __all__ = [
     "BioCurationAgent",
     "BioCurationDependencies",
+    "EntityExtractionAgent",
     "BioCurationOutput",
     "EntityExtractionOutput",
     "AnnotationSuggestion",

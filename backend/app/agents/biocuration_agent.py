@@ -25,7 +25,9 @@ from .models import (
     EntityType,
     HighlightColor,
     StreamingUpdate,
+    EntityExtractionOutput,
 )
+from .entity_extraction_agent import EntityExtractionAgent
 from ..database import get_db
 from ..models import ChatHistory
 
@@ -59,6 +61,7 @@ class BioCurationAgent:
         system_prompt: Optional[str] = None,
         max_history_messages: int = 20,
         enable_history_summary: bool = True,
+        entity_confidence_threshold: float = 0.7,
     ):
         """
         Initialize the BioCuration agent.
@@ -68,11 +71,13 @@ class BioCurationAgent:
             system_prompt: Optional custom system prompt
             max_history_messages: Maximum messages to keep in history
             enable_history_summary: Whether to summarize old messages
+            entity_confidence_threshold: Minimum confidence for entity extraction
         """
         self.model = model
         self.system_prompt = system_prompt
         self.max_history_messages = max_history_messages
         self.enable_history_summary = enable_history_summary
+        self.entity_confidence_threshold = entity_confidence_threshold
 
         # Default system prompt for biocuration
         if self.system_prompt is None:
@@ -226,6 +231,123 @@ Keep the summary concise and technical.""",
 
             validator = validations.get(entity_type, lambda x: True)
             return validator(entity_text)
+
+        @self.agent.tool(name="extract_entities")
+        async def extract_entities(
+            ctx: RunContext[BioCurationDependencies],
+            text: str,
+            entity_types: Optional[List[str]] = None,
+        ) -> Dict[str, Any]:
+            """
+            Extract biological entities from text using a specialized sub-agent.
+
+            This tool uses the EntityExtractionAgent to identify and extract
+            structured biological entities like genes, proteins, diseases, etc.
+
+            Args:
+                text: The text to extract entities from
+                entity_types: Optional list of entity types to focus on
+
+            Returns:
+                Dictionary containing extracted entities and metadata
+            """
+            try:
+                # Create entity extraction agent
+                extractor = EntityExtractionAgent(
+                    model="openai:gpt-4o-mini",  # Use faster model for extraction
+                    min_confidence=self.entity_confidence_threshold,
+                )
+
+                # Extract entities
+                result = await extractor.extract(text)
+
+                # Filter by confidence
+                filtered_entities = extractor.filter_by_confidence(result.entities)
+
+                # Convert to serializable format
+                return {
+                    "entities": [
+                        {
+                            "text": e.text,
+                            "type": e.type.value,
+                            "normalized": e.normalized_form,
+                            "database_id": e.database_id,
+                            "confidence": e.confidence,
+                            "context": e.context,
+                        }
+                        for e in filtered_entities
+                    ],
+                    "total": len(filtered_entities),
+                    "summary": result.summary,
+                    "breakdown": {
+                        k.value: v for k, v in result.entity_breakdown.items()
+                    },
+                }
+            except Exception as e:
+                logger.error(f"Entity extraction failed: {e}")
+                return {"error": str(e), "entities": [], "total": 0}
+
+        # Store internal tool reference
+        self._extract_entities_tool_func = extract_entities
+
+    async def extract_entities_tool(
+        self,
+        deps: BioCurationDependencies,
+        text: str,
+        min_confidence: Optional[float] = None,
+        use_document: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Public method to extract entities from text.
+
+        This is a wrapper around the tool for direct access.
+
+        Args:
+            deps: Dependencies including context
+            text: Text to extract from (ignored if use_document=True)
+            min_confidence: Minimum confidence threshold
+            use_document: If True, use document text from context
+
+        Returns:
+            Dictionary with extracted entities
+        """
+        try:
+            # Use document text if requested and available
+            if use_document and deps.context and deps.context.document_text:
+                text = deps.context.document_text
+
+            # Create entity extraction agent
+            extractor = EntityExtractionAgent(
+                model="openai:gpt-4o-mini",
+                min_confidence=min_confidence or self.entity_confidence_threshold,
+            )
+
+            # Extract entities
+            result = await extractor.extract(text)
+
+            # Filter by confidence
+            filtered_entities = extractor.filter_by_confidence(result.entities)
+
+            # Convert to serializable format
+            return {
+                "entities": [
+                    {
+                        "text": e.text,
+                        "type": e.type.value,
+                        "normalized": e.normalized_form,
+                        "database_id": e.database_id,
+                        "confidence": e.confidence,
+                        "context": e.context,
+                    }
+                    for e in filtered_entities
+                ],
+                "total": len(filtered_entities),
+                "summary": result.summary,
+                "breakdown": {k.value: v for k, v in result.entity_breakdown.items()},
+            }
+        except Exception as e:
+            logger.error(f"Entity extraction failed: {e}")
+            return {"error": str(e), "entities": [], "total": 0}
 
     async def _keep_recent_messages(
         self, messages: List[ModelMessage]

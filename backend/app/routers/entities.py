@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from ..database import get_db
@@ -16,14 +16,13 @@ class EntityCreate(BaseModel):
 
 
 class EntityResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     type: str
     synonyms: List[str]
     references: List[str]
-
-    class Config:
-        from_attributes = True
 
 
 @router.get("/", response_model=List[EntityResponse])

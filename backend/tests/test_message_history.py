@@ -58,16 +58,17 @@ class TestMessageHistory:
 
         with patch.object(agent.agent, "run") as mock_run:
             mock_result = Mock()
-            mock_result.output.response = "p53 mutations are common in cancer."
-            mock_result.output.entities = []
-            mock_result.output.annotations = []
-            mock_result.output.confidence = 0.9
-            mock_result.new_messages.return_value = history + [
-                ModelRequest(parts=[UserPromptPart(content="What mutations?")]),
-                ModelResponse(
-                    parts=[TextPart(content="p53 mutations are common in cancer.")]
-                ),
-            ]
+            # Agent now returns string directly as output
+            mock_result.output = "p53 mutations are common in cancer."
+            mock_result.new_messages = Mock(
+                return_value=history
+                + [
+                    ModelRequest(parts=[UserPromptPart(content="What mutations?")]),
+                    ModelResponse(
+                        parts=[TextPart(content="p53 mutations are common in cancer.")]
+                    ),
+                ]
+            )
             mock_run.return_value = mock_result
 
             output, new_messages = await agent.process(
@@ -179,25 +180,14 @@ class TestMessageHistory:
 
             mock_run.stream_text = mock_text_gen
 
-            # Mock result - use Mock instead of AsyncMock for synchronous methods
-            mock_result = Mock()
-            mock_output = Mock()
-            mock_output.entities = []
-            mock_output.annotations = []
-            mock_output.processing_time = None
-            mock_output.model_used = None
-            mock_output.confidence = 0.9
-            mock_result.output = mock_output
-            # new_messages() is a regular method that returns a list
-            mock_result.new_messages = Mock(
+            # Mock new_messages as a regular method that returns a list
+            mock_run.new_messages = Mock(
                 return_value=history
                 + [
                     ModelRequest(parts=[UserPromptPart(content="New question")]),
                     ModelResponse(parts=[TextPart(content="Response text")]),
                 ]
             )
-            # result() is async
-            mock_run.result = AsyncMock(return_value=mock_result)
 
             # Collect streaming updates
             async for update in agent._process_stream("New question", deps, history):
@@ -233,19 +223,8 @@ class TestMessageHistory:
 
             mock_run.stream_text = mock_delta_gen
 
-            # Mock result - use Mock instead of AsyncMock for synchronous methods
-            mock_result = Mock()
-            mock_output = Mock()
-            mock_output.entities = []
-            mock_output.annotations = []
-            mock_output.processing_time = None
-            mock_output.model_used = None
-            mock_output.confidence = 0.9
-            mock_result.output = mock_output
-            # new_messages() is a regular method that returns a list
-            mock_result.new_messages = Mock(return_value=[])
-            # result() is async
-            mock_run.result = AsyncMock(return_value=mock_result)
+            # Mock new_messages as a regular method that returns a list
+            mock_run.new_messages = Mock(return_value=[])
 
             # Collect streaming updates with delta mode
             async for update in agent._process_stream(

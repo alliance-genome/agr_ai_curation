@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from functools import lru_cache
 import os
 from dotenv import load_dotenv
@@ -25,8 +26,7 @@ class Settings(BaseSettings):
     api_url: str = "http://localhost:8002"
     frontend_url: str = "http://localhost:3000"
 
-    class Config:
-        env_file = ".env"
+    model_config = ConfigDict(env_file=".env")
 
 
 @lru_cache()

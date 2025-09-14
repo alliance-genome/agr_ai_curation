@@ -1,5 +1,54 @@
 # AGENT ARCHITECTURE PLAN
 
+## 🚀 IMPLEMENTATION PROGRESS
+
+### ✅ Completed (as of 2025-01-14)
+
+#### Phase 1: Core Streaming ✅
+
+- [x] Main agent converted to `output_type=str` for text streaming
+- [x] Implemented `stream_text()` with delta support in `_process_stream()`
+- [x] Removed BioCurationOutput from main agent streaming path
+- [x] All streaming tests passing (7 tests in test_message_history.py)
+
+#### Phase 2: Entity Extraction Tool ✅
+
+- [x] Created `EntityExtractionAgent` class as specialized sub-agent
+- [x] Implemented structured output (`EntityExtractionOutput`) for entities
+- [x] Added confidence filtering and deduplication methods
+- [x] Comprehensive test suite (13 tests, all passing)
+- [x] Support for batch extraction and entity grouping
+
+### 🔄 In Progress
+
+#### Phase 2: Entity Tool Integration
+
+- [ ] Add `extract_entities` tool to main BioCurationAgent
+- [ ] Implement automatic tool invocation logic
+- [ ] Stream entity events during processing
+
+### 📋 Remaining Work
+
+#### Phase 3: Form Filling Tool
+
+- [ ] Create DocumentFields model
+- [ ] Implement form-filling sub-agent
+- [ ] Add form field streaming events
+
+#### Phase 4: Annotation Tool
+
+- [ ] Create annotation suggestion sub-agent
+- [ ] Stream annotation events
+- [ ] Integrate with PDF viewer highlights
+
+#### Phase 5: Frontend Integration
+
+- [ ] Update AgentInterface.tsx for new event types
+- [ ] Implement progressive UI updates
+- [ ] Add entity and annotation state management
+
+---
+
 ## Problem Statement
 
 We need both **streaming text responses** for user experience AND **structured data extraction** for biocuration tasks. PydanticAI doesn't support streaming partial text when using structured output types.
