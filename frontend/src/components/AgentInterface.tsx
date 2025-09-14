@@ -127,6 +127,10 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
       selected_text: selectedText || undefined,
     };
 
+    // Map UI provider names to backend provider names
+    const backendProvider =
+      selectedProvider === "gemini" ? "google-gla" : selectedProvider;
+
     const requestData = {
       message: input,
       context: pdfTextData || selectedText ? context : undefined,
@@ -134,7 +138,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
       stream: streamingEnabled,
       include_entities: includeEntities,
       include_annotations: includeAnnotations,
-      model_preference: `${selectedProvider}:${selectedModel}`,
+      model_preference: `${backendProvider}:${selectedModel}`,
       message_history: messageHistory.length > 0 ? messageHistory : undefined,
     };
 

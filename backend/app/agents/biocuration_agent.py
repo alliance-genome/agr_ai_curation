@@ -30,6 +30,7 @@ from ..database import get_db
 from ..models import ChatHistory
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -111,10 +112,11 @@ Always maintain scientific accuracy and clarity in your responses.
             history_processors.append(self._summarize_old_messages)
 
         # Create the PydanticAI agent
+        # Using str output type for streaming support
         self.agent = Agent(
             model,
             deps_type=BioCurationDependencies,
-            output_type=BioCurationOutput,
+            output_type=str,  # Plain text for streaming
             system_prompt=self.system_prompt,
             history_processors=history_processors if history_processors else None,
         )
@@ -316,11 +318,20 @@ Keep the summary concise and technical.""",
                     message_history=message_history,
                 )
 
-                # The result.output is already a BioCurationOutput
-                output = result.output
-                # Add processing metadata
-                output.processing_time = time.time() - start_time
-                output.model_used = self.model
+                # The result.output is now a string
+                text_response = result.output
+
+                # Create a BioCurationOutput for compatibility
+                # (We'll remove this later when we update the frontend)
+                output = BioCurationOutput(
+                    response=text_response,
+                    entities=[],  # Will be populated by tools later
+                    annotations=[],  # Will be populated by tools later
+                    confidence=1.0,
+                    requires_review=False,
+                    processing_time=time.time() - start_time,
+                    model_used=self.model,
+                )
 
                 # Save to history if we have a session
                 if deps.db_session and deps.session_id:
@@ -328,7 +339,7 @@ Keep the summary concise and technical.""",
                         deps.db_session,
                         deps.session_id,
                         message,
-                        output.response,
+                        text_response,
                     )
 
                 return output, result.new_messages()
@@ -347,6 +358,8 @@ Keep the summary concise and technical.""",
         """
         Process with streaming updates.
 
+        Now using text output for real streaming support!
+
         Args:
             message: The user's message
             deps: Dependencies
@@ -356,59 +369,38 @@ Keep the summary concise and technical.""",
         Yields:
             StreamingUpdate objects
         """
+        logger.info(f"Starting stream processing for message: {message[:50]}...")
+
         async with self.agent.run_stream(
             message,
             deps=deps,
             message_history=message_history,
-        ) as run:
-            # Stream text updates (use delta for efficiency)
-            async for text in run.stream_text(delta=use_delta):
+        ) as stream_result:
+            logger.info("Stream context created, starting text streaming...")
+
+            # Stream the text response
+            async for text_chunk in stream_result.stream_text(delta=use_delta):
+                logger.debug(
+                    f"Streaming {'delta' if use_delta else 'full'} text: {text_chunk[:50]}..."
+                )
                 yield StreamingUpdate(
                     type="text_delta" if use_delta else "text",
-                    content=text,
+                    content=text_chunk,
                 )
 
-            # Get final result
-            result = await run.result()
-            output = result.output if hasattr(result, "output") else result
-
-            # Stream entities as they're found
-            for entity in output.entities:
-                yield StreamingUpdate(
-                    type="entity",
-                    content=entity.text,
-                    metadata=entity.model_dump(),
-                )
-
-            # Stream annotations
-            for annotation in output.annotations:
-                yield StreamingUpdate(
-                    type="annotation",
-                    content=annotation.text,
-                    metadata=annotation.model_dump(),
-                )
-
-            # Send message history for client storage
+            # After streaming completes, send message history
             from pydantic_core import to_jsonable_python
 
             yield StreamingUpdate(
                 type="history",
                 content="",
                 metadata={
-                    "messages": to_jsonable_python(result.new_messages()),
+                    "messages": to_jsonable_python(stream_result.new_messages()),
                 },
             )
 
-            # Final metadata
-            yield StreamingUpdate(
-                type="metadata",
-                content="",
-                metadata={
-                    "processing_time": output.processing_time,
-                    "model_used": output.model_used,
-                    "confidence": output.confidence,
-                },
-            )
+            # For now, we'll add entity/annotation extraction as tools later
+            # Just get the chat working with streaming text first
 
     async def _save_to_history(
         self,

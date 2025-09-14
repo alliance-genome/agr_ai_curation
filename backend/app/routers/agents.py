@@ -29,6 +29,7 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_core import to_jsonable_python
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 router = APIRouter()
 
 
@@ -156,10 +157,14 @@ async def biocurate_stream(
 
     This endpoint replaces the old /chat/stream endpoint.
     """
+    logger.info(
+        f"Received stream request: message={request.message[:50]}..., model={request.model_preference}"
+    )
     try:
         session_id = request.session_id or str(uuid.uuid4())
         model = request.model_preference or "openai:gpt-4o"
 
+        logger.info(f"Creating agent with model: {model}")
         agent = AgentFactory.get_biocuration_agent(model)
 
         deps = BioCurationDependencies(
@@ -171,6 +176,7 @@ async def biocurate_stream(
                 "include_annotations": request.include_annotations,
             },
         )
+        logger.info(f"Dependencies created, session_id: {session_id}")
 
         # Deserialize message history if provided
         message_history = None
@@ -210,9 +216,13 @@ async def _stream_response(
     """
     Generate SSE stream for agent responses.
     """
+    logger.info(f"Starting SSE stream for message: {message[:50]}...")
     try:
         # Process with streaming
+        update_count = 0
         async for update in agent._process_stream(message, deps, message_history):
+            update_count += 1
+            logger.debug(f"Sending update #{update_count}: type={update.type}")
             # Convert to SSE format
             data = {
                 "type": update.type,
@@ -225,6 +235,7 @@ async def _stream_response(
             yield f"data: {json.dumps(data)}\n\n"
 
         # Send completion marker
+        logger.info(f"Stream complete, sent {update_count} updates")
         completion_data = {
             "type": "complete",
             "session_id": session_id,
@@ -232,7 +243,7 @@ async def _stream_response(
         yield f"data: {json.dumps(completion_data)}\n\n"
 
     except Exception as e:
-        logger.error(f"Streaming error: {str(e)}")
+        logger.error(f"Streaming error: {str(e)}", exc_info=True)
         error_data = {
             "type": "error",
             "error": str(e),

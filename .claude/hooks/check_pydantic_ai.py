@@ -50,8 +50,8 @@ def main():
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
 
-    # Only check for Edit, MultiEdit, and Write tools
-    if tool_name not in ["Edit", "MultiEdit", "Write"]:
+    # Only check for Edit, MultiEdit, Write, and Update tools
+    if tool_name not in ["Edit", "MultiEdit", "Write", "Update"]:
         sys.exit(0)
 
     # Get the project directory
@@ -83,6 +83,10 @@ def main():
     elif tool_name == "Write":
         content_to_check = tool_input.get("content", "")
         file_path = tool_input.get("file_path", "")
+    elif tool_name == "Update":
+        # Update tool has different parameters
+        content_to_check = tool_input.get("content", "")
+        file_path = tool_input.get("path", "")
 
     # Check if this is a Python file
     if not file_path.endswith((".py", ".pyx")):

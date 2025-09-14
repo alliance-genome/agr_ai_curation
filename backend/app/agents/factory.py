@@ -169,7 +169,7 @@ class AgentFactory:
 
             agent = Agent(
                 model,
-                result_type=EntityExtractionOutput,
+                output_type=EntityExtractionOutput,
                 system_prompt="""
 You are a specialized entity extraction agent focused on identifying
 biological entities in scientific text. Extract:
@@ -197,7 +197,7 @@ Rate your confidence based on context clarity.
     def create_custom_agent(
         cls,
         model: str,
-        result_type: type,
+        output_type: type,
         system_prompt: str,
         deps_type: Optional[type] = None,
     ) -> Agent:
@@ -206,7 +206,7 @@ Rate your confidence based on context clarity.
 
         Args:
             model: Model identifier
-            result_type: Pydantic model for output validation
+            output_type: Pydantic model for output validation
             system_prompt: System prompt for the agent
             deps_type: Optional dependency type
 
@@ -217,7 +217,7 @@ Rate your confidence based on context clarity.
 
         agent = Agent(
             model,
-            result_type=result_type,
+            output_type=output_type,
             system_prompt=system_prompt,
             deps_type=deps_type,
         )

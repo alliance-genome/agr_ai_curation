@@ -7,7 +7,7 @@
         "script": ".claude/hooks/check_pydantic_ai.py",
         "matchers": [
           {
-            "tool": "(Edit|MultiEdit|Write)"
+            "tool": "(Edit|MultiEdit|Write|Update)"
           }
         ]
       }

@@ -57,9 +57,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         });
       }
 
-      // Process Gemini models
-      if (data.gemini) {
-        data.gemini.forEach((modelId: string) => {
+      // Process Google/Gemini models
+      if (data.google) {
+        data.google.forEach((modelId: string) => {
           modelList.push({
             id: modelId,
             name: getModelDisplayName(modelId),
