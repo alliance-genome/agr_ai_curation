@@ -510,6 +510,46 @@ Keep the summary concise and technical.""",
                     content=text_chunk,
                 )
 
+            # Check for tool calls and emit entity events
+            # Note: In PydanticAI 1.0.6, tool results are available after streaming
+            # We'll emit entity events based on the tool results
+            try:
+                # Access tool call results if any
+                if hasattr(stream_result, "all_messages"):
+                    messages = stream_result.all_messages()
+                    for msg in messages:
+                        # Check if this message contains tool call results
+                        if hasattr(msg, "parts"):
+                            for part in msg.parts:
+                                if (
+                                    hasattr(part, "tool_name")
+                                    and part.tool_name == "extract_entities"
+                                ):
+                                    # Extract entities from the tool result
+                                    if hasattr(part, "result") and isinstance(
+                                        part.result, dict
+                                    ):
+                                        entities = part.result.get("entities", [])
+                                        for entity in entities:
+                                            yield StreamingUpdate(
+                                                type="entity",
+                                                content=entity.get("text", ""),
+                                                metadata={
+                                                    "type": entity.get("type"),
+                                                    "confidence": entity.get(
+                                                        "confidence"
+                                                    ),
+                                                    "database_id": entity.get(
+                                                        "database_id"
+                                                    ),
+                                                    "normalized": entity.get(
+                                                        "normalized"
+                                                    ),
+                                                },
+                                            )
+            except Exception as e:
+                logger.warning(f"Could not extract tool call results: {e}")
+
             # After streaming completes, send message history
             from pydantic_core import to_jsonable_python
 
@@ -520,9 +560,6 @@ Keep the summary concise and technical.""",
                     "messages": to_jsonable_python(stream_result.new_messages()),
                 },
             )
-
-            # For now, we'll add entity/annotation extraction as tools later
-            # Just get the chat working with streaming text first
 
     async def _save_to_history(
         self,

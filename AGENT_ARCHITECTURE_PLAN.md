@@ -2,7 +2,7 @@
 
 ## 🚀 IMPLEMENTATION PROGRESS
 
-### ✅ Completed (as of 2025-01-14)
+### ✅ Completed (as of 2025-01-14 18:00 UTC)
 
 #### Phase 1: Core Streaming ✅
 
@@ -19,13 +19,21 @@
 - [x] Comprehensive test suite (13 tests, all passing)
 - [x] Support for batch extraction and entity grouping
 
+#### Phase 2: Entity Tool Integration ✅
+
+- [x] Add `extract_entities` tool to main BioCurationAgent
+- [x] Implement automatic tool invocation logic
+- [x] Stream entity events during processing
+- [x] Comprehensive test coverage (8 tests for tool integration)
+- [x] Fixed all deprecation warnings (Pydantic, SQLAlchemy, Docker Compose)
+
 ### 🔄 In Progress
 
-#### Phase 2: Entity Tool Integration
+#### Phase 3: Form Filling Tool
 
-- [ ] Add `extract_entities` tool to main BioCurationAgent
-- [ ] Implement automatic tool invocation logic
-- [ ] Stream entity events during processing
+- [ ] Create DocumentFields model
+- [ ] Implement form-filling sub-agent
+- [ ] Add form field streaming events
 
 ### 📋 Remaining Work
 

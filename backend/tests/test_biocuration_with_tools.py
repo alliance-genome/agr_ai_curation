@@ -114,26 +114,37 @@ class TestBioCurationAgentWithTools:
             mock_run.stream_text = mock_text_gen
             mock_run.new_messages = Mock(return_value=[])
 
-            # Mock tool calls during streaming
-            mock_run.tool_calls = [
-                Mock(
-                    tool_name="extract_entities",
-                    args={
-                        "text": "The BRCA1 gene is associated with breast cancer risk."
+            # Mock all_messages to simulate tool call results
+            from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+            # Create mock tool call part with extract_entities result
+            tool_part = Mock()
+            tool_part.tool_name = "extract_entities"
+            tool_part.result = {
+                "entities": [
+                    {
+                        "text": "BRCA1",
+                        "type": "gene",
+                        "confidence": 0.95,
+                        "database_id": "GENE:672",
+                        "normalized": "BRCA1",
                     },
-                    result={
-                        "entities": [
-                            {"text": "BRCA1", "type": "gene", "confidence": 0.95},
-                            {
-                                "text": "breast cancer",
-                                "type": "disease",
-                                "confidence": 0.90,
-                            },
-                        ],
-                        "total": 2,
+                    {
+                        "text": "breast cancer",
+                        "type": "disease",
+                        "confidence": 0.90,
+                        "database_id": "MESH:D001943",
+                        "normalized": "Breast Cancer",
                     },
-                )
-            ]
+                ],
+                "total": 2,
+            }
+
+            # Create mock message with tool call part
+            mock_msg = Mock()
+            mock_msg.parts = [tool_part]
+
+            mock_run.all_messages = Mock(return_value=[mock_msg])
 
             # Collect streaming updates
             async for update in agent._process_stream(
@@ -144,9 +155,17 @@ class TestBioCurationAgentWithTools:
             # Check we got both text and entity updates
             text_updates = [u for u in updates if u.type == "text_delta"]
             entity_updates = [u for u in updates if u.type == "entity"]
+            history_updates = [u for u in updates if u.type == "history"]
 
             assert len(text_updates) > 0  # Got text streaming
-            # Entity extraction would happen via tool calls
+            assert len(entity_updates) == 2  # Got 2 entity events
+            assert len(history_updates) == 1  # Got history update
+
+            # Verify entity content
+            assert entity_updates[0].content == "BRCA1"
+            assert entity_updates[0].metadata["type"] == "gene"
+            assert entity_updates[1].content == "breast cancer"
+            assert entity_updates[1].metadata["type"] == "disease"
 
     @pytest.mark.asyncio
     async def test_automatic_entity_extraction_trigger(self):
