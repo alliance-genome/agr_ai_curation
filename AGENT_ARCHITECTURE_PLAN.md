@@ -61,154 +61,324 @@
 
 We need both **streaming text responses** for user experience AND **structured data extraction** for biocuration tasks. PydanticAI doesn't support streaming partial text when using structured output types.
 
-## Solution: Hybrid Agent Architecture
+## Solution: Multi-Agent Architecture with Pre-Retrieval
 
 ### Core Design Principles
 
-1. **Main agent returns plain text** (`output_type=str`) for streaming capability
-2. **Specialized sub-agents** handle structured data extraction via tools
-3. **Stream text immediately** while structured data processes in background
-4. **Tool events** provide real-time updates about extraction progress
+1. **Main orchestrator agent** (`output_type=str`) ONLY streams conversational text
+2. **All operations delegated** - Orchestrator doesn't do any actual work
+3. **Services handle retrieval** - Hybrid search/reranking are regular services, not agents
+4. **Specialized sub-agents** for synthesis - Receive pre-retrieved context via Dependencies
+5. **Clear separation** - Conversation (orchestrator) vs Operations (services/agents)
 
 ## Agent Hierarchy
 
-### 1. Main Conversational Agent
+### 1. Main Orchestrator Agent
 
-- **Type**: `Agent[BioCurationDependencies, str]`
+- **Type**: `Agent[None, str]`
 - **Output**: Plain text (streamable)
-- **Purpose**: Handle all user conversations with streaming responses
-- **System Prompt**: General biocuration assistant instructions
+- **Purpose**: Conversational interface that streams responses to user
+- **Responsibilities**:
+  - Maintain conversation flow
+  - Analyze user intent
+  - Decide which specialized agent to dispatch
+  - Stream results back to user
+- **System Prompt**: "You are a conversational assistant. Analyze user intent and dispatch the appropriate specialized agent."
 
-### 2. Entity Extraction Tool (Sub-Agent)
+### 2. Specialized Domain Sub-Agents
 
-- **Type**: `Agent[None, EntityExtractionOutput]`
-- **Output**: Structured list of biological entities
-- **Called By**: Main agent via `@agent.tool`
-- **When Used**: Automatically when entities mentioned or explicitly requested
+Each sub-agent is an expert in a specific biological domain:
 
-### 3. Document Form Filler Tool (Sub-Agent)
+#### Disease Annotation Agent
 
-- **Type**: `Agent[None, DocumentFields]`
-- **Output**: Structured form data
-- **Called By**: Main agent via `@agent.tool`
-- **When Used**: When user requests form population or structured output
+- **Type**: `Agent[DiseasePipelineOutput, DiseaseAnnotations]`
+- **Expertise**: Diseases, conditions, phenotypes, symptoms
+- **Receives**: Pre-filtered disease-relevant chunks from pipeline
+- **Returns**: Structured disease annotations with confidence scores
 
-### 4. Annotation Suggester Tool (Sub-Agent)
+#### Gene/Protein Agent
 
-- **Type**: `Agent[None, List[AnnotationSuggestion]]`
-- **Output**: List of annotation suggestions
-- **Called By**: Main agent via `@agent.tool`
-- **When Used**: When analyzing documents for highlights
+- **Type**: `Agent[GenePipelineOutput, GeneAnnotations]`
+- **Expertise**: Genes, proteins, mutations, expression patterns
+- **Receives**: Pre-filtered gene-relevant chunks from pipeline
+- **Returns**: Structured gene/protein information
 
-## Streaming Event Flow
+#### Pathway Agent
+
+- **Type**: `Agent[PathwayPipelineOutput, PathwayAnnotations]`
+- **Expertise**: Biological pathways, interactions, networks
+- **Receives**: Pre-filtered pathway-relevant chunks from pipeline
+- **Returns**: Structured pathway information
+
+#### Drug/Chemical Agent
+
+- **Type**: `Agent[ChemicalPipelineOutput, ChemicalAnnotations]`
+- **Expertise**: Drugs, compounds, chemical interactions
+- **Receives**: Pre-filtered chemical-relevant chunks from pipeline
+- **Returns**: Structured chemical/drug information
+
+### 3. Data Preparation Pipelines (Python Services)
+
+Each pipeline prepares data for its corresponding agent:
+
+#### Disease Pipeline
+
+- Searches for disease-related terms
+- Filters chunks by disease relevance
+- Extracts disease ontology matches
+- Prepares structured context
+
+#### Gene Pipeline
+
+- Searches for gene/protein mentions
+- Cross-references with gene databases
+- Filters by gene relevance
+- Prepares structured context
+
+#### Pathway Pipeline
+
+- Searches for pathway terms
+- Identifies interaction patterns
+- Filters by pathway relevance
+- Prepares structured context
+
+#### Chemical Pipeline
+
+- Searches for chemical/drug names
+- Identifies SMILES patterns
+- Filters by chemical relevance
+- Prepares structured context
+
+### 4. Core Services (Python Classes)
+
+- **HybridSearchService**: Domain-agnostic search
+- **RerankingService**: Cross-encoder reranking
+- **OntologyService**: Ontology matching
+- **DatabaseService**: External database queries
+- These support all pipelines
+
+## Complete Pipeline Flow
 
 ```
-User Message
+User: "Find all disease annotations in this paper"
     ↓
-Main Agent Processes
+Orchestrator Analyzes Intent → DISEASE_ANNOTATION task
     ↓
-Stream Text Response (immediate)
+Orchestrator Starts Streaming: "I'll search for disease annotations..."
     ↓
-Tool Calls (if needed)
-    ├── Entity Extraction (async)
-    ├── Form Filling (async)
-    └── Annotation Suggestions (async)
+Orchestrator Dispatches: run_disease_pipeline()
     ↓
-Stream Tool Results as Updates
+Disease Pipeline Executes (Python, No LLM):
+    ├── HybridSearchService.search(disease_terms)
+    │   ├── Vector Search with disease-specific embeddings
+    │   ├── Lexical Search for disease ontology terms
+    │   └── Merge results with disease weighting
+    ├── DiseaseFilterService.filter()
+    │   ├── Filter chunks by disease relevance score
+    │   ├── Extract sentences with disease mentions
+    │   └── Group by disease type
+    ├── OntologyService.match()
+    │   ├── Match to Disease Ontology (DO)
+    │   ├── Match to Human Phenotype Ontology (HPO)
+    │   └── Add ontology IDs
+    └── Prepare DiseasePipelineOutput
     ↓
-Complete Response
+Disease Agent Receives Prepared Data:
+    ├── Pre-filtered disease chunks
+    ├── Ontology matches
+    ├── Relevance scores
+    └── No additional search needed
+    ↓
+Disease Agent Synthesizes (LLM call):
+    ├── Validates disease annotations
+    ├── Adds confidence scores
+    ├── Formats structured output
+    └── Returns DiseaseAnnotations
+    ↓
+Orchestrator Receives Results
+    ↓
+Orchestrator Continues Streaming: "I found 5 disease annotations:
+1. Breast cancer (DOID:1612) - mentioned on page 3..."
 ```
 
-## Event Types for Frontend
+**Key Architecture Points**:
 
-### Streaming Updates (`StreamingUpdate`)
+- **Orchestrator**: Decides WHAT to run based on intent
+- **Pipelines**: Do the HOW - all data preparation
+- **Specialized Agents**: Expert synthesis from prepared data
+- **Clear Separation**: Intent → Pipeline → Agent → Response
+
+## Event Types for Frontend (Simplified)
+
+### Streaming Updates
 
 ```python
 {
-    "type": "text_delta",     # Incremental text
-    "content": "Looking at..."
+    "type": "text_delta",      # Streaming conversational text
+    "content": "I'm analyzing the paper for gene mentions..."
 }
 
 {
-    "type": "tool_call",       # Tool being invoked
-    "content": "extract_entities",
-    "metadata": {"status": "started"}
+    "type": "status",          # Status update (optional)
+    "content": "Extracting entities",
+    "metadata": {"tool": "entity_extraction"}
 }
 
 {
-    "type": "entity",          # Entity found
-    "content": "BRCA1",
+    "type": "tool_complete",   # Tool finished - full results available
+    "content": "Entities extracted",
     "metadata": {
-        "type": "gene",
-        "database_id": "672",
-        "confidence": 0.95
+        "entities": [...],     # Complete list, not streamed
+        "count": 5
     }
 }
 
 {
-    "type": "form_field",      # Form field populated
-    "content": "gene_name",
+    "type": "complete",        # Everything done
     "metadata": {
-        "value": "BRCA1",
-        "field_type": "string"
+        "total_entities": 5,
+        "confidence": 0.85
     }
 }
+```
 
-{
-    "type": "annotation",      # Annotation suggestion
-    "content": "important finding",
-    "metadata": {
-        "color": "yellow",
-        "start": 100,
-        "end": 150
-    }
-}
+## Implementation Example
 
-{
-    "type": "complete",        # Stream finished
-    "metadata": {
-        "entities_count": 5,
-        "annotations_count": 3
-    }
-}
+```python
+from pydantic_ai import Agent, RunContext
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+# Main Orchestrator - only streams text
+orchestrator = Agent(
+    'gpt-4o',
+    output_type=str,
+    system_prompt="""You are a conversational biocuration assistant.
+    Analyze user intent and dispatch appropriate specialized agents.
+    Stream friendly responses while work happens in background."""
+)
+
+# Specialized Disease Agent
+disease_agent = Agent(
+    'gpt-4o',
+    output_type=DiseaseAnnotations,
+    deps_type=DiseasePipelineOutput,
+    system_prompt="""You are a disease annotation specialist.
+    You receive pre-filtered disease-relevant data.
+    Validate and structure disease annotations with confidence scores."""
+)
+
+# Specialized Gene Agent
+gene_agent = Agent(
+    'gpt-4o',
+    output_type=GeneAnnotations,
+    deps_type=GenePipelineOutput,
+    system_prompt="""You are a gene/protein annotation specialist.
+    You receive pre-filtered gene-relevant data.
+    Validate and structure gene annotations with database IDs."""
+)
+
+@orchestrator.tool
+async def find_disease_annotations(ctx: RunContext, query: str) -> str:
+    """Orchestrator tool for disease annotation requests"""
+
+    # Run the disease pipeline (Python services, no LLM)
+    pipeline_output = await disease_pipeline.run(
+        document_id=ctx.document_id,
+        query=query
+    )
+
+    # Dispatch to specialized disease agent
+    result = await disease_agent.run(
+        "",
+        deps=pipeline_output
+    )
+
+    # Format for streaming
+    annotations = result.output.annotations
+    return f"Found {len(annotations)} disease annotations: {format_diseases(annotations)}"
+
+@orchestrator.tool
+async def find_gene_mentions(ctx: RunContext, query: str) -> str:
+    """Orchestrator tool for gene annotation requests"""
+
+    # Run the gene pipeline (Python services, no LLM)
+    pipeline_output = await gene_pipeline.run(
+        document_id=ctx.document_id,
+        query=query
+    )
+
+    # Dispatch to specialized gene agent
+    result = await gene_agent.run(
+        "",
+        deps=pipeline_output
+    )
+
+    # Format for streaming
+    genes = result.output.genes
+    return f"Found {len(genes)} genes: {format_genes(genes)}"
+
+# Disease Pipeline (Pure Python)
+class DiseasePipeline:
+    async def run(self, document_id: str, query: str) -> DiseasePipelineOutput:
+        # 1. Search with disease-specific strategy
+        chunks = await hybrid_search.search(
+            query=query,
+            boost_terms=["disease", "condition", "syndrome", "disorder"],
+            ontology="disease"
+        )
+
+        # 2. Filter for disease relevance
+        filtered = await disease_filter.filter(chunks)
+
+        # 3. Match to ontologies
+        matched = await ontology_service.match(
+            filtered,
+            ontologies=["DO", "HPO", "MONDO"]
+        )
+
+        # 4. Prepare output for agent
+        return DiseasePipelineOutput(
+            chunks=matched,
+            ontology_matches=matched.ontology_ids,
+            relevance_scores=matched.scores
+        )
 ```
 
 ## Use Cases
 
 ### Case 1: Simple Question
 
-**User**: "What is gene X in this paper?"
+**User**: "What genes are mentioned in this paper?"
 
 **Response Flow**:
 
-1. Stream text: "Looking at the paper, gene X refers to BRCA1, which is..."
-2. Tool call: extract_entities("BRCA1...")
-3. Entity update: {type: "entity", content: "BRCA1", metadata: {...}}
+1. Stream text: "I'll analyze the paper for gene mentions. Let me review the content..."
+2. Tool runs in background: extract_entities() [2-3 seconds]
+3. Stream continuation: "I found 5 genes in the paper: BRCA1, TP53, EGFR, KRAS, and MYC..."
+4. Update UI: Entities sidebar populated with complete list
 
-### Case 2: Document Population
+### Case 2: Document Q&A
 
-**User**: "Please fill in the gene curation form"
+**User**: "What are the main findings about BRCA1?"
 
 **Response Flow**:
 
-1. Stream text: "I'll analyze the paper and populate the form. Starting with gene identification..."
-2. Tool call: fill_document_fields(paper_text, form_schema)
-3. Form updates: Multiple {type: "form_field"} events
-4. Stream text: "I've populated 12 fields. The main gene is..."
+1. Stream text: "Let me search for information about BRCA1 in this paper..."
+2. RAG retrieval runs in background [1-2 seconds]
+3. Stream answer: "The paper identifies three key findings about BRCA1: First..."
+4. Metadata available: Citations and page references (not streamed, just available)
 
 ### Case 3: Complex Analysis
 
-**User**: "Analyze this paper for all genes and their interactions"
+**User**: "Analyze this paper and extract all relevant biological entities"
 
 **Response Flow**:
 
-1. Stream text: "I'll perform a comprehensive analysis..."
-2. Multiple tool calls in parallel:
-   - extract_entities(full_text)
-   - find_interactions(full_text)
-   - suggest_annotations(full_text)
-3. Stream updates as each tool completes
-4. Stream summary text: "Found 15 genes with 8 documented interactions..."
+1. Stream text: "I'll perform a comprehensive analysis of the paper. This will include genes, proteins, diseases, and pathways..."
+2. Multiple tools run in background (not shown individually to user)
+3. Stream results: "I've completed the analysis. I found 15 genes, 8 proteins, 3 diseases..."
+4. Update UI: Complete structured data available in sidebars
 
 ## Implementation Steps
 

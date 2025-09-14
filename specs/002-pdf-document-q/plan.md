@@ -32,7 +32,7 @@
 
 ## Summary
 
-Implement an enhanced RAG-based PDF Q&A system with hybrid search (vector + lexical), reranking, and confidence-based guardrails. Uses PydanticAI for all orchestration, pgvector with HNSW indexing, layout-aware PDF processing with table/figure extraction, ontology-aware query expansion, and Postgres-based job queue. Provides precise citations with page/bbox references and "insufficient evidence" fallbacks for high curator trust.
+Implement a multi-agent PDF Q&A system with specialized domain experts. Main orchestrator agent analyzes intent and streams conversational text. Based on user intent (disease, gene, pathway, etc.), orchestrator dispatches specialized pipelines that prepare data, then passes to domain-specific sub-agents for synthesis. Clean separation: Orchestrator (conversation) → Pipelines (data prep) → Specialized Agents (expert synthesis).
 
 ## Technical Context
 
@@ -45,6 +45,86 @@ Implement an enhanced RAG-based PDF Q&A system with hybrid search (vector + lexi
 **Performance Goals**: <100ms vector search, <50ms lexical search, <200ms reranking, <2s full pipeline
 **Constraints**: 12+ concurrent users, 100MB file limit, 500 page limit, confidence thresholds
 **Scale/Scope**: 12 users, 100 PDFs/day, 10K queries/day, 90-day retention
+
+## Agent Architecture
+
+### Multi-Agent System Design
+
+**Main Orchestrator Agent**:
+
+- `Agent[None, str]` - Streams conversational text only
+- Analyzes user intent to determine which specialist to dispatch
+- System prompt: Conversational assistant that coordinates specialists
+
+**Specialized Domain Agents**:
+
+**Disease Annotation Agent**:
+
+- `Agent[DiseasePipelineOutput, DiseaseAnnotations]`
+- Expert in diseases, conditions, phenotypes
+- Receives pre-filtered disease data from pipeline
+- System prompt: Disease annotation specialist
+
+**Gene/Protein Agent**:
+
+- `Agent[GenePipelineOutput, GeneAnnotations]`
+- Expert in genes, proteins, mutations
+- Receives pre-filtered gene data from pipeline
+- System prompt: Molecular biology specialist
+
+**Pathway Agent**:
+
+- `Agent[PathwayPipelineOutput, PathwayAnnotations]`
+- Expert in biological pathways and interactions
+- Receives pre-filtered pathway data from pipeline
+- System prompt: Systems biology specialist
+
+**Chemical/Drug Agent**:
+
+- `Agent[ChemicalPipelineOutput, ChemicalAnnotations]`
+- Expert in compounds, drugs, treatments
+- Receives pre-filtered chemical data from pipeline
+- System prompt: Pharmacology specialist
+
+### Pipeline Architecture
+
+```python
+# Example: Disease Pipeline Flow
+@orchestrator.tool
+async def find_disease_annotations(ctx: RunContext, query: str) -> str:
+    # 1. Run disease pipeline (no LLM)
+    pipeline_output = await disease_pipeline.run(
+        document_id=ctx.document_id,
+        query=query
+    )
+
+    # 2. Dispatch to disease specialist agent
+    result = await disease_agent.run(
+        "",
+        deps=pipeline_output
+    )
+
+    # 3. Return formatted string for streaming
+    return format_disease_results(result.output)
+
+class DiseasePipeline:
+    async def run(self, document_id: str, query: str) -> DiseasePipelineOutput:
+        # Search with disease-specific strategy
+        chunks = await hybrid_search.search(
+            query=query,
+            boost_terms=["disease", "condition", "syndrome"],
+            ontology="disease"
+        )
+
+        # Filter and match to ontologies
+        filtered = await disease_filter.filter(chunks)
+        matched = await ontology_service.match(filtered, ["DO", "HPO"])
+
+        return DiseasePipelineOutput(
+            chunks=matched,
+            ontology_matches=matched.ontology_ids
+        )
+```
 
 ## Constitution Check
 
@@ -297,23 +377,30 @@ The /tasks command will generate approximately 50-55 prioritized tasks following
    - Source attribution
    - Performance optimization
 
-### Priority 3: RAG Pipeline with Guardrails (Tasks 31-40) - Week 2
+### Priority 3: Multi-Agent System (Tasks 31-45) - Week 2
 
-**Core functionality with quality controls**
+**Specialized agents and pipelines**
 
-7. **PydanticAI Agents** (Tasks 31-35):
-   - QueryExpansionAgent for synonyms
-   - HybridSearchAgent for retrieval
-   - RerankingAgent with MMR
-   - AnswerValidationAgent for confidence
-   - CitationAgent for attribution
+7. **Specialized Domain Agents** (Tasks 31-36):
+   - Disease Annotation Agent with expertise
+   - Gene/Protein Agent with molecular knowledge
+   - Pathway Agent for interactions
+   - Chemical/Drug Agent for compounds
+   - Each with domain-specific prompts
 
-8. **Confidence & Guardrails** (Tasks 36-40):
-   - Multi-factor confidence scoring
-   - "Insufficient evidence" fallbacks
-   - Citation requirement enforcement
-   - Answer validation pipeline
-   - Reformulation suggestions
+8. **Data Preparation Pipelines** (Tasks 37-40):
+   - Disease Pipeline with ontology matching
+   - Gene Pipeline with database cross-refs
+   - Domain-specific search strategies
+   - Pre-filtering and relevance scoring
+   - No LLM costs during preparation
+
+9. **Orchestrator Integration** (Tasks 41-45):
+   - Intent detection and routing
+   - Agent dispatch logic
+   - Result formatting for streaming
+   - Error handling and fallbacks
+   - Full pipeline integration tests
 
 ### Priority 4: API & Frontend (Tasks 41-50) - Week 2-3
 
@@ -382,7 +469,7 @@ Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipe
 - P4: End-to-end flow works
 - P5: All metrics visible
 
-**Estimated Output**: 50-55 tasks with clear priorities and dependencies
+**Estimated Output**: 60 tasks with clear priorities and dependencies
 
 **IMPORTANT**: This phase is executed by the /tasks command, NOT by /plan
 

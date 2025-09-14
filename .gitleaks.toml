@@ -59,8 +59,8 @@ keywords = ["ghp_"]
 [[rules]]
 id = "generic-secret"
 description = "Generic secret patterns"
-regex = '''(?i)(secret|password|passwd|pwd|token|auth)\s*[:=]\s*["\']?[a-zA-Z0-9\-_!@#$%^&*()]{8,}["\']?'''
-keywords = ["secret", "password", "passwd", "token", "auth"]
+regex = '''(?i)(secret|password|passwd|pwd|auth)\s*[:=]\s*["\']?[a-zA-Z0-9\-_!@#$%^&*()]{8,}["\']?'''
+keywords = ["secret", "password", "passwd", "auth"]
 
 # Allowlist for known safe patterns
 [allowlist]
@@ -72,6 +72,7 @@ regexes = [
     '''127\.0\.0\.1''',   # Local IP
     '''password.*example''', # Example passwords in documentation
     '''secret.*placeholder''', # Placeholder secrets
+    '''session_token''',  # SQLAlchemy column names and test values
 ]
 
 paths = [

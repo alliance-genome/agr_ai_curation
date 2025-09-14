@@ -159,14 +159,17 @@ class CurationContext(BaseModel):
 
 
 class StreamingUpdate(BaseModel):
-    """Update for streaming responses"""
+    """Simplified update for streaming responses - only text and status"""
 
     type: Literal[
-        "text", "text_delta", "entity", "annotation", "metadata", "history", "event"
+        "text_delta",  # Streaming conversational text
+        "status",  # Tool status update
+        "tool_complete",  # Tool finished with complete results
+        "complete",  # Everything done
     ] = Field(description="Type of update")
     content: str = Field(description="Content of the update")
     metadata: Optional[Dict[str, Any]] = Field(
-        None, description="Additional metadata for the update"
+        None, description="Optional metadata (complete tool results, not streamed)"
     )
     timestamp: datetime = Field(
         default_factory=datetime.utcnow, description="Timestamp of the update"

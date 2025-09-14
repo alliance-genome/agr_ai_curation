@@ -71,51 +71,58 @@
 - [ ] T029 Implement MMR algorithm in `backend/lib/mmr_diversifier.py` **[TDD-GREEN]**
 - [ ] T030 [P] Create reranker CLI with performance metrics in `backend/lib/cli/rerank_cli.py`
 
-## Priority 3: RAG Pipeline with Guardrails (Week 2)
+## Priority 3: Multi-Agent RAG System (Week 2)
 
-### PydanticAI Agents
+### Specialized Agents & Pipelines
 
-- [ ] T031 [P] Write QueryExpansionAgent tests in `backend/tests/unit/test_query_expansion.py` **[TDD-RED]**
-- [ ] T032 [P] Implement QueryExpansionAgent with ontology in `backend/app/agents/query_expansion_agent.py` **[TDD-GREEN]**
-- [ ] T033 [P] Write HybridSearchAgent tests in `backend/tests/unit/test_search_agent.py` **[TDD-RED]**
-- [ ] T034 [P] Implement HybridSearchAgent in `backend/app/agents/hybrid_search_agent.py` **[TDD-GREEN]**
-- [ ] T035 [P] Write AnswerValidationAgent tests in `backend/tests/unit/test_validation_agent.py` **[TDD-RED]**
+- [ ] T031 [P] Write pipeline output models tests in `backend/tests/unit/test_pipeline_models.py` **[TDD-RED]**
+- [ ] T032 [P] Implement pipeline output models in `backend/app/agents/pipeline_models.py` **[TDD-GREEN]**
+  - DiseasePipelineOutput, GenePipelineOutput, PathwayPipelineOutput, ChemicalPipelineOutput
+- [ ] T033 [P] Write Disease Agent tests in `backend/tests/unit/test_disease_agent.py` **[TDD-RED]**
+- [ ] T034 Implement Disease Agent in `backend/app/agents/disease_agent.py` **[TDD-GREEN]**
+- [ ] T035 [P] Write Gene Agent tests in `backend/tests/unit/test_gene_agent.py` **[TDD-RED]**
+- [ ] T036 Implement Gene Agent in `backend/app/agents/gene_agent.py` **[TDD-GREEN]**
+- [ ] T037 [P] Write Disease Pipeline tests in `backend/tests/unit/test_disease_pipeline.py` **[TDD-RED]**
+- [ ] T038 Implement Disease Pipeline in `backend/lib/pipelines/disease_pipeline.py` **[TDD-GREEN]**
+  - Integrates hybrid search, filtering, ontology matching
+- [ ] T039 [P] Write Gene Pipeline tests in `backend/tests/unit/test_gene_pipeline.py` **[TDD-RED]**
+- [ ] T040 Implement Gene Pipeline in `backend/lib/pipelines/gene_pipeline.py` **[TDD-GREEN]**
 
-### Confidence & Guardrails
+### Orchestrator & Integration
 
-- [ ] T036 Implement AnswerValidationAgent with confidence scoring in `backend/app/agents/answer_validation_agent.py` **[TDD-GREEN]**
-- [ ] T037 [P] Write citation enforcement tests in `backend/tests/unit/test_citations.py` **[TDD-RED]**
-- [ ] T038 Implement CitationAgent with bbox support in `backend/app/agents/citation_agent.py` **[TDD-GREEN]**
-- [ ] T039 [P] Write RAG orchestrator integration tests in `backend/tests/integration/test_rag_pipeline.py` **[TDD-RED]**
-- [ ] T040 Implement RAG orchestrator with fallbacks in `backend/lib/rag_orchestrator.py` **[TDD-GREEN]**
+- [ ] T041 [P] Write Main Orchestrator tests in `backend/tests/unit/test_orchestrator.py` **[TDD-RED]**
+- [ ] T042 Implement Main Orchestrator in `backend/app/agents/main_orchestrator.py` **[TDD-GREEN]**
+- [ ] T043 [P] Write orchestrator intent detection tests in `backend/tests/unit/test_intent_detection.py` **[TDD-RED]**
+- [ ] T044 Implement intent detection in orchestrator tools **[TDD-GREEN]**
+- [ ] T045 [P] Write full pipeline integration tests in `backend/tests/integration/test_full_pipeline.py` **[TDD-RED]**
 
 ## Priority 4: API & Frontend (Week 2-3)
 
 ### FastAPI Endpoints
 
-- [ ] T041 [P] Write contract tests for all 12 endpoints in `backend/tests/contract/test_api_contracts.py` **[TDD-RED]**
-- [ ] T042 Implement PDF upload endpoint with deduplication in `backend/app/api/pdf_endpoints.py` **[TDD-GREEN]**
-- [ ] T043 Implement session management endpoints in `backend/app/api/session_endpoints.py` **[TDD-GREEN]**
-- [ ] T044 Implement RAG question endpoint with streaming in `backend/app/api/rag_endpoints.py` **[TDD-GREEN]**
-- [ ] T045 Implement job management endpoints in `backend/app/api/job_endpoints.py` **[TDD-GREEN]**
+- [ ] T046 [P] Write contract tests for all 12 endpoints in `backend/tests/contract/test_api_contracts.py` **[TDD-RED]**
+- [ ] T047 Implement PDF upload endpoint with deduplication in `backend/app/api/pdf_endpoints.py` **[TDD-GREEN]**
+- [ ] T048 Implement session management endpoints in `backend/app/api/session_endpoints.py` **[TDD-GREEN]**
+- [ ] T049 Implement RAG question endpoint with streaming in `backend/app/api/rag_endpoints.py` **[TDD-GREEN]**
+- [ ] T050 Implement job management endpoints in `backend/app/api/job_endpoints.py` **[TDD-GREEN]**
 
 ### React Components
 
-- [ ] T046 [P] Write component tests for PDF upload in `frontend/src/components/__tests__/PDFUpload.test.tsx` **[TDD-RED]**
-- [ ] T047 [P] Implement PDFUpload with progress tracking in `frontend/src/components/PDFUpload.tsx` **[TDD-GREEN]**
-- [ ] T048 [P] Write ChatInterface tests with streaming in `frontend/src/components/__tests__/ChatInterface.test.tsx` **[TDD-RED]**
-- [ ] T049 [P] Implement ChatInterface with confidence indicators in `frontend/src/components/ChatInterface.tsx` **[TDD-GREEN]**
-- [ ] T050 [P] Implement CitationDisplay with bbox highlighting in `frontend/src/components/CitationDisplay.tsx` **[TDD-GREEN]**
+- [ ] T051 [P] Write component tests for PDF upload in `frontend/src/components/__tests__/PDFUpload.test.tsx` **[TDD-RED]**
+- [ ] T052 [P] Implement PDFUpload with progress tracking in `frontend/src/components/PDFUpload.tsx` **[TDD-GREEN]**
+- [ ] T053 [P] Write ChatInterface tests with streaming in `frontend/src/components/__tests__/ChatInterface.test.tsx` **[TDD-RED]**
+- [ ] T054 [P] Implement ChatInterface with confidence indicators in `frontend/src/components/ChatInterface.tsx` **[TDD-GREEN]**
+- [ ] T055 [P] Implement CitationDisplay with bbox highlighting in `frontend/src/components/CitationDisplay.tsx` **[TDD-GREEN]**
 
 ## Priority 5: Polish & Monitoring (Week 3)
 
 ### Observability & Performance
 
-- [ ] T051 [P] Implement structured logging with correlation IDs in `backend/app/core/logging.py`
-- [ ] T052 [P] Create metrics collection for all services in `backend/app/core/metrics.py`
-- [ ] T053 [P] Write performance benchmarks in `backend/tests/performance/test_benchmarks.py`
-- [ ] T054 Implement health check endpoints in `backend/app/api/system_endpoints.py`
-- [ ] T055 Create monitoring dashboard configuration in `docker/monitoring/prometheus.yml`
+- [ ] T056 [P] Implement structured logging with correlation IDs in `backend/app/core/logging.py`
+- [ ] T057 [P] Create metrics collection for all services in `backend/app/core/metrics.py`
+- [ ] T058 [P] Write performance benchmarks in `backend/tests/performance/test_benchmarks.py`
+- [ ] T059 Implement health check endpoints in `backend/app/api/system_endpoints.py`
+- [ ] T060 Create monitoring dashboard configuration in `docker/monitoring/prometheus.yml`
 
 ## Dependencies Graph
 
@@ -197,6 +204,12 @@ Task subagent_type="general-purpose" prompt="Write failing test for ChatInterfac
 6. **Batch Sizes**: 64 for embeddings, 100 for search candidates
 7. **Job Queue**: LISTEN/NOTIFY on channel 'embedding_queue'
 8. **All PydanticAI agents** must use structured outputs with validation
+9. **RAG Pipeline Flow**:
+   - MainOrchestratorAgent analyzes intent and dispatches to pipelines
+   - Domain-specific pipelines perform hybrid search (vector + lexical)
+   - Pipelines perform reranking and MMR diversification
+   - Pipelines pass pre-processed data to specialized domain agents
+   - Specialized agents (Disease, Gene, Pathway, etc.) synthesize expert answers
 
 ## Validation Checklist
 
@@ -219,7 +232,7 @@ Task subagent_type="general-purpose" prompt="Write failing test for ChatInterfac
 
 ---
 
-**Total Tasks**: 55
+**Total Tasks**: 60
 **Estimated Duration**: 3 weeks
 **Team Size**: 1-2 developers
 **Parallel Potential**: High (many [P] tasks)
