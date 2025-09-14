@@ -38,7 +38,7 @@ describe("ModelSelector", () => {
       expect(screen.getByRole("combobox")).toBeInTheDocument();
     });
 
-    expect(global.fetch).toHaveBeenCalledWith("/api/chat/models");
+    expect(global.fetch).toHaveBeenCalledWith("/api/agents/models");
 
     // Open the dropdown
     const select = screen.getByRole("combobox");

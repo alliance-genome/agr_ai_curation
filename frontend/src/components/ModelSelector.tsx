@@ -40,7 +40,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const fetchModels = async () => {
     try {
-      const response = await fetch("/api/chat/models");
+      const response = await fetch("/api/agents/models");
       const data = await response.json();
 
       const modelList: Model[] = [];

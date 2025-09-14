@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 from pathlib import Path
 
-from .routers import chat, agents, entities, settings, health, test_highlights
+from .routers import agents, entities, settings, health, test_highlights
 from .database import engine, Base
 from .config import get_settings
 from .middleware.error_handler import (
@@ -40,11 +40,8 @@ if uploads_path.exists():
 # Include routers
 app.include_router(health.router, tags=["health"])
 app.include_router(
-    chat.router, prefix="/chat", tags=["chat"]
-)  # Keep for backward compatibility
-app.include_router(
     agents.router, prefix="/agents", tags=["agents"]
-)  # New PydanticAI agents
+)  # PydanticAI agents
 app.include_router(entities.router, prefix="/entities", tags=["entities"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(test_highlights.router, prefix="/test", tags=["testing"])
