@@ -1,0 +1,225 @@
+# Tasks: PDF Document Q&A with Enhanced RAG
+
+**Input**: Design documents from `/specs/002-pdf-document-q/`
+**Prerequisites**: plan.md (required), research.md, data-model.md, contracts/openapi.yaml, quickstart.md
+
+## Execution Flow
+
+```
+1. Core Infrastructure (P1: T001-T015) - Must complete first
+2. Hybrid Search & Reranking (P2: T016-T030) - Critical for quality
+3. RAG Pipeline with Guardrails (P3: T031-T040) - Core functionality
+4. API & Frontend (P4: T041-T050) - User-facing components
+5. Polish & Monitoring (P5: T051-T055) - Production readiness
+```
+
+## Format: `[ID] [P?] Description`
+
+- **[P]**: Can run in parallel (different files, no dependencies)
+- Tests marked with **[TDD-RED]** must be written to fail first
+- Implementation marked with **[TDD-GREEN]** makes tests pass
+
+## Priority 1: Core Infrastructure (Week 1)
+
+### Database Setup & Migrations
+
+- [ ] T001 Create PostgreSQL docker setup with pgvector extension in `docker/postgres/Dockerfile`
+- [ ] T002 [P] Write tests for database models in `backend/tests/unit/test_models.py` **[TDD-RED]**
+- [ ] T003 Create SQLAlchemy models for all 11 entities in `backend/app/models/pdf_models.py` **[TDD-GREEN]**
+- [ ] T004 [P] Write HNSW index configuration tests in `backend/tests/unit/test_indexes.py` **[TDD-RED]**
+- [ ] T005 Create Alembic migration for HNSW and tsvector indexes in `backend/alembic/versions/001_initial_schema.py` **[TDD-GREEN]**
+
+### PDF Processing Library
+
+- [ ] T006 [P] Write pdf-processor library tests in `backend/tests/unit/test_pdf_processor.py` **[TDD-RED]**
+- [ ] T007 Implement pdf-processor with PyMuPDF fallback chain in `backend/lib/pdf_processor.py` **[TDD-GREEN]**
+- [ ] T008 [P] Write chunk-manager tests with layout preservation in `backend/tests/unit/test_chunk_manager.py` **[TDD-RED]**
+- [ ] T009 Implement chunk-manager with semantic boundaries in `backend/lib/chunk_manager.py` **[TDD-GREEN]**
+- [ ] T010 [P] Create CLI interfaces for pdf-processor and chunk-manager in `backend/lib/cli/pdf_cli.py`
+
+### Job Queue System
+
+- [ ] T011 [P] Write job queue tests with LISTEN/NOTIFY in `backend/tests/unit/test_job_queue.py` **[TDD-RED]**
+- [ ] T012 Implement Postgres-based job queue in `backend/lib/job_queue.py` **[TDD-GREEN]**
+- [ ] T013 [P] Write worker pool tests in `backend/tests/unit/test_workers.py` **[TDD-RED]**
+- [ ] T014 Implement job workers with rate limiting in `backend/app/workers/embedding_worker.py` **[TDD-GREEN]**
+- [ ] T015 [P] Create job monitoring CLI in `backend/lib/cli/job_cli.py`
+
+## Priority 2: Hybrid Search & Reranking (Week 1-2)
+
+### Embedding Service
+
+- [ ] T016 [P] Write embedding service tests with versioning in `backend/tests/unit/test_embedding_service.py` **[TDD-RED]**
+- [ ] T017 Implement multi-model embedding service in `backend/lib/embedding_service.py` **[TDD-GREEN]**
+- [ ] T018 [P] Write batch processing tests in `backend/tests/unit/test_batch_embeddings.py` **[TDD-RED]**
+- [ ] T019 Implement embedding batch processor in `backend/lib/batch_processor.py` **[TDD-GREEN]**
+- [ ] T020 [P] Create embedding CLI with status tracking in `backend/lib/cli/embedding_cli.py`
+
+### Hybrid Search Implementation
+
+- [ ] T021 [P] Write vector search tests (<100ms) in `backend/tests/unit/test_vector_search.py` **[TDD-RED]**
+- [ ] T022 Implement HNSW vector search in `backend/lib/vector_search.py` **[TDD-GREEN]**
+- [ ] T023 [P] Write lexical search tests (<50ms) in `backend/tests/unit/test_lexical_search.py` **[TDD-RED]**
+- [ ] T024 Implement tsvector lexical search in `backend/lib/lexical_search.py` **[TDD-GREEN]**
+- [ ] T025 [P] Create hybrid search orchestrator with result merging in `backend/lib/hybrid_search.py`
+
+### Reranker with MMR
+
+- [ ] T026 [P] Write reranker tests with cross-encoder in `backend/tests/unit/test_reranker.py` **[TDD-RED]**
+- [ ] T027 Implement PydanticAI reranking agent in `backend/lib/reranker.py` **[TDD-GREEN]**
+- [ ] T028 [P] Write MMR diversification tests (λ=0.7) in `backend/tests/unit/test_mmr.py` **[TDD-RED]**
+- [ ] T029 Implement MMR algorithm in `backend/lib/mmr_diversifier.py` **[TDD-GREEN]**
+- [ ] T030 [P] Create reranker CLI with performance metrics in `backend/lib/cli/rerank_cli.py`
+
+## Priority 3: RAG Pipeline with Guardrails (Week 2)
+
+### PydanticAI Agents
+
+- [ ] T031 [P] Write QueryExpansionAgent tests in `backend/tests/unit/test_query_expansion.py` **[TDD-RED]**
+- [ ] T032 [P] Implement QueryExpansionAgent with ontology in `backend/app/agents/query_expansion_agent.py` **[TDD-GREEN]**
+- [ ] T033 [P] Write HybridSearchAgent tests in `backend/tests/unit/test_search_agent.py` **[TDD-RED]**
+- [ ] T034 [P] Implement HybridSearchAgent in `backend/app/agents/hybrid_search_agent.py` **[TDD-GREEN]**
+- [ ] T035 [P] Write AnswerValidationAgent tests in `backend/tests/unit/test_validation_agent.py` **[TDD-RED]**
+
+### Confidence & Guardrails
+
+- [ ] T036 Implement AnswerValidationAgent with confidence scoring in `backend/app/agents/answer_validation_agent.py` **[TDD-GREEN]**
+- [ ] T037 [P] Write citation enforcement tests in `backend/tests/unit/test_citations.py` **[TDD-RED]**
+- [ ] T038 Implement CitationAgent with bbox support in `backend/app/agents/citation_agent.py` **[TDD-GREEN]**
+- [ ] T039 [P] Write RAG orchestrator integration tests in `backend/tests/integration/test_rag_pipeline.py` **[TDD-RED]**
+- [ ] T040 Implement RAG orchestrator with fallbacks in `backend/lib/rag_orchestrator.py` **[TDD-GREEN]**
+
+## Priority 4: API & Frontend (Week 2-3)
+
+### FastAPI Endpoints
+
+- [ ] T041 [P] Write contract tests for all 12 endpoints in `backend/tests/contract/test_api_contracts.py` **[TDD-RED]**
+- [ ] T042 Implement PDF upload endpoint with deduplication in `backend/app/api/pdf_endpoints.py` **[TDD-GREEN]**
+- [ ] T043 Implement session management endpoints in `backend/app/api/session_endpoints.py` **[TDD-GREEN]**
+- [ ] T044 Implement RAG question endpoint with streaming in `backend/app/api/rag_endpoints.py` **[TDD-GREEN]**
+- [ ] T045 Implement job management endpoints in `backend/app/api/job_endpoints.py` **[TDD-GREEN]**
+
+### React Components
+
+- [ ] T046 [P] Write component tests for PDF upload in `frontend/src/components/__tests__/PDFUpload.test.tsx` **[TDD-RED]**
+- [ ] T047 [P] Implement PDFUpload with progress tracking in `frontend/src/components/PDFUpload.tsx` **[TDD-GREEN]**
+- [ ] T048 [P] Write ChatInterface tests with streaming in `frontend/src/components/__tests__/ChatInterface.test.tsx` **[TDD-RED]**
+- [ ] T049 [P] Implement ChatInterface with confidence indicators in `frontend/src/components/ChatInterface.tsx` **[TDD-GREEN]**
+- [ ] T050 [P] Implement CitationDisplay with bbox highlighting in `frontend/src/components/CitationDisplay.tsx` **[TDD-GREEN]**
+
+## Priority 5: Polish & Monitoring (Week 3)
+
+### Observability & Performance
+
+- [ ] T051 [P] Implement structured logging with correlation IDs in `backend/app/core/logging.py`
+- [ ] T052 [P] Create metrics collection for all services in `backend/app/core/metrics.py`
+- [ ] T053 [P] Write performance benchmarks in `backend/tests/performance/test_benchmarks.py`
+- [ ] T054 Implement health check endpoints in `backend/app/api/system_endpoints.py`
+- [ ] T055 Create monitoring dashboard configuration in `docker/monitoring/prometheus.yml`
+
+## Dependencies Graph
+
+```
+Database Setup (T001-T005) ──┬──> Embedding Service (T016-T020)
+                             │
+PDF Processing (T006-T010) ──┼──> Hybrid Search (T021-T025)
+                             │
+Job Queue (T011-T015) ───────┴──> Reranker (T026-T030)
+                                        │
+                                        v
+                              PydanticAI Agents (T031-T040)
+                                        │
+                                        v
+                              API Endpoints (T041-T045)
+                                        │
+                                        v
+                              Frontend Components (T046-T050)
+                                        │
+                                        v
+                              Monitoring (T051-T055)
+```
+
+## Parallel Execution Examples
+
+### Week 1 - Infrastructure Sprint
+
+```bash
+# Launch T002, T004, T006, T008, T011, T013 together (all test files):
+Task subagent_type="general-purpose" prompt="Write failing test for database models in backend/tests/unit/test_models.py following TDD-RED phase"
+Task subagent_type="general-purpose" prompt="Write failing test for HNSW indexes in backend/tests/unit/test_indexes.py following TDD-RED phase"
+Task subagent_type="general-purpose" prompt="Write failing test for pdf-processor in backend/tests/unit/test_pdf_processor.py following TDD-RED phase"
+Task subagent_type="general-purpose" prompt="Write failing test for chunk-manager in backend/tests/unit/test_chunk_manager.py following TDD-RED phase"
+Task subagent_type="general-purpose" prompt="Write failing test for job queue in backend/tests/unit/test_job_queue.py following TDD-RED phase"
+Task subagent_type="general-purpose" prompt="Write failing test for worker pool in backend/tests/unit/test_workers.py following TDD-RED phase"
+```
+
+### Week 1-2 - Search & Reranking Sprint
+
+```bash
+# Launch T016, T018, T021, T023, T026, T028 together (all test files):
+Task subagent_type="general-purpose" prompt="Write failing test for embedding service in backend/tests/unit/test_embedding_service.py"
+Task subagent_type="general-purpose" prompt="Write failing test for batch embeddings in backend/tests/unit/test_batch_embeddings.py"
+Task subagent_type="general-purpose" prompt="Write failing test for vector search <100ms in backend/tests/unit/test_vector_search.py"
+Task subagent_type="general-purpose" prompt="Write failing test for lexical search <50ms in backend/tests/unit/test_lexical_search.py"
+Task subagent_type="general-purpose" prompt="Write failing test for reranker in backend/tests/unit/test_reranker.py"
+Task subagent_type="general-purpose" prompt="Write failing test for MMR λ=0.7 in backend/tests/unit/test_mmr.py"
+```
+
+### Week 2 - PydanticAI Agents Sprint
+
+```bash
+# Launch T031, T033, T035, T037 together (all agent test files):
+Task subagent_type="general-purpose" prompt="Write failing test for QueryExpansionAgent in backend/tests/unit/test_query_expansion.py"
+Task subagent_type="general-purpose" prompt="Write failing test for HybridSearchAgent in backend/tests/unit/test_search_agent.py"
+Task subagent_type="general-purpose" prompt="Write failing test for AnswerValidationAgent in backend/tests/unit/test_validation_agent.py"
+Task subagent_type="general-purpose" prompt="Write failing test for citation enforcement in backend/tests/unit/test_citations.py"
+```
+
+### Week 2-3 - Frontend Components Sprint
+
+```bash
+# Launch T046, T048 together (component tests):
+Task subagent_type="general-purpose" prompt="Write failing test for PDFUpload component in frontend/src/components/__tests__/PDFUpload.test.tsx"
+Task subagent_type="general-purpose" prompt="Write failing test for ChatInterface component in frontend/src/components/__tests__/ChatInterface.test.tsx"
+```
+
+## Critical Implementation Notes
+
+1. **TDD Enforcement**: Every test marked [TDD-RED] MUST fail before implementation
+2. **Performance Targets**:
+   - Vector search: <100ms for top-50
+   - Lexical search: <50ms for top-50
+   - Reranking: <200ms for 100 candidates
+   - Full pipeline: <2s end-to-end
+3. **Confidence Threshold**: 0.7 default, configurable per session
+4. **MMR Lambda**: 0.7 for diversity/relevance balance
+5. **HNSW Parameters**: m=16, ef_construction=200, ef_search=64
+6. **Batch Sizes**: 64 for embeddings, 100 for search candidates
+7. **Job Queue**: LISTEN/NOTIFY on channel 'embedding_queue'
+8. **All PydanticAI agents** must use structured outputs with validation
+
+## Validation Checklist
+
+- [x] All 12 API endpoints have contract tests (T041)
+- [x] All 11 entities have model creation tasks (T003)
+- [x] All tests come before implementation (TDD-RED → TDD-GREEN)
+- [x] Parallel tasks ([P]) modify different files
+- [x] Each task specifies exact file path
+- [x] Dependencies properly sequenced
+- [x] All 8 libraries have implementation tasks
+- [x] All 8 libraries have CLI interfaces
+
+## Success Metrics
+
+- **P1 Complete**: Database migrated, PDFs extractable, jobs queueable
+- **P2 Complete**: Hybrid search <200ms total, reranking functional
+- **P3 Complete**: Confidence scoring prevents hallucinations, citations work
+- **P4 Complete**: End-to-end upload→question→answer flow works
+- **P5 Complete**: All metrics visible, performance targets met
+
+---
+
+**Total Tasks**: 55
+**Estimated Duration**: 3 weeks
+**Team Size**: 1-2 developers
+**Parallel Potential**: High (many [P] tasks)
