@@ -54,9 +54,14 @@ def main():
     if tool_name not in ["Edit", "MultiEdit", "Write", "Update"]:
         sys.exit(0)
 
-    # Get the project directory
+    # Get the project directory relative to this script
+    # This script is in .claude/hooks/, so project root is two levels up
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.environ.get(
-        "CLAUDE_PROJECT_DIR", "/home/ctabone/Programming/agr_ai_curation"
+        "CLAUDE_PROJECT_DIR",
+        os.path.dirname(
+            os.path.dirname(script_dir)
+        ),  # Go up two levels from script location
     )
     hooks_dir = os.path.join(project_dir, ".claude", "hooks")
     trigger_file = os.path.join(hooks_dir, "pydantic_ai_1.0.6_identifiers.txt")
@@ -96,41 +101,41 @@ def main():
     found, trigger = check_for_pydantic_ai(content_to_check, triggers)
 
     if found:
-        # Construct reminder message
-        message = {
-            "user_message": f"""⚠️ PydanticAI code detected (pattern: '{trigger[:50]}...')
+        # Clean up the trigger pattern for display (remove escape characters)
+        display_trigger = trigger.replace("\\", "")[:50]
 
-You are working with PydanticAI code. Before proceeding with any edits:
-
-📚 MANDATORY DOCUMENTATION CHECK:
-You MUST search the local PydanticAI docs at: {docs_file}
-
-REQUIRED ACTIONS:
-1. Use Grep to search for the specific PydanticAI object/function/pattern you're working with
-2. When found, use sufficient context flags (-A 30 -B 30 or more) to read the COMPLETE section
-3. For complex topics, search multiple related terms to ensure full understanding
-
-WHY THIS MATTERS:
-- The documentation contains critical implementation details and examples
-- Reading partial sections may lead to incorrect implementations
-- The complete context often includes important caveats and best practices
-
-SEARCH STRATEGY:
-- Start with the exact class/function name: '{trigger[:30]}'
-- Use generous context: grep -A 50 -B 50 "pattern" {docs_file}
-- For multiline examples, increase context further (-A 100 -B 20)
-- Search related terms if the main search doesn't provide enough detail
-
-Common v1.0.6 patterns to verify:
-- Agent initialization with 'output_type' (not 'result_type')
-- Streaming with 'stream_text(delta=True)'
-- Built-in message history support
-- Tool registration patterns
-- Dependency injection approaches
-
-⚠️ DO NOT proceed with edits until you've thoroughly reviewed the relevant documentation sections."""
-        }
-        print(json.dumps(message))
+        # Construct reminder message - use print directly for better formatting
+        print("WARNING: PydanticAI code detected!")
+        print(f"Pattern found: '{display_trigger}...'")
+        print("")
+        print("MANDATORY DOCUMENTATION CHECK:")
+        print(f"You MUST search the local PydanticAI docs at:")
+        print(f"  {docs_file}")
+        print("")
+        print("REQUIRED ACTIONS:")
+        print(
+            "1. Use Grep to search for the specific PydanticAI object/function/pattern"
+        )
+        print(
+            "2. Use sufficient context flags (-A 30 -B 30 or more) to read COMPLETE sections"
+        )
+        print("3. For complex topics, search multiple related terms")
+        print("")
+        print("SEARCH STRATEGY:")
+        clean_pattern = trigger.replace("\\", "")[:30]
+        print(f'- Start with: grep -A 50 -B 50 "{clean_pattern}" {docs_file}')
+        print("- For multiline examples, increase context (-A 100 -B 20)")
+        print("- Search related terms if needed")
+        print("")
+        print("Common v1.0.6 patterns to verify:")
+        print("- Agent initialization with 'output_type' (not 'result_type')")
+        print("- Streaming with 'stream_text(delta=True)'")
+        print("- Built-in message history support")
+        print("- Tool registration patterns")
+        print("")
+        print(
+            "WARNING: DO NOT proceed with edits until you've reviewed the relevant documentation!"
+        )
 
     # Exit code 0 allows the tool to continue
     sys.exit(0)
