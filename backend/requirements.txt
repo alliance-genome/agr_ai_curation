@@ -20,7 +20,13 @@ passlib[bcrypt]
 pgvector
 
 # PDF Processing
-PyMuPDF
+unstructured[pdf,local-inference]
+unstructured-inference
+pytesseract  # For OCR fallback
+pdf2image  # For image extraction
+pillow  # Image processing
+pandas  # For table extraction
+tabulate  # Table formatting
 
 # Testing
 pytest

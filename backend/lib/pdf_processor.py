@@ -1,706 +1,604 @@
 """
-PDF Processor Library
-Handles PDF extraction, validation, and hashing using PyMuPDF
+PDF Processor using Unstructured.io
+Provides superior extraction with automatic de-hyphenation, element classification,
+layout understanding, and built-in table/figure handling.
 """
 
 import hashlib
-import json
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
-import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import fitz  # PyMuPDF
-
-logger = logging.getLogger(__name__)
-
-# Configuration
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
-
-
-# ==================== Exceptions ====================
-
-
-class PDFProcessorError(Exception):
-    """Base exception for PDF processor errors"""
-
-    pass
-
-
-class UnsupportedFileError(PDFProcessorError):
-    """Raised when file is not a valid PDF"""
-
-    pass
-
-
-class CorruptedPDFError(PDFProcessorError):
-    """Raised when PDF is corrupted or malformed"""
-
-    pass
-
-
-# ==================== Data Models ====================
+from unstructured.cleaners.core import clean
+from unstructured.documents.elements import Element
+from unstructured.partition.pdf import partition_pdf
 
 
 @dataclass
-class PageContent:
-    """Represents content from a single PDF page"""
+class UnstructuredElement:
+    """Wrapper for Unstructured element with enhanced metadata"""
 
-    page_number: int
+    type: str  # Title, NarrativeText, Table, FigureCaption, etc.
     text: str
-    layout_blocks: Optional[List[Dict[str, Any]]] = None
+    metadata: Dict[str, Any]
+    element_id: str
+    page_number: Optional[int] = None
     bbox: Optional[Dict[str, float]] = None
+    parent_id: Optional[str] = None
+    section_path: Optional[str] = None
 
+    @classmethod
+    def from_unstructured(cls, element: Element) -> "UnstructuredElement":
+        """Create from Unstructured element"""
+        metadata = (
+            element.metadata.to_dict() if hasattr(element.metadata, "to_dict") else {}
+        )
 
-@dataclass
-class ExtractedTable:
-    """Represents an extracted table from PDF"""
-
-    page_number: int
-    table_index: int
-    data: List[List[str]]
-    headers: Optional[List[str]] = None
-    bbox: Optional[Dict[str, float]] = None
-    caption: Optional[str] = None
-
-
-@dataclass
-class ExtractedFigure:
-    """Represents an extracted figure from PDF"""
-
-    page_number: int
-    figure_index: int
-    figure_type: Optional[str] = None  # CHART, DIAGRAM, IMAGE, PLOT
-    caption: Optional[str] = None
-    bbox: Optional[Dict[str, float]] = None
-    image_data: Optional[bytes] = None
+        return cls(
+            type=element.category,
+            text=clean(element.text),  # Removes artifacts
+            metadata=metadata,
+            element_id=str(element.id) if hasattr(element, "id") else None,
+            page_number=metadata.get("page_number"),
+            bbox=metadata.get("coordinates"),
+            parent_id=metadata.get("parent_id"),
+            section_path=metadata.get("section"),
+        )
 
 
 @dataclass
 class ExtractionResult:
-    """Complete result from PDF extraction"""
+    """Updated extraction result with Unstructured elements"""
 
     pdf_path: str
+    elements: List[UnstructuredElement]
     page_count: int
-    pages: List[PageContent]
     full_text: str
+    metadata: Dict[str, Any]
+    tables: List[Dict[str, Any]]
+    figures: List[Dict[str, Any]]
     extraction_time_ms: float
     file_size_bytes: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    tables: List[ExtractedTable] = field(default_factory=list)
-    figures: List[ExtractedFigure] = field(default_factory=list)
-
-    @property
-    def table_count(self) -> int:
-        return len(self.tables)
-
-    @property
-    def figure_count(self) -> int:
-        return len(self.figures)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
-        return asdict(self)
-
-    def to_json(self) -> str:
-        """Convert to JSON string"""
-        return json.dumps(self.to_dict(), default=str)
+    processing_strategy: str  # "hi_res", "fast", "ocr_only"
+    content_hash: Optional[str] = None
+    content_hash_normalized: Optional[str] = None
+    page_hashes: List[str] = field(default_factory=list)
 
 
 @dataclass
-class PDFValidationResult:
-    """Result from PDF validation"""
+class ValidationResult:
+    """PDF validation result"""
 
     is_valid: bool
     page_count: int
     has_text: bool
-    has_images: bool
     file_size_bytes: int
-    is_encrypted: bool = False
-    is_corrupted: bool = False
-    issues: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict())
+    is_encrypted: bool
+    is_corrupted: bool
+    is_scanned: bool  # New field for OCR detection
+    error_message: Optional[str] = None
 
 
 @dataclass
-class PDFHashResult:
-    """Result from PDF hashing"""
+class HashResult:
+    """PDF hashing result"""
 
     file_hash: str
     content_hash: str
-    content_hash_normalized: Optional[str] = None
-    page_hashes: Optional[List[str]] = None
-    page_count: int = 0
-    is_normalized: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-# ==================== Main Processor Class ====================
+    content_hash_normalized: str
+    page_hashes: List[str]
+    page_count: int
 
 
 class PDFProcessor:
-    """Main PDF processor using PyMuPDF"""
+    """
+    Enhanced PDF processor using Unstructured.io
+    Handles extraction, validation, and hashing with superior quality
+    """
 
-    def __init__(self):
-        """Initialize PDF processor"""
-        self.logger = logger
+    def __init__(self, default_strategy: str = "hi_res"):
+        """
+        Initialize PDF processor
+
+        Args:
+            default_strategy: Default extraction strategy ("hi_res", "fast", "ocr_only")
+        """
+        self.default_strategy = default_strategy
 
     def extract(
         self,
         pdf_path: str,
-        extract_tables: bool = False,
-        extract_figures: bool = False,
-        preserve_layout: bool = False,
-        start_page: Optional[int] = None,
-        end_page: Optional[int] = None,
+        strategy: Optional[str] = None,
+        extract_tables: bool = True,
+        extract_figures: bool = True,
+        extract_images: bool = False,
+        languages: List[str] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        **kwargs,
     ) -> ExtractionResult:
         """
-        Extract content from PDF
+        Extract content from PDF using Unstructured
 
         Args:
             pdf_path: Path to PDF file
-            extract_tables: Whether to extract tables
-            extract_figures: Whether to extract figures
-            preserve_layout: Whether to preserve layout information
-            start_page: Starting page (1-indexed, inclusive)
-            end_page: Ending page (1-indexed, inclusive)
-            progress_callback: Callback for progress updates
+            strategy: Extraction strategy ("hi_res", "fast", "ocr_only")
+            extract_tables: Extract table structure
+            extract_figures: Extract figure information
+            extract_images: Extract actual images from PDF
+            languages: Languages for OCR (default: ["eng"])
+            progress_callback: Optional callback for progress updates
+            **kwargs: Additional arguments for partition_pdf
 
         Returns:
-            ExtractionResult with all extracted content
-
-        Raises:
-            FileNotFoundError: If PDF file doesn't exist
-            UnsupportedFileError: If file is not a valid PDF
-            CorruptedPDFError: If PDF is corrupted
-            PDFProcessorError: For other extraction errors
+            ExtractionResult with structured elements
         """
         start_time = time.time()
+        pdf_path = Path(pdf_path)
 
-        # Validate file exists
-        if not os.path.exists(pdf_path):
+        if not pdf_path.exists():
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-        # Check file size
-        file_size = os.path.getsize(pdf_path)
-        if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise PDFProcessorError(
-                f"File too large: {file_size / 1024 / 1024:.1f}MB > {MAX_FILE_SIZE_MB}MB limit"
-            )
+        file_size = pdf_path.stat().st_size
+        strategy = strategy or self.default_strategy
+        languages = languages or ["eng"]
 
-        # Check if it's a PDF
-        if not pdf_path.lower().endswith(".pdf"):
-            with open(pdf_path, "rb") as f:
-                header = f.read(5)
-                if header != b"%PDF-":
-                    raise UnsupportedFileError(f"File is not a valid PDF: {pdf_path}")
+        # Progress callback
+        if progress_callback:
+            progress_callback(0, 100, "Starting PDF extraction...")
 
         try:
-            # Open PDF with PyMuPDF
-            doc = fitz.open(pdf_path)
-
-            # Check if encrypted
-            if doc.is_encrypted:
-                doc.close()
-                raise PDFProcessorError("PDF is encrypted/password-protected")
-
-            # Extract metadata
-            metadata = self._extract_metadata(doc)
-
-            # Determine page range
-            total_pages = len(doc)
-            start_idx = (start_page - 1) if start_page else 0
-            end_idx = end_page if end_page else total_pages
-            end_idx = min(end_idx, total_pages)
-
-            # Extract pages
-            pages = []
-            full_text_parts = []
-            tables = []
-            figures = []
-
-            for idx in range(start_idx, end_idx):
-                if progress_callback:
-                    progress_callback(idx + 1, total_pages, "extracting")
-
-                page = doc[idx]
-                page_num = idx + 1
-
-                # Extract text
-                text = page.get_text()
-                full_text_parts.append(text)
-
-                # Extract layout blocks if requested
-                layout_blocks = None
-                if preserve_layout:
-                    layout_blocks = self._extract_layout_blocks(page)
-
-                # Create page content
-                page_content = PageContent(
-                    page_number=page_num, text=text, layout_blocks=layout_blocks
-                )
-                pages.append(page_content)
-
-                # Extract tables if requested
-                if extract_tables:
-                    page_tables = self._extract_tables_from_page(page, page_num)
-                    tables.extend(page_tables)
-
-                # Extract figures if requested
-                if extract_figures:
-                    page_figures = self._extract_figures_from_page(page, page_num)
-                    figures.extend(page_figures)
-
-            doc.close()
+            # Partition PDF into elements
+            elements = partition_pdf(
+                filename=str(pdf_path),
+                strategy=strategy,  # hi_res uses layout detection models
+                infer_table_structure=extract_tables,
+                include_page_breaks=True,
+                extract_images_in_pdf=extract_images,
+                extract_forms=False,
+                languages=languages,
+                **kwargs,
+            )
 
             if progress_callback:
-                progress_callback(total_pages, total_pages, "completed")
+                progress_callback(50, 100, "Processing extracted elements...")
 
-            # Calculate extraction time
-            extraction_time_ms = (time.time() - start_time) * 1000
+            # Convert to our format
+            extracted_elements = []
+            tables = []
+            figures = []
+            page_numbers = set()
+
+            for i, element in enumerate(elements):
+                elem = UnstructuredElement.from_unstructured(element)
+                extracted_elements.append(elem)
+
+                if elem.page_number:
+                    page_numbers.add(elem.page_number)
+
+                # Collect tables
+                if elem.type == "Table":
+                    table_data = {
+                        "text": elem.text,
+                        "page": elem.page_number,
+                        "bbox": elem.bbox,
+                        "element_id": elem.element_id,
+                    }
+
+                    # Check for HTML representation
+                    if "text_as_html" in elem.metadata:
+                        table_data["html"] = elem.metadata["text_as_html"]
+
+                    tables.append(table_data)
+
+                # Collect figures and captions
+                if elem.type in ["FigureCaption", "Image", "Figure"]:
+                    figures.append(
+                        {
+                            "type": elem.type,
+                            "text": elem.text,
+                            "page": elem.page_number,
+                            "bbox": elem.bbox,
+                            "element_id": elem.element_id,
+                        }
+                    )
+
+            # Generate full text in reading order
+            full_text = "\n\n".join([e.text for e in extracted_elements if e.text])
+
+            # Extract document metadata
+            metadata = self._extract_document_metadata(elements)
+
+            # Calculate page count
+            page_count = max(page_numbers) if page_numbers else 0
+
+            # Generate hashes
+            content_hash = hashlib.md5(full_text.encode()).hexdigest()
+            normalized_text = self._normalize_text(full_text)
+            content_hash_normalized = hashlib.md5(normalized_text.encode()).hexdigest()
+
+            # Generate per-page hashes
+            page_hashes = self._generate_page_hashes(extracted_elements)
+
+            if progress_callback:
+                progress_callback(100, 100, "Extraction complete")
+
+            extraction_time = (time.time() - start_time) * 1000
 
             return ExtractionResult(
-                pdf_path=pdf_path,
-                page_count=len(pages),
-                pages=pages,
-                full_text="".join(full_text_parts),
-                extraction_time_ms=extraction_time_ms,
-                file_size_bytes=file_size,
+                pdf_path=str(pdf_path),
+                elements=extracted_elements,
+                page_count=page_count,
+                full_text=full_text,
                 metadata=metadata,
                 tables=tables,
                 figures=figures,
+                extraction_time_ms=extraction_time,
+                file_size_bytes=file_size,
+                processing_strategy=strategy,
+                content_hash=content_hash,
+                content_hash_normalized=content_hash_normalized,
+                page_hashes=page_hashes,
             )
 
-        except fitz.FileDataError as e:
-            # Check if it's an empty or minimal PDF
-            if "no objects found" in str(e).lower():
-                # Handle empty PDF gracefully
-                return ExtractionResult(
-                    pdf_path=pdf_path,
-                    page_count=0,
-                    pages=[],
-                    full_text="",
-                    extraction_time_ms=(time.time() - start_time) * 1000,
-                    file_size_bytes=file_size,
-                    metadata=self._get_empty_metadata(),
-                    tables=[],
-                    figures=[],
-                )
-            raise UnsupportedFileError(f"Not a valid PDF: {pdf_path}")
         except Exception as e:
-            if isinstance(
-                e, (PDFProcessorError, UnsupportedFileError, CorruptedPDFError)
-            ):
-                raise
-            raise PDFProcessorError(f"Failed to extract PDF: {str(e)}")
+            raise RuntimeError(f"Failed to extract PDF: {str(e)}") from e
 
     def validate(
         self,
         pdf_path: str,
-        check_corruption: bool = False,
-        check_encryption: bool = False,
-        format: str = "dict",
-    ) -> Any:
+        check_corruption: bool = True,
+        check_encryption: bool = True,
+    ) -> ValidationResult:
         """
-        Validate PDF structure and properties
+        Validate PDF file
 
         Args:
             pdf_path: Path to PDF file
-            check_corruption: Whether to check for corruption
-            check_encryption: Whether to check for encryption
-            format: Output format ("dict" or "json")
+            check_corruption: Check for file corruption
+            check_encryption: Check for encryption
 
         Returns:
-            PDFValidationResult or JSON string
+            ValidationResult with validation details
         """
-        if not os.path.exists(pdf_path):
-            result = PDFValidationResult(
+        pdf_path = Path(pdf_path)
+
+        if not pdf_path.exists():
+            return ValidationResult(
                 is_valid=False,
                 page_count=0,
                 has_text=False,
-                has_images=False,
                 file_size_bytes=0,
-                is_corrupted=True,
-                issues=["File not found"],
+                is_encrypted=False,
+                is_corrupted=False,
+                is_scanned=False,
+                error_message="File not found",
             )
-        else:
-            file_size = os.path.getsize(pdf_path)
-            issues = []
 
-            try:
-                doc = fitz.open(pdf_path)
+        file_size = pdf_path.stat().st_size
 
-                is_encrypted = doc.is_encrypted if check_encryption else False
-                if is_encrypted:
-                    issues.append("PDF is encrypted")
+        try:
+            # Try fast extraction first to validate
+            elements = partition_pdf(
+                filename=str(pdf_path),
+                strategy="fast",
+                include_page_breaks=False,
+                max_partition=1,  # Only process first page for validation
+            )
 
-                page_count = len(doc)
-                has_text = False
-                has_images = False
+            # Check if we got any text
+            has_text = any(elem.text for elem in elements if hasattr(elem, "text"))
 
-                # Check first few pages for content
-                for i in range(min(3, page_count)):
-                    page = doc[i]
-                    if page.get_text().strip():
-                        has_text = True
-                    if page.get_images():
-                        has_images = True
-                    if has_text and has_images:
-                        break
+            # Check if it's likely a scanned PDF (no text elements)
+            is_scanned = len(elements) == 0 or not has_text
 
-                doc.close()
-
-                result = PDFValidationResult(
-                    is_valid=not is_encrypted and page_count > 0,
-                    page_count=page_count,
-                    has_text=has_text,
-                    has_images=has_images,
-                    file_size_bytes=file_size,
-                    is_encrypted=is_encrypted,
-                    is_corrupted=False,
-                    issues=issues,
+            # Get page count (need to extract more for this)
+            if check_corruption:
+                full_elements = partition_pdf(
+                    filename=str(pdf_path), strategy="fast", include_page_breaks=True
                 )
+                page_numbers = set()
+                for elem in full_elements:
+                    if hasattr(elem, "metadata") and hasattr(
+                        elem.metadata, "page_number"
+                    ):
+                        page_numbers.add(elem.metadata.page_number)
+                page_count = max(page_numbers) if page_numbers else 1
+            else:
+                page_count = 1
 
-            except Exception as e:
-                result = PDFValidationResult(
-                    is_valid=False,
-                    page_count=0,
-                    has_text=False,
-                    has_images=False,
-                    file_size_bytes=file_size,
-                    is_corrupted=True,
-                    issues=[f"Validation error: {str(e)}"],
-                )
+            return ValidationResult(
+                is_valid=True,
+                page_count=page_count,
+                has_text=has_text,
+                file_size_bytes=file_size,
+                is_encrypted=False,
+                is_corrupted=False,
+                is_scanned=is_scanned,
+            )
 
-        if format == "json":
-            return result.to_json()
-        return result
+        except Exception as e:
+            error_msg = str(e)
+            is_encrypted = "encrypted" in error_msg.lower()
+
+            return ValidationResult(
+                is_valid=False,
+                page_count=0,
+                has_text=False,
+                file_size_bytes=file_size,
+                is_encrypted=is_encrypted,
+                is_corrupted=not is_encrypted,
+                is_scanned=False,
+                error_message=error_msg,
+            )
 
     def hash(
-        self, pdf_path: str, normalized: bool = False, per_page: bool = False
-    ) -> PDFHashResult:
+        self, pdf_path: str, normalized: bool = True, per_page: bool = False
+    ) -> HashResult:
         """
         Generate hashes for PDF content
 
         Args:
             pdf_path: Path to PDF file
-            normalized: Whether to generate normalized content hash
-            per_page: Whether to generate per-page hashes
+            normalized: Generate normalized content hash
+            per_page: Generate per-page hashes
 
         Returns:
-            PDFHashResult with various hashes
+            HashResult with various hashes
         """
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+        pdf_path = Path(pdf_path)
 
-        # File hash (MD5 of raw file)
+        # File hash
         with open(pdf_path, "rb") as f:
             file_hash = hashlib.md5(f.read()).hexdigest()
 
-        try:
-            doc = fitz.open(pdf_path)
+        # Extract content for content hashing
+        result = self.extract(
+            pdf_path, strategy="fast", extract_tables=False, extract_figures=False
+        )
 
-            # Extract all text for content hash
-            full_text = ""
-            page_texts = []
+        # Content hash
+        content_hash = hashlib.md5(result.full_text.encode()).hexdigest()
 
-            for page in doc:
-                text = page.get_text()
-                page_texts.append(text)
-                full_text += text
-
-            doc.close()
-
-            # Content hash (MD5 of extracted text)
-            content_hash = hashlib.md5(full_text.encode("utf-8")).hexdigest()
-
-            # Normalized content hash (remove whitespace variations)
-            content_hash_normalized = None
-            if normalized:
-                normalized_text = " ".join(full_text.split())
-                normalized_text = normalized_text.lower()
-                content_hash_normalized = hashlib.md5(
-                    normalized_text.encode("utf-8")
-                ).hexdigest()
-
-            # Per-page hashes
-            page_hashes_list = None
-            if per_page:
-                page_hashes_list = []
-                for text in page_texts:
-                    page_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
-                    page_hashes_list.append(page_hash)
-
-            return PDFHashResult(
-                file_hash=file_hash,
-                content_hash=content_hash,
-                content_hash_normalized=content_hash_normalized,
-                page_hashes=page_hashes_list,
-                page_count=len(page_texts),
-                is_normalized=normalized,
-            )
-
-        except Exception as e:
-            raise PDFProcessorError(f"Failed to hash PDF: {str(e)}")
-
-    # ==================== Helper Methods ====================
-
-    def _extract_metadata(self, doc: fitz.Document) -> Dict[str, Any]:
-        """Extract metadata from PDF document"""
-        metadata = doc.metadata or {}
-
-        # Ensure all expected keys exist
-        expected_keys = [
-            "title",
-            "author",
-            "subject",
-            "keywords",
-            "creator",
-            "producer",
-            "creation_date",
-            "modification_date",
-        ]
-
-        result = {}
-        for key in expected_keys:
-            # PyMuPDF uses different key names
-            pymupdf_key = key.replace("_", "").replace("date", "Date")
-            result[key] = metadata.get(pymupdf_key, None)
-
-        return result
-
-    def _get_empty_metadata(self) -> Dict[str, Any]:
-        """Get empty metadata structure for empty PDFs."""
-        return {
-            "title": "",
-            "author": "",
-            "subject": "",
-            "keywords": "",
-            "creator": "",
-            "producer": "",
-            "creation_date": "",
-            "modification_date": None,
-        }
-
-    def _extract_layout_blocks(self, page: fitz.Page) -> List[Dict[str, Any]]:
-        """Extract layout blocks from a page"""
-        blocks = []
-
-        # Get text blocks with bbox
-        text_blocks = page.get_text("dict")
-
-        for block in text_blocks.get("blocks", []):
-            if block.get("type") == 0:  # Text block
-                bbox = block.get("bbox", [0, 0, 0, 0])
-
-                # Determine block type based on content and position
-                block_text = ""
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        block_text += span.get("text", "")
-
-                block_type = self._classify_block_type(block_text, bbox)
-
-                blocks.append(
-                    {
-                        "type": block_type,
-                        "text": block_text.strip(),
-                        "bbox": {
-                            "x1": bbox[0],
-                            "y1": bbox[1],
-                            "x2": bbox[2],
-                            "y2": bbox[3],
-                        },
-                    }
-                )
-
-        return blocks
-
-    def _classify_block_type(self, text: str, bbox: List[float]) -> str:
-        """Classify the type of a text block"""
-        text_lower = text.lower().strip()
-
-        # Check for common patterns
-        if text_lower.startswith("table ") or text_lower.startswith("tab."):
-            return "table_caption"
-        elif text_lower.startswith("figure ") or text_lower.startswith("fig."):
-            return "figure_caption"
-        elif len(text) < 100 and text.isupper():
-            return "header"
-        elif len(text) < 50 and any(
-            text_lower.startswith(w)
-            for w in [
-                "abstract",
-                "introduction",
-                "methods",
-                "results",
-                "discussion",
-                "conclusion",
-                "references",
-            ]
-        ):
-            return "header"
+        # Normalized content hash
+        if normalized:
+            normalized_text = self._normalize_text(result.full_text)
+            content_hash_normalized = hashlib.md5(normalized_text.encode()).hexdigest()
         else:
-            return "paragraph"
+            content_hash_normalized = content_hash
 
-    def _extract_tables_from_page(
-        self, page: fitz.Page, page_num: int
-    ) -> List[ExtractedTable]:
-        """Extract tables from a page"""
+        # Per-page hashes
+        page_hashes = []
+        if per_page:
+            page_hashes = self._generate_page_hashes(result.elements)
+
+        return HashResult(
+            file_hash=file_hash,
+            content_hash=content_hash,
+            content_hash_normalized=content_hash_normalized,
+            page_hashes=page_hashes,
+            page_count=result.page_count,
+        )
+
+    def _extract_document_metadata(self, elements: List[Element]) -> Dict[str, Any]:
+        """Extract document-level metadata from elements"""
+        metadata = {}
+
+        # Look for title (usually first Title element)
+        for elem in elements:
+            if hasattr(elem, "category") and elem.category == "Title":
+                metadata["title"] = elem.text
+                break
+
+        # Extract other metadata from first element if available
+        if elements and hasattr(elements[0], "metadata"):
+            first_meta = elements[0].metadata
+            if hasattr(first_meta, "filename"):
+                metadata["filename"] = first_meta.filename
+            if hasattr(first_meta, "filetype"):
+                metadata["filetype"] = first_meta.filetype
+
+        return metadata
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for consistent hashing"""
+        # Remove extra whitespace
+        text = " ".join(text.split())
+        # Convert to lowercase
+        text = text.lower()
+        # Remove punctuation (optional, depending on needs)
+        import string
+
+        text = text.translate(str.maketrans("", "", string.punctuation))
+        return text
+
+    def _generate_page_hashes(self, elements: List[UnstructuredElement]) -> List[str]:
+        """Generate hashes for each page"""
+        page_texts = {}
+
+        for elem in elements:
+            if elem.page_number and elem.text:
+                if elem.page_number not in page_texts:
+                    page_texts[elem.page_number] = []
+                page_texts[elem.page_number].append(elem.text)
+
+        # Sort by page number and generate hashes
+        page_hashes = []
+        for page_num in sorted(page_texts.keys()):
+            page_text = "\n".join(page_texts[page_num])
+            page_hash = hashlib.md5(page_text.encode()).hexdigest()
+            page_hashes.append(page_hash)
+
+        return page_hashes
+
+    def extract_tables_as_dataframes(
+        self, elements: List[UnstructuredElement]
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract tables as structured data (DataFrames)
+
+        Args:
+            elements: List of extracted elements
+
+        Returns:
+            List of table dictionaries with DataFrames
+        """
         tables = []
 
-        # PyMuPDF doesn't have built-in table extraction
-        # This is a simplified approach - in production, consider using
-        # libraries like camelot-py or tabula-py for better table extraction
+        for element in elements:
+            if element.type == "Table":
+                table_dict = {
+                    "text": element.text,
+                    "page": element.page_number,
+                    "element_id": element.element_id,
+                }
 
-        # For now, we'll detect table-like structures in the text
-        text = page.get_text()
-        lines = text.split("\n")
+                # Try to parse HTML if available
+                if "text_as_html" in element.metadata:
+                    try:
+                        import pandas as pd
 
-        # Simple heuristic: consecutive lines with multiple tab/space separations
-        # might be table rows
-        potential_table_lines = []
-        for line in lines:
-            if "\t" in line or "  " in line:
-                potential_table_lines.append(line)
+                        df = pd.read_html(element.metadata["text_as_html"])[0]
+                        table_dict["dataframe"] = df
+                        table_dict["html"] = element.metadata["text_as_html"]
+                    except Exception:
+                        pass  # Fall back to text representation
 
-        # If we found potential table content, create a table
-        if potential_table_lines:
-            # This is very simplified - real implementation would need
-            # better table detection and parsing
-            data = []
-            for line in potential_table_lines[:10]:  # Limit to 10 rows for now
-                cells = line.split("\t") if "\t" in line else line.split("  ")
-                cells = [c.strip() for c in cells if c.strip()]
-                if cells:
-                    data.append(cells)
-
-            if data:
-                table = ExtractedTable(
-                    page_number=page_num,
-                    table_index=0,
-                    data=data,
-                    headers=data[0] if data else None,
-                    bbox={"x1": 0, "y1": 0, "x2": 100, "y2": 100},  # Placeholder
+                # Look for associated caption
+                table_dict["caption"] = self._find_caption_for_element(
+                    element, elements, "Table"
                 )
-                tables.append(table)
+                tables.append(table_dict)
 
         return tables
 
-    def _extract_figures_from_page(
-        self, page: fitz.Page, page_num: int
-    ) -> List[ExtractedFigure]:
-        """Extract figures from a page"""
+    def extract_figures(
+        self, elements: List[UnstructuredElement]
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract figures with captions
+
+        Args:
+            elements: List of extracted elements
+
+        Returns:
+            List of figure dictionaries
+        """
         figures = []
 
-        # Get images from page
-        image_list = page.get_images()
+        for i, element in enumerate(elements):
+            if element.type == "FigureCaption":
+                figure = {
+                    "caption": element.text,
+                    "page": element.page_number,
+                    "bbox": element.bbox,
+                    "element_id": element.element_id,
+                    "has_image": False,
+                }
 
-        for idx, img in enumerate(image_list):
-            # Get image bbox (if available)
-            # PyMuPDF stores images differently, this is simplified
-            figure = ExtractedFigure(
-                page_number=page_num,
-                figure_index=idx,
-                figure_type="IMAGE",  # Default type
-                bbox={"x1": 0, "y1": 0, "x2": 100, "y2": 100},  # Placeholder
-            )
-            figures.append(figure)
+                # Check if adjacent element is an image
+                if i > 0 and elements[i - 1].type in ["Image", "Figure"]:
+                    figure["has_image"] = True
+                    figure["image_element_id"] = elements[i - 1].element_id
+                elif i + 1 < len(elements) and elements[i + 1].type in [
+                    "Image",
+                    "Figure",
+                ]:
+                    figure["has_image"] = True
+                    figure["image_element_id"] = elements[i + 1].element_id
+
+                figures.append(figure)
 
         return figures
 
+    def build_document_structure(
+        self, elements: List[UnstructuredElement]
+    ) -> List[Dict[str, Any]]:
+        """
+        Build hierarchical document structure
 
-# ==================== CLI Interface ====================
+        Args:
+            elements: List of extracted elements
 
+        Returns:
+            Hierarchical structure of document sections
+        """
+        structure = []
+        current_section = None
+        current_subsection = None
 
-class cli:
-    """CLI interface for pdf_processor"""
+        for element in elements:
+            if element.type == "Title":
+                # Main title/section
+                current_section = {
+                    "title": element.text,
+                    "level": 1,
+                    "children": [],
+                    "content": [],
+                    "element_id": element.element_id,
+                    "page": element.page_number,
+                }
+                structure.append(current_section)
+                current_subsection = None
 
-    @staticmethod
-    def extract(*args, **kwargs):
-        """CLI extract command"""
-        processor = PDFProcessor()
-        return processor.extract(*args, **kwargs)
+            elif element.type == "Header":
+                # Subsection
+                subsection = {
+                    "title": element.text,
+                    "level": 2,
+                    "content": [],
+                    "element_id": element.element_id,
+                    "page": element.page_number,
+                }
 
-    @staticmethod
-    def validate(*args, **kwargs):
-        """CLI validate command"""
-        processor = PDFProcessor()
-        return processor.validate(*args, **kwargs)
+                if current_section:
+                    current_section["children"].append(subsection)
+                    current_subsection = subsection
+                else:
+                    # No parent section, make it a top-level section
+                    structure.append(subsection)
+                    current_section = subsection
 
-    @staticmethod
-    def hash(*args, **kwargs):
-        """CLI hash command"""
-        processor = PDFProcessor()
-        return processor.hash(*args, **kwargs)
+            elif current_subsection:
+                current_subsection["content"].append(
+                    {
+                        "type": element.type,
+                        "text": element.text,
+                        "element_id": element.element_id,
+                    }
+                )
+            elif current_section:
+                current_section["content"].append(
+                    {
+                        "type": element.type,
+                        "text": element.text,
+                        "element_id": element.element_id,
+                    }
+                )
 
+        return structure
 
-# ==================== Module Entry Point ====================
+    def _find_caption_for_element(
+        self,
+        element: UnstructuredElement,
+        all_elements: List[UnstructuredElement],
+        element_type: str,
+    ) -> Optional[str]:
+        """Find caption for a table or figure element"""
+        # Look for caption before or after the element
+        element_index = all_elements.index(element)
 
-if __name__ == "__main__":
-    import sys
-    import argparse
+        # Check previous element
+        if element_index > 0:
+            prev_elem = all_elements[element_index - 1]
+            if prev_elem.type == f"{element_type}Caption":
+                return prev_elem.text
 
-    parser = argparse.ArgumentParser(description="PDF Processor CLI")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+        # Check next element
+        if element_index < len(all_elements) - 1:
+            next_elem = all_elements[element_index + 1]
+            if next_elem.type == f"{element_type}Caption":
+                return next_elem.text
 
-    # Extract command
-    extract_parser = subparsers.add_parser("extract", help="Extract content from PDF")
-    extract_parser.add_argument("pdf_path", help="Path to PDF file")
-    extract_parser.add_argument("--tables", action="store_true", help="Extract tables")
-    extract_parser.add_argument(
-        "--figures", action="store_true", help="Extract figures"
-    )
-    extract_parser.add_argument("--layout", action="store_true", help="Preserve layout")
-
-    # Validate command
-    validate_parser = subparsers.add_parser("validate", help="Validate PDF")
-    validate_parser.add_argument("pdf_path", help="Path to PDF file")
-    validate_parser.add_argument("--format", choices=["dict", "json"], default="json")
-
-    # Hash command
-    hash_parser = subparsers.add_parser("hash", help="Generate PDF hashes")
-    hash_parser.add_argument("pdf_path", help="Path to PDF file")
-    hash_parser.add_argument(
-        "--normalized", action="store_true", help="Generate normalized hash"
-    )
-    hash_parser.add_argument(
-        "--per-page", action="store_true", help="Generate per-page hashes"
-    )
-
-    args = parser.parse_args()
-
-    if args.command == "extract":
-        processor = PDFProcessor()
-        result = processor.extract(
-            args.pdf_path,
-            extract_tables=args.tables,
-            extract_figures=args.figures,
-            preserve_layout=args.layout,
-        )
-        print(result.to_json())
-
-    elif args.command == "validate":
-        processor = PDFProcessor()
-        result = processor.validate(args.pdf_path, format=args.format)
-        print(result)
-
-    elif args.command == "hash":
-        processor = PDFProcessor()
-        result = processor.hash(
-            args.pdf_path, normalized=args.normalized, per_page=args.per_page
-        )
-        print(json.dumps(result.to_dict(), indent=2))
-
-    else:
-        parser.print_help()
+        return None

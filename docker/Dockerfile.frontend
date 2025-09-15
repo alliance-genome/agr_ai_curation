@@ -3,13 +3,15 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files first (cached layer if package.json doesn't change)
 COPY frontend/package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies with npm cache
+# Using cache mount for npm to speed up rebuilds
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm
 
-# Copy source code
+# Copy source code last (changes most frequently)
 COPY frontend/ ./
 
 # Build the application

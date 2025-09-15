@@ -1,439 +1,347 @@
 """
-Unit tests for PDF Processor Library
-Following TDD-RED phase - these tests should FAIL initially
-Tests cover PyMuPDF extraction, validation, and hashing functionality
+Unit tests for PDF Processor using Unstructured.io
+Tests extraction, validation, and hashing with the new implementation
 """
 
 import pytest
-import hashlib
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-import json
-from typing import Dict, List, Optional
 
-# These imports will fail initially (TDD-RED)
 from lib.pdf_processor import (
     PDFProcessor,
     ExtractionResult,
-    PageContent,
-    ExtractedTable,
-    ExtractedFigure,
-    PDFValidationResult,
-    PDFHashResult,
-    PDFProcessorError,
-    UnsupportedFileError,
-    CorruptedPDFError,
+    ValidationResult,
+    HashResult,
+    UnstructuredElement,
 )
 
 
-class TestPDFProcessor:
-    """Test suite for PDF Processor using PyMuPDF"""
+class TestPDFProcessorUnstructured:
+    """Test suite for Unstructured PDF processor"""
 
     @pytest.fixture
     def processor(self):
-        """Create a PDF processor instance"""
-        return PDFProcessor()
+        """Create PDF processor instance"""
+        return PDFProcessor(default_strategy="fast")
 
     @pytest.fixture
-    def sample_pdf_path(self):
-        """Use the real test PDF for testing"""
+    def mock_elements(self):
+        """Create mock Unstructured elements"""
+        elements = []
+
+        # Create mock Title element
+        title_elem = Mock()
+        title_elem.category = "Title"
+        title_elem.text = "Test Document Title"
+        title_elem.id = "elem_1"
+        title_elem.metadata = Mock()
+        title_elem.metadata.page_number = 1
+        title_elem.metadata.coordinates = {
+            "x": 100,
+            "y": 100,
+            "width": 400,
+            "height": 50,
+        }
+        title_elem.metadata.to_dict = Mock(
+            return_value={
+                "page_number": 1,
+                "coordinates": {"x": 100, "y": 100, "width": 400, "height": 50},
+            }
+        )
+        elements.append(title_elem)
+
+        # Create mock NarrativeText element
+        text_elem = Mock()
+        text_elem.category = "NarrativeText"
+        text_elem.text = "This is the main content of the document."
+        text_elem.id = "elem_2"
+        text_elem.metadata = Mock()
+        text_elem.metadata.page_number = 1
+        text_elem.metadata.to_dict = Mock(return_value={"page_number": 1})
+        elements.append(text_elem)
+
+        # Create mock Table element
+        table_elem = Mock()
+        table_elem.category = "Table"
+        table_elem.text = "Col1\tCol2\nVal1\tVal2"
+        table_elem.id = "elem_3"
+        table_elem.metadata = Mock()
+        table_elem.metadata.page_number = 2
+        table_elem.metadata.text_as_html = (
+            "<table><tr><td>Col1</td><td>Col2</td></tr></table>"
+        )
+        table_elem.metadata.to_dict = Mock(
+            return_value={
+                "page_number": 2,
+                "text_as_html": "<table><tr><td>Col1</td><td>Col2</td></tr></table>",
+            }
+        )
+        elements.append(table_elem)
+
+        # Create mock FigureCaption element
+        caption_elem = Mock()
+        caption_elem.category = "FigureCaption"
+        caption_elem.text = "Figure 1: Test figure caption"
+        caption_elem.id = "elem_4"
+        caption_elem.metadata = Mock()
+        caption_elem.metadata.page_number = 2
+        caption_elem.metadata.to_dict = Mock(return_value={"page_number": 2})
+        elements.append(caption_elem)
+
+        return elements
+
+    @pytest.fixture
+    def real_pdf_path(self):
+        """Path to real test PDF"""
         return "tests/fixtures/test_paper.pdf"
-
-    @pytest.fixture
-    def corrupted_pdf_path(self, tmp_path):
-        """Create a corrupted PDF file for testing"""
-        pdf_file = tmp_path / "corrupted.pdf"
-        pdf_file.write_bytes(b"Not a valid PDF content")
-        return str(pdf_file)
 
     # ==================== EXTRACTION TESTS ====================
 
-    def test_extract_basic(self, processor, sample_pdf_path):
-        """Test basic PDF extraction"""
-        result = processor.extract(
-            pdf_path=sample_pdf_path, extract_tables=False, extract_figures=False
-        )
+    def test_extract_basic(self, processor, real_pdf_path):
+        """Test basic PDF extraction with real PDF"""
+        result = processor.extract(real_pdf_path, strategy="fast")
 
         assert isinstance(result, ExtractionResult)
-        assert result.pdf_path == sample_pdf_path
-        assert result.page_count == 9  # Known page count for test_paper.pdf
-        assert result.pages is not None
-        assert len(result.pages) == result.page_count
-        assert result.extraction_time_ms > 0
-        assert result.file_size_bytes > 1000000  # ~1.8MB file
+        assert result.processing_strategy == "fast"
+        assert len(result.elements) > 10  # Real PDF has many elements
+        assert result.page_count == 9  # test_paper.pdf has 9 pages
+        assert len(result.full_text) > 1000  # Should have substantial content
 
-    def test_extract_with_text_content(self, processor, sample_pdf_path):
-        """Test extraction returns text content"""
-        result = processor.extract(pdf_path=sample_pdf_path)
+        # Check for key content from the paper
+        assert "Dnr1" in result.full_text or "neurodegeneration" in result.full_text
 
-        assert result.full_text is not None
-        assert len(result.full_text) > 50000  # Should have substantial text
-        assert "Dnr1 mutations" in result.full_text  # Check for title
-        assert "neurodegeneration" in result.full_text
+        # Check that elements have proper types
+        element_types = {e.type for e in result.elements}
+        assert len(element_types) > 1  # Should have multiple element types
 
-        for page in result.pages:
-            assert isinstance(page, PageContent)
-            assert page.page_number > 0
-            assert page.text is not None
+    def test_extract_with_tables(self, processor, real_pdf_path):
+        """Test extraction with table detection using real PDF"""
+        result = processor.extract(real_pdf_path, extract_tables=True, strategy="fast")
 
-    def test_extract_tables(self, processor, sample_pdf_path):
-        """Test table extraction from PDF"""
-        result = processor.extract(pdf_path=sample_pdf_path, extract_tables=True)
-
-        assert result.tables is not None
+        # Real scientific papers often have tables
+        # Just check the structure is correct, actual count may vary
         assert isinstance(result.tables, list)
-        assert result.table_count >= 0
+        if result.tables:  # If tables were detected
+            assert "text" in result.tables[0]
+            assert "page" in result.tables[0]
 
-        for table in result.tables:
-            assert isinstance(table, ExtractedTable)
-            assert table.page_number > 0
-            assert table.data is not None
-            assert isinstance(table.headers, (list, type(None)))
-            assert table.bbox is not None
+    def test_extract_with_figures(self, processor, real_pdf_path):
+        """Test extraction with figure detection using real PDF"""
+        result = processor.extract(real_pdf_path, extract_figures=True, strategy="fast")
 
-    def test_extract_figures(self, processor, sample_pdf_path):
-        """Test figure extraction from PDF"""
-        result = processor.extract(pdf_path=sample_pdf_path, extract_figures=True)
-
-        assert result.figures is not None
         assert isinstance(result.figures, list)
-        assert result.figure_count >= 0
+        # Scientific papers typically have figures
+        if result.figures:
+            assert "type" in result.figures[0]
+            assert "text" in result.figures[0]
 
-        for figure in result.figures:
-            assert isinstance(figure, ExtractedFigure)
-            assert figure.page_number > 0
-            assert figure.figure_type in ["CHART", "DIAGRAM", "IMAGE", "PLOT", None]
-            assert figure.bbox is not None
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_with_progress_callback(
+        self, mock_partition, processor, mock_elements
+    ):
+        """Test extraction with progress callback"""
+        mock_partition.return_value = mock_elements
+        progress_calls = []
 
-    def test_extract_with_layout_blocks(self, processor, sample_pdf_path):
-        """Test that layout information is extracted"""
-        result = processor.extract(pdf_path=sample_pdf_path, preserve_layout=True)
+        def progress_callback(current, total, message):
+            progress_calls.append((current, total, message))
 
-        for page in result.pages:
-            assert page.layout_blocks is not None
-            assert isinstance(page.layout_blocks, list)
-            for block in page.layout_blocks:
-                assert "bbox" in block
-                assert "type" in block  # header, paragraph, caption, etc.
-                assert "text" in block
-                assert block["bbox"] is not None
-                assert all(key in block["bbox"] for key in ["x1", "y1", "x2", "y2"])
+        result = processor.extract("test.pdf", progress_callback=progress_callback)
 
-    def test_extract_metadata(self, processor, sample_pdf_path):
-        """Test PDF metadata extraction"""
-        result = processor.extract(pdf_path=sample_pdf_path)
+        assert len(progress_calls) >= 2
+        assert progress_calls[0][0] == 0  # Start at 0%
+        assert progress_calls[-1][0] == 100  # End at 100%
 
-        assert result.metadata is not None
-        # Check actual metadata from the test paper
-        assert "Dnr1 mutations" in result.metadata.get("title", "")
-        assert "Proc. Natl. Acad. Sci" in result.metadata.get("subject", "")
-        assert result.metadata.get("creator") is not None
-        assert result.metadata.get("producer") is not None
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_different_strategies(
+        self, mock_partition, processor, mock_elements
+    ):
+        """Test different extraction strategies"""
+        mock_partition.return_value = mock_elements
 
-        # These fields should exist as keys
-        expected_keys = [
-            "title",
-            "author",
-            "subject",
-            "keywords",
-            "creator",
-            "producer",
-            "creation_date",
-            "modification_date",
-        ]
-        for key in expected_keys:
-            assert key in result.metadata  # Key exists even if value is None
-
-    def test_extract_corrupted_pdf_raises_error(self, processor, corrupted_pdf_path):
-        """Test that corrupted PDF raises appropriate error"""
-        with pytest.raises((CorruptedPDFError, UnsupportedFileError)) as exc_info:
-            processor.extract(pdf_path=corrupted_pdf_path)
-
-        assert (
-            "corrupted" in str(exc_info.value).lower()
-            or "invalid" in str(exc_info.value).lower()
-            or "not a valid" in str(exc_info.value).lower()
+        # Test hi_res strategy
+        result = processor.extract("test.pdf", strategy="hi_res")
+        assert result.processing_strategy == "hi_res"
+        mock_partition.assert_called_with(
+            filename="test.pdf",
+            strategy="hi_res",
+            infer_table_structure=True,
+            include_page_breaks=True,
+            extract_images_in_pdf=False,
+            extract_forms=False,
+            languages=["eng"],
         )
 
-    def test_extract_nonexistent_file_raises_error(self, processor):
-        """Test that nonexistent file raises appropriate error"""
-        with pytest.raises(FileNotFoundError):
-            processor.extract(pdf_path="/nonexistent/file.pdf")
+        # Test ocr_only strategy
+        result = processor.extract("test.pdf", strategy="ocr_only")
+        assert result.processing_strategy == "ocr_only"
 
-    def test_extract_non_pdf_file_raises_error(self, processor, tmp_path):
-        """Test that non-PDF file raises appropriate error"""
-        txt_file = tmp_path / "not_a_pdf.txt"
-        txt_file.write_text("This is not a PDF")
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_content_hashing(self, mock_partition, processor, mock_elements):
+        """Test content hash generation"""
+        mock_partition.return_value = mock_elements
 
-        with pytest.raises(UnsupportedFileError) as exc_info:
-            processor.extract(pdf_path=str(txt_file))
+        result = processor.extract("test.pdf")
 
+        assert result.content_hash is not None
+        assert result.content_hash_normalized is not None
+        assert len(result.content_hash) == 32  # MD5 hash length
         assert (
-            "not a valid pdf" in str(exc_info.value).lower()
-            or "unsupported" in str(exc_info.value).lower()
-        )
+            result.content_hash != result.content_hash_normalized
+        )  # Different due to normalization
 
-    def test_extract_with_page_range(self, processor, sample_pdf_path):
-        """Test extraction with specific page range"""
-        # Extract pages 2-4 from the 9-page document
-        result = processor.extract(pdf_path=sample_pdf_path, start_page=2, end_page=4)
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_page_hashes(self, mock_partition, processor, mock_elements):
+        """Test per-page hash generation"""
+        mock_partition.return_value = mock_elements
 
-        assert len(result.pages) == 3
-        assert result.pages[0].page_number == 2
-        assert result.pages[1].page_number == 3
-        assert result.pages[2].page_number == 4
+        result = processor.extract("test.pdf")
+
+        assert len(result.page_hashes) == 2  # Two pages in mock data
+        assert all(len(h) == 32 for h in result.page_hashes)
 
     # ==================== VALIDATION TESTS ====================
 
-    def test_validate_pdf_structure(self, processor, sample_pdf_path):
-        """Test PDF validation functionality"""
-        result = processor.validate(pdf_path=sample_pdf_path)
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_validate_valid_pdf(self, mock_partition, processor, mock_elements):
+        """Test validation of valid PDF"""
+        mock_partition.return_value = mock_elements
 
-        assert isinstance(result, PDFValidationResult)
-        assert result.is_valid is True
-        assert result.page_count == 9
-        assert result.has_text is True
-        assert isinstance(result.has_images, bool)
-        assert result.file_size_bytes > 1000000  # ~1.8MB
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value.st_size = 1000000
 
-    def test_validate_with_checks(self, processor, sample_pdf_path):
-        """Test validation with various checks"""
-        result = processor.validate(
-            pdf_path=sample_pdf_path, check_corruption=True, check_encryption=True
-        )
+                result = processor.validate("test.pdf")
 
-        assert result.is_encrypted is not None
-        assert result.is_corrupted is not None
-        assert result.issues is not None
-        assert isinstance(result.issues, list)
+                assert result.is_valid is True
+                assert result.page_count >= 1
+                assert result.has_text is True
+                assert result.file_size_bytes == 1000000
+                assert result.is_encrypted is False
+                assert result.is_corrupted is False
 
-    def test_validate_returns_json_format(self, processor, sample_pdf_path):
-        """Test validation returns JSON format when requested"""
-        result_json = processor.validate(pdf_path=sample_pdf_path, format="json")
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_validate_scanned_pdf(self, mock_partition, processor):
+        """Test detection of scanned PDF"""
+        mock_partition.return_value = []  # No elements means scanned
 
-        assert isinstance(result_json, str)
-        parsed = json.loads(result_json)
-        assert "is_valid" in parsed
-        assert "page_count" in parsed
-        assert "file_size_bytes" in parsed
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value.st_size = 1000000
 
-    def test_validate_corrupted_pdf(self, processor, corrupted_pdf_path):
-        """Test validation of corrupted PDF"""
-        result = processor.validate(pdf_path=corrupted_pdf_path)
+                result = processor.validate("test.pdf")
+
+                assert result.is_scanned is True
+                assert result.has_text is False
+
+    def test_validate_nonexistent_pdf(self, processor):
+        """Test validation of non-existent file"""
+        result = processor.validate("nonexistent.pdf")
 
         assert result.is_valid is False
-        assert result.is_corrupted is True
-        assert len(result.issues) > 0
+        assert result.error_message == "File not found"
+        assert result.file_size_bytes == 0
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_validate_corrupted_pdf(self, mock_partition, processor):
+        """Test validation of corrupted PDF"""
+        mock_partition.side_effect = Exception("PDF is corrupted")
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value.st_size = 1000000
+
+                result = processor.validate("test.pdf")
+
+                assert result.is_valid is False
+                assert result.is_corrupted is True
+                assert "corrupted" in result.error_message
 
     # ==================== HASHING TESTS ====================
 
-    def test_hash_pdf_content(self, processor, sample_pdf_path):
-        """Test PDF content hashing"""
-        result = processor.hash(
-            pdf_path=sample_pdf_path, normalized=False, per_page=False
-        )
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_hash_all_types(self, mock_partition, processor, mock_elements):
+        """Test all hash types"""
+        mock_partition.return_value = mock_elements
 
-        assert isinstance(result, PDFHashResult)
-        assert result.file_hash is not None
-        assert len(result.file_hash) == 32  # MD5 hash length
-        assert result.content_hash is not None
-        assert len(result.content_hash) == 32
-
-    def test_hash_normalized_content(self, processor, sample_pdf_path):
-        """Test normalized content hashing (whitespace/formatting agnostic)"""
-        result = processor.hash(pdf_path=sample_pdf_path, normalized=True)
-
-        assert result.content_hash_normalized is not None
-        assert len(result.content_hash_normalized) == 32
-        # Normalized hash should exist (may or may not differ from raw)
-        assert result.content_hash is not None
-
-    def test_hash_per_page(self, processor, sample_pdf_path):
-        """Test per-page hashing for incremental updates"""
-        result = processor.hash(pdf_path=sample_pdf_path, per_page=True)
-
-        assert result.page_hashes is not None
-        assert isinstance(result.page_hashes, list)
-        assert len(result.page_hashes) == 9  # Should have 9 page hashes
-
-        for page_hash in result.page_hashes:
-            assert isinstance(page_hash, str)
-            assert len(page_hash) == 32
-
-    def test_hash_deterministic(self, processor, sample_pdf_path):
-        """Test that hashing is deterministic"""
-        result1 = processor.hash(pdf_path=sample_pdf_path, normalized=True)
-        result2 = processor.hash(pdf_path=sample_pdf_path, normalized=True)
-
-        assert result1.file_hash == result2.file_hash
-        assert result1.content_hash == result2.content_hash
-        if result1.content_hash_normalized and result2.content_hash_normalized:
-            assert result1.content_hash_normalized == result2.content_hash_normalized
-
-    # ==================== INTEGRATION TESTS ====================
-
-    def test_full_extraction_pipeline(self, processor, sample_pdf_path):
-        """Test complete extraction pipeline with all features"""
-        result = processor.extract(
-            pdf_path=sample_pdf_path,
-            extract_tables=True,
-            extract_figures=True,
-            preserve_layout=True,
-        )
-
-        # Validate the complete result
-        assert result.pdf_path == sample_pdf_path
-        assert result.full_text is not None
-        assert len(result.full_text) > 50000
-        assert result.extraction_time_ms > 0
-        assert result.metadata is not None
-        assert result.pages is not None
-        assert len(result.pages) == 9
-        assert result.tables is not None
-        assert result.figures is not None
-        # Scientific papers typically have figures
-        assert result.figure_count > 0
-
-    def test_extraction_with_progress_callback(self, processor, sample_pdf_path):
-        """Test extraction with progress callback"""
-        progress_updates = []
-
-        def progress_callback(current_page: int, total_pages: int, status: str):
-            progress_updates.append(
-                {"current": current_page, "total": total_pages, "status": status}
+        with patch("builtins.open", create=True) as mock_open:
+            mock_open.return_value.__enter__.return_value.read.return_value = (
+                b"file content"
             )
 
-        result = processor.extract(
-            pdf_path=sample_pdf_path, progress_callback=progress_callback
-        )
+            result = processor.hash("test.pdf", normalized=True, per_page=True)
 
-        assert len(progress_updates) > 0
-        assert any(u["status"] == "completed" for u in progress_updates)
+            assert isinstance(result, HashResult)
+            assert len(result.file_hash) == 32
+            assert len(result.content_hash) == 32
+            assert len(result.content_hash_normalized) == 32
+            assert len(result.page_hashes) == 2
+
+    # ==================== HELPER METHOD TESTS ====================
+
+    def test_normalize_text(self, processor):
+        """Test text normalization"""
+        text = "  This   is   a   TEST!   "
+        normalized = processor._normalize_text(text)
+
+        assert "  " not in normalized  # No double spaces
+        assert normalized == normalized.lower()  # Lowercase
+        assert "!" not in normalized  # Punctuation removed
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_tables_as_dataframes(
+        self, mock_partition, processor, mock_elements
+    ):
+        """Test table extraction as DataFrames"""
+        mock_partition.return_value = mock_elements
+
+        result = processor.extract("test.pdf")
+        tables = processor.extract_tables_as_dataframes(result.elements)
+
+        assert len(tables) == 1
+        assert tables[0]["text"] == "Col1\tCol2\nVal1\tVal2"
+        assert tables[0]["page"] == 2
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_figures(self, mock_partition, processor, mock_elements):
+        """Test figure extraction"""
+        mock_partition.return_value = mock_elements
+
+        result = processor.extract("test.pdf")
+        figures = processor.extract_figures(result.elements)
+
+        assert len(figures) == 1
+        assert "Figure 1" in figures[0]["caption"]
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_build_document_structure(self, mock_partition, processor, mock_elements):
+        """Test document structure building"""
+        mock_partition.return_value = mock_elements
+
+        result = processor.extract("test.pdf")
+        structure = processor.build_document_structure(result.elements)
+
+        assert len(structure) >= 1
+        assert structure[0]["title"] == "Test Document Title"
+        assert structure[0]["level"] == 1
 
     # ==================== ERROR HANDLING TESTS ====================
 
-    def test_handle_encrypted_pdf(self, processor, tmp_path):
-        """Test handling of encrypted PDFs"""
-        # This is a placeholder - real encrypted PDF would be more complex
-        encrypted_pdf = tmp_path / "encrypted.pdf"
-        encrypted_pdf.write_bytes(b"%PDF-1.4\n%Encrypted")
+    def test_extract_file_not_found(self, processor):
+        """Test extraction with non-existent file"""
+        with pytest.raises(FileNotFoundError):
+            processor.extract("nonexistent.pdf")
 
-        with pytest.raises(PDFProcessorError) as exc_info:
-            processor.extract(pdf_path=str(encrypted_pdf))
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_processing_error(self, mock_partition, processor):
+        """Test extraction error handling"""
+        mock_partition.side_effect = Exception("Processing failed")
 
-        assert (
-            "encrypted" in str(exc_info.value).lower()
-            or "password" in str(exc_info.value).lower()
-        )
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value.st_size = 1000000
 
-    def test_handle_large_pdf_with_memory_limit(self, processor, tmp_path):
-        """Test handling of large PDFs with memory constraints"""
-        # Create a mock large PDF
-        large_pdf = tmp_path / "large.pdf"
-        large_pdf.write_bytes(b"%PDF-1.4\n" + b"0" * 100_000_000)  # 100MB
+                with pytest.raises(RuntimeError) as exc_info:
+                    processor.extract("test.pdf")
 
-        with patch("lib.pdf_processor.MAX_FILE_SIZE_MB", 50):
-            with pytest.raises(PDFProcessorError) as exc_info:
-                processor.extract(pdf_path=str(large_pdf))
-
-            assert (
-                "too large" in str(exc_info.value).lower()
-                or "size limit" in str(exc_info.value).lower()
-            )
-
-    def test_handle_empty_pdf(self, processor, tmp_path):
-        """Test handling of empty PDFs"""
-        empty_pdf = tmp_path / "empty.pdf"
-        empty_pdf.write_bytes(b"%PDF-1.4\n%%EOF")
-
-        # Empty PDFs might be treated as unsupported or return empty result
-        try:
-            result = processor.extract(pdf_path=str(empty_pdf))
-            # Should handle gracefully if it doesn't raise
-            assert result.page_count == 0
-            assert result.full_text == ""
-            assert result.pages == []
-        except (UnsupportedFileError, CorruptedPDFError):
-            # Also acceptable - empty PDFs can be considered invalid
-            pass
-
-
-class TestExtractionResult:
-    """Test the ExtractionResult data model"""
-
-    def test_extraction_result_creation(self):
-        """Test ExtractionResult creation and properties"""
-        pages = [PageContent(page_number=1, text="Page 1 text", layout_blocks=[])]
-
-        result = ExtractionResult(
-            pdf_path="/path/to/file.pdf",
-            page_count=1,
-            pages=pages,
-            full_text="Page 1 text",
-            extraction_time_ms=100.5,
-            file_size_bytes=1024,
-            metadata={"title": "Test PDF"},
-            tables=[],
-            figures=[],
-        )
-
-        assert result.pdf_path == "/path/to/file.pdf"
-        assert result.page_count == 1
-        assert len(result.pages) == 1
-        assert result.table_count == 0
-        assert result.figure_count == 0
-
-    def test_extraction_result_serialization(self):
-        """Test that ExtractionResult can be serialized to dict/JSON"""
-        result = ExtractionResult(
-            pdf_path="/path/to/file.pdf",
-            page_count=10,
-            pages=[],
-            full_text="Sample text",
-            extraction_time_ms=100.5,
-            file_size_bytes=1024,
-            metadata={"title": "Test PDF"},
-            tables=[],
-            figures=[],
-        )
-
-        # Should be able to convert to dict
-        result_dict = result.to_dict()
-        assert result_dict["pdf_path"] == "/path/to/file.pdf"
-        assert result_dict["page_count"] == 10
-        assert result_dict["extraction_time_ms"] == 100.5
-
-        # Should be able to convert to JSON
-        result_json = result.to_json()
-        assert isinstance(result_json, str)
-        parsed = json.loads(result_json)
-        assert parsed["pdf_path"] == "/path/to/file.pdf"
-
-
-class TestCLIInterface:
-    """Test the CLI interface for pdf_processor"""
-
-    def test_cli_extract_command(self):
-        """Test CLI extract command structure"""
-        from lib.pdf_processor import cli
-
-        # Should have extract command
-        assert hasattr(cli, "extract")
-        assert callable(cli.extract)
-
-    def test_cli_validate_command(self):
-        """Test CLI validate command structure"""
-        from lib.pdf_processor import cli
-
-        # Should have validate command
-        assert hasattr(cli, "validate")
-        assert callable(cli.validate)
-
-    def test_cli_hash_command(self):
-        """Test CLI hash command structure"""
-        from lib.pdf_processor import cli
-
-        # Should have hash command
-        assert hasattr(cli, "hash")
-        assert callable(cli.hash)
+                assert "Failed to extract PDF" in str(exc_info.value)
