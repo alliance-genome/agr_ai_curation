@@ -52,6 +52,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
       - ./backend/app:/app/app
+      - ./backend/lib:/app/lib
       - ./backend/tests:/app/tests
       - ./uploads:/app/uploads
     ports:

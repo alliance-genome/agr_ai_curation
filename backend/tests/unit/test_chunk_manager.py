@@ -101,6 +101,11 @@ class TestChunkManager:
             pages=pages,
             page_count=3,
             full_text="".join([p.text for p in pages]),
+            extraction_time_ms=100.0,
+            file_size_bytes=1024,
+            metadata={"title": "Test Document"},
+            tables=[],
+            figures=[],
         )
 
     # ==================== BASIC CHUNKING TESTS ====================
@@ -144,28 +149,39 @@ class TestChunkManager:
     def test_mark_references_section(self, manager, sample_extraction_result):
         """Test that references section is marked appropriately"""
         # Add references section to test data
-        sample_extraction_result.pages.append(
-            PageContent(
-                page_number=4,
-                text="References\n1. Smith et al. (2020)\n2. Jones et al. (2021)",
-                layout_blocks=[
-                    {
-                        "type": "header",
-                        "text": "References",
-                        "bbox": {"x1": 0, "y1": 0, "x2": 100, "y2": 20},
-                    },
-                    {
-                        "type": "paragraph",
-                        "text": "1. Smith et al...",
-                        "bbox": {"x1": 0, "y1": 30, "x2": 100, "y2": 50},
-                    },
-                ],
-            )
+        ref_page = PageContent(
+            page_number=4,
+            text="References\n1. Smith et al. (2020)\n2. Jones et al. (2021)",
+            layout_blocks=[
+                {
+                    "type": "header",
+                    "text": "References",
+                    "bbox": {"x1": 0, "y1": 0, "x2": 100, "y2": 20},
+                },
+                {
+                    "type": "paragraph",
+                    "text": "1. Smith et al...",
+                    "bbox": {"x1": 0, "y1": 30, "x2": 100, "y2": 50},
+                },
+            ],
         )
+        sample_extraction_result.pages.append(ref_page)
+        # Update full_text to include the new page
+        sample_extraction_result.full_text += ref_page.text
 
         result = manager.chunk(
-            extraction_result=sample_extraction_result, mark_references=True
+            extraction_result=sample_extraction_result,
+            chunk_size=50,  # Small chunks to ensure References gets its own chunk
+            overlap=10,
+            mark_references=True,
         )
+
+        # Debug: print what chunks were created
+        print(f"Total chunks: {len(result.chunks)}")
+        for i, chunk in enumerate(result.chunks):
+            print(
+                f"Chunk {i}: is_reference={chunk.is_reference}, text_preview={chunk.text[:50]}"
+            )
 
         # Find chunks containing references
         ref_chunks = [c for c in result.chunks if c.is_reference]
@@ -220,6 +236,7 @@ class TestChunkManager:
         result = manager.chunk(
             extraction_result=sample_extraction_result,
             chunk_size=50,  # Small size to force splitting
+            overlap=10,  # Small overlap for small chunks
             semantic_boundaries=True,
         )
 
@@ -365,7 +382,15 @@ class TestChunkManager:
     def test_empty_document_handling(self, manager):
         """Test handling of empty documents"""
         empty_result = ExtractionResult(
-            pdf_path="/path/to/empty.pdf", pages=[], page_count=0, full_text=""
+            pdf_path="/path/to/empty.pdf",
+            pages=[],
+            page_count=0,
+            full_text="",
+            extraction_time_ms=10.0,
+            file_size_bytes=0,
+            metadata={},
+            tables=[],
+            figures=[],
         )
 
         with pytest.raises(InvalidDocumentError) as exc_info:

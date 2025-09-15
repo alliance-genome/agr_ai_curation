@@ -19,6 +19,9 @@ passlib[bcrypt]
 # Database extensions
 pgvector
 
+# PDF Processing
+PyMuPDF
+
 # Testing
 pytest
 pytest-asyncio
