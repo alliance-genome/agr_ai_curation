@@ -144,7 +144,7 @@ _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 
 - EVERY feature as library? Yes ✓
 - Libraries listed:
-  - pdf-processor: Layout-aware extraction with PyMuPDF/pdfminer fallback chain
+  - pdf-processor: Layout-aware extraction with PyMuPDF
   - chunk-manager: Semantic chunking with table/figure preservation
   - embedding-service: Multi-model embeddings with versioning
   - hybrid-search: Vector (HNSW) + lexical (tsvector) search
@@ -400,7 +400,7 @@ The /tasks command will generate approximately 50-55 prioritized tasks following
    - Intent detection and routing
    - Agent dispatch logic
    - Result formatting for streaming
-   - Error handling and fallbacks
+   - Error handling and validation
    - Full pipeline integration tests
 
 ### Priority 4: API & Frontend (Tasks 41-50) - Week 2-3
@@ -457,7 +457,7 @@ Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipe
 
 **Risk Mitigation**:
 
-- Start with lexical-only fallback if vector delays
+- Start with lexical-only search if vector search delays
 - Simple confidence threshold before complex scoring
 - Manual reranking before automated cross-encoder
 - Progress UI before job queue if needed

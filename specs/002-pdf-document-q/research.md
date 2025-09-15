@@ -40,7 +40,7 @@ async def rerank_and_select(ctx, search_results: HybridSearchAgent) -> RankedRes
 
 ### 2. Layout-Aware PDF Processing with Fallback Chain
 
-**Decision**: PyMuPDF (fitz) → pdfminer.six → Tesseract OCR fallback chain
+**Decision**: PyMuPDF (fitz) for all PDF extraction
 **Rationale**:
 
 - PyMuPDF extracts structure (headings, tables, figures) with bounding boxes
@@ -349,7 +349,7 @@ retrieval_recall_at_k
 # Quality
 answers_low_confidence_total
 no_result_total
-fallback_to_lexical_total
+lexical_search_total
 
 # Costs
 embedding_tokens_total
@@ -357,7 +357,7 @@ llm_tokens_total
 cost_per_session_usd
 
 # Errors
-ocr_fallback_total
+extraction_errors_total
 timeout_total
 rate_limit_429_total
 ```

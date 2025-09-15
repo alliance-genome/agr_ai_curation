@@ -86,10 +86,8 @@ cd frontend && npm run dev
 ### PDF Processor (Layout-Aware Extraction)
 
 ```bash
-# Extract with PyMuPDF fallback chain
+# Extract with PyMuPDF
 python -m backend.lib.pdf_processor extract paper.pdf \
-  --method=auto \
-  --ocr-fallback \
   --extract-tables \
   --extract-figures
 
@@ -430,7 +428,7 @@ curl -X POST http://localhost:8002/api/v1/session/abc123/search \
 ### Quality
 
 - [ ] Deduplication via normalized content hash works
-- [ ] OCR fallback activates for image PDFs
+- [ ] Tables and figures extracted correctly
 - [ ] Section paths preserved in chunks
 - [ ] References marked and down-weighted
 - [ ] Per-page hashes enable incremental updates
