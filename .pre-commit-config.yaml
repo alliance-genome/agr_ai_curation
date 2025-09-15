@@ -10,6 +10,11 @@ repos:
       # Prevent large files from being committed
       - id: check-added-large-files
         args: ["--maxkb=1000"]
+        exclude: |
+          (?x)^(
+            backend/tests/fixtures/.*\.pdf$|
+            test_paper\.pdf$
+          )$
 
       # Check for files that would conflict in case-insensitive filesystems
       - id: check-case-conflict
