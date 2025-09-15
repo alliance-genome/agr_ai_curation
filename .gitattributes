@@ -1,0 +1,7 @@
+# Mark test PDFs as binary and allow them despite size
+backend/tests/fixtures/test_paper.pdf filter=lfs diff=lfs merge=lfs -text
+test_paper.pdf filter=lfs diff=lfs merge=lfs -text
+
+# Alternative: mark them to be excluded from size checks
+backend/tests/fixtures/*.pdf binary
+*.pdf binary

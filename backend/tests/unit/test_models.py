@@ -195,11 +195,11 @@ class TestPDFChunk:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="This is the first chunk of text",
-            chunk_tokens=8,
-            start_page=1,
-            end_page=1,
-            heading_text="Introduction",
+            text="This is the first chunk of text",
+            token_count=8,
+            page_start=1,
+            page_end=1,
+            chunk_hash="test_hash_123",
             section_path="Introduction",
         )
 
@@ -208,8 +208,9 @@ class TestPDFChunk:
 
         assert chunk.id is not None
         assert chunk.pdf_id == pdf.id
-        assert chunk.is_table is False
-        assert chunk.is_figure is False
+        assert chunk.is_reference is False
+        assert chunk.is_caption is False
+        assert chunk.is_header is False
 
     def test_pdf_chunk_unique_index(self, test_session):
         """Test unique constraint on pdf_id + chunk_index"""
@@ -227,10 +228,11 @@ class TestPDFChunk:
         chunk1 = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="First chunk",
-            chunk_tokens=2,
-            start_page=1,
-            end_page=1,
+            text="First chunk",
+            token_count=2,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash1",
         )
         test_session.add(chunk1)
         test_session.commit()
@@ -239,10 +241,11 @@ class TestPDFChunk:
             chunk2 = PDFChunk(
                 pdf_id=pdf.id,
                 chunk_index=0,  # Duplicate index
-                chunk_text="Different text",
-                chunk_tokens=2,
-                start_page=2,
-                end_page=2,
+                text="Different text",
+                token_count=2,
+                page_start=2,
+                page_end=2,
+                chunk_hash="hash_test",
             )
             test_session.add(chunk2)
             test_session.commit()
@@ -264,10 +267,11 @@ class TestPDFChunk:
             chunk = PDFChunk(
                 pdf_id=pdf.id,
                 chunk_index=0,
-                chunk_text="Text",
-                chunk_tokens=2001,  # Over limit
-                start_page=1,
-                end_page=1,
+                text="Text",
+                token_count=2001,  # Over limit
+                page_start=1,
+                page_end=1,
+                chunk_hash="hash_invalid",
             )
             test_session.add(chunk)
             test_session.commit()
@@ -290,12 +294,12 @@ class TestPDFChunk:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="Text with bbox",
-            chunk_tokens=3,
-            start_page=1,
-            end_page=1,
+            text="Text with bbox",
+            token_count=3,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_bbox",
             bbox=bbox,
-            is_figure=True,
         )
 
         test_session.add(chunk)
@@ -304,7 +308,6 @@ class TestPDFChunk:
         retrieved = test_session.query(PDFChunk).filter_by(pdf_id=pdf.id).first()
         assert retrieved.bbox["x1"] == 100.5
         assert retrieved.bbox["page"] == 1
-        assert retrieved.is_figure is True
 
 
 class TestPDFEmbedding:
@@ -327,10 +330,11 @@ class TestPDFEmbedding:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="Text to embed",
-            chunk_tokens=3,
-            start_page=1,
-            end_page=1,
+            text="Text to embed",
+            token_count=3,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_test",
         )
         test_session.add(chunk)
         test_session.commit()
@@ -371,10 +375,11 @@ class TestPDFEmbedding:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="Text",
-            chunk_tokens=1,
-            start_page=1,
-            end_page=1,
+            text="Text",
+            token_count=1,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_test",
         )
         test_session.add(chunk)
         test_session.commit()
@@ -433,10 +438,11 @@ class TestChunkSearch:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="BRCA1 gene mutation analysis",
-            chunk_tokens=4,
-            start_page=1,
-            end_page=1,
+            text="BRCA1 gene mutation analysis",
+            token_count=4,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_test",
         )
         test_session.add(chunk)
         test_session.commit()
@@ -472,10 +478,11 @@ class TestChunkSearch:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="Text",
-            chunk_tokens=1,
-            start_page=1,
-            end_page=1,
+            text="Text",
+            token_count=1,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_test",
         )
         test_session.add(chunk)
         test_session.commit()
@@ -960,10 +967,11 @@ class TestRelationships:
         chunk = PDFChunk(
             pdf_id=pdf.id,
             chunk_index=0,
-            chunk_text="Test chunk",
-            chunk_tokens=2,
-            start_page=1,
-            end_page=1,
+            text="Test chunk",
+            token_count=2,
+            page_start=1,
+            page_end=1,
+            chunk_hash="hash_test",
         )
         test_session.add(chunk)
         test_session.commit()
@@ -994,10 +1002,10 @@ class TestRelationships:
             chunk = PDFChunk(
                 pdf_id=pdf.id,
                 chunk_index=i,
-                chunk_text=f"Chunk {i}",
-                chunk_tokens=2,
-                start_page=i + 1,
-                end_page=i + 1,
+                text=f"Chunk {i}",
+                token_count=2,
+                page_start=i + 1,
+                page_end=i + 1,
             )
             test_session.add(chunk)
         test_session.commit()
@@ -1011,7 +1019,7 @@ class TestRelationships:
 
         chunks = test_session.query(PDFChunk).filter_by(pdf_id=pdf_with_chunks.id).all()
         assert len(chunks) == 3
-        assert chunks[0].chunk_text == "Chunk 0"
+        assert chunks[0].text == "Chunk 0"
 
 
 if __name__ == "__main__":
