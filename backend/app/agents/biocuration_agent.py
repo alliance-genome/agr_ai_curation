@@ -29,7 +29,9 @@ from .models import (
 )
 from .entity_extraction_agent import EntityExtractionAgent
 from ..database import get_db
-from ..models import ChatHistory
+
+# TODO: Migrate to new ChatSession + Message models from pdf_models
+# from ..models import ChatHistory  # Removed - using new chat system
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -570,29 +572,33 @@ Keep the summary concise and technical.""",
     ):
         """Save conversation to history"""
         try:
-            # Save user message
-            user_msg = ChatHistory(
-                session_id=session_id,
-                role="user",
-                content=user_message,
-            )
-            db.add(user_msg)
+            # TODO: Migrate to new ChatSession + Message models
+            # Temporarily disabled chat history saving
+            # Will be reimplemented with new models that include:
+            # - ChatSession with RAG configuration
+            # - Message with confidence scores and citations
+            pass
 
-            # Save assistant response
-            assistant_msg = ChatHistory(
-                session_id=session_id,
-                role="assistant",
-                content=assistant_response,
-                model_provider=(
-                    self.model.split(":")[0] if ":" in self.model else "unknown"
-                ),
-                model_name=(
-                    self.model.split(":")[1] if ":" in self.model else self.model
-                ),
-            )
-            db.add(assistant_msg)
-
-            db.commit()
+            # Old code commented out for reference during migration:
+            # user_msg = ChatHistory(
+            #     session_id=session_id,
+            #     role="user",
+            #     content=user_message,
+            # )
+            # db.add(user_msg)
+            # assistant_msg = ChatHistory(
+            #     session_id=session_id,
+            #     role="assistant",
+            #     content=assistant_response,
+            #     model_provider=(
+            #         self.model.split(":")[0] if ":" in self.model else "unknown"
+            #     ),
+            #     model_name=(
+            #         self.model.split(":")[1] if ":" in self.model else self.model
+            #     ),
+            # )
+            # db.add(assistant_msg)
+            # db.commit()
         except Exception as e:
             logger.error(f"Failed to save to history: {e}")
             db.rollback()

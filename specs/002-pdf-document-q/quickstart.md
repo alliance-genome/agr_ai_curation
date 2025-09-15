@@ -30,15 +30,17 @@ docker run -d \
   -p 5432:5432 \
   pgvector/pgvector:pg16
 
-# Enable extensions and create indexes
-docker exec -it pgvector-fts psql -U postgres -d agr_curation -c "
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-"
+# Database setup - Fresh start approach (no migrations)
+# Extensions are automatically created by docker-compose with pgvector/pgvector:pg16 image
 
-# Run migrations
-cd backend
-alembic upgrade head
+# Create tables from SQLAlchemy models
+docker compose exec backend python -c "
+from app.models import Base
+from app.database import engine
+Base.metadata.drop_all(engine)  # Clean start
+Base.metadata.create_all(engine)  # Create all tables with indexes
+print('Database schema created successfully!')
+"
 ```
 
 ### 3. Configure Environment

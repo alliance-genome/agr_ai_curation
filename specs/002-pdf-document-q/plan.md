@@ -39,6 +39,7 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 **Language/Version**: Python 3.11+ (backend), TypeScript/React 18 (frontend)
 **Primary Dependencies**: FastAPI, PydanticAI, pgvector, PyMuPDF, pdfminer.six, Camelot, OpenAI SDK, React + MUI
 **Storage**: PostgreSQL with pgvector (HNSW) + tsvector for hybrid search, Postgres job queue, local filesystem
+**Database Strategy**: Fresh start - no migrations needed, recreate schema from SQLAlchemy models
 **Testing**: Pytest (backend), Vitest (frontend), performance benchmarks
 **Target Platform**: Docker containerized web application
 **Project Type**: web (frontend + backend structure)

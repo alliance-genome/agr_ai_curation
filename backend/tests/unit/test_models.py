@@ -11,20 +11,20 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import IntegrityError
 from unittest.mock import Mock, patch
 import json
+import os
 
 # These imports will fail initially (TDD-RED)
-from app.models.pdf_models import (
+from app.models import (
     PDFDocument,
     PDFChunk,
     PDFEmbedding,
     ChunkSearch,
-    PDFTable,
-    PDFFigure,
-    OntologyMapping,
+    ExtractedTable,
+    ExtractedFigure,
     ChatSession,
     Message,
-    EmbeddingJobs,
-    EmbeddingConfig,
+    EmbeddingJob,
+    CitationTracking,
     Base,
     ExtractionMethod,
     JobType,
@@ -36,10 +36,22 @@ from app.models.pdf_models import (
 
 @pytest.fixture
 def test_engine():
-    """Create an in-memory SQLite database for testing"""
-    engine = create_engine("sqlite:///:memory:")
+    """Create a test database engine"""
+    # Use the TEST_DATABASE_URL from docker-compose environment
+    database_url = os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test",  # pragma: allowlist secret
+    )
+    engine = create_engine(database_url)
+
+    # Create tables for testing
+    Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-    return engine
+
+    yield engine
+
+    # Cleanup
+    Base.metadata.drop_all(engine)
 
 
 @pytest.fixture
@@ -47,7 +59,10 @@ def test_session(test_engine):
     """Create a test database session"""
     Session = sessionmaker(bind=test_engine)
     session = Session()
+
     yield session
+
+    session.rollback()
     session.close()
 
 
@@ -130,7 +145,7 @@ class TestPDFDocument:
             test_session.commit()
 
     def test_pdf_document_metadata_jsonb(self, test_session):
-        """Test JSONB metadata field"""
+        """Test JSONB meta_data field"""
         metadata = {
             "title": "Test Paper",
             "authors": ["Author 1", "Author 2"],
@@ -146,7 +161,7 @@ class TestPDFDocument:
             content_hash_normalized="meta456",
             file_size=1024000,
             page_count=15,
-            metadata=metadata,
+            meta_data=metadata,
         )
 
         test_session.add(pdf)
@@ -155,9 +170,9 @@ class TestPDFDocument:
         retrieved = (
             test_session.query(PDFDocument).filter_by(file_hash="meta123").first()
         )
-        assert retrieved.metadata["title"] == "Test Paper"
-        assert len(retrieved.metadata["authors"]) == 2
-        assert "BRCA1" in retrieved.metadata["extracted_entities"]
+        assert retrieved.meta_data["title"] == "Test Paper"
+        assert len(retrieved.meta_data["authors"]) == 2
+        assert "BRCA1" in retrieved.meta_data["extracted_entities"]
 
 
 class TestPDFChunk:
@@ -431,7 +446,7 @@ class TestChunkSearch:
             search_vector="'brca1':1 'gene':2 'mutation':3 'analysis':4",  # tsvector format
             search_text="BRCA1 gene mutation analysis",
             lexical_rank=0.95,
-            metadata={"important_terms": ["BRCA1", "mutation"]},
+            meta_data={"important_terms": ["BRCA1", "mutation"]},
         )
 
         test_session.add(search)
@@ -439,7 +454,7 @@ class TestChunkSearch:
 
         assert search.id is not None
         assert search.lexical_rank == 0.95
-        assert "BRCA1" in search.metadata["important_terms"]
+        assert "BRCA1" in search.meta_data["important_terms"]
 
     def test_chunk_search_unique_chunk(self, test_session):
         """Test unique constraint on chunk_id"""

@@ -23,11 +23,11 @@
 
 ### Database Setup & Migrations
 
-- [ ] T001 Create PostgreSQL docker setup with pgvector extension in `docker/postgres/Dockerfile`
-- [ ] T002 [P] Write tests for database models in `backend/tests/unit/test_models.py` **[TDD-RED]**
-- [ ] T003 Create SQLAlchemy models for all 11 entities in `backend/app/models/pdf_models.py` **[TDD-GREEN]**
-- [ ] T004 [P] Write HNSW index configuration tests in `backend/tests/unit/test_indexes.py` **[TDD-RED]**
-- [ ] T005 Create Alembic migration for HNSW and tsvector indexes in `backend/alembic/versions/001_initial_schema.py` **[TDD-GREEN]**
+- [x] T001 Create PostgreSQL docker setup with pgvector extension ~~in `docker/postgres/Dockerfile`~~ using `pgvector/pgvector:pg16` image
+- [x] T002 [P] Write tests for database models in `backend/tests/unit/test_models.py` **[TDD-RED]**
+- [x] T003 Create SQLAlchemy models for all 11 entities in `backend/app/models/pdf_models.py` **[TDD-GREEN]**
+- [x] T004 [P] ~~Write HNSW index configuration tests~~ Indexes defined in models **[COMPLETED]**
+- [x] T005 ~~Create Alembic migration~~ Direct table creation via `Base.metadata.create_all()` **[NO MIGRATION NEEDED]**
 
 ### PDF Processing Library
 

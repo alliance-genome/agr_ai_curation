@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 
 from .routers import agents, entities, settings, health, test_highlights
-from .database import engine, Base
+from .database import engine
+from .models import Base  # Import Base from models.py now
 from .config import get_settings
 from .middleware.error_handler import (
     ErrorHandlingMiddleware,

@@ -1,15 +1,15 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: docker/postgres/Dockerfile
+    image: pgvector/pgvector:pg16
     container_name: ai_curation_db
     environment:
       POSTGRES_DB: ai_curation_db
       POSTGRES_USER: curation_user
-      POSTGRES_PASSWORD: curation_pass
+      POSTGRES_PASSWORD: curation_pass # gitleaks:allow
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-pgvector.sql:/docker-entrypoint-initdb.d/01-init-pgvector.sql
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/02-init.sql
     ports:
       - "5432:5432"
     networks:
@@ -20,13 +20,34 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    container_name: ai_curation_db_test
+    environment:
+      POSTGRES_DB: ai_curation_test
+      POSTGRES_USER: curation_user
+      POSTGRES_PASSWORD: curation_pass # gitleaks:allow
+    volumes:
+      - ./postgres_test_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-pgvector.sql:/docker-entrypoint-initdb.d/01-init-pgvector.sql
+    ports:
+      - "5433:5432"
+    networks:
+      - ai_curation_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curation_user -d ai_curation_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
     container_name: ai_curation_backend
     environment:
-      DATABASE_URL: postgresql://curation_user:curation_pass@postgres:5432/ai_curation_db
+      DATABASE_URL: postgresql://curation_user:curation_pass@postgres:5432/ai_curation_db # gitleaks:allow
+      TEST_DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # gitleaks:allow
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
@@ -37,6 +58,8 @@ services:
       - "8002:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-test:
         condition: service_healthy
     networks:
       - ai_curation_network

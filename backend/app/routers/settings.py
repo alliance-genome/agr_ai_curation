@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 from ..database import get_db
-from ..models import Settings as SettingsModel
+from app.models import Settings as SettingsModel
 import json
 
 router = APIRouter()
