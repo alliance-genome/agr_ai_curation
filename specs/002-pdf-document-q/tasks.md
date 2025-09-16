@@ -75,8 +75,8 @@
 
 ### Specialized Agents & Pipelines
 
-- [ ] T031 [P] Write pipeline output models tests in `backend/tests/unit/test_pipeline_models.py` **[TDD-RED]**
-- [ ] T032 [P] Implement pipeline output models in `backend/app/agents/pipeline_models.py` **[TDD-GREEN]**
+- [x] T031 [P] Write pipeline output models tests in `backend/tests/unit/test_pipeline_models.py` **[TDD-RED]**
+- [x] T032 [P] Implement pipeline output models in `backend/app/agents/pipeline_models.py` **[TDD-GREEN]**
   - DiseasePipelineOutput, GenePipelineOutput, PathwayPipelineOutput, ChemicalPipelineOutput
 - [ ] T033 [P] Write Disease Agent tests in `backend/tests/unit/test_disease_agent.py` **[TDD-RED]**
 - [ ] T034 Implement Disease Agent in `backend/app/agents/disease_agent.py` **[TDD-GREEN]**
@@ -90,8 +90,8 @@
 
 ### Orchestrator & Integration
 
-- [ ] T041 [P] Write Main Orchestrator tests in `backend/tests/unit/test_orchestrator.py` **[TDD-RED]**
-- [ ] T042 Implement Main Orchestrator in `backend/app/agents/main_orchestrator.py` **[TDD-GREEN]**
+- [x] T041 [P] Write Main Orchestrator tests in `backend/tests/unit/test_orchestrator.py` **[TDD-RED]**
+- [x] T042 Implement Main Orchestrator in `backend/app/agents/main_orchestrator.py` **[TDD-GREEN]**
 - [ ] T043 [P] Write orchestrator intent detection tests in `backend/tests/unit/test_intent_detection.py` **[TDD-RED]**
 - [ ] T044 Implement intent detection in orchestrator tools **[TDD-GREEN]**
 - [ ] T045 [P] Write full pipeline integration tests in `backend/tests/integration/test_full_pipeline.py` **[TDD-RED]**
