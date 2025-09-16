@@ -109,6 +109,7 @@ def _service(session_factory, embedding_client):
         dimensions=1536,
         default_version="1.0",
         max_batch_size=128,
+        default_batch_size=64,
     )
     return EmbeddingService(
         session_factory=session_factory,
@@ -145,8 +146,9 @@ def test_embed_pdf_persists_embeddings_with_version(session_factory):
     with session_factory() as session:
         stored = (
             session.query(PDFEmbedding)
+            .join(PDFChunk, PDFEmbedding.chunk_id == PDFChunk.id)
             .filter(PDFEmbedding.pdf_id == pdf.id)
-            .order_by(PDFEmbedding.chunk_id)
+            .order_by(PDFChunk.chunk_index)
             .all()
         )
         assert len(stored) == 2

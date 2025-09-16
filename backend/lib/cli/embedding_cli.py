@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from typing import Sequence
 from uuid import UUID
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import PDFDocument, PDFEmbedding
 from lib.embedding_service import EmbeddingModelConfig, EmbeddingService
+from openai import OpenAI
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -40,12 +41,16 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def _load_service() -> EmbeddingService:
     session_factory = SessionLocal
     client = _load_client()
+    settings = get_settings()
+
     config = EmbeddingModelConfig(
-        name="text-embedding-3-small",
-        dimensions=1536,
-        default_version="1.0",
-        max_batch_size=128,
+        name=settings.embedding_model_name,
+        dimensions=settings.embedding_dimensions,
+        default_version=settings.embedding_model_version,
+        max_batch_size=settings.embedding_max_batch_size,
+        default_batch_size=settings.embedding_default_batch_size,
     )
+
     return EmbeddingService(
         session_factory=session_factory,
         embedding_client=client,
@@ -53,8 +58,26 @@ def _load_service() -> EmbeddingService:
     )
 
 
+class OpenAIEmbeddingClient:
+    """Simple OpenAI embedding client wrapper."""
+
+    def __init__(self, api_key: str) -> None:
+        self._client = OpenAI(api_key=api_key)
+
+    def embed_texts(self, texts: Sequence[str], *, model: str) -> list[list[float]]:
+        if not texts:
+            return []
+        response = self._client.embeddings.create(model=model, input=list(texts))
+        return [item.embedding for item in response.data]
+
+
 def _load_client():  # pragma: no cover - runtime dependency injection
-    raise NotImplementedError("Embedding client factory not implemented")
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured. Provide an API key to use the embedding CLI."
+        )
+    return OpenAIEmbeddingClient(api_key=settings.openai_api_key)
 
 
 def _list_models(service: EmbeddingService) -> None:
@@ -64,6 +87,7 @@ def _list_models(service: EmbeddingService) -> None:
             "dimensions": config.dimensions,
             "default_version": config.default_version,
             "max_batch_size": config.max_batch_size,
+            "default_batch_size": config.default_batch_size,
         }
         for config in service.list_models()
     ]

@@ -25,6 +25,11 @@ async def initialize_settings():
             "temperature": str(config.temperature),
             "database_url": config.database_url,
             "debug_mode": json.dumps(config.debug_mode),
+            "embedding_model_name": config.embedding_model_name,
+            "embedding_model_version": config.embedding_model_version,
+            "embedding_dimensions": str(config.embedding_dimensions),
+            "embedding_max_batch_size": str(config.embedding_max_batch_size),
+            "embedding_default_batch_size": str(config.embedding_default_batch_size),
         }
 
         # Add settings to database

@@ -108,6 +108,7 @@ def _service(session_factory, embedding_client):
         dimensions=1536,
         default_version="1.0",
         max_batch_size=128,
+        default_batch_size=64,
     )
     return EmbeddingService(
         session_factory=session_factory,

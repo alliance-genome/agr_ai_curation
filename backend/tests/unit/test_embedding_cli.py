@@ -20,6 +20,7 @@ def mock_service():
             dimensions=1536,
             default_version="1.0",
             max_batch_size=128,
+            default_batch_size=64,
         )
     ]
     service.embed_pdf.return_value = {

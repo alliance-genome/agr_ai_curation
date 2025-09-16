@@ -105,7 +105,10 @@ function App() {
               </>
             }
           />
-          <Route path="/admin" element={<AdminPage />} />
+          <Route
+            path="/admin"
+            element={<AdminPage toggleColorMode={toggleColorMode} />}
+          />
           <Route
             path="/settings"
             element={

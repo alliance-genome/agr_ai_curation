@@ -21,6 +21,17 @@ class Settings(BaseSettings):
     max_tokens: int = 2048
     temperature: float = 0.7
 
+    # Embedding Settings
+    embedding_model_name: str = os.getenv(
+        "EMBEDDING_MODEL_NAME", "text-embedding-3-small"
+    )
+    embedding_model_version: str = os.getenv("EMBEDDING_MODEL_VERSION", "1.0")
+    embedding_dimensions: int = int(os.getenv("EMBEDDING_DIMENSIONS", 1536))
+    embedding_max_batch_size: int = int(os.getenv("EMBEDDING_MAX_BATCH_SIZE", 128))
+    embedding_default_batch_size: int = int(
+        os.getenv("EMBEDDING_DEFAULT_BATCH_SIZE", 64)
+    )
+
     # Application Settings
     debug_mode: bool = False
     api_url: str = "http://localhost:8002"

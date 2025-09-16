@@ -19,6 +19,7 @@ class EmbeddingModelConfig:
     dimensions: int
     default_version: str
     max_batch_size: int
+    default_batch_size: int
 
 
 class EmbeddingService:
@@ -62,7 +63,12 @@ class EmbeddingService:
                 raise ValueError("batch_size exceeds configured max_batch_size")
             effective_batch_size = batch_size
         else:
+            effective_batch_size = config.default_batch_size
+
+        if effective_batch_size <= 0:
             effective_batch_size = config.max_batch_size
+
+        effective_batch_size = min(effective_batch_size, config.max_batch_size)
 
         with self._session_factory() as session:
             document = session.get(PDFDocument, pdf_id)
@@ -128,7 +134,10 @@ class EmbeddingService:
                     "Embedding client returned unexpected number of vectors"
                 )
 
-            for chunk, vector in zip(chunks, vectors, strict=True):
+            chunk_vector_pairs = list(zip(chunks, vectors, strict=True))
+            chunk_vector_pairs.sort(key=lambda pair: str(pair[0].id))
+
+            for chunk, vector in chunk_vector_pairs:
                 session.add(
                     PDFEmbedding(
                         pdf_id=pdf_id,
