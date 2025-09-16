@@ -109,7 +109,7 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
 
   const fetchSettings = async () => {
     try {
-      const response = await axios.get("/api/settings");
+      const response = await axios.get("/api/settings/");
       const data = response.data ?? {};
       setSettings({
         openai_api_key: data.openai_api_key_masked
@@ -320,7 +320,7 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
 
     setLoading(true);
     try {
-      await axios.put("/api/settings", payload);
+      await axios.put("/api/settings/", payload);
       setSnackbar({
         open: true,
         message: "Settings saved successfully",
