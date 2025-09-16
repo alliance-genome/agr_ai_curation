@@ -68,21 +68,12 @@ def _seed_document(session_factory) -> UUID:
         session.flush()
 
         chunks = [
-            (
-                "BRCA1 is associated with breast cancer.",
-                "BRCA1",
-            ),
-            (
-                "TP53 mutations are common in many cancers.",
-                "TP53",
-            ),
-            (
-                "EGFR inhibitors target epidermal growth factor receptor.",
-                "EGFR",
-            ),
+            "BRCA1 is associated with breast cancer.",
+            "TP53 cancer cancer progression involves tumor suppressors.",
+            "EGFR inhibitors target epidermal growth factor receptor.",
         ]
 
-        for idx, (text_body, keyword) in enumerate(chunks):
+        for idx, text_body in enumerate(chunks):
             chunk = PDFChunk(
                 pdf_id=doc.id,
                 chunk_index=idx,
@@ -98,15 +89,17 @@ def _seed_document(session_factory) -> UUID:
 
             search_entry = text(
                 """
-                INSERT INTO chunk_search (chunk_id, search_vector, search_text)
-                VALUES (:chunk_id, to_tsvector('simple', :text_body), :text_body)
+                INSERT INTO chunk_search (id, chunk_id, search_vector, text_length, lang)
+                VALUES (:id, :chunk_id, to_tsvector('english', :text_body), :text_length, 'english')
                 """
             )
             session.execute(
                 search_entry,
                 {
+                    "id": str(uuid4()),
                     "chunk_id": str(chunk.id),
                     "text_body": text_body,
+                    "text_length": len(text_body),
                 },
             )
 
@@ -126,11 +119,7 @@ def test_lexical_search_returns_top_results_under_latency(
     search = LexicalSearch(engine)
 
     start = time.perf_counter()
-    results = search.query(
-        pdf_id=document_id,
-        query="TP53",
-        top_k=2,
-    )
+    results = search.query(pdf_id=document_id, query="cancer", top_k=2)
     duration_ms = (time.perf_counter() - start) * 1000
 
     assert duration_ms < 50
