@@ -67,6 +67,7 @@ class SettingsUpdate(BaseModel):
     hybrid_lexical_k: int | None = None
     hybrid_max_results: int | None = None
     mmr_lambda: float | None = None
+    uploads_dir: str | None = None
 
 
 @router.get("/")
@@ -108,6 +109,7 @@ async def get_settings(db: Session = Depends(get_db)):
         "hybrid_lexical_k": getattr(config, "hybrid_lexical_k", 50),
         "hybrid_max_results": getattr(config, "hybrid_max_results", 100),
         "mmr_lambda": getattr(config, "mmr_lambda", 0.7),
+        "uploads_dir": getattr(config, "uploads_dir", "/tmp/uploads"),
     }
 
     response: Dict[str, Any] = {}

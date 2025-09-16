@@ -36,6 +36,7 @@ async def initialize_settings():
             "hybrid_lexical_k": str(config.hybrid_lexical_k),
             "hybrid_max_results": str(config.hybrid_max_results),
             "mmr_lambda": str(config.mmr_lambda),
+            "uploads_dir": config.uploads_dir,
         }
 
         # Add settings to database

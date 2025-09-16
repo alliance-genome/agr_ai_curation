@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     hybrid_max_results: int = int(os.getenv("HYBRID_MAX_RESULTS", 100))
     mmr_lambda: float = float(os.getenv("MMR_LAMBDA", 0.7))
 
+    uploads_dir: str = os.getenv("UPLOADS_DIR", "/tmp/uploads")
+
     # Application Settings
     debug_mode: bool = False
     api_url: str = "http://localhost:8002"
