@@ -77,9 +77,9 @@ class Settings(Base):
 
 # Enums for various fields
 class ExtractionMethod(str, PyEnum):
-    PYMUPDF = "PYMUPDF"
-    PDFMINER = "PDFMINER"
-    OCR = "OCR"
+    UNSTRUCTURED_FAST = "UNSTRUCTURED_FAST"
+    UNSTRUCTURED_HI_RES = "UNSTRUCTURED_HI_RES"
+    UNSTRUCTURED_OCR_ONLY = "UNSTRUCTURED_OCR_ONLY"
 
 
 class JobType(str, PyEnum):
@@ -188,6 +188,9 @@ class PDFChunk(Base):
     pdf_id = Column(UUID(as_uuid=True), ForeignKey("pdf_documents.id"), nullable=False)
     chunk_index = Column(Integer, nullable=False)
     text = Column(Text, nullable=False)
+    element_type = Column(
+        String(50)
+    )  # Title, NarrativeText, Table, FigureCaption, etc.
     page_start = Column(Integer, nullable=False)
     page_end = Column(Integer, nullable=False)
     char_start = Column(Integer)
@@ -197,6 +200,8 @@ class PDFChunk(Base):
     is_reference = Column(Boolean, default=False)
     is_caption = Column(Boolean, default=False)
     is_header = Column(Boolean, default=False)
+    is_table = Column(Boolean, default=False)
+    is_figure = Column(Boolean, default=False)
     token_count = Column(Integer)
     chunk_hash = Column(String(32), nullable=False)
     meta_data = Column(JSONB, default=dict)
@@ -440,10 +445,12 @@ class EmbeddingJob(Base):
     pdf_id = Column(UUID(as_uuid=True), ForeignKey("pdf_documents.id"), nullable=False)
     job_type = Column(Enum(JobType), nullable=False)
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
+    priority = Column(Integer, default=5)  # 1-10, higher = more urgent
     config = Column(JSONB, default=dict)
     progress = Column(Integer, default=0)
     total_items = Column(Integer)
-    error_message = Column(Text)
+    processed_items = Column(Integer, default=0)
+    error_log = Column(Text)
     retry_count = Column(Integer, default=0)
     result = Column(JSONB)
     worker_id = Column(String(100))
@@ -456,6 +463,7 @@ class EmbeddingJob(Base):
         Index("idx_job_pdf_id", "pdf_id"),
         Index("idx_job_status", "status"),
         Index("idx_job_type", "job_type"),
+        Index("idx_job_priority", "priority"),
         Index("idx_job_created", "created_at"),
     )
 

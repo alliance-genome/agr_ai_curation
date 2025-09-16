@@ -79,7 +79,7 @@ class TestPDFDocument:
             file_size=1024000,
             page_count=10,
             extracted_text="Sample text from paper",
-            extraction_method=ExtractionMethod.PYMUPDF,
+            extraction_method=ExtractionMethod.UNSTRUCTURED_HI_RES,
         )
 
         test_session.add(pdf)
