@@ -167,7 +167,7 @@ class PDFProcessor:
             # Convert to our format
             extracted_elements = []
             tables = []
-            figures = []
+            table_refs: List[Tuple[UnstructuredElement, Dict[str, Any]]] = []
             page_numbers = set()
 
             for i, element in enumerate(elements):
@@ -178,7 +178,7 @@ class PDFProcessor:
                     page_numbers.add(elem.page_number)
 
                 # Collect tables
-                if elem.type == "Table":
+                if extract_tables and elem.type == "Table":
                     table_data = {
                         "text": elem.text,
                         "page": elem.page_number,
@@ -191,18 +191,7 @@ class PDFProcessor:
                         table_data["html"] = elem.metadata["text_as_html"]
 
                     tables.append(table_data)
-
-                # Collect figures and captions
-                if elem.type in ["FigureCaption", "Image", "Figure"]:
-                    figures.append(
-                        {
-                            "type": elem.type,
-                            "text": elem.text,
-                            "page": elem.page_number,
-                            "bbox": elem.bbox,
-                            "element_id": elem.element_id,
-                        }
-                    )
+                    table_refs.append((elem, table_data))
 
             # Generate full text in reading order
             full_text = "\n\n".join([e.text for e in extracted_elements if e.text])
@@ -212,6 +201,24 @@ class PDFProcessor:
 
             # Calculate page count
             page_count = max(page_numbers) if page_numbers else 0
+
+            # Optionally enrich tables and figures
+            if not extract_tables:
+                tables = []
+            else:
+                for source_elem, table in table_refs:
+                    caption = self._find_caption_for_element(
+                        source_elem, extracted_elements, "Table"
+                    )
+                    table["caption"] = caption
+                for table in tables:
+                    table.setdefault("caption", None)
+
+            figures = (
+                self.extract_figures(extracted_elements)
+                if extract_figures
+                else []
+            )
 
             # Generate hashes
             content_hash = hashlib.md5(full_text.encode()).hexdigest()
@@ -497,16 +504,22 @@ class PDFProcessor:
                     "has_image": False,
                 }
 
-                # Check if adjacent element is an image
+                image_element = None
+
+                # Prefer preceding image element, otherwise check following
                 if i > 0 and elements[i - 1].type in ["Image", "Figure"]:
-                    figure["has_image"] = True
-                    figure["image_element_id"] = elements[i - 1].element_id
+                    image_element = elements[i - 1]
                 elif i + 1 < len(elements) and elements[i + 1].type in [
                     "Image",
                     "Figure",
                 ]:
+                    image_element = elements[i + 1]
+
+                if image_element:
                     figure["has_image"] = True
-                    figure["image_element_id"] = elements[i + 1].element_id
+                    figure["image_element_id"] = image_element.element_id
+                    if image_element.bbox:
+                        figure["bbox"] = image_element.bbox
 
                 figures.append(figure)
 

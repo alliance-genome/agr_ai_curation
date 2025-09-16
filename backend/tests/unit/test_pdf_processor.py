@@ -25,6 +25,15 @@ class TestPDFProcessorUnstructured:
         return PDFProcessor(default_strategy="fast")
 
     @pytest.fixture
+    def mock_pdf_fs(self):
+        """Mock filesystem interactions for synthetic PDF paths"""
+        with patch("pathlib.Path.exists", return_value=True), patch(
+            "pathlib.Path.stat"
+        ) as mock_stat:
+            mock_stat.return_value.st_size = 1024
+            yield
+
+    @pytest.fixture
     def mock_elements(self):
         """Create mock Unstructured elements"""
         elements = []
@@ -73,16 +82,48 @@ class TestPDFProcessorUnstructured:
         table_elem.metadata.to_dict = Mock(
             return_value={
                 "page_number": 2,
+                "coordinates": {"x1": 50, "y1": 100, "x2": 550, "y2": 200},
                 "text_as_html": "<table><tr><td>Col1</td><td>Col2</td></tr></table>",
             }
         )
         elements.append(table_elem)
 
+        # Create mock TableCaption element
+        table_caption = Mock()
+        table_caption.category = "TableCaption"
+        table_caption.text = "Table 1: Test table caption"
+        table_caption.id = "elem_4"
+        table_caption.metadata = Mock()
+        table_caption.metadata.page_number = 2
+        table_caption.metadata.to_dict = Mock(return_value={"page_number": 2})
+        elements.append(table_caption)
+
+        # Create mock Image element that precedes figure caption
+        image_elem = Mock()
+        image_elem.category = "Image"
+        image_elem.text = ""
+        image_elem.id = "elem_5"
+        image_elem.metadata = Mock()
+        image_elem.metadata.page_number = 2
+        image_elem.metadata.coordinates = {
+            "x1": 75,
+            "y1": 120,
+            "x2": 525,
+            "y2": 420,
+        }
+        image_elem.metadata.to_dict = Mock(
+            return_value={
+                "page_number": 2,
+                "coordinates": {"x1": 75, "y1": 120, "x2": 525, "y2": 420},
+            }
+        )
+        elements.append(image_elem)
+
         # Create mock FigureCaption element
         caption_elem = Mock()
         caption_elem.category = "FigureCaption"
         caption_elem.text = "Figure 1: Test figure caption"
-        caption_elem.id = "elem_4"
+        caption_elem.id = "elem_6"
         caption_elem.metadata = Mock()
         caption_elem.metadata.page_number = 2
         caption_elem.metadata.to_dict = Mock(return_value={"page_number": 2})
@@ -132,12 +173,12 @@ class TestPDFProcessorUnstructured:
         assert isinstance(result.figures, list)
         # Scientific papers typically have figures
         if result.figures:
-            assert "type" in result.figures[0]
-            assert "text" in result.figures[0]
+            assert "caption" in result.figures[0]
+            assert "page" in result.figures[0]
 
     @patch("lib.pdf_processor.partition_pdf")
     def test_extract_with_progress_callback(
-        self, mock_partition, processor, mock_elements
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
     ):
         """Test extraction with progress callback"""
         mock_partition.return_value = mock_elements
@@ -154,7 +195,7 @@ class TestPDFProcessorUnstructured:
 
     @patch("lib.pdf_processor.partition_pdf")
     def test_extract_different_strategies(
-        self, mock_partition, processor, mock_elements
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
     ):
         """Test different extraction strategies"""
         mock_partition.return_value = mock_elements
@@ -177,7 +218,9 @@ class TestPDFProcessorUnstructured:
         assert result.processing_strategy == "ocr_only"
 
     @patch("lib.pdf_processor.partition_pdf")
-    def test_extract_content_hashing(self, mock_partition, processor, mock_elements):
+    def test_extract_content_hashing(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
         """Test content hash generation"""
         mock_partition.return_value = mock_elements
 
@@ -191,7 +234,9 @@ class TestPDFProcessorUnstructured:
         )  # Different due to normalization
 
     @patch("lib.pdf_processor.partition_pdf")
-    def test_extract_page_hashes(self, mock_partition, processor, mock_elements):
+    def test_extract_page_hashes(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
         """Test per-page hash generation"""
         mock_partition.return_value = mock_elements
 
@@ -199,6 +244,41 @@ class TestPDFProcessorUnstructured:
 
         assert len(result.page_hashes) == 2  # Two pages in mock data
         assert all(len(h) == 32 for h in result.page_hashes)
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_includes_table_metadata(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
+        """Tables should include caption, bbox, html, and element IDs"""
+        mock_partition.return_value = mock_elements
+
+        result = processor.extract("test.pdf", extract_tables=True)
+
+        assert result.tables, "Expected table results in extraction"
+        table = result.tables[0]
+        assert table["text"] == "Col1\tCol2\nVal1\tVal2"
+        assert table["page"] == 2
+        assert table["element_id"] == "elem_3"
+        assert table["bbox"] == {"x1": 50, "y1": 100, "x2": 550, "y2": 200}
+        assert table["html"].startswith("<table")
+        assert table["caption"] == "Table 1: Test table caption"
+
+    @patch("lib.pdf_processor.partition_pdf")
+    def test_extract_groups_figures_with_captions(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
+        """Figure results should group caption and image metadata together"""
+        mock_partition.return_value = mock_elements
+
+        result = processor.extract("test.pdf", extract_figures=True)
+
+        assert result.figures, "Expected figure results in extraction"
+        figure = result.figures[0]
+        assert figure["caption"] == "Figure 1: Test figure caption"
+        assert figure["page"] == 2
+        assert figure["has_image"] is True
+        assert figure["image_element_id"] == "elem_5"
+        assert figure["bbox"] == {"x1": 75, "y1": 120, "x2": 525, "y2": 420}
 
     # ==================== VALIDATION TESTS ====================
 
@@ -260,7 +340,9 @@ class TestPDFProcessorUnstructured:
     # ==================== HASHING TESTS ====================
 
     @patch("lib.pdf_processor.partition_pdf")
-    def test_hash_all_types(self, mock_partition, processor, mock_elements):
+    def test_hash_all_types(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
         """Test all hash types"""
         mock_partition.return_value = mock_elements
 
@@ -290,7 +372,7 @@ class TestPDFProcessorUnstructured:
 
     @patch("lib.pdf_processor.partition_pdf")
     def test_extract_tables_as_dataframes(
-        self, mock_partition, processor, mock_elements
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
     ):
         """Test table extraction as DataFrames"""
         mock_partition.return_value = mock_elements
@@ -303,7 +385,9 @@ class TestPDFProcessorUnstructured:
         assert tables[0]["page"] == 2
 
     @patch("lib.pdf_processor.partition_pdf")
-    def test_extract_figures(self, mock_partition, processor, mock_elements):
+    def test_extract_figures(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
         """Test figure extraction"""
         mock_partition.return_value = mock_elements
 
@@ -314,7 +398,9 @@ class TestPDFProcessorUnstructured:
         assert "Figure 1" in figures[0]["caption"]
 
     @patch("lib.pdf_processor.partition_pdf")
-    def test_build_document_structure(self, mock_partition, processor, mock_elements):
+    def test_build_document_structure(
+        self, mock_partition, processor, mock_elements, mock_pdf_fs
+    ):
         """Test document structure building"""
         mock_partition.return_value = mock_elements
 
