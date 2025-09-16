@@ -35,7 +35,7 @@
 - [x] T007 Implement pdf-processor with Unstructured.io in `backend/lib/pdf_processor.py` **[TDD-GREEN]**
 - [x] T008 [P] Write chunk-manager tests with layout preservation in `backend/tests/unit/test_chunk_manager.py` **[TDD-RED]**
 - [x] T009 Implement chunk-manager with semantic boundaries in `backend/lib/chunk_manager.py` **[TDD-GREEN]**
-- [ ] T010 [P] Create CLI interfaces for pdf-processor and chunk-manager in `backend/lib/cli/pdf_cli.py`
+- [x] T010 [P] Create CLI interfaces for pdf-processor and chunk-manager in `backend/lib/cli/pdf_cli.py`
 
 ### Job Queue System
 
