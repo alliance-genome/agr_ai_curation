@@ -37,7 +37,7 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 ## Technical Context
 
 **Language/Version**: Python 3.11+ (backend), TypeScript/React 18 (frontend)
-**Primary Dependencies**: FastAPI, PydanticAI, pgvector, PyMuPDF, pdfminer.six, Camelot, OpenAI SDK, React + MUI
+**Primary Dependencies**: FastAPI, PydanticAI, pgvector, Unstructured.io, OpenAI SDK, React + MUI
 **Storage**: PostgreSQL with pgvector (HNSW) + tsvector for hybrid search, Postgres job queue, local filesystem
 **Database Strategy**: Fresh start - no migrations needed, recreate schema from SQLAlchemy models
 **Testing**: Pytest (backend), Vitest (frontend), performance benchmarks
@@ -144,8 +144,8 @@ _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 
 - EVERY feature as library? Yes ✓
 - Libraries listed:
-  - pdf-processor: Layout-aware extraction with PyMuPDF
-  - chunk-manager: Semantic chunking with table/figure preservation
+  - pdf-processor: Element-based extraction with Unstructured.io
+  - chunk-manager: Semantic chunking with element type preservation
   - embedding-service: Multi-model embeddings with versioning
   - hybrid-search: Vector (HNSW) + lexical (tsvector) search
   - reranker: Cross-encoder reranking with MMR diversification
@@ -340,9 +340,9 @@ The /tasks command will generate approximately 50-55 prioritized tasks following
    - Add configurable embedding dimensions
 
 2. **PDF Processing Foundation** (Tasks 6-10):
-   - pdf-processor library with PyMuPDF→pdfminer→OCR chain
-   - Layout-aware chunking with section preservation
-   - Table/figure extraction (Camelot/Tabula)
+   - pdf-processor library with Unstructured.io element extraction
+   - Element-aware chunking with type preservation (Title, NarrativeText, Table, etc.)
+   - Automatic table/figure extraction with coordinates
    - Content normalization and deduplication
    - Page-level hashing
 
@@ -490,7 +490,7 @@ _Fill ONLY if Constitution Check has violations that must be justified_
 | ------------------------ | -------------------------------------- | -------------------------------------- |
 | 8 libraries instead of 4 | Separation of concerns for complex RAG | Monolithic library would be untestable |
 | pgvector + tsvector      | Hybrid search required for accuracy    | Vector-only misses exact matches       |
-| PyMuPDF + pdfminer + OCR | Robust PDF handling                    | Single tool fails on many PDFs         |
+| Unstructured.io          | Element-based extraction needed        | Plain text loses structure and tables  |
 | Cross-encoder reranking  | Quality requirement                    | Raw scores give poor results           |
 
 ## Progress Tracking

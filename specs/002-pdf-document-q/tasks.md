@@ -32,7 +32,7 @@
 ### PDF Processing Library
 
 - [ ] T006 [P] Write pdf-processor library tests in `backend/tests/unit/test_pdf_processor.py` **[TDD-RED]**
-- [ ] T007 Implement pdf-processor with PyMuPDF in `backend/lib/pdf_processor.py` **[TDD-GREEN]**
+- [ ] T007 Implement pdf-processor with Unstructured.io in `backend/lib/pdf_processor.py` **[TDD-GREEN]**
 - [ ] T008 [P] Write chunk-manager tests with layout preservation in `backend/tests/unit/test_chunk_manager.py` **[TDD-RED]**
 - [ ] T009 Implement chunk-manager with semantic boundaries in `backend/lib/chunk_manager.py` **[TDD-GREEN]**
 - [ ] T010 [P] Create CLI interfaces for pdf-processor and chunk-manager in `backend/lib/cli/pdf_cli.py`

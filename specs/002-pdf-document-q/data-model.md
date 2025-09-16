@@ -38,7 +38,7 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - `file_size`: Integer (bytes, max 100MB)
 - `page_count`: Integer (max 500 pages)
 - `extracted_text`: Text (full document text)
-- `extraction_method`: Enum (PYMUPDF, PDFMINER, OCR)
+- `extraction_method`: Enum (UNSTRUCTURED_FAST, UNSTRUCTURED_HI_RES, UNSTRUCTURED_OCR_ONLY)
 - `is_ocr`: Boolean (true if OCR was used)
 - `embeddings_generated`: Boolean
 - `embedding_models`: JSONB (list of models used)
@@ -87,6 +87,7 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - `chunk_index`: Integer (position in document)
 - `chunk_text`: Text (the actual chunk content)
 - `chunk_tokens`: Integer (token count)
+- `element_type`: String (from Unstructured: Title, NarrativeText, Table, FigureCaption, ListItem, etc.)
 - `start_page`: Integer
 - `end_page`: Integer
 - `heading_text`: String (section heading if applicable)
@@ -192,7 +193,7 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - `caption`: Text
 - `headers`: JSONB (column headers)
 - `data`: JSONB (table rows as list of dicts)
-- `extraction_method`: Enum (CAMELOT, TABULA, OCR)
+- `extraction_method`: Enum (UNSTRUCTURED_FAST, UNSTRUCTURED_HI_RES, UNSTRUCTURED_OCR_ONLY)
 - `confidence_score`: Float
 - `bbox`: JSONB (bounding box)
 

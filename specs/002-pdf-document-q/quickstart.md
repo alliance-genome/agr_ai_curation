@@ -83,17 +83,17 @@ cd frontend && npm run dev
 
 ## 📚 Enhanced Library CLI Usage
 
-### PDF Processor (Layout-Aware Extraction)
+### PDF Processor (Element-Based Extraction)
 
 ```bash
-# Extract with PyMuPDF
+# Extract with Unstructured.io
 python -m backend.lib.pdf_processor extract paper.pdf \
-  --extract-tables \
-  --extract-figures
+  --strategy=hi_res \
+  --extract-images-in-pdf
 
-# Check extraction quality
+# Check extraction quality with element types
 python -m backend.lib.pdf_processor validate paper.pdf \
-  --check-layout \
+  --show-elements \
   --format=json
 
 # Get page-level hashes for deduplication
@@ -102,20 +102,20 @@ python -m backend.lib.pdf_processor hash paper.pdf \
   --per-page
 ```
 
-### Chunk Manager (Semantic Chunking)
+### Chunk Manager (Element-Based Chunking)
 
 ```bash
-# Smart chunking with layout preservation
+# Smart chunking with element type preservation
 python -m backend.lib.chunk_manager chunk paper.pdf \
   --size=1000 \
   --overlap=200 \
-  --preserve-layout \
-  --mark-references \
+  --preserve-elements \
+  --group-tables \
   --group-captions
 
-# Analyze chunk quality
+# Analyze chunk quality by element types
 python -m backend.lib.chunk_manager analyze paper.pdf \
-  --show-boundaries \
+  --show-elements \
   --token-counts
 ```
 

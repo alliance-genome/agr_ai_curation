@@ -38,32 +38,44 @@ async def rerank_and_select(ctx, search_results: HybridSearchAgent) -> RankedRes
 - Reduced false negatives for exact terminology
 - Improved answer accuracy with source diversity
 
-### 2. Layout-Aware PDF Processing with Fallback Chain
+### 2. Layout-Aware PDF Processing with Element Classification
 
-**Decision**: PyMuPDF (fitz) for all PDF extraction
+**Decision**: Unstructured.io for intelligent PDF extraction
 **Rationale**:
 
-- PyMuPDF extracts structure (headings, tables, figures) with bounding boxes
-- pdfminer.six handles complex layouts PyMuPDF misses
-- Tesseract OCR for image-only PDFs (with user warning)
+- Unstructured.io provides element-based extraction (Title, NarrativeText, Table, FigureCaption, etc.)
+- Built-in table structure extraction with infer_table_structure=True
+- Automatic strategy selection (hi_res for complex layouts, fast for simple, ocr_only for scanned)
+- Handles complex layouts with coordinates and page metadata preserved
   **Chunking Strategy**:
-- Preserve paragraph boundaries and heading hierarchy
-- Keep figure/table captions with content
-- Strip headers/footers via n-gram detection
-- Store section paths (e.g., "Results > Figure 2")
-- Mark reference sections for down-weighting
+- Use Unstructured's chunk_by_title for semantic boundaries
+- Preserve element types (Title, NarrativeText, Table, FigureCaption)
+- Keep figure/table captions with their associated content
+- Leverage metadata.page_number and metadata.coordinates for precise citations
+- Store section hierarchy from Title elements
+- Mark ListItem and Footer elements for appropriate handling
+  **Element Types Available**:
+- Title: Section headings and document title
+- NarrativeText: Main body text and paragraphs
+- Table: Structured tabular data with optional infer_table_structure
+- FigureCaption: Captions for figures and images
+- Image: Embedded images (when extract_images_in_pdf=True)
+- ListItem: Bulleted or numbered list items
+- Footer/Header: Page metadata for filtering
+- Formula: Mathematical equations and formulas
   **PydanticAI Integration**:
 
 ```python
 class ChunkingAgent(BaseModel):
-    page_content: str
-    layout_elements: list[LayoutElement]
+    elements: list[Element]  # From Unstructured partition_pdf
+    max_chunk_size: int = 1000
 
 @agent
 async def smart_chunk(ctx, doc: ChunkingAgent) -> list[Chunk]:
-    # Semantic boundary detection
-    # Table/figure grouping
-    # Metadata enrichment
+    # Use chunk_by_title for semantic boundaries
+    # Preserve element.category (Table, Title, NarrativeText)
+    # Group related elements (caption with figure/table)
+    # Enrich with element.metadata.coordinates
 ```
 
 ### 3. HNSW Indexing Instead of IVFFlat
@@ -125,24 +137,26 @@ async def expand_query(ctx, input: QueryExpansionAgent) -> ExpandedQuery:
 
 ### 6. Table & Figure Extraction as First-Class Citizens
 
-**Decision**: Camelot/Tabula for tables, explicit caption preservation
+**Decision**: Unstructured.io's built-in element classification for tables and figures
 **Rationale**:
 
 - Critical data lives in tables and figure captions
-- Plain text extraction loses structure
-- Curators need precise table/figure citations
+- Unstructured automatically identifies Table, FigureCaption, and Image elements
+- Preserves structure with infer_table_structure for downstream processing
+- Curators need precise table/figure citations with bounding boxes
   **Implementation**:
 
 ```python
-class TableExtractionAgent(BaseModel):
-    page_image: bytes
-    detected_tables: list[BoundingBox]
+class ElementExtractionAgent(BaseModel):
+    pdf_path: str
+    strategy: str = "hi_res"  # or "fast", "ocr_only"
 
 @agent
-async def extract_tables(ctx, input: TableExtractionAgent) -> list[Table]:
-    # Camelot for vector PDFs
-    # Fallback to OCR + grid detection
-    # Store as structured JSON in metadata
+async def extract_elements(ctx, input: ElementExtractionAgent) -> list[Element]:
+    # Use partition_pdf with strategy selection
+    # Elements include Table, FigureCaption, Title, NarrativeText
+    # Each element has metadata.coordinates and metadata.page_number
+    # Store as structured JSON with element types
 ```
 
 ### 7. Confidence-Based Guardrails & Citations
