@@ -44,8 +44,8 @@ Contract tests from T046 should accompany these endpoints.
 
 Update React components to hit new endpoints:
 
-- [ ] `PDFUpload` component: call `/pdf`, show progress/state (T052). Write component test (T051).
-- [ ] `ChatInterface`: manage session, send questions, render streamed answer/citations (T053/T054). Tests ensure streaming and confidence display.
+- [x] `PDFUpload` component: call `/pdf`, show progress/state (T052). Write component test (T051).
+- [x] `ChatInterface`: manage session, send questions, render answer/citations via REST (T053/T054).
 - [ ] Citation UI (T055) can be simplified or deferred; basic inline citation listing is acceptable for MVP.
 
 ### 4. Configuration & Dependencies

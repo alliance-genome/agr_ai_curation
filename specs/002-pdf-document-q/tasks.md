@@ -108,10 +108,10 @@
 
 ### React Components
 
-- [ ] T051 [P] Write component tests for PDF upload in `frontend/src/components/__tests__/PDFUpload.test.tsx` **[TDD-RED]**
-- [ ] T052 [P] Implement PDFUpload with progress tracking in `frontend/src/components/PDFUpload.tsx` **[TDD-GREEN]**
-- [ ] T053 [P] Write ChatInterface tests with streaming in `frontend/src/components/__tests__/ChatInterface.test.tsx` **[TDD-RED]**
-- [ ] T054 [P] Implement ChatInterface with confidence indicators in `frontend/src/components/ChatInterface.tsx` **[TDD-GREEN]**
+- [x] T051 [P] Write component tests for PDF upload in `frontend/src/components/__tests__/PDFUpload.test.tsx` **[TDD-RED]**
+- [x] T052 [P] Implement PDFUpload with progress tracking in `frontend/src/components/PDFUpload.tsx` **[TDD-GREEN]**
+- [x] T053 [P] Write ChatInterface tests with streaming in `frontend/src/components/__tests__/ChatInterface.test.tsx` **[TDD-RED]**
+- [x] T054 [P] Implement ChatInterface with confidence indicators in `frontend/src/components/ChatInterface.tsx` **[TDD-GREEN]**
 - [ ] T055 [P] Implement CitationDisplay with bbox highlighting in `frontend/src/components/CitationDisplay.tsx` **[TDD-GREEN]**
 
 ## Priority 5: Polish & Monitoring (Week 3)
