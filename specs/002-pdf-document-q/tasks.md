@@ -53,7 +53,7 @@
 - [x] T017 Implement multi-model embedding service in `backend/lib/embedding_service.py` **[TDD-GREEN]**
 - [x] T018 [P] Write batch processing tests in `backend/tests/unit/test_batch_embeddings.py` **[TDD-RED]**
 - [x] T019 Implement embedding batch processor in `backend/lib/batch_processor.py` **[TDD-GREEN]**
-- [ ] T020 [P] Create embedding CLI with status tracking in `backend/lib/cli/embedding_cli.py`
+- [x] T020 [P] Create embedding CLI with status tracking in `backend/lib/cli/embedding_cli.py`
 
 ### Hybrid Search Implementation
 

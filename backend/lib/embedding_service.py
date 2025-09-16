@@ -37,6 +37,10 @@ class EmbeddingService:
         self._client = embedding_client
         self._models = models
 
+    def list_models(self):
+        """Return configured model metadata."""
+        return list(self._models.values())
+
     def embed_pdf(
         self,
         *,
