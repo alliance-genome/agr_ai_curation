@@ -166,16 +166,20 @@ class PDFDocument(Base):
 
     @validates("file_size")
     def validate_file_size(self, key, value):
-        """Validate file size is positive"""
+        """Validate file size is positive and within 100MB limit"""
         if value <= 0:
             raise ValueError("File size must be positive")
+        if value > 104857600:  # 100MB in bytes
+            raise ValueError("File size exceeds 100MB limit")
         return value
 
     @validates("page_count")
     def validate_page_count(self, key, value):
-        """Validate page count is positive"""
+        """Validate page count is positive and within 500 page limit"""
         if value <= 0:
             raise ValueError("Page count must be positive")
+        if value > 500:
+            raise ValueError("Page count exceeds 500 page limit")
         return value
 
 

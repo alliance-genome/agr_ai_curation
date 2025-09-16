@@ -141,6 +141,13 @@ class PDFProcessor:
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
         file_size = pdf_path.stat().st_size
+
+        # Validate file size (100MB limit)
+        if file_size > 104857600:  # 100MB in bytes
+            raise ValueError(
+                f"PDF file size ({file_size / 1024 / 1024:.2f}MB) exceeds 100MB limit"
+            )
+
         strategy = strategy or self.default_strategy
         languages = languages or ["eng"]
 
@@ -215,9 +222,7 @@ class PDFProcessor:
                     table.setdefault("caption", None)
 
             figures = (
-                self.extract_figures(extracted_elements)
-                if extract_figures
-                else []
+                self.extract_figures(extracted_elements) if extract_figures else []
             )
 
             # Generate hashes

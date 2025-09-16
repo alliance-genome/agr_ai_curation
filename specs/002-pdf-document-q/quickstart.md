@@ -34,7 +34,7 @@ GEMINI_API_KEY=...  # Optional for Gemini models
 
 ```bash
 # Start all services (PostgreSQL, Backend, Frontend)
-docker-compose up -d
+docker compose up -d
 
 # Wait for services to be ready
 sleep 5
