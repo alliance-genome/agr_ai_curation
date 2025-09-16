@@ -90,7 +90,7 @@ As a biocurator reviewing scientific papers, I need to upload PDF documents and 
 - **FR-005**: System MUST maintain conversation context within a session to enable follow-up questions
 - **FR-006**: System MUST understand the full document context when answering questions about specific sections, findings, or relationships
 - **FR-007**: System MUST persist conversation history within a user session
-- **FR-008**: System MUST NOT perform structured data extraction in the initial scope (pure chat interface only)
+- **FR-008**: System MUST support structured extraction of tables, figures, and other document elements for enhanced Q&A capabilities
 - **FR-009**: System MUST handle PDF files up to 100MB in size
 - **FR-010**: System MUST provide responses without specific time constraints (best effort streaming)
 - **FR-011**: System MUST support at least 12 concurrent users/sessions

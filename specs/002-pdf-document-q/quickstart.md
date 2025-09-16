@@ -19,19 +19,25 @@ cd backend && pip install -r requirements.txt && cd ..
 cd frontend && npm install && cd ..
 ```
 
-### 2. PostgreSQL with pgvector + Full-Text Search
+### 2. Configure Environment
 
 ```bash
-# Run PostgreSQL with extensions
-docker run -d \
-  --name pgvector-fts \
-  -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=agr_curation \
-  -p 5432:5432 \
-  pgvector/pgvector:pg16
+cp .env.example .env
 
-# Database setup - Fresh start approach (no migrations)
-# Extensions are automatically created by docker-compose with pgvector/pgvector:pg16 image
+# Required settings in .env:
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...  # Optional for Gemini models
+# Note: DATABASE_URL is set automatically by docker-compose.yml
+```
+
+### 3. Start Services with Docker Compose
+
+```bash
+# Start all services (PostgreSQL, Backend, Frontend)
+docker-compose up -d
+
+# Wait for services to be ready
+sleep 5
 
 # Create tables from SQLAlchemy models
 # WARNING: This will DROP ALL TABLES and delete all data! Only use in development!
@@ -45,27 +51,20 @@ print('Database schema created successfully!')
 "
 ```
 
-### 3. Configure Environment
+### 4. Alternative: Manual Setup (without Docker Compose)
 
 ```bash
-cp .env.example .env
+# Only if not using Docker Compose
+# Run PostgreSQL standalone with same credentials as docker-compose
+docker run -d \
+  --name ai_curation_db \
+  -e POSTGRES_USER=curation_user \
+  -e POSTGRES_PASSWORD=curation_pass \
+  -e POSTGRES_DB=ai_curation_db \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
 
-# Required settings in .env:
-OPENAI_API_KEY=sk-...
-DATABASE_URL=postgresql://postgres:password@localhost/agr_curation  # pragma: allowlist secret
-MAX_FILE_SIZE_MB=100
-MAX_PAGE_COUNT=500
-CONFIDENCE_THRESHOLD=0.7
-RATE_LIMIT_PER_MINUTE=10
-```
-
-### 4. Start Services
-
-```bash
-# With Docker Compose
-docker-compose up -d
-
-# Or manually:
+# Then manually start services:
 # Terminal 1: Backend with job workers
 cd backend && uvicorn app.main:app --reload --port 8002
 
@@ -76,9 +75,9 @@ cd backend && python -m app.workers.embedding_worker
 cd frontend && npm run dev
 ```
 
-### 5. Access Application
+### 5. Verify Setup & Access Application
 
-- Frontend: http://localhost:3000
+- Frontend: http://localhost:8080 (Docker Compose nginx)
 - API Docs: http://localhost:8002/docs
 - Metrics: http://localhost:8002/metrics
 - Health: http://localhost:8002/health
