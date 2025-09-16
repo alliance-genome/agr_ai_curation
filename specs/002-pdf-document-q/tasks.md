@@ -57,7 +57,7 @@
 
 ### Hybrid Search Implementation
 
-- [ ] T021 [P] Write vector search tests (<100ms) in `backend/tests/unit/test_vector_search.py` **[TDD-RED]**
+- [x] T021 [P] Write vector search tests (<100ms) in `backend/tests/unit/test_vector_search.py` **[TDD-RED]**
 - [ ] T022 Implement HNSW vector search in `backend/lib/vector_search.py` **[TDD-GREEN]**
 - [ ] T023 [P] Write lexical search tests (<50ms) in `backend/tests/unit/test_lexical_search.py` **[TDD-RED]**
 - [ ] T024 Implement tsvector lexical search in `backend/lib/lexical_search.py` **[TDD-GREEN]**
