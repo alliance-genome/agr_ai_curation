@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -86,7 +86,7 @@ class JobQueue:
 
             job.status = JobStatus.RUNNING
             job.worker_id = worker_id
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             job.error_log = None
             session.flush()
             session.refresh(job)
@@ -120,8 +120,9 @@ class JobQueue:
             job.worker_id = None
             job.progress = 100
             job.processed_items = job.total_items or job.processed_items
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.result = result or {}
+            job.error_log = None
             session.flush()
             session.refresh(job)
             return job
@@ -148,12 +149,13 @@ class JobQueue:
                 job.completed_at = None
                 job.progress = 0
                 job.processed_items = 0
+                job.result = None
                 session.flush()
                 session.refresh(job)
             else:
                 job.status = JobStatus.FAILED
                 job.worker_id = None
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.progress = job.progress or 0
                 session.flush()
                 session.refresh(job)

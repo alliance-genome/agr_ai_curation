@@ -39,18 +39,18 @@
 
 ### Job Queue System
 
-- [ ] T011 [P] Write job queue tests with LISTEN/NOTIFY in `backend/tests/unit/test_job_queue.py` **[TDD-RED]**
-- [ ] T012 Implement Postgres-based job queue in `backend/lib/job_queue.py` **[TDD-GREEN]**
-- [ ] T013 [P] Write worker pool tests in `backend/tests/unit/test_workers.py` **[TDD-RED]**
-- [ ] T014 Implement job workers with rate limiting in `backend/app/workers/embedding_worker.py` **[TDD-GREEN]**
-- [ ] T015 [P] Create job monitoring CLI in `backend/lib/cli/job_cli.py`
+- [x] T011 [P] Write job queue tests with LISTEN/NOTIFY in `backend/tests/unit/test_job_queue.py` **[TDD-RED]**
+- [x] T012 Implement Postgres-based job queue in `backend/lib/job_queue.py` **[TDD-GREEN]**
+- [x] T013 [P] Write worker pool tests in `backend/tests/unit/test_workers.py` **[TDD-RED]**
+- [x] T014 Implement job workers with rate limiting in `backend/app/workers/embedding_worker.py` **[TDD-GREEN]**
+- [x] T015 [P] Create job monitoring CLI in `backend/lib/cli/job_cli.py`
 
 ## Priority 2: Hybrid Search & Reranking (Week 1-2)
 
 ### Embedding Service
 
-- [ ] T016 [P] Write embedding service tests with versioning in `backend/tests/unit/test_embedding_service.py` **[TDD-RED]**
-- [ ] T017 Implement multi-model embedding service in `backend/lib/embedding_service.py` **[TDD-GREEN]**
+- [x] T016 [P] Write embedding service tests with versioning in `backend/tests/unit/test_embedding_service.py` **[TDD-RED]**
+- [x] T017 Implement multi-model embedding service in `backend/lib/embedding_service.py` **[TDD-GREEN]**
 - [ ] T018 [P] Write batch processing tests in `backend/tests/unit/test_batch_embeddings.py` **[TDD-RED]**
 - [ ] T019 Implement embedding batch processor in `backend/lib/batch_processor.py` **[TDD-GREEN]**
 - [ ] T020 [P] Create embedding CLI with status tracking in `backend/lib/cli/embedding_cli.py`
