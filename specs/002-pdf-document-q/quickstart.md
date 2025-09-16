@@ -34,10 +34,12 @@ docker run -d \
 # Extensions are automatically created by docker-compose with pgvector/pgvector:pg16 image
 
 # Create tables from SQLAlchemy models
+# WARNING: This will DROP ALL TABLES and delete all data! Only use in development!
 docker compose exec backend python -c "
 from app.models import Base
 from app.database import engine
-Base.metadata.drop_all(engine)  # Clean start
+# CAUTION: drop_all() will DELETE ALL DATA - ensure this is not production!
+Base.metadata.drop_all(engine)  # Clean start - DESTROYS ALL DATA
 Base.metadata.create_all(engine)  # Create all tables with indexes
 print('Database schema created successfully!')
 "

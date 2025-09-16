@@ -74,7 +74,7 @@ As a biocurator reviewing scientific papers, I need to upload PDF documents and 
 
 - What happens when the uploaded file is not a valid PDF? System displays an error message notifying the user that the file format is invalid
 - How does system handle PDFs that are image-based without text extraction? System displays a warning message notifying the user that the PDF appears to be image-based and may not be readable
-- What is the maximum PDF file size allowed? No file size limit is enforced
+- What is the maximum PDF file size allowed? 100MB maximum file size is enforced
 - How long does a session persist? Sessions persist through page reloads when possible, with a manual "Start New Session" button available in the chat window
 - Can users upload multiple PDFs in one session? Only one document per session is supported; uploading a new document resets the session
 - What happens if the PDF contains sensitive/protected content? System displays an error message notifying the user that the content is protected
@@ -91,7 +91,7 @@ As a biocurator reviewing scientific papers, I need to upload PDF documents and 
 - **FR-006**: System MUST understand the full document context when answering questions about specific sections, findings, or relationships
 - **FR-007**: System MUST persist conversation history within a user session
 - **FR-008**: System MUST NOT perform structured data extraction in the initial scope (pure chat interface only)
-- **FR-009**: System MUST handle PDF files without file size limits
+- **FR-009**: System MUST handle PDF files up to 100MB in size
 - **FR-010**: System MUST provide responses without specific time constraints (best effort streaming)
 - **FR-011**: System MUST support at least 12 concurrent users/sessions
 - **FR-012**: System MUST retain the last 10 sessions per user (configurable by user preference)
