@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook for detecting PydanticAI code in files being edited.
-When PydanticAI patterns are detected, reminds the LLM to check documentation.
+PreToolUse hook for detecting Unstructured.io code in files being edited.
+When Unstructured patterns are detected, reminds the LLM to check documentation.
 """
 
 import json
@@ -11,7 +11,7 @@ import re
 
 
 def load_triggers(trigger_file):
-    """Load PydanticAI trigger patterns from reference file."""
+    """Load Unstructured trigger patterns from reference file."""
     triggers = []
     if os.path.exists(trigger_file):
         with open(trigger_file, "r") as f:
@@ -27,52 +27,50 @@ def load_triggers(trigger_file):
     return triggers
 
 
-def check_for_pydantic_ai(content, triggers):
-    """Check if content contains PydanticAI patterns.
+def check_for_unstructured(content, triggers):
+    """Check if content contains Unstructured patterns.
 
     Enhanced to detect patterns regardless of import aliases.
     Focuses on actual function/class names and signatures.
     """
-    # First check for any import of pydantic_ai modules (with any alias)
+    # First check for any import of unstructured modules (with any alias)
     import_patterns = [
-        r"from\s+pydantic_ai[\w\.]*\s+import",  # from pydantic_ai.X import Y
-        r"import\s+pydantic_ai[\w\.]*(?:\s+as\s+\w+)?",  # import pydantic_ai as X
+        r"from\s+unstructured[\w\.]*\s+import",  # from unstructured.X import Y
+        r"import\s+unstructured[\w\.]*(?:\s+as\s+\w+)?",  # import unstructured as X
     ]
 
-    has_pydantic_ai_import = False
+    has_unstructured_import = False
     for pattern in import_patterns:
         if re.search(pattern, content, re.IGNORECASE):
-            has_pydantic_ai_import = True
+            has_unstructured_import = True
             break
 
-    # If no pydantic_ai import found, skip detailed checks
-    if not has_pydantic_ai_import:
+    # If no unstructured import found, skip detailed checks
+    if not has_unstructured_import:
         # Still check for direct function/class usage patterns
-        # These are distinctive enough to indicate PydanticAI usage
+        # These are distinctive enough to indicate Unstructured usage
         direct_patterns = [
-            r"\bAgent\s*\(",
-            r"\bModelRetry\s*\(",
-            r"\bRunContext\s*\(",
-            r"\bToolContext\s*\(",
-            r"\bSystemPrompt\s*\(",
-            r"\bUserPrompt\s*\(",
-            r"\bDependencyContext\s*\(",
-            r"\boutput_type\s*=",  # v1.0.6 specific
-            r"\bstream_text\s*\(",
-            r"\bdelta\s*=\s*True",  # streaming pattern
-            r"\.run\s*\(",
-            r"\.run_sync\s*\(",
-            r"\.stream\s*\(",
-            r"\.stream_sync\s*\(",
-            r"@\w+\.tool(?:_plain)?\s*\(",  # tool decorators
-            r"@\w+\.system_prompt\s*\(",
+            r"\bpartition_pdf\s*\(",
+            r"\bpartition_docx\s*\(",
+            r"\bpartition_html\s*\(",
+            r"\bchunk_by_title\s*\(",
+            r"\bTitle\s*\(",
+            r"\bNarrativeText\s*\(",
+            r"\bTable\s*\(",
+            r"\bTableChunk\s*\(",
+            r"\bFigureCaption\s*\(",
+            r'strategy\s*=\s*["\'](?:hi_res|fast|ocr_only)["\']',
+            r"infer_table_structure\s*=\s*(?:True|False)",
+            r"extract_images_in_pdf\s*=\s*(?:True|False)",
+            r"\.metadata\.page_number",
+            r"\.metadata\.coordinates",
         ]
 
         for pattern in direct_patterns:
             if re.search(pattern, content):
                 return True, pattern
 
-    # If we have pydantic_ai imports, check for any trigger patterns
+    # If we have unstructured imports, check for any trigger patterns
     # Focus on function calls and distinctive patterns
     for trigger in triggers:
         # Clean up trigger for better matching
@@ -129,8 +127,8 @@ def main():
         ),  # Go up two levels from script location
     )
     hooks_dir = os.path.join(project_dir, ".claude", "hooks")
-    trigger_file = os.path.join(hooks_dir, "pydantic_ai_1.0.6_identifiers.txt")
-    docs_file = os.path.join(hooks_dir, "pydantic_ai_1.0.6_docs.txt")
+    trigger_file = os.path.join(hooks_dir, "unstructured_0.18.14_identifiers.txt")
+    docs_file = os.path.join(hooks_dir, "unstructured_0.18.14_docs.txt")
 
     # Load trigger patterns
     triggers = load_triggers(trigger_file)
@@ -162,8 +160,8 @@ def main():
     if not file_path.endswith((".py", ".pyx")):
         sys.exit(0)
 
-    # Check for PydanticAI patterns
-    found, trigger = check_for_pydantic_ai(content_to_check, triggers)
+    # Check for Unstructured patterns
+    found, trigger = check_for_unstructured(content_to_check, triggers)
 
     if found:
         # Clean up the trigger pattern for display (remove escape characters)
@@ -171,7 +169,7 @@ def main():
 
         # Output JSON with systemMessage for Claude Code UI
         output = {
-            "systemMessage": f"🔍 PydanticAI hook detected pattern: '{display_trigger}...'",
+            "systemMessage": f"🔍 Unstructured.io hook detected pattern: '{display_trigger}...'",
             "suppressOutput": False,  # Show in transcript mode
         }
         print(json.dumps(output))
