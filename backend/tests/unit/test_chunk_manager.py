@@ -285,14 +285,29 @@ class TestChunkManagerUnstructured:
 
     def test_analyze_special_content(self, manager, mock_extraction_result):
         """Test special content analysis"""
-        chunk_result = manager.chunk(mock_extraction_result)
+        chunk_result = manager.chunk(
+            mock_extraction_result, strategy=ChunkingStrategy.BY_PAGE
+        )
         analysis = manager.analyze(chunk_result)
 
         assert "special_content" in analysis
         special = analysis["special_content"]
-        assert "captions" in special
-        assert "tables" in special
-        assert "references" in special
+        assert special["captions"] > 0
+        assert special["tables"] > 0
+        assert special["references"] > 0
+
+    def test_chunk_marks_table_elements(self, manager, mock_extraction_result):
+        """Tables should be flagged even when short"""
+        chunk_result = manager.chunk(
+            mock_extraction_result, strategy=ChunkingStrategy.BY_PAGE
+        )
+
+        table_chunk = next(
+            chunk for chunk in chunk_result.chunks if "Model\tAccuracy" in chunk.text
+        )
+
+        assert table_chunk.contains_table is True
+        assert table_chunk.is_table is True
 
     def test_analyze_page_coverage(self, manager, mock_extraction_result):
         """Test page coverage analysis"""

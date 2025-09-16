@@ -335,15 +335,16 @@ class ChunkManager:
 
         for i, elem in enumerate(chunked_elements):
             # Handle different chunk formats (Element, dict, etc.)
+            chunk_elements: List[Any] = []
+
             if isinstance(elem, dict):
                 text = elem.get("text", "")
                 page_start = elem.get("page", 1)
                 page_end = page_start
                 section = elem.get("section", "")
+                chunk_elements = elem.get("elements", []) or []
                 element_ids = [
-                    e.element_id
-                    for e in elem.get("elements", [])
-                    if hasattr(e, "element_id")
+                    e.element_id for e in chunk_elements if hasattr(e, "element_id")
                 ]
             elif hasattr(elem, "text"):
                 text = elem.text
@@ -354,6 +355,7 @@ class ChunkManager:
                 section = (
                     elem.metadata.section if hasattr(elem.metadata, "section") else ""
                 )
+                chunk_elements = [elem]
                 element_ids = [elem.id] if hasattr(elem, "id") else []
             else:
                 text = str(elem)
@@ -372,14 +374,27 @@ class ChunkManager:
 
             # Detect special content
             text_lower = text.lower()
+            element_types = [
+                getattr(e, "type", getattr(e, "category", "")).lower()
+                for e in chunk_elements
+            ]
+
+            has_table_element = any(t in {"table"} for t in element_types)
+            has_caption_element = any(
+                t in {"figurecaption", "tablecaption"} for t in element_types
+            )
+            has_image_element = any(t in {"image", "figure"} for t in element_types)
+
             is_reference = self._is_reference_section(text_lower)
-            is_caption = self._is_caption(text_lower)
-            is_table = "Table" in str(elem) if not isinstance(elem, dict) else False
-            contains_table = "table" in text_lower and len(text) > 100
-            contains_figure = any(
+            is_caption = has_caption_element or self._is_caption(text_lower)
+            is_table = has_table_element
+            contains_table = has_table_element or "table" in text_lower
+            contains_figure = has_image_element or any(
                 term in text_lower for term in ["figure", "fig.", "chart", "graph"]
             )
-            contains_caption = is_caption or "caption" in text_lower
+            contains_caption = (
+                has_caption_element or is_caption or "caption" in text_lower
+            )
 
             # Extract heading if available
             heading_text = self._extract_heading(elem, extraction_result)
