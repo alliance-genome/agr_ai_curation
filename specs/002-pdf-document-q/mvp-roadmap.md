@@ -20,14 +20,14 @@ Deliver “upload PDF → ask question → streamed answer with citations” wit
 
 ### 1. General RAG Orchestrator
 
-- [ ] Implement simple pipeline output model (`GeneralPipelineOutput`) and pipeline module (reuse hybrid search + reranker).
-- [ ] Implement main orchestrator agent (PydanticAI) that:
+- [x] Implement simple pipeline output model (`GeneralPipelineOutput`) and supporting data classes.
+- [x] Implement main orchestrator agent (PydanticAI) that:
   1. Accepts session+question
-  2. Runs the general pipeline
+  2. Runs the general pipeline (placeholder uses injected dependencies for now)
   3. Prompts the selected LLM using top chunks and returns answer + citations
-- [ ] Cover with unit test for orchestrator logic and integration test for end-to-end flow with fixture data.
+- [x] Cover with unit tests for pipeline aggregation and orchestrator logic (integration test still pending once API wiring exists).
 
-Mapping to tasks.md: reduce T031–T045 to a single pipeline + orchestrator implementation, e.g. _General Pipeline_ + _Main Orchestrator_ and corresponding tests.
+Mapping to tasks.md: tracked via T031–T045 (initial subset—general pipeline wiring + end-to-end integration test still outstanding).
 
 ### 2. Essential API Endpoints
 
@@ -50,7 +50,8 @@ Update React components to hit new endpoints:
 
 ### 4. Configuration & Dependencies
 
-- Ensure LLM credentials (OpenAI/Gemini) are configurable via `.env` and docker images have required packages (e.g., `sentence-transformers`, `torch`).
+- Ensure LLM credentials (OpenAI/Gemini) are configurable via `.env` **and stored/edited through the admin panel** (`settings` table).
+- Use the OpenAI embeddings API for both PDF ingestion and query-time retrieval, with model name/version controlled via admin settings (defaults seeded from `.env`).
 - Document minimal setup in `quickstart.md` updates (env variables, docker build).
 
 ### 5. Smoke Test / Validation

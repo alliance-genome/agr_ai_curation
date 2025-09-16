@@ -21,13 +21,17 @@ def _coerce_value(key: str, value: Any) -> Any:
         "embedding_dimensions",
         "embedding_max_batch_size",
         "embedding_default_batch_size",
+        "rag_rerank_top_k",
+        "hybrid_vector_k",
+        "hybrid_lexical_k",
+        "hybrid_max_results",
     }:
         try:
             return int(value)
         except (ValueError, TypeError):
             return value
 
-    if key in {"temperature"}:
+    if key in {"temperature", "rag_confidence_threshold", "mmr_lambda"}:
         try:
             return float(value)
         except (ValueError, TypeError):
@@ -57,6 +61,12 @@ class SettingsUpdate(BaseModel):
     embedding_dimensions: int | None = None
     embedding_max_batch_size: int | None = None
     embedding_default_batch_size: int | None = None
+    rag_rerank_top_k: int | None = None
+    rag_confidence_threshold: float | None = None
+    hybrid_vector_k: int | None = None
+    hybrid_lexical_k: int | None = None
+    hybrid_max_results: int | None = None
+    mmr_lambda: float | None = None
 
 
 @router.get("/")
@@ -92,6 +102,12 @@ async def get_settings(db: Session = Depends(get_db)):
         "embedding_default_batch_size": getattr(
             config, "embedding_default_batch_size", 64
         ),
+        "rag_rerank_top_k": getattr(config, "rag_rerank_top_k", 5),
+        "rag_confidence_threshold": getattr(config, "rag_confidence_threshold", 0.2),
+        "hybrid_vector_k": getattr(config, "hybrid_vector_k", 50),
+        "hybrid_lexical_k": getattr(config, "hybrid_lexical_k", 50),
+        "hybrid_max_results": getattr(config, "hybrid_max_results", 100),
+        "mmr_lambda": getattr(config, "mmr_lambda", 0.7),
     }
 
     response: Dict[str, Any] = {}

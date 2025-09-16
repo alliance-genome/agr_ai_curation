@@ -30,6 +30,12 @@ async def initialize_settings():
             "embedding_dimensions": str(config.embedding_dimensions),
             "embedding_max_batch_size": str(config.embedding_max_batch_size),
             "embedding_default_batch_size": str(config.embedding_default_batch_size),
+            "rag_rerank_top_k": str(config.rag_rerank_top_k),
+            "rag_confidence_threshold": str(config.rag_confidence_threshold),
+            "hybrid_vector_k": str(config.hybrid_vector_k),
+            "hybrid_lexical_k": str(config.hybrid_lexical_k),
+            "hybrid_max_results": str(config.hybrid_max_results),
+            "mmr_lambda": str(config.mmr_lambda),
         }
 
         # Add settings to database

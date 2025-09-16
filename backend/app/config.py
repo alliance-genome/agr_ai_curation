@@ -32,6 +32,14 @@ class Settings(BaseSettings):
         os.getenv("EMBEDDING_DEFAULT_BATCH_SIZE", 64)
     )
 
+    # Retrieval/Reranking Settings
+    rag_rerank_top_k: int = int(os.getenv("RAG_RERANK_TOP_K", 5))
+    rag_confidence_threshold: float = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", 0.2))
+    hybrid_vector_k: int = int(os.getenv("HYBRID_VECTOR_K", 50))
+    hybrid_lexical_k: int = int(os.getenv("HYBRID_LEXICAL_K", 50))
+    hybrid_max_results: int = int(os.getenv("HYBRID_MAX_RESULTS", 100))
+    mmr_lambda: float = float(os.getenv("MMR_LAMBDA", 0.7))
+
     # Application Settings
     debug_mode: bool = False
     api_url: str = "http://localhost:8002"
