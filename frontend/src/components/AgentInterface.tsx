@@ -23,7 +23,6 @@ import {
 import {
   Send,
   Clear,
-  Stream,
   ExpandMore,
   Science,
   Biotech,
@@ -31,7 +30,6 @@ import {
 } from "@mui/icons-material";
 import axios from "axios";
 import { PdfTextData } from "../types/pdf";
-import ModelSelector from "./ModelSelector";
 import StreamingMessage from "./StreamingMessage";
 
 interface Entity {
@@ -89,9 +87,8 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState("openai");
-  const [selectedModel, setSelectedModel] = useState("gpt-4o");
-  const [streamingEnabled, setStreamingEnabled] = useState(true);
+  const selectedProvider = "openai";
+  const selectedModel = "gpt-4o";
   const [includeEntities, setIncludeEntities] = useState(true);
   const [includeAnnotations, setIncludeAnnotations] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,22 +125,38 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
     };
 
     // Map UI provider names to backend provider names
-    const backendProvider =
-      selectedProvider === "gemini" ? "google-gla" : selectedProvider;
+    const backendProvider = "openai";
 
     const requestData = {
       message: input,
       context: pdfTextData || selectedText ? context : undefined,
       session_id: sessionId,
-      stream: streamingEnabled,
+      stream: true,
       include_entities: includeEntities,
       include_annotations: includeAnnotations,
       model_preference: `${backendProvider}:${selectedModel}`,
       message_history: messageHistory.length > 0 ? messageHistory : undefined,
     };
+    const streamResponses = true;
+    let currentOutput: Partial<BioCurationOutput> | null = null;
+
+    const ensureOutput = () => {
+      if (!currentOutput) {
+        currentOutput = {
+          response: "",
+          entities: [],
+          annotations: [],
+          key_findings: [],
+          references: [],
+          confidence: 0,
+          requires_review: false,
+        };
+      }
+      return currentOutput;
+    };
 
     try {
-      if (streamingEnabled) {
+      if (streamResponses) {
         // Streaming response using Server-Sent Events
         const assistantMessage: AgentMessage = {
           id: (Date.now() + 1).toString(),
@@ -158,6 +171,8 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
+
+        const outputRef = ensureOutput();
 
         const response = await fetch("/api/agents/biocurate/stream", {
           method: "POST",
@@ -212,6 +227,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
                         const newMessages = [...prev];
                         const lastMessage = newMessages[newMessages.length - 1];
                         if (lastMessage && lastMessage.role === "assistant") {
+                          outputRef.response = parsed.content;
                           newMessages[newMessages.length - 1] = {
                             ...lastMessage,
                             content: parsed.content,
@@ -225,6 +241,8 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
                         const newMessages = [...prev];
                         const lastMessage = newMessages[newMessages.length - 1];
                         if (lastMessage && lastMessage.role === "assistant") {
+                          outputRef.response =
+                            (outputRef.response || "") + parsed.content;
                           newMessages[newMessages.length - 1] = {
                             ...lastMessage,
                             content: lastMessage.content + parsed.content,
@@ -234,15 +252,17 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
                       });
                     } else if (parsed.type === "entity") {
                       if (parsed.metadata) {
-                        currentOutput.entities?.push(parsed.metadata);
+                        ensureOutput();
+                        currentOutput?.entities?.push(parsed.metadata);
                       }
                     } else if (parsed.type === "annotation") {
                       if (parsed.metadata) {
-                        currentOutput.annotations?.push(parsed.metadata);
+                        ensureOutput();
+                        currentOutput?.annotations?.push(parsed.metadata);
                       }
                     } else if (parsed.type === "metadata") {
                       currentOutput = {
-                        ...currentOutput,
+                        ...ensureOutput(),
                         ...parsed.metadata,
                       };
                     } else if (parsed.type === "history") {
@@ -265,7 +285,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
                           newMessages[newMessages.length - 1] = {
                             ...lastMessage,
                             isStreaming: false,
-                            curationOutput: currentOutput as BioCurationOutput,
+                            curationOutput: ensureOutput() as BioCurationOutput,
                           };
                         }
                         return newMessages;
@@ -314,7 +334,7 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
       );
 
       // Remove streaming message if it was added
-      if (streamingEnabled) {
+      if (streamResponses) {
         setMessages((prev) => {
           const newMessages = [...prev];
           const lastMessage = newMessages[newMessages.length - 1];
@@ -330,6 +350,28 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
       }
     } finally {
       setLoading(false);
+      if (streamResponses) {
+        setMessages((prev) => {
+          if (prev.length === 0) return prev;
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (!lastMessage || lastMessage.role !== "assistant") {
+            return prev;
+          }
+          if (!lastMessage.isStreaming) {
+            return prev;
+          }
+
+          const finalOutput = ensureOutput();
+          newMessages[newMessages.length - 1] = {
+            ...lastMessage,
+            isStreaming: false,
+            curationOutput:
+              lastMessage.curationOutput || (finalOutput as BioCurationOutput),
+          };
+          return newMessages;
+        });
+      }
     }
   };
 
@@ -345,11 +387,6 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
     setSessionId(null);
     setError(null);
     setMessageHistory([]);
-  };
-
-  const handleModelChange = (provider: string, model: string) => {
-    setSelectedProvider(provider);
-    setSelectedModel(model);
   };
 
   const renderEntityChip = (entity: Entity) => (
@@ -420,26 +457,25 @@ function AgentInterface({ pdfTextData, selectedText }: AgentInterfaceProps) {
           <Typography variant="h6">BioCuration Agent</Typography>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <ModelSelector onModelChange={handleModelChange} disabled={loading} />
+          <Chip
+            label="Model: OpenAI · GPT-4o"
+            color="primary"
+            variant="outlined"
+            size="small"
+            sx={{ fontWeight: 500 }}
+          />
           <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
           <ToggleButtonGroup
             size="small"
             value={[
-              streamingEnabled && "stream",
               includeEntities && "entities",
               includeAnnotations && "annotations",
             ].filter(Boolean)}
             onChange={(_, newValues) => {
-              setStreamingEnabled(newValues.includes("stream"));
               setIncludeEntities(newValues.includes("entities"));
               setIncludeAnnotations(newValues.includes("annotations"));
             }}
           >
-            <ToggleButton value="stream" disabled={loading}>
-              <Tooltip title="Stream responses">
-                <Stream />
-              </Tooltip>
-            </ToggleButton>
             <ToggleButton value="entities" disabled={loading}>
               <Tooltip title="Extract entities">
                 <Science />

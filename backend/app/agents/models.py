@@ -162,7 +162,10 @@ class StreamingUpdate(BaseModel):
     """Simplified update for streaming responses - only text and status"""
 
     type: Literal[
-        "text_delta",  # Streaming conversational text
+        "text_delta",  # Streaming conversational text (delta)
+        "text",  # Streaming conversational text (full)
+        "entity",  # Entity extraction update
+        "history",  # Message history update
         "status",  # Tool status update
         "tool_complete",  # Tool finished with complete results
         "complete",  # Everything done

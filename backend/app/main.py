@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import logging
 import os
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from .middleware.error_handler import (
     RateLimitMiddleware,
     APIKeyValidationMiddleware,
 )
+
+logger = logging.getLogger(__name__)
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -36,6 +39,14 @@ app.add_middleware(
 # Mount uploads directory for serving PDFs
 uploads_path = Path("uploads")
 if uploads_path.exists():
+    default_pdf = Path("test_paper.pdf")
+    target_pdf = uploads_path / "test_paper.pdf"
+    if default_pdf.exists() and not target_pdf.exists():
+        try:
+            target_pdf.write_bytes(default_pdf.read_bytes())
+        except Exception as exc:
+            # Log but don't crash app if default copy fails
+            logger.warning("Failed to copy default PDF to uploads directory: %s", exc)
     app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
 # Include routers

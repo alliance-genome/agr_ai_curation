@@ -38,7 +38,7 @@ function HomePage({ toggleColorMode }: HomePageProps) {
   const [highlightTerms, setHighlightTerms] = useState<string[]>([]);
   const [pdfTextData, setPdfTextData] = useState<PdfTextData | null>(null);
   const [currentPdfUrl, setCurrentPdfUrl] = useState<string>(
-    "/api/uploads/sample_fly_publication.pdf",
+    "/api/uploads/test_paper.pdf",
   );
 
   debug.pdfHighlight("🏠 HOMEPAGE: State initialized:", {

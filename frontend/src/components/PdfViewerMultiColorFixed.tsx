@@ -59,7 +59,7 @@ function PdfViewerMultiColorFixed({
     return null;
   });
   const [currentPdfUrl, setCurrentPdfUrl] = useState(() => {
-    const url = pdfUrl || "/api/uploads/sample_fly_publication.pdf";
+    const url = pdfUrl || "/api/uploads/test_paper.pdf";
     debug.pdfHighlight(
       "🚀 COMPONENT: useState currentPdfUrl initialized to:",
       url,
