@@ -95,7 +95,10 @@ async def get_settings(db: Session = Depends(get_db)):
 
     response: Dict[str, Any] = {}
     for key, default_value in defaults.items():
-        raw_value = settings_dict.get(key, default_value)
+        raw_value = settings_dict.get(key)
+        if raw_value in (None, ""):
+            raw_value = default_value
+
         if key in SECRET_FIELDS:
             has_value = bool(raw_value)
             response[key] = SECRET_MASK if has_value else ""
