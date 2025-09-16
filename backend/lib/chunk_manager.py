@@ -261,11 +261,18 @@ class ChunkManager:
         Maintains semantic coherence within sections
         """
         section_chunks = []
-        current_section = None
+        current_section: Optional[str] = None
         current_elements = []
 
         for elem in elements:
-            elem_section = elem.section_path or "Unknown"
+            elem_section = elem.section_path
+
+            if not elem_section and getattr(elem, "type", "").lower() == "title":
+                # Use the heading text as the section label when section metadata
+                # is not provided. This keeps chunks aligned with document titles.
+                elem_section = (elem.text or "").strip() or "Title"
+            if not elem_section:
+                elem_section = current_section or "Unknown"
 
             if elem_section != current_section:
                 # Process previous section
@@ -315,13 +322,17 @@ class ChunkManager:
     def _prepare_elements_for_chunking(
         self, elements: List[UnstructuredElement]
     ) -> List[Element]:
-        """
-        Prepare elements for Unstructured chunking functions
-        This is a placeholder - in practice, we'd keep the original Element objects
-        """
-        # For now, return a mock list
-        # In the real implementation, we'd maintain the original Element objects
-        return []
+        """Prepare elements for Unstructured chunking functions."""
+
+        # The chunking helpers from Unstructured expect native Element objects.
+        # We persist the original element on each wrapper so we can recover it
+        # here without re-parsing the PDF.
+        prepared: List[Element] = []
+        for elem in elements:
+            raw = getattr(elem, "raw_element", None)
+            if raw is not None:
+                prepared.append(raw)
+        return prepared
 
     def _convert_to_chunks(
         self,
@@ -339,22 +350,32 @@ class ChunkManager:
 
             if isinstance(elem, dict):
                 text = elem.get("text", "")
-                page_start = elem.get("page", 1)
+                page_value = elem.get("page") or elem.get("page_start")
+                if isinstance(page_value, int) and page_value > 0:
+                    page_start = page_value
+                else:
+                    page_start = 1
                 page_end = page_start
-                section = elem.get("section", "")
+                section = elem.get("section") or elem.get("section_path") or ""
                 chunk_elements = elem.get("elements", []) or []
                 element_ids = [
                     e.element_id for e in chunk_elements if hasattr(e, "element_id")
                 ]
             elif hasattr(elem, "text"):
                 text = elem.text
-                page_start = (
-                    elem.metadata.page_number if hasattr(elem, "metadata") else 1
-                )
+                page_start = 1
+                if hasattr(elem, "metadata"):
+                    page_number = getattr(elem.metadata, "page_number", None)
+                    if not isinstance(page_number, int) or page_number <= 0:
+                        page_number = getattr(elem.metadata, "page", None)
+                    if isinstance(page_number, int) and page_number > 0:
+                        page_start = page_number
                 page_end = page_start
-                section = (
-                    elem.metadata.section if hasattr(elem.metadata, "section") else ""
-                )
+                section = ""
+                if hasattr(elem, "metadata"):
+                    section = getattr(elem.metadata, "section", None) or getattr(
+                        elem.metadata, "section_path", ""
+                    )
                 chunk_elements = [elem]
                 element_ids = [elem.id] if hasattr(elem, "id") else []
             else:

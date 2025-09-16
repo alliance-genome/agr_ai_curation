@@ -28,6 +28,7 @@ class UnstructuredElement:
     bbox: Optional[Dict[str, float]] = None
     parent_id: Optional[str] = None
     section_path: Optional[str] = None
+    raw_element: Optional[Element] = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_unstructured(cls, element: Element) -> "UnstructuredElement":
@@ -45,6 +46,7 @@ class UnstructuredElement:
             bbox=metadata.get("coordinates"),
             parent_id=metadata.get("parent_id"),
             section_path=metadata.get("section"),
+            raw_element=element,
         )
 
 
@@ -310,12 +312,13 @@ class PDFProcessor:
                 full_elements = partition_pdf(
                     filename=str(pdf_path), strategy="fast", include_page_breaks=True
                 )
-                page_numbers = set()
+                page_numbers: set[int] = set()
                 for elem in full_elements:
-                    if hasattr(elem, "metadata") and hasattr(
-                        elem.metadata, "page_number"
-                    ):
-                        page_numbers.add(elem.metadata.page_number)
+                    if not hasattr(elem, "metadata"):
+                        continue
+                    page_number = getattr(elem.metadata, "page_number", None)
+                    if isinstance(page_number, int) and page_number > 0:
+                        page_numbers.add(page_number)
                 page_count = max(page_numbers) if page_numbers else 1
             else:
                 page_count = 1

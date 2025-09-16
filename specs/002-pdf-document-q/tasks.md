@@ -61,7 +61,7 @@
 - [x] T022 Implement HNSW vector search in `backend/lib/vector_search.py` **[TDD-GREEN]**
 - [x] T023 [P] Write lexical search tests (<50ms) in `backend/tests/unit/test_lexical_search.py` **[TDD-RED]**
 - [x] T024 Implement tsvector lexical search in `backend/lib/lexical_search.py` **[TDD-GREEN]**
-- [ ] T025 [P] Create hybrid search orchestrator with result merging in `backend/lib/hybrid_search.py`
+- [x] T025 [P] Create hybrid search orchestrator with result merging in `backend/lib/hybrid_search.py`
 
 ### Reranker with MMR
 

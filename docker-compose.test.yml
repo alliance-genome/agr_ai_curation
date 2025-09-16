@@ -16,8 +16,8 @@ services:
       dockerfile: docker/Dockerfile.backend
     container_name: ai_curation_backend_test
     environment:
-      DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # gitleaks:allow
-      TEST_DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # gitleaks:allow
+      DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # pragma: allowlist secret # gitleaks:allow
+      TEST_DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # pragma: allowlist secret # gitleaks:allow
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PYTHONPATH: /app
@@ -28,6 +28,7 @@ services:
       - ./backend/lib:/app/lib
       - ./backend/tests:/app/tests
       - ./backend/tests/fixtures:/app/tests/fixtures
+      - ./test_paper.pdf:/app/test_paper.pdf:ro
     depends_on:
       postgres-test:
         condition: service_healthy
