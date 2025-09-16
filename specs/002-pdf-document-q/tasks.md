@@ -65,11 +65,11 @@
 
 ### Reranker with MMR
 
-- [ ] T026 [P] Write reranker tests with cross-encoder in `backend/tests/unit/test_reranker.py` **[TDD-RED]**
-- [ ] T027 Implement PydanticAI reranking agent in `backend/lib/reranker.py` **[TDD-GREEN]**
-- [ ] T028 [P] Write MMR diversification tests (λ=0.7) in `backend/tests/unit/test_mmr.py` **[TDD-RED]**
-- [ ] T029 Implement MMR algorithm in `backend/lib/mmr_diversifier.py` **[TDD-GREEN]**
-- [ ] T030 [P] Create reranker CLI with performance metrics in `backend/lib/cli/rerank_cli.py`
+- [x] T026 [P] Write reranker tests with cross-encoder in `backend/tests/unit/test_reranker.py` **[TDD-RED]**
+- [x] T027 Implement PydanticAI reranking agent in `backend/lib/reranker.py` **[TDD-GREEN]**
+- [x] T028 [P] Write MMR diversification tests (λ=0.7) in `backend/tests/unit/test_mmr.py` **[TDD-RED]**
+- [x] T029 Implement MMR algorithm in `backend/lib/mmr_diversifier.py` **[TDD-GREEN]**
+- [x] T030 [P] Create reranker CLI with performance metrics in `backend/lib/cli/rerank_cli.py`
 
 ## Priority 3: Multi-Agent RAG System (Week 2)
 
