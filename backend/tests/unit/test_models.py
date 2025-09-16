@@ -402,10 +402,10 @@ class TestPDFEmbedding:
         embed_v2 = PDFEmbedding(
             chunk_id=chunk.id,
             pdf_id=pdf.id,
-            embedding=[0.2] * 3072,
-            model_name="text-embedding-3-large",  # Different model to avoid unique constraint
+            embedding=[0.2] * 1536,  # Must be 1536 dimensions - hardcoded in model
+            model_name="text-embedding-ada-002",  # Different model to avoid unique constraint
             model_version="v1",
-            dimensions=3072,
+            dimensions=1536,  # Must match Vector(1536) in model
             # is_active=True,  # field not in model
         )
 
@@ -421,7 +421,7 @@ class TestPDFEmbedding:
 
         # Since we're not filtering by is_active, we'll get one of the embeddings
         assert active is not None
-        assert active.model_name in ["text-embedding-3-small", "text-embedding-3-large"]
+        assert active.model_name in ["text-embedding-3-small", "text-embedding-ada-002"]
 
 
 class TestChunkSearch:
