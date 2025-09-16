@@ -12,7 +12,9 @@ User (future)
   ├─< ChatSession >─── PDFDocument ──< PDFChunk ──< PDFEmbedding
   │         │              │              │
   │         └─< Message    │              └─< ChunkSearch (lexical)
-  │                        │
+  │         │              │
+  │         └─< LangGraphRun ──< LangGraphNodeRun
+  │                        │              │
   └─< SessionHistory       └─< PDFTable/PDFFigure
                            │
                            └─< OntologyMapping
@@ -271,6 +273,10 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
   - `mmr_lambda`: Float (0.7)
   - `use_ontology_expansion`: Boolean
   - `max_expansions`: Integer (5)
+  - `langgraph_workflow`: String (default `general_supervisor`)
+  - `langgraph_version`: String (semantic version)
+  - `checkpointer_strategy`: String (memory, redis, postgres)
+  - `enable_human_review`: Boolean
 - `session_stats`: JSONB
   - `total_questions`: Integer
   - `total_tokens_used`: Integer
@@ -278,6 +284,8 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
   - `avg_confidence_score`: Float
   - `low_confidence_answers`: Integer
   - `retrieval_stats`: dict
+  - `graph_runs_completed`: Integer
+  - `graph_retries`: Integer
 
 **Indexes**:
 
@@ -313,6 +321,8 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
     - `page`: Integer
     - `section`: String
     - `bbox`: dict
+  - `langgraph_workflow`: String
+  - `langgraph_node_path`: list[String]
 - `performance_metrics`: JSONB
   - `query_expansion_ms`: Integer
   - `vector_search_ms`: Integer
@@ -330,8 +340,74 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - session_id, sequence_number (compound, unique)
 - session_id, timestamp
 - confidence_score (for filtering)
+- GIN index on rag_context (jsonb_path_ops)
 
-### 10. EmbeddingJobs
+### 10. LangGraphRun
+
+**Purpose**: Persist each LangGraph supervisor execution per user question for replay and analytics
+
+**Fields**:
+
+- `id`: UUID (primary key)
+- `session_id`: UUID (foreign key to ChatSession)
+- `pdf_id`: UUID (foreign key to PDFDocument, nullable)
+- `workflow_name`: String (graph identifier such as `general_supervisor`)
+- `input_query`: Text (original user prompt)
+- `state_snapshot`: JSONB (final state from LangGraph checkpointer)
+- `status`: Enum (PENDING, RUNNING, COMPLETED, FAILED, INTERRUPTED)
+- `started_at`: DateTime with timezone
+- `completed_at`: DateTime with timezone
+- `latency_ms`: Integer
+- `specialists_invoked`: JSONB (list of node keys executed)
+- `debug_trace_path`: Text (optional local path to serialized trace)
+- `metadata`: JSONB (SSE channel, admin overrides, etc.)
+
+**Validation Rules**:
+
+- session_id must exist
+- latency_ms >= 0 when completed_at present
+- completed_at required when status in (COMPLETED, FAILED)
+- specialists_invoked defaults to []
+
+**Indexes**:
+
+- session_id, started_at DESC
+- status (partial index for RUNNING)
+- workflow_name
+
+### 11. LangGraphNodeRun
+
+**Purpose**: Track per-node execution for debugging, human approvals, and observability
+
+**Fields**:
+
+- `id`: UUID (primary key)
+- `graph_run_id`: UUID (foreign key to LangGraphRun, cascade delete)
+- `node_key`: String (LangGraph node identifier)
+- `node_type`: String (intent_router, pydantic_agent, tool, human_gate, etc.)
+- `input_state`: JSONB (subset entering node)
+- `output_state`: JSONB (state diff produced)
+- `status`: Enum (PENDING, RUNNING, COMPLETED, FAILED, SKIPPED)
+- `started_at`: DateTime with timezone
+- `completed_at`: DateTime with timezone
+- `latency_ms`: Integer
+- `error`: Text (stack trace or structured payload)
+- `deps_snapshot`: JSONB (payload handed to wrapped PydanticAI agents)
+
+**Validation Rules**:
+
+- graph_run_id must exist
+- node_key unique per graph_run_id
+- latency_ms >= 0 with completed_at
+- deps_snapshot required when node_type = 'pydantic_agent'
+
+**Indexes**:
+
+- graph_run_id, node_key (unique)
+- node_type (observability)
+- status (partial index for FAILED nodes)
+
+### 12. EmbeddingJobs
 
 **Purpose**: Postgres-based job queue for async processing
 
@@ -365,7 +441,7 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - pdf_id (for status checks)
 - worker_id, status (for worker management)
 
-### 11. EmbeddingConfig
+### 13. EmbeddingConfig
 
 **Purpose**: System configuration for embeddings and RAG
 
@@ -522,6 +598,49 @@ CREATE TABLE ontology_mappings (
     usage_count INTEGER DEFAULT 0,
     last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- LangGraph workflow executions
+CREATE TABLE langgraph_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    pdf_id UUID REFERENCES pdf_documents(id) ON DELETE SET NULL,
+    workflow_name VARCHAR(100) NOT NULL,
+    input_query TEXT NOT NULL,
+    state_snapshot JSONB DEFAULT '{}',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    completed_at TIMESTAMP WITH TIME ZONE,
+    latency_ms INTEGER,
+    specialists_invoked JSONB DEFAULT '[]',
+    debug_trace_path TEXT,
+    metadata JSONB DEFAULT '{}',
+    CHECK (latency_ms IS NULL OR latency_ms >= 0)
+);
+
+CREATE INDEX idx_langgraph_runs_session ON langgraph_runs(session_id, started_at DESC);
+CREATE INDEX idx_langgraph_runs_status ON langgraph_runs(status);
+CREATE INDEX idx_langgraph_runs_workflow ON langgraph_runs(workflow_name);
+
+-- LangGraph node executions
+CREATE TABLE langgraph_node_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    graph_run_id UUID NOT NULL REFERENCES langgraph_runs(id) ON DELETE CASCADE,
+    node_key VARCHAR(150) NOT NULL,
+    node_type VARCHAR(50) NOT NULL,
+    input_state JSONB DEFAULT '{}',
+    output_state JSONB DEFAULT '{}',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    completed_at TIMESTAMP WITH TIME ZONE,
+    latency_ms INTEGER,
+    error TEXT,
+    deps_snapshot JSONB,
+    CHECK (latency_ms IS NULL OR latency_ms >= 0)
+);
+
+CREATE UNIQUE INDEX idx_langgraph_node_unique ON langgraph_node_runs(graph_run_id, node_key);
+CREATE INDEX idx_langgraph_node_type ON langgraph_node_runs(node_type);
+CREATE INDEX idx_langgraph_node_status ON langgraph_node_runs(status);
 
 -- EmbeddingJobs for async processing
 CREATE TABLE embedding_jobs (

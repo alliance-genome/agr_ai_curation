@@ -32,12 +32,12 @@
 
 ## Summary
 
-Implement a multi-agent PDF Q&A system with specialized domain experts. Main orchestrator agent analyzes intent and streams conversational text. Based on user intent (disease, gene, pathway, etc.), orchestrator dispatches specialized pipelines that prepare data, then passes to domain-specific sub-agents for synthesis. Clean separation: Orchestrator (conversation) → Pipelines (data prep) → Specialized Agents (expert synthesis).
+Implement a LangGraph-orchestrated multi-agent PDF Q&A system with specialized domain experts. A LangGraph supervisor coordinates PydanticAI agents, maintaining state across nodes and enabling conditional routing. The supervisor analyzes intent and streams conversational text while dispatching specialized pipelines that prepare data, then passes to domain-specific sub-agents for synthesis. Clean separation: LangGraph Supervisor → Pipelines (data prep) → PydanticAI Specialists (expert synthesis).
 
 ## Technical Context
 
 **Language/Version**: Python 3.11+ (backend), TypeScript/React 18 (frontend)
-**Primary Dependencies**: FastAPI, PydanticAI, pgvector, Unstructured.io, OpenAI SDK, React + MUI
+**Primary Dependencies**: FastAPI, LangGraph, PydanticAI, pgvector, Unstructured.io, OpenAI SDK, React + MUI
 **Storage**: PostgreSQL with pgvector (HNSW) + tsvector for hybrid search, Postgres job queue, local filesystem
 **Database Strategy**: Fresh start - no migrations needed, recreate schema from SQLAlchemy models
 **Testing**: Pytest (backend), Vitest (frontend), performance benchmarks
@@ -51,11 +51,40 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 
 ### Multi-Agent System Design
 
+#### LangGraph Supervisor Graph
+
+- Top-level orchestrator built with `langgraph.graph.StateGraph`
+- Nodes wrap PydanticAI agents and tool functions
+- Checkpointer persists graph state per question (Postgres-backed)
+- Supports conditional routing + future parallel execution
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+workflow = StateGraph(PDFQAState)
+workflow.add_node("intent_router", analyze_intent)
+workflow.add_node("general_answer", run_general_agent)
+
+workflow.add_edge(START, "intent_router")
+workflow.add_conditional_edges(
+    "intent_router",
+    decide_route,
+    {
+        "general": "general_answer",
+        "specialist_fanout": "specialist_router",
+    },
+)
+
+workflow.add_edge("general_answer", END)
+general_supervisor = workflow.compile(checkpointer=postgres_checkpointer)
+```
+
 **Main Orchestrator Agent**:
 
 - `Agent[None, str]` - Streams conversational text only
-- Analyzes user intent to determine which specialist to dispatch
-- System prompt: Conversational assistant that coordinates specialists
+- Invoked via LangGraph `general_answer` node
+- System prompt: Conversational assistant that coordinates specialists and narrates LangGraph progress
+- Accesses graph state through injected dependencies for context + citations
 
 **Specialized Domain Agents**:
 
@@ -64,6 +93,7 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 - `Agent[DiseasePipelineOutput, DiseaseAnnotations]`
 - Expert in diseases, conditions, phenotypes
 - Receives pre-filtered disease data from pipeline
+- Triggered by LangGraph node `disease_specialist`
 - System prompt: Disease annotation specialist
 
 **Gene/Protein Agent**:
@@ -71,6 +101,7 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 - `Agent[GenePipelineOutput, GeneAnnotations]`
 - Expert in genes, proteins, mutations
 - Receives pre-filtered gene data from pipeline
+- Triggered by LangGraph node `gene_specialist`
 - System prompt: Molecular biology specialist
 
 **Pathway Agent**:
@@ -78,6 +109,7 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 - `Agent[PathwayPipelineOutput, PathwayAnnotations]`
 - Expert in biological pathways and interactions
 - Receives pre-filtered pathway data from pipeline
+- Triggered by LangGraph node `pathway_specialist`
 - System prompt: Systems biology specialist
 
 **Chemical/Drug Agent**:
@@ -85,18 +117,19 @@ Implement a multi-agent PDF Q&A system with specialized domain experts. Main orc
 - `Agent[ChemicalPipelineOutput, ChemicalAnnotations]`
 - Expert in compounds, drugs, treatments
 - Receives pre-filtered chemical data from pipeline
+- Triggered by LangGraph node `chemical_specialist`
 - System prompt: Pharmacology specialist
 
 ### Pipeline Architecture
 
 ```python
-# Example: Disease Pipeline Flow
-@orchestrator.tool
-async def find_disease_annotations(ctx: RunContext, query: str) -> str:
+# Example: Disease Pipeline Flow (LangGraph node wrapping PydanticAI agent)
+@workflow.node("disease_pipeline")
+async def find_disease_annotations(state: PDFQAState) -> str:
     # 1. Run disease pipeline (no LLM)
     pipeline_output = await disease_pipeline.run(
-        document_id=ctx.document_id,
-        query=query
+        document_id=state.document_id,
+        query=state.query
     )
 
     # 2. Dispatch to disease specialist agent
@@ -396,12 +429,13 @@ The /tasks command will generate approximately 50-55 prioritized tasks following
    - Pre-filtering and relevance scoring
    - No LLM costs during preparation
 
-9. **Orchestrator Integration** (Tasks 41-45):
-   - Intent detection and routing
-   - Agent dispatch logic
-   - Result formatting for streaming
-   - Error handling and validation
-   - Full pipeline integration tests
+9. **LangGraph Orchestrator Integration** (Tasks 41-45 & 61-65):
+   - Define LangGraph state + checkpointer
+   - Wrap general orchestrator in `StateGraph`
+   - Intent detection and routing through graph edges
+   - SSE-friendly runner adapter for streaming
+   - Persist run/node telemetry + replay tooling
+   - Full pipeline integration tests using `app.ainvoke`
 
 ### Priority 4: API & Frontend (Tasks 41-50) - Week 2-3
 
@@ -444,7 +478,7 @@ Example: "031. P3-PydanticAI: Create reranking agent - Implementation"
 **Critical Path Dependencies**:
 
 ```
-Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipeline
+Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipeline → LangGraph Supervisor
                 ↘ Job Queue → PDF Processing ↗
 ```
 
@@ -452,7 +486,7 @@ Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipe
 
 - P1: Database setup || PDF processor || Job queue
 - P2: Vector search || Lexical search || Query expansion
-- P3: All PydanticAI agents can be developed in parallel
+- P3: PydanticAI agents || LangGraph scaffolding (state + nodes)
 - P4: API endpoints || Frontend components
 
 **Risk Mitigation**:
@@ -461,6 +495,7 @@ Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipe
 - Simple confidence threshold before complex scoring
 - Manual reranking before automated cross-encoder
 - Progress UI before job queue if needed
+- Fallback to direct PydanticAI execution if LangGraph supervisor fails (feature flag)
 
 **Success Metrics for Each Priority**:
 
@@ -469,8 +504,9 @@ Database Setup → Embedding Service → Hybrid Search → Reranker → RAG Pipe
 - P3: Confidence scoring prevents bad answers
 - P4: End-to-end flow works
 - P5: All metrics visible
+- LangGraph: Supervisor graph persists state, exposes telemetry, passes replay tests
 
-**Estimated Output**: 60 tasks with clear priorities and dependencies
+**Estimated Output**: 65 tasks with clear priorities and dependencies
 
 **IMPORTANT**: This phase is executed by the /tasks command, NOT by /plan
 

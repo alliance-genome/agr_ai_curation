@@ -1,8 +1,8 @@
-# Quick Start Guide: Enhanced PDF Q&A with Hybrid RAG
+# Quick Start Guide: LangGraph-Orchestrated PDF Q&A with Hybrid RAG
 
-**Feature**: PDF Document Q&A with Hybrid Search, Reranking, and Guardrails
+**Feature**: LangGraph-supervised PDF Document Q&A with Hybrid Search, Reranking, and Guardrails
 **Version**: 2.0.0
-**Prerequisites**: Docker, PostgreSQL 16+, pgvector, Python 3.11+, Node.js 20+
+**Prerequisites**: Docker, PostgreSQL 16+, pgvector, Python 3.11+, LangGraph (Python library), Node.js 20+
 
 ## 🚀 5-Minute Setup
 
@@ -27,6 +27,9 @@ cp .env.example .env
 # Required settings in .env:
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...  # Optional for Gemini models
+# LangGraph supervisor configuration
+LANGGRAPH_WORKFLOW=general_supervisor
+LANGGRAPH_CHECKPOINTER_URL=postgresql+psycopg://<db_user>:<db_password>@postgres:5432/ai_curation_db
 # Note: DATABASE_URL is set automatically by docker-compose.yml
 ```
 
@@ -46,7 +49,7 @@ from app.models import Base
 from app.database import engine
 # CAUTION: drop_all() will DELETE ALL DATA - ensure this is not production!
 Base.metadata.drop_all(engine)  # Clean start - DESTROYS ALL DATA
-Base.metadata.create_all(engine)  # Create all tables with indexes
+Base.metadata.create_all(engine)  # Create all tables with indexes (including langgraph_runs/langgraph_node_runs)
 print('Database schema created successfully!')
 "
 ```
@@ -182,21 +185,19 @@ python -m backend.lib.query_expander load \
   --file=ontology_mappings.csv
 ```
 
-### RAG Orchestrator (PydanticAI Pipeline)
+### LangGraph Supervisor (PydanticAI Inside Graph)
 
 ```bash
-# Full RAG pipeline
-echo "What are the main findings?" | python -m backend.lib.rag_orchestrator question \
+# Invoke LangGraph supervisor for a single question (non-streaming dry run)
+echo "What are the main findings?" | python -m backend.app.orchestration.general_supervisor \
+  --workflow=general_supervisor \
+  --session-id=<uuid> \
   --pdf-id=<uuid> \
-  --confidence-threshold=0.7 \
-  --include-tables \
-  --format=json
+  --emit-state
 
-# Test with custom config
-python -m backend.lib.rag_orchestrator question \
-  --pdf-id=<uuid> \
-  --config=rag_config.json \
-  < question.txt
+# Replay a stored LangGraph run (renders JSON trace to stdout for local inspection)
+python -m backend.app.orchestration.langgraph_replay \
+  --graph-run-id=<langgraph_run_uuid>
 ```
 
 ### Job Queue (Postgres-Based)
@@ -530,6 +531,21 @@ curl http://localhost:8002/api/v1/session/abc123/cost
 }
 ```
 
+### LangGraph Run Telemetry
+
+```bash
+# Inspect recent LangGraph runs
+docker compose exec backend psql -U curation_user -d ai_curation_db -c "
+SELECT workflow_name, status, latency_ms, started_at
+FROM langgraph_runs
+ORDER BY started_at DESC
+LIMIT 5;
+"
+
+# Tail LangGraph node execution logs
+docker compose logs -f backend | rg "langgraph"
+```
+
 ## 🎯 Success Criteria
 
 1. ✅ Hybrid search combines vector + lexical effectively
@@ -542,6 +558,7 @@ curl http://localhost:8002/api/v1/session/abc123/cost
 8. ✅ Deduplication prevents redundant processing
 9. ✅ Performance meets all latency targets
 10. ✅ All PydanticAI agents working correctly
+11. ✅ LangGraph supervisor persists runs and supports replay/debugging
 
 ## 📚 Next Steps
 
@@ -555,6 +572,7 @@ curl http://localhost:8002/api/v1/session/abc123/cost
 8. Add confidence scoring
 9. Implement job queue with LISTEN/NOTIFY
 10. Create monitoring dashboard
+11. Wire SSE streaming through LangGraph runner
 
 ---
 

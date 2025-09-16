@@ -1,10 +1,10 @@
-# Multi-Agent RAG Architecture with Specialized Domain Experts
+# LangGraph-Orchestrated Multi-Agent RAG Architecture
 
 **Date**: 2025-01-14 | **Version**: 2.0.0
 
 ## Overview
 
-This document specifies the complete multi-agent RAG architecture with specialized domain experts. The main orchestrator agent analyzes user intent and streams conversational text. Based on the detected intent (disease, gene, pathway, etc.), it dispatches domain-specific pipelines that prepare data, then passes to specialized sub-agents for expert synthesis.
+This document specifies the complete multi-agent RAG architecture powered by LangGraph with specialized domain experts. A LangGraph supervisor orchestrates user intent detection, stateful routing, and collaboration between PydanticAI agents. Based on detected intent (disease, gene, pathway, etc.), the supervisor dispatches domain-specific pipelines that prepare data, then passes to specialized sub-agents for expert synthesis while maintaining shared graph state for citations and follow-ups.
 
 ## Core Architecture Principles
 
@@ -12,6 +12,39 @@ This document specifies the complete multi-agent RAG architecture with specializ
 2. **Domain Expertise**: Each sub-agent is an expert in its biological domain
 3. **Pipeline-First**: Data preparation happens in pipelines before agent synthesis
 4. **Clear Hierarchy**: Orchestrator (conversation) → Pipelines (data prep) → Agents (synthesis)
+5. **Graph-Orchestrated State**: LangGraph maintains conversation + routing context with checkpointed state
+
+## LangGraph Supervisor Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    LangGraph Supervisor                      │
+│         (general_supervisor workflow with checkpointing)     │
+└──────────┬────────────────────────────────────┬─────────────┘
+           │                                    │
+           ▼                                    ▼
+    ┌──────────────┐                    ┌──────────────┐
+    │ Intent Router│                    │State Manager │
+    └──────┬───────┘                    └──────┬───────┘
+           │                                    │
+    ┌──────▼────────────────────────────────────▼──────┐
+    │              LangGraph StateGraph                  │
+    │                                                    │
+    │  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
+    │  │Disease  │  │  Gene   │  │Pathway  │            │
+    │  │  Node   │  │  Node   │  │  Node   │            │
+    │  └────┬────┘  └────┬────┘  └────┬────┘            │
+    │       │            │            │                 │
+    │  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐            │
+    │  │PydanticAI│  │PydanticAI│  │PydanticAI│          │
+    │  │  Agent  │  │  Agent  │  │  Agent  │            │
+    │  └─────────┘  └─────────┘  └─────────┘            │
+    └────────────────────────────────────────────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Pipelines  │
+                    └──────────────┘
+```
 
 ## Example User Interaction
 
@@ -24,6 +57,27 @@ _[Behind the scenes: Tool calls hybrid_search_service, reranking_service, then r
 **Orchestrator** (continues streaming): "I found several important findings about BRCA1 in the paper. The study identifies three key mutations in the BRCA1 gene that are associated with increased cancer risk. First, the mutation at position 1234..."
 
 The orchestrator maintains the conversation flow while all technical operations happen invisibly in the background.
+
+## Graph State Definition
+
+```python
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field
+
+class PDFQAState(BaseModel):
+    session_id: str
+    pdf_id: str
+    query: str
+    intent: Optional[Literal["general", "disease", "gene", "pathway", "chemical", "complex"]] = None
+    retrieved_chunks: list[PDFChunk] = Field(default_factory=list)
+    specialists_invoked: List[str] = Field(default_factory=list)
+    draft_answer: Optional[str] = None
+    citations: list[Citation] = Field(default_factory=list)
+    followup_questions: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+```
+
+The LangGraph supervisor checkpoint persists `PDFQAState` between nodes, enabling retries, audits, and human-in-the-loop interruptions.
 
 ## Agent Hierarchy
 
@@ -40,7 +94,10 @@ main_agent = Agent(
     explaining what you're doing as you coordinate various tools and agents.
 
     Your role is purely conversational - you stream text responses to keep
-    the user informed while specialized tools handle all actual operations."""
+    the user informed while specialized tools handle all actual operations.
+
+    Reference the shared LangGraph state so the user knows which specialists
+    were consulted and cite evidence already loaded in state.citations."""
 )
 ```
 

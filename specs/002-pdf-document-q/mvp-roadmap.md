@@ -12,22 +12,22 @@ This document outlines the **minimum set of tasks** required to deliver a workin
 - Hybrid search (vector + lexical) and reranker + MMR implementation
 - Job queue infrastructure and CLI tooling
 
-## Goal: Minimal Chat Flow
+## Goal: Minimal LangGraph Chat Flow
 
-Deliver “upload PDF → ask question → streamed answer with citations” without domain-specific agent tree.
+Deliver “upload PDF → ask question → streamed answer with citations” orchestrated by a LangGraph supervisor that wraps our existing PydanticAI agents, keeping the specialist branches optional for later.
 
 ## MVP Scope
 
-### 1. General RAG Orchestrator
+### 1. LangGraph Supervisor Orchestrator
 
 - [x] Implement simple pipeline output model (`GeneralPipelineOutput`) and supporting data classes.
-- [x] Implement main orchestrator agent (PydanticAI) that:
-  1. Accepts session+question
-  2. Runs the general pipeline (placeholder uses injected dependencies for now)
-  3. Prompts the selected LLM using top chunks and returns answer + citations
-- [x] Cover with unit tests for pipeline aggregation and orchestrator logic (integration test still pending once API wiring exists).
+- [x] Implement general-purpose PydanticAI answer agent reused inside LangGraph nodes.
+- [ ] Wrap the existing orchestrator flow in a LangGraph `general_supervisor` graph with explicit state class + checkpointer.
+- [ ] Add LangGraph `IntentRouter` node (currently routes to general path only) so we can later expand to specialists.
+- [ ] Capture LangGraph execution metadata (specialists invoked, timing) and persist via new tables.
+- [ ] Extend unit tests to cover LangGraph node execution lifecycle (mocking parallel edges until implemented).
 
-Mapping to tasks.md: tracked via T031–T045 (initial subset—general pipeline wiring + end-to-end integration test still outstanding).
+Mapping to tasks.md: tracked via T031–T045 plus new LangGraph entries T061–T065 for supervisor graph wiring.
 
 ### 2. Essential API Endpoints
 
@@ -35,8 +35,9 @@ Implement and test (FastAPI):
 
 - [x] `POST /pdf` – upload PDF, persist metadata, enqueue processing (T047)
 - [x] `POST /sessions` – create chat sessions tied to a PDF (T048 simplified)
-- [x] `POST /sessions/{id}/question` – call orchestrator and return answer JSON (T049; streaming upgrade pending)
+- [x] `POST /sessions/{id}/question` – call LangGraph supervisor adapter and return answer JSON (T049; streaming upgrade pending)
 - [ ] (Optional) `GET /jobs/{id}` – track embedding jobs (T050)
+- [ ] Upgrade `/sessions/{id}/question` to SSE once LangGraph edges stream tokens (depends on T064).
 
 Contract tests from T046 should accompany these endpoints.
 
@@ -47,16 +48,19 @@ Update React components to hit new endpoints:
 - [x] `PDFUpload` component: call `/pdf`, show progress/state (T052). Write component test (T051).
 - [x] `ChatInterface`: manage session, send questions, render answer/citations via REST (T053/T054).
 - [ ] Citation UI (T055) can be simplified or deferred; basic inline citation listing is acceptable for MVP.
+- [ ] Surface LangGraph execution metadata in chat header (e.g., specialist badges once available).
 
 ### 4. Configuration & Dependencies
 
 - Ensure LLM credentials (OpenAI/Gemini) are configurable via `.env` **and stored/edited through the admin panel** (`settings` table).
 - Use the OpenAI embeddings API for both PDF ingestion and query-time retrieval, with model name/version controlled via admin settings (defaults seeded from `.env`).
-- Document minimal setup in `quickstart.md` updates (env variables, docker build).
+- Add LangGraph workflow + version controls to the admin panel (select workflow, toggle human-gate, choose checkpointer backend).
+- Document minimal setup in `quickstart.md` updates (env variables, docker build, LangGraph services).
 
 ### 5. Smoke Test / Validation
 
 - Add integration test: upload fixture PDF → wait for embedding job → post question → assert non-empty answer with citation list.
+- Add LangGraph supervisor test calling `general_supervisor.app.ainvoke` with mock dependencies to ensure state persists.
 - Confirm CLI entry (`python -m backend.lib.reranker rerank`) still works.
 
 ## Nice-to-Have After MVP
@@ -68,9 +72,9 @@ Update React components to hit new endpoints:
 
 ## Summary Sequence
 
-1. Build general pipeline output model + orchestrator (single agent path).
-2. Expose upload/session/question endpoints with tests.
-3. Hook frontend Upload & Chat components to the new API.
-4. Run end-to-end test to confirm question answering works.
+1. Build general pipeline output model + LangGraph-wrapped PydanticAI orchestrator.
+2. Expose upload/session/question endpoints with tests that call the LangGraph supervisor adapter.
+3. Hook frontend Upload & Chat components to the new API and surface supervisor metadata.
+4. Run end-to-end test (including LangGraph ainvoke) to confirm question answering works.
 
 Once these are complete, the chatbot will answer questions about uploaded PDFs, providing a true MVP before layering in domain-specific or monitoring features.
