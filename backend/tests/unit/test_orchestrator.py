@@ -7,7 +7,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.main_orchestrator import GeneralOrchestrator, OrchestratorConfig
+from app.agents.main_orchestrator import (
+    GeneralOrchestrator,
+    OrchestratorConfig,
+    OrchestratorDeps,
+    GeneralAnswer,
+)
 from app.agents.pipeline_models import GeneralPipelineChunk, GeneralPipelineOutput
 
 
@@ -21,16 +26,18 @@ class FakePipeline:
         return self._output
 
 
-class FakeLLM:
-    def __init__(self, response: str) -> None:
-        self._response = response
+class FakeAgent:
+    def __init__(self, answer: str) -> None:
+        self._answer = answer
         self.calls: List[dict] = []
 
-    async def generate(
-        self, *, prompt: str, context: List[GeneralPipelineChunk]
-    ) -> str:
-        self.calls.append({"prompt": prompt, "context": context})
-        return self._response
+    async def run(self, prompt: str, *, deps: OrchestratorDeps):
+        self.calls.append({"prompt": prompt, "deps": deps})
+
+        class Result:
+            output = GeneralAnswer(answer=self._answer)
+
+        return Result()
 
 
 @pytest.mark.asyncio
@@ -50,17 +57,17 @@ async def test_general_orchestrator_runs_pipeline_and_llm():
         ],
     )
     pipeline = FakePipeline(pipeline_output)
-    llm = FakeLLM("BRCA1 repairs DNA.")
+    agent = FakeAgent("BRCA1 repairs DNA.")
 
     orchestrator = GeneralOrchestrator(
         pipeline=pipeline,
-        llm=llm,
+        agent=agent,
         config=OrchestratorConfig(confidence_threshold=0.0),
     )
 
     result = await orchestrator.answer_question(pdf_id=pdf_id, query="What is BRCA1?")
 
     assert pipeline.calls[0][0] == "What is BRCA1?"
-    assert "BRCA1" in llm.calls[0]["prompt"]
+    assert "BRCA1" in agent.calls[0]["prompt"]
     assert result.answer == "BRCA1 repairs DNA."
     assert result.citations[0]["page"] == 3
