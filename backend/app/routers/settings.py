@@ -9,6 +9,7 @@ import json
 
 SECRET_MASK = "************"
 SECRET_FIELDS = {"openai_api_key", "anthropic_api_key"}
+SECRET_PLACEHOLDER_VALUES = {"your_anthropic_api_key_here"}
 
 
 def _coerce_value(key: str, value: Any) -> Any:
@@ -100,6 +101,9 @@ async def get_settings(db: Session = Depends(get_db)):
             raw_value = default_value
 
         if key in SECRET_FIELDS:
+            if isinstance(raw_value, str) and raw_value in SECRET_PLACEHOLDER_VALUES:
+                raw_value = ""
+
             has_value = bool(raw_value)
             response[key] = SECRET_MASK if has_value else ""
             response[f"{key}_masked"] = has_value
