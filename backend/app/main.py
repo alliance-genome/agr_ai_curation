@@ -5,7 +5,14 @@ import logging
 import os
 from pathlib import Path
 
-from .routers import agents, entities, settings, health, test_highlights
+from .routers import (
+    agents,
+    entities,
+    settings,
+    health,
+    test_highlights,
+    rag_endpoints,
+)
 from .database import engine
 from .models import Base  # Import Base from models.py now
 from .config import get_settings
@@ -57,6 +64,7 @@ app.include_router(
 app.include_router(entities.router, prefix="/entities", tags=["entities"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(test_highlights.router, prefix="/test", tags=["testing"])
+app.include_router(rag_endpoints.router)
 
 
 @app.on_event("startup")

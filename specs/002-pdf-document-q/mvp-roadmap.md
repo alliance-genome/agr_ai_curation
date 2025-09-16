@@ -34,8 +34,8 @@ Mapping to tasks.md: tracked via T031–T045 (initial subset—general pipeline 
 Implement and test (FastAPI):
 
 - [ ] `POST /pdf` – upload PDF, persist metadata, enqueue processing (T047)
-- [ ] `POST /sessions` (and optionally `GET /sessions/{id}`) – create/retrieve conversation sessions (T048 simplified)
-- [ ] `POST /sessions/{id}/question` – call orchestrator and stream response (T049)
+- [x] `POST /sessions` – create chat sessions tied to a PDF (T048 simplified)
+- [x] `POST /sessions/{id}/question` – call orchestrator and return answer JSON (T049; streaming upgrade pending)
 - [ ] (Optional) `GET /jobs/{id}` – track embedding jobs (T050)
 
 Contract tests from T046 should accompany these endpoints.

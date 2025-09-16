@@ -102,8 +102,8 @@
 
 - [ ] T046 [P] Write contract tests for all 12 endpoints in `backend/tests/contract/test_api_contracts.py` **[TDD-RED]**
 - [ ] T047 Implement PDF upload endpoint with deduplication in `backend/app/api/pdf_endpoints.py` **[TDD-GREEN]**
-- [ ] T048 Implement session management endpoints in `backend/app/api/session_endpoints.py` **[TDD-GREEN]**
-- [ ] T049 Implement RAG question endpoint with streaming in `backend/app/api/rag_endpoints.py` **[TDD-GREEN]**
+- [x] T048 Implement session management endpoints in `backend/app/api/session_endpoints.py` **[TDD-GREEN]**
+- [x] T049 Implement RAG question endpoint with streaming in `backend/app/api/rag_endpoints.py` **[TDD-GREEN]**
 - [ ] T050 Implement job management endpoints in `backend/app/api/job_endpoints.py` **[TDD-GREEN]**
 
 ### React Components
