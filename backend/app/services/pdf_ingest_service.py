@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
-from typing import Iterable
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
+from sqlalchemy.sql import func
 from sqlalchemy.orm import Session
 
-from app.models import ExtractionMethod, PDFDocument, PDFChunk
+from app.models import (
+    ExtractionMethod,
+    PDFDocument,
+    PDFChunk,
+    Settings as SettingsModel,
+)
 from lib.pdf_processor import PDFProcessor, ExtractionResult
 from lib.chunk_manager import ChunkManager, ChunkResult, ChunkingStrategy
 from lib.embedding_service import EmbeddingService
@@ -35,20 +41,69 @@ class PDFIngestService:
         self._embedding_service = embedding_service
         self._settings = get_settings()
 
-    def ingest(self, *, file_path: Path, original_filename: str) -> UUID:
+    def ingest(self, *, file_path: Path, original_filename: str) -> tuple[UUID, bool]:
+        extraction_strategy = self._get_extraction_strategy()
+        file_hash = self._hash_file(file_path)
+        existing_pdf = self._find_existing_document(file_hash=file_hash)
+        if existing_pdf:
+            return existing_pdf, False
+
         extraction = self._pdf_processor.extract(
-            str(file_path), strategy="fast", extract_tables=True, extract_figures=True
+            str(file_path),
+            strategy=extraction_strategy,
+            extract_tables=True,
+            extract_figures=True,
         )
-        pdf_id = self._store_document(file_path, original_filename, extraction)
+        pdf_id, created = self._store_document(
+            file_path, original_filename, extraction, file_hash=file_hash
+        )
+        if not created:
+            return pdf_id, False
+
         self._chunk_pdf(pdf_id=pdf_id, extraction=extraction)
         self._embedding_service.embed_pdf(
             pdf_id=pdf_id, model_name=self._settings.embedding_model_name
         )
-        return pdf_id
+        return pdf_id, True
+
+    def _get_extraction_strategy(self) -> str:
+        """Return the configured extraction strategy with validation."""
+
+        allowed = {"fast", "hi_res", "ocr_only"}
+        session: Session = self._session_factory()
+        try:
+            record = (
+                session.query(SettingsModel)
+                .filter(SettingsModel.key == "pdf_extraction_strategy")
+                .first()
+            )
+        finally:
+            session.close()
+
+        if record and record.value:
+            raw = record.value
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                loaded = raw
+
+            if isinstance(loaded, str):
+                candidate = loaded.strip().lower()
+                if candidate in allowed:
+                    return candidate
+
+        fallback = getattr(self._settings, "pdf_extraction_strategy", "fast")
+        fallback_normalized = str(fallback).strip().lower()
+        return fallback_normalized if fallback_normalized in allowed else "fast"
 
     def _store_document(
-        self, file_path: Path, original_filename: str, extraction: ExtractionResult
-    ) -> UUID:
+        self,
+        file_path: Path,
+        original_filename: str,
+        extraction: ExtractionResult,
+        *,
+        file_hash: str,
+    ) -> tuple[UUID, bool]:
         session: Session = self._session_factory()
         try:
             normalized_hash = extraction.content_hash_normalized or self._hash_text(
@@ -60,9 +115,11 @@ class PDFIngestService:
                 .first()
             )
             if existing:
-                return existing.id
-
-            file_hash = extraction.content_hash or self._hash_file(file_path)
+                if existing.file_hash != file_hash:
+                    existing.file_hash = file_hash
+                existing.last_accessed = func.now()
+                session.commit()
+                return existing.id, False
 
             extraction_method = self._map_strategy(extraction.processing_strategy)
 
@@ -83,7 +140,23 @@ class PDFIngestService:
             session.add(document)
             session.commit()
             session.refresh(document)
-            return document.id
+            return document.id, True
+        finally:
+            session.close()
+
+    def _find_existing_document(self, *, file_hash: str) -> UUID | None:
+        session: Session = self._session_factory()
+        try:
+            document = (
+                session.query(PDFDocument)
+                .filter(PDFDocument.file_hash == file_hash)
+                .first()
+            )
+            if document:
+                document.last_accessed = func.now()
+                session.commit()
+                return document.id
+            return None
         finally:
             session.close()
 
@@ -168,8 +241,11 @@ class PDFIngestService:
 def get_pdf_ingest_service() -> PDFIngestService:
     from app.services.embedding_service_factory import get_embedding_service
 
+    settings = get_settings()
     return PDFIngestService(
-        pdf_processor=PDFProcessor(default_strategy="fast"),
+        pdf_processor=PDFProcessor(
+            default_strategy=getattr(settings, "pdf_extraction_strategy", "fast")
+        ),
         chunk_manager=ChunkManager(),
         embedding_service=get_embedding_service(),
     )

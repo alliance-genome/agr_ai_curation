@@ -68,6 +68,7 @@ class SettingsUpdate(BaseModel):
     hybrid_max_results: int | None = None
     mmr_lambda: float | None = None
     uploads_dir: str | None = None
+    pdf_extraction_strategy: str | None = None
 
 
 @router.get("/")
@@ -110,6 +111,7 @@ async def get_settings(db: Session = Depends(get_db)):
         "hybrid_max_results": getattr(config, "hybrid_max_results", 100),
         "mmr_lambda": getattr(config, "mmr_lambda", 0.7),
         "uploads_dir": getattr(config, "uploads_dir", "/tmp/uploads"),
+        "pdf_extraction_strategy": getattr(config, "pdf_extraction_strategy", "fast"),
     }
 
     response: Dict[str, Any] = {}

@@ -3,20 +3,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
 
 from app.database import SessionLocal, engine as db_engine
-from app.models import Base, PDFDocument, PDFChunk, ChunkSearch
+from app.models import (
+    Base,
+    PDFDocument,
+    PDFChunk,
+    ChunkSearch,
+    Settings as SettingsModel,
+)
 from app.services.pdf_ingest_service import PDFIngestService
 from lib.chunk_manager import Chunk, ChunkResult, ChunkingStrategy
 from lib.pdf_processor import ExtractionResult, UnstructuredElement
 
 
 class FakePDFProcessor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
     def extract(self, path: str, **kwargs):
+        self.calls.append(kwargs)
+        strategy = kwargs.get("strategy", "fast")
         element = UnstructuredElement(
             type="NarrativeText",
             text="Sample chunk text",
@@ -37,7 +49,7 @@ class FakePDFProcessor:
             figures=[],
             extraction_time_ms=100.0,
             file_size_bytes=100,
-            processing_strategy="fast",
+            processing_strategy=strategy,
             content_hash="hash1",
             content_hash_normalized="normhash",
         )
@@ -88,7 +100,7 @@ def setup_db():
     try:
         session.execute(
             text(
-                "TRUNCATE TABLE chunk_search, pdf_embeddings, pdf_chunks, pdf_documents RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE chunk_search, pdf_embeddings, pdf_chunks, pdf_documents, settings RESTART IDENTITY CASCADE"
             )
         )
         session.commit()
@@ -114,7 +126,8 @@ def tmp_pdf(tmp_path: Path) -> Path:
 
 
 def test_ingest_persists_document_and_chunks(service, tmp_pdf):
-    pdf_id = service.ingest(file_path=tmp_pdf, original_filename="sample.pdf")
+    pdf_id, created = service.ingest(file_path=tmp_pdf, original_filename="sample.pdf")
+    assert created is True
 
     session = SessionLocal()
     try:
@@ -134,3 +147,57 @@ def test_ingest_persists_document_and_chunks(service, tmp_pdf):
         assert len(search_entries) == 1
     finally:
         session.close()
+
+
+def test_ingest_skips_duplicate_pdf(service, tmp_pdf):
+    first_id, created = service.ingest(
+        file_path=tmp_pdf, original_filename="sample.pdf"
+    )
+    assert created is True
+
+    second_id, created_again = service.ingest(
+        file_path=tmp_pdf, original_filename="sample.pdf"
+    )
+
+    assert first_id == second_id
+    assert created_again is False
+
+    session = SessionLocal()
+    try:
+        chunks = session.query(PDFChunk).filter(PDFChunk.pdf_id == first_id).all()
+        assert len(chunks) == 1
+    finally:
+        session.close()
+
+    # Embedding service should not be invoked again for duplicates.
+    assert len(service._embedding_service.calls) == 1  # type: ignore[attr-defined]
+
+
+def test_ingest_uses_configured_extraction_strategy(service, tmp_pdf):
+    session = SessionLocal()
+    try:
+        session.add(SettingsModel(key="pdf_extraction_strategy", value="hi_res"))
+        session.commit()
+    finally:
+        session.close()
+
+    service.ingest(file_path=tmp_pdf, original_filename="sample.pdf")
+
+    calls = getattr(service._pdf_processor, "calls", [])
+    assert calls
+    assert calls[-1].get("strategy") == "hi_res"
+
+
+def test_ingest_falls_back_to_default_strategy(service, tmp_pdf):
+    session = SessionLocal()
+    try:
+        session.add(SettingsModel(key="pdf_extraction_strategy", value="not_real"))
+        session.commit()
+    finally:
+        session.close()
+
+    service.ingest(file_path=tmp_pdf, original_filename="sample.pdf")
+
+    calls = getattr(service._pdf_processor, "calls", [])
+    assert calls
+    assert calls[-1].get("strategy") == "fast"

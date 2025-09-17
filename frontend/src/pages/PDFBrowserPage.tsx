@@ -30,6 +30,8 @@ import {
   Description,
   Brightness4,
   Brightness7,
+  DeleteForever,
+  OpenInNew,
 } from "@mui/icons-material";
 import { useTheme } from "@mui/material/styles";
 import { useNavigate } from "react-router-dom";
@@ -95,6 +97,12 @@ interface EmbeddingSummaryRow {
   model_name: string;
   count: number;
   latest_created_at?: string;
+  model_version?: string | null;
+  dimensions?: number | null;
+  total_tokens?: number | null;
+  vector_memory_bytes?: number | null;
+  estimated_cost_usd?: number | null;
+  avg_processing_time_ms?: number | null;
 }
 
 interface PDFBrowserPageProps {
@@ -106,9 +114,23 @@ function formatDate(value?: string) {
   return new Date(value).toLocaleString();
 }
 
+function formatBytes(bytes?: number) {
+  if (!bytes) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
 const TABS = [
   "Overview",
   "Chunks",
+  "Embeddings",
   "LangGraph Runs",
   "LangGraph Nodes",
 ] as const;
@@ -126,7 +148,9 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
   >([]);
   const [tabIndex, setTabIndex] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [deleting, setDeleting] = useState<boolean>(false);
   const theme = useTheme();
   const navigate = useNavigate();
 
@@ -142,6 +166,7 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
         setError(message);
+        setSuccessMessage(null);
       }
     };
 
@@ -151,6 +176,7 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
   const handleSelectDocument = async (doc: DocumentSummary) => {
     setLoading(true);
     setError(null);
+    setSuccessMessage(null);
     setSelectedRun(null);
     try {
       const [detailResp, chunksResp, runsResp, embeddingsResp] =
@@ -178,6 +204,65 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
     }
   };
 
+  const handleLoadDocument = () => {
+    if (!selectedDocument) {
+      return;
+    }
+    // Navigate to home page with PDF ID as parameter
+    navigate(`/?pdf=${selectedDocument.id}`);
+  };
+
+  const handleDeleteDocument = async () => {
+    if (!selectedDocument || deleting) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedDocument.filename}? This removes the PDF and all derived data.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleting(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/pdf-data/documents/${selectedDocument.id}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 404
+            ? "PDF document not found"
+            : "Failed to delete PDF document",
+        );
+      }
+
+      setDocuments((docs) =>
+        docs.filter((doc) => doc.id !== selectedDocument.id),
+      );
+      setSelectedDocument(null);
+      setSelectedRun(null);
+      setChunks([]);
+      setRuns([]);
+      setNodes([]);
+      setEmbeddingSummary([]);
+      setTabIndex(0);
+      setSuccessMessage(`Deleted ${selectedDocument.filename}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setError(message);
+      setSuccessMessage(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleSelectRun = async (run: LangGraphRunRow) => {
     setSelectedRun(run.id);
     try {
@@ -189,7 +274,7 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
       }
       const payload: LangGraphNodeRow[] = await response.json();
       setNodes(payload);
-      setTabIndex(3);
+      setTabIndex(4);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
@@ -287,6 +372,16 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
             </Alert>
           )}
 
+          {successMessage && (
+            <Alert
+              severity="success"
+              sx={{ mb: 2 }}
+              onClose={() => setSuccessMessage(null)}
+            >
+              {successMessage}
+            </Alert>
+          )}
+
           {!selectedDocument && !loading && (
             <Typography variant="body1" color="text.secondary">
               Select a document from the left to view details.
@@ -302,15 +397,42 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
 
           {selectedDocument && !loading && (
             <Paper sx={{ p: 2 }}>
-              <Tabs
-                value={tabIndex}
-                onChange={(_e, idx) => setTabIndex(idx)}
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={2}
+                alignItems={{ xs: "flex-start", sm: "center" }}
+                justifyContent="space-between"
                 sx={{ mb: 2 }}
               >
-                {TABS.map((tab) => (
-                  <Tab key={tab} label={tab} />
-                ))}
-              </Tabs>
+                <Tabs
+                  value={tabIndex}
+                  onChange={(_e, idx) => setTabIndex(idx)}
+                  sx={{ flexGrow: 1, minHeight: 48 }}
+                >
+                  {TABS.map((tab) => (
+                    <Tab key={tab} label={tab} />
+                  ))}
+                </Tabs>
+                <Stack direction="row" spacing={1}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    startIcon={<OpenInNew />}
+                    onClick={handleLoadDocument}
+                  >
+                    Load PDF
+                  </Button>
+                  <Button
+                    variant="contained"
+                    color="error"
+                    startIcon={<DeleteForever />}
+                    onClick={handleDeleteDocument}
+                    disabled={deleting}
+                  >
+                    Delete PDF
+                  </Button>
+                </Stack>
+              </Stack>
 
               {tabIndex === 0 && (
                 <Stack spacing={2}>
@@ -435,6 +557,64 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
               )}
 
               {tabIndex === 2 && (
+                <Box sx={{ overflow: "auto" }}>
+                  {embeddingSummary.length === 0 ? (
+                    <Typography color="text.secondary">
+                      No embeddings recorded for this document yet.
+                    </Typography>
+                  ) : (
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Model</TableCell>
+                          <TableCell>Version</TableCell>
+                          <TableCell>Count</TableCell>
+                          <TableCell>Dimensions</TableCell>
+                          <TableCell>Total Tokens</TableCell>
+                          <TableCell>Vector Memory</TableCell>
+                          <TableCell>Est. Cost</TableCell>
+                          <TableCell>Avg Proc (ms)</TableCell>
+                          <TableCell>Latest Created</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {embeddingSummary.map((row) => {
+                          const memoryBytes = row.vector_memory_bytes ?? 0;
+                          const memoryLabel = memoryBytes
+                            ? formatBytes(memoryBytes)
+                            : "—";
+                          const cost = row.estimated_cost_usd ?? null;
+                          return (
+                            <TableRow key={row.model_name}>
+                              <TableCell>{row.model_name}</TableCell>
+                              <TableCell>{row.model_version ?? "—"}</TableCell>
+                              <TableCell>{row.count}</TableCell>
+                              <TableCell>{row.dimensions ?? "—"}</TableCell>
+                              <TableCell>
+                                {row.total_tokens?.toLocaleString() ?? "—"}
+                              </TableCell>
+                              <TableCell>{memoryLabel}</TableCell>
+                              <TableCell>
+                                {cost !== null ? `$${cost.toFixed(6)}` : "—"}
+                              </TableCell>
+                              <TableCell>
+                                {row.avg_processing_time_ms
+                                  ? row.avg_processing_time_ms.toFixed(2)
+                                  : "—"}
+                              </TableCell>
+                              <TableCell>
+                                {formatDate(row.latest_created_at)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                </Box>
+              )}
+
+              {tabIndex === 3 && (
                 <Box sx={{ maxHeight: 360, overflow: "auto" }}>
                   <List dense>
                     {runs.map((run) => (
@@ -458,7 +638,7 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
                 </Box>
               )}
 
-              {tabIndex === 3 && (
+              {tabIndex === 4 && (
                 <Table size="small">
                   <TableHead>
                     <TableRow>

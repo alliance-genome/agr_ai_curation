@@ -15,6 +15,7 @@ import {
   FormControl,
   InputLabel,
   Select,
+  SelectChangeEvent,
   MenuItem,
   Switch,
   FormControlLabel,
@@ -67,6 +68,7 @@ interface SettingsState {
   embedding_dimensions: string;
   embedding_max_batch_size: string;
   embedding_default_batch_size: string;
+  pdf_extraction_strategy: string;
 }
 
 interface AdminPageProps {
@@ -88,6 +90,7 @@ const initialState: SettingsState = {
   embedding_dimensions: "1536",
   embedding_max_batch_size: "128",
   embedding_default_batch_size: "64",
+  pdf_extraction_strategy: "fast",
 };
 
 function AdminPage({ toggleColorMode }: AdminPageProps) {
@@ -147,6 +150,10 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
         embedding_default_batch_size: parseString(
           data.embedding_default_batch_size,
           initialState.embedding_default_batch_size,
+        ),
+        pdf_extraction_strategy: parseString(
+          data.pdf_extraction_strategy,
+          initialState.pdf_extraction_strategy,
         ),
       });
       setDirty(false);
@@ -210,6 +217,15 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
     setSettings((prev) => ({
       ...prev,
       default_model: value,
+    }));
+    setDirty(true);
+  };
+
+  const handleExtractionStrategyChange = (event: SelectChangeEvent<string>) => {
+    const value = event.target.value as string;
+    setSettings((prev) => ({
+      ...prev,
+      pdf_extraction_strategy: value,
     }));
     setDirty(true);
   };
@@ -293,6 +309,7 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
     payload.debug_mode = settings.debug_mode;
     payload.embedding_model_name = settings.embedding_model_name;
     payload.embedding_model_version = settings.embedding_model_version;
+    payload.pdf_extraction_strategy = settings.pdf_extraction_strategy;
 
     const secretFields: Array<{
       key: SecretField;
@@ -529,6 +546,33 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
               }
               label="Enable Debug Mode"
             />
+
+            <Divider sx={{ my: 3 }} />
+
+            <Typography variant="subtitle1" sx={{ mb: 2 }}>
+              PDF Processing
+            </Typography>
+            <Grid container spacing={2} sx={{ mb: 1 }}>
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Extraction Strategy</InputLabel>
+                  <Select
+                    value={settings.pdf_extraction_strategy}
+                    label="Extraction Strategy"
+                    onChange={handleExtractionStrategyChange}
+                  >
+                    <MenuItem value="fast">Fast (default)</MenuItem>
+                    <MenuItem value="hi_res">High Resolution</MenuItem>
+                    <MenuItem value="ocr_only">OCR Only</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Choose the Unstructured extraction mode used when new PDFs are
+              ingested. High resolution offers the best layout fidelity at the
+              cost of longer processing times.
+            </Typography>
 
             <Divider sx={{ my: 3 }} />
 

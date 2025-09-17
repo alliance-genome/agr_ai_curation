@@ -24,18 +24,23 @@ function App() {
 
     // Initialize debug mode from settings
     const initDebugMode = async () => {
-      try {
-        const response = await axios.get("/api/settings");
-        if (response.data.debug_mode) {
-          debug.setEnabled(true);
-          debug.log("APP", "Debug mode enabled from settings");
-        }
-      } catch (error) {
-        // If settings fail to load, check localStorage
-        const localDebug = localStorage.getItem("debug_mode") === "true";
-        if (localDebug) {
-          debug.setEnabled(true);
-          debug.log("APP", "Debug mode enabled from localStorage");
+      const localDebug = localStorage.getItem("debug_mode") === "true";
+      if (localDebug) {
+        debug.setEnabled(true);
+        debug.log("APP", "Debug mode enabled from localStorage");
+      } else {
+        try {
+          const response = await axios.get("/api/settings/", {
+            baseURL: "http://localhost:8002",
+          });
+          if (response.data.debug_mode) {
+            debug.setEnabled(true);
+            debug.log("APP", "Debug mode enabled from settings");
+          }
+        } catch (error) {
+          console.warn(
+            "Unable to load settings; continuing without debug flag",
+          );
         }
       }
     };

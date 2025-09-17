@@ -19,6 +19,7 @@ class PDFDocumentSummary(BaseModel):
     table_count: Optional[int]
     figure_count: Optional[int]
     embeddings_generated: Optional[bool]
+    viewer_url: Optional[str] = None
 
 
 class PDFDocumentDetail(PDFDocumentSummary):
@@ -69,7 +70,13 @@ class LangGraphNodeRow(BaseModel):
 class EmbeddingSummaryRow(BaseModel):
     model_name: str
     count: int
-    latest_created_at: Optional[datetime]
+    latest_created_at: Optional[datetime] = None
+    model_version: Optional[str] = None
+    dimensions: Optional[int] = None
+    total_tokens: Optional[int] = None
+    vector_memory_bytes: Optional[int] = None
+    estimated_cost_usd: Optional[float] = None
+    avg_processing_time_ms: Optional[float] = None
 
 
 __all__ = [

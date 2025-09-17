@@ -20,7 +20,7 @@ class FakeIngestService:
 
     def ingest(self, *, file_path: Path, original_filename: str):
         self.calls.append((file_path, original_filename))
-        return uuid4()
+        return uuid4(), True
 
 
 @pytest.fixture
@@ -50,6 +50,7 @@ def test_upload_pdf_invokes_ingest_service(tmp_path: Path, fake_ingestor):
     assert payload["pdf_id"]
     assert payload["filename"] == "sample.pdf"
     assert payload["viewer_url"] == "/uploads/sample.pdf"
+    assert payload["reused"] is False
     assert fake_ingestor.calls
     stored_path, original_name = fake_ingestor.calls[0]
     assert original_name == "sample.pdf"

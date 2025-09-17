@@ -59,7 +59,7 @@ function PdfViewerMultiColorFixed({
     return null;
   });
   const [currentPdfUrl, setCurrentPdfUrl] = useState(() => {
-    const url = pdfUrl || "/api/uploads/test_paper.pdf";
+    const url = pdfUrl || "";
     debug.pdfHighlight(
       "🚀 COMPONENT: useState currentPdfUrl initialized to:",
       url,
@@ -95,6 +95,19 @@ function PdfViewerMultiColorFixed({
     );
     highlightTermsRef.current = highlightTerms;
   }, [highlightTerms]);
+
+  // Track when pdfUrl prop changes
+  useEffect(() => {
+    if (!pdfUrl) {
+      return;
+    }
+    debug.pdfHighlight(
+      "📑 PDF COMPONENT: pdfUrl prop changed, updating currentPdfUrl",
+      pdfUrl,
+    );
+    setCurrentPdfUrl(pdfUrl);
+    // Loading occurs in the effect that reacts to currentPdfUrl changes
+  }, [pdfUrl]);
 
   // Load settings from localStorage and listen for changes
   useEffect(() => {
@@ -214,7 +227,7 @@ function PdfViewerMultiColorFixed({
   // Initialize PDF viewer on mount
   useEffect(() => {
     debug.pdfHighlight(
-      "🚀 COMPONENT: useEffect for PDF viewer initialization running",
+      "🚀 COMPONENT: useEffect for PDF viewer initialization/update running",
     );
     debug.pdfHighlight(
       "🚀 COMPONENT: currentPdfUrl for initialization:",
@@ -229,7 +242,7 @@ function PdfViewerMultiColorFixed({
     } else {
       debug.pdfHighlight("🚀 COMPONENT: No currentPdfUrl, skipping PDF load");
     }
-  }, []);
+  }, [currentPdfUrl]);
 
   // Load PDF in viewer
   const loadPdfInViewer = (url: string) => {
@@ -242,19 +255,37 @@ function PdfViewerMultiColorFixed({
       "🚀 COMPONENT: Set loading=true, error=null, pdfLoaded=false",
     );
 
-    if (iframeRef.current) {
-      const viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(url)}`;
-      debug.pdfHighlight("🚀 COMPONENT: Setting iframe src to:", viewerUrl);
-      iframeRef.current.src = viewerUrl;
-
-      if (onPdfUrlChange) {
-        debug.pdfHighlight("🚀 COMPONENT: Calling onPdfUrlChange with:", url);
-        onPdfUrlChange(url);
-      } else {
-        debug.pdfHighlight("🚀 COMPONENT: No onPdfUrlChange callback provided");
-      }
-    } else {
+    if (!iframeRef.current) {
       debug.pdfHighlight("❌ COMPONENT: iframeRef.current is null!");
+      return;
+    }
+
+    const normalizedUrl = url.startsWith("/") ? url : `/${url}`;
+    const absoluteUrl = url.startsWith("http")
+      ? url
+      : `${window.location.origin}${normalizedUrl}`;
+
+    console.log("🔍 PDF Loading Debug:", {
+      originalUrl: url,
+      normalizedUrl,
+      absoluteUrl,
+      windowOrigin: window.location.origin,
+      encodedRelative: encodeURIComponent(normalizedUrl),
+    });
+
+    const encodedRelativeUrl = encodeURIComponent(normalizedUrl);
+    const viewerUrl = `/pdfjs/web/viewer.html?file=${encodedRelativeUrl}`;
+    debug.pdfHighlight("🚀 COMPONENT: Setting iframe src to:", viewerUrl);
+    console.log("📄 Final viewer URL:", viewerUrl);
+    console.log("📄 URL that PDF.js will load:", normalizedUrl);
+
+    iframeRef.current.src = viewerUrl;
+
+    if (onPdfUrlChange) {
+      debug.pdfHighlight("🚀 COMPONENT: Calling onPdfUrlChange with:", url);
+      onPdfUrlChange(url);
+    } else {
+      debug.pdfHighlight("🚀 COMPONENT: No onPdfUrlChange callback provided");
     }
   };
 
@@ -525,6 +556,7 @@ function PdfViewerMultiColorFixed({
   // Handle iframe load
   useEffect(() => {
     const handleIframeLoad = () => {
+      console.log("🚀 Iframe load event triggered");
       setLoading(false);
       setPdfLoaded(true);
       debug.pdfRender("PDF viewer loaded");
@@ -541,8 +573,10 @@ function PdfViewerMultiColorFixed({
           try {
             const PDFViewerApplication = (iframeWindow as any)
               .PDFViewerApplication;
+            console.log("Checking PDFViewerApplication:", PDFViewerApplication);
             if (PDFViewerApplication && PDFViewerApplication.eventBus) {
               clearInterval(checkInterval);
+              console.log("✅ PDFViewerApplication found and ready");
 
               // Listen for text layer rendered events - this is the key event
               // It fires for EACH page as its text layer is rendered
@@ -611,15 +645,26 @@ function PdfViewerMultiColorFixed({
             }
           } catch (e) {
             // Still waiting...
+            console.log("Waiting for PDFViewerApplication...", e);
           }
         }, 100);
       }
     };
 
+    const handleIframeError = (event: ErrorEvent) => {
+      console.error("❌ Iframe error:", event);
+      setError("Failed to load PDF viewer");
+      setLoading(false);
+    };
+
     const iframe = iframeRef.current;
     if (iframe) {
       iframe.addEventListener("load", handleIframeLoad);
-      return () => iframe.removeEventListener("load", handleIframeLoad);
+      iframe.addEventListener("error", handleIframeError);
+      return () => {
+        iframe.removeEventListener("load", handleIframeLoad);
+        iframe.removeEventListener("error", handleIframeError);
+      };
     }
   }, []);
 

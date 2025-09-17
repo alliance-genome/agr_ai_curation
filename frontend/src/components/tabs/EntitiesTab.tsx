@@ -52,6 +52,11 @@ function EntitiesTab({ onEntityCountChange }: EntitiesTabProps) {
       const response = await axios.get("/api/entities");
       setEntities(response.data);
     } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        console.info("Entities API not available; skipping fetch");
+        setEntities([]);
+        return;
+      }
       console.error("Failed to fetch entities:", error);
     }
   };

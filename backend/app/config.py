@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     mmr_lambda: float = float(os.getenv("MMR_LAMBDA", 0.7))
 
     uploads_dir: str = os.getenv("UPLOADS_DIR", "/tmp/uploads")
+    pdf_extraction_strategy: str = os.getenv("PDF_EXTRACTION_STRATEGY", "fast")
 
     # Application Settings
     debug_mode: bool = False

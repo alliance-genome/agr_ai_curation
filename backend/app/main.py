@@ -64,7 +64,7 @@ app.include_router(
     agents.router, prefix="/agents", tags=["agents"]
 )  # PydanticAI agents
 app.include_router(entities.router, prefix="/entities", tags=["entities"])
-app.include_router(settings.router, prefix="/settings", tags=["settings"])
+app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(test_highlights.router, prefix="/test", tags=["testing"])
 app.include_router(rag_endpoints.router)
 app.include_router(pdf_endpoints.router)

@@ -30,7 +30,7 @@ async def upload_pdf(
         with destination.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        pdf_id: UUID = ingest_service.ingest(
+        pdf_id, created = ingest_service.ingest(
             file_path=destination, original_filename=file.filename
         )
     except Exception as exc:  # pragma: no cover - unexpected runtime issues
@@ -43,6 +43,7 @@ async def upload_pdf(
         "pdf_id": str(pdf_id),
         "filename": file.filename,
         "viewer_url": viewer_url,
+        "reused": not created,
     }
 
 

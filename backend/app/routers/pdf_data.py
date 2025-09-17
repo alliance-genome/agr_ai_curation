@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.repositories.pdf_data_repository import PDFDataRepository
 from app.schemas.pdf_data import (
@@ -22,6 +23,18 @@ router = APIRouter(prefix="/api/pdf-data", tags=["pdf-data"])
 
 def get_repository() -> PDFDataRepository:
     return PDFDataRepository()
+
+
+def _viewer_url_for_path(file_path: str | None) -> str | None:
+    if not file_path:
+        return None
+    try:
+        name = Path(file_path).name
+        if not name:
+            return None
+        return f"/uploads/{name}"
+    except Exception:
+        return None
 
 
 @router.get("/documents", response_model=List[PDFDocumentSummary])
@@ -41,9 +54,25 @@ async def list_documents(
             table_count=doc.table_count,
             figure_count=doc.figure_count,
             embeddings_generated=doc.embeddings_generated,
+            viewer_url=_viewer_url_for_path(getattr(doc, "file_path", None)),
         )
         for doc in documents
     ]
+
+
+@router.get("/documents/{pdf_id}/url", response_model=dict)
+async def get_document_url(
+    pdf_id: UUID,
+    repo: PDFDataRepository = Depends(get_repository),
+):
+    document = repo.get_document(pdf_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="PDF document not found")
+
+    viewer_url = _viewer_url_for_path(document.file_path)
+    if not viewer_url:
+        raise HTTPException(status_code=404, detail="PDF file not available")
+    return {"viewer_url": viewer_url}
 
 
 @router.get("/documents/{pdf_id}", response_model=PDFDocumentDetail)
@@ -67,6 +96,7 @@ async def get_document(
         file_size=document.file_size,
         extraction_method=document.extraction_method,
         preproc_version=document.preproc_version,
+        viewer_url=_viewer_url_for_path(document.file_path),
         meta_data=document.meta_data or {},
     )
 
@@ -168,9 +198,26 @@ async def list_embeddings(
             model_name=row["model_name"],
             count=row["count"],
             latest_created_at=row["latest_created_at"],
+            model_version=row.get("model_version"),
+            dimensions=row.get("dimensions"),
+            total_tokens=row.get("total_tokens"),
+            vector_memory_bytes=row.get("vector_memory_bytes"),
+            estimated_cost_usd=row.get("estimated_cost_usd"),
+            avg_processing_time_ms=row.get("avg_processing_time_ms"),
         )
         for row in summary
     ]
+
+
+@router.delete("/documents/{pdf_id}", status_code=204)
+async def delete_document(
+    pdf_id: UUID,
+    repo: PDFDataRepository = Depends(get_repository),
+):
+    deleted = repo.delete_document(pdf_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="PDF document not found")
+    return Response(status_code=204)
 
 
 __all__ = ["router"]

@@ -18,6 +18,7 @@ class FakeRepository:
     def __init__(self):
         self.document_id = uuid4()
         self.run_id = uuid4()
+        self.deleted_ids: list = []
         self.documents = [
             SimpleNamespace(
                 id=self.document_id,
@@ -33,6 +34,7 @@ class FakeRepository:
                 extraction_method="UNSTRUCTURED_FAST",
                 preproc_version="v1",
                 meta_data={"title": "Sample"},
+                file_path="/app/uploads/sample.pdf",
             )
         ]
         self.chunks = [
@@ -81,6 +83,12 @@ class FakeRepository:
                 "model_name": "text-embedding-3-small",
                 "count": 120,
                 "latest_created_at": "2025-09-17T00:00:03Z",
+                "model_version": "1.0",
+                "dimensions": 1536,
+                "total_tokens": 6000,
+                "vector_memory_bytes": 737280,
+                "estimated_cost_usd": 0.00012,
+                "avg_processing_time_ms": 12.5,
             }
         ]
 
@@ -105,6 +113,12 @@ class FakeRepository:
     def list_embedding_summary(self, pdf_id):
         return self.embeddings
 
+    def delete_document(self, pdf_id):
+        if pdf_id == self.document_id:
+            self.deleted_ids.append(pdf_id)
+            return True
+        return False
+
 
 @pytest.fixture(autouse=True)
 def override_repository():
@@ -120,6 +134,7 @@ def test_list_documents_returns_repository_data(override_repository):
     payload = response.json()
     assert len(payload) == 1
     assert payload[0]["filename"] == "sample.pdf"
+    assert payload[0]["viewer_url"] == "/uploads/sample.pdf"
 
 
 def test_document_detail_endpoint(override_repository):
@@ -129,6 +144,15 @@ def test_document_detail_endpoint(override_repository):
     payload = response.json()
     assert payload["extraction_method"] == "UNSTRUCTURED_FAST"
     assert payload["meta_data"]["title"] == "Sample"
+    assert payload["viewer_url"] == "/uploads/sample.pdf"
+
+
+def test_document_viewer_url_endpoint(override_repository):
+    doc_id = override_repository.document_id
+    response = client.get(f"/api/pdf-data/documents/{doc_id}/url")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["viewer_url"] == "/uploads/sample.pdf"
 
 
 def test_chunk_listing_endpoint(override_repository):
@@ -158,3 +182,16 @@ def test_embeddings_endpoint(override_repository):
     assert response.status_code == 200
     payload = response.json()
     assert payload[0]["model_name"] == "text-embedding-3-small"
+    assert payload[0]["estimated_cost_usd"] == 0.00012
+
+
+def test_delete_document_endpoint(override_repository):
+    doc_id = override_repository.document_id
+    response = client.delete(f"/api/pdf-data/documents/{doc_id}")
+    assert response.status_code == 204
+    assert override_repository.deleted_ids == [doc_id]
+
+
+def test_delete_document_not_found(override_repository):
+    response = client.delete(f"/api/pdf-data/documents/{uuid4()}")
+    assert response.status_code == 404

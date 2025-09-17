@@ -16,9 +16,9 @@ import {
   Brightness7,
 } from "@mui/icons-material";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PdfViewerMultiColorFixed from "../components/PdfViewerMultiColorFixed";
 import ChatInterface from "../components/ChatInterface";
 import PDFUpload from "../components/PDFUpload";
@@ -31,17 +31,20 @@ interface HomePageProps {
 }
 
 const PANEL_SIZES_KEY = "alliance-panel-sizes";
+const LAST_UPLOADED_PDF_KEY = "last-uploaded-pdf";
 
 function HomePage({ toggleColorMode }: HomePageProps) {
   debug.pdfHighlight("🏠 HOMEPAGE: Component function called/rendered");
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const theme = useTheme();
   const panelGroupRef = useRef<any>(null);
   const [highlightTerms, setHighlightTerms] = useState<string[]>([]);
   const [pdfTextData, setPdfTextData] = useState<PdfTextData | null>(null);
   const [currentPdfUrl, setCurrentPdfUrl] = useState<string | null>(null);
   const [uploadedPdfId, setUploadedPdfId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   debug.pdfHighlight("🏠 HOMEPAGE: State initialized:", {
     highlightTerms,
@@ -75,6 +78,20 @@ function HomePage({ toggleColorMode }: HomePageProps) {
     setHighlightTerms([]);
   };
 
+  const fetchViewerUrl = async (pdfId: string): Promise<string | null> => {
+    try {
+      const response = await fetch(`/api/pdf-data/documents/${pdfId}/url`);
+      if (!response.ok) {
+        return null;
+      }
+      const payload = await response.json();
+      return typeof payload.viewer_url === "string" ? payload.viewer_url : null;
+    } catch (error) {
+      console.warn("Failed to resolve viewer URL", error);
+      return null;
+    }
+  };
+
   // Handle PDF text extraction
   const handlePdfTextExtracted = (textData: PdfTextData) => {
     setPdfTextData(textData);
@@ -85,10 +102,88 @@ function HomePage({ toggleColorMode }: HomePageProps) {
     });
   };
 
-  // Handle PDF URL change
+  // Load PDF from URL parameter if present
+  useEffect(() => {
+    const loadPdfFromParam = async () => {
+      const pdfIdParam = searchParams.get("pdf");
+      if (pdfIdParam) {
+        setLoading(true);
+        try {
+          // Fetch PDF document details
+          const response = await fetch(`/api/pdf-data/documents/${pdfIdParam}`);
+          if (!response.ok) {
+            throw new Error("Failed to load PDF document");
+          }
+          const pdfData = await response.json();
+
+          // Set the PDF ID and viewer URL
+          console.log("Loading PDF from browser:", {
+            pdfId: pdfIdParam,
+            filename: pdfData.filename,
+            viewerUrl: pdfData.viewer_url,
+          });
+          setUploadedPdfId(pdfIdParam);
+          const viewerUrl =
+            pdfData.viewer_url ||
+            (pdfData.filename ? `/uploads/${pdfData.filename}` : null);
+          if (viewerUrl) {
+            setCurrentPdfUrl(viewerUrl);
+          }
+
+          // Store in localStorage for persistence
+          localStorage.setItem(
+            LAST_UPLOADED_PDF_KEY,
+            JSON.stringify({ pdfId: pdfIdParam, viewerUrl }),
+          );
+
+          // Clear the URL parameter after loading
+          navigate("/", { replace: true });
+        } catch (error) {
+          console.error("Failed to load PDF from parameter:", error);
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
+      // If no URL parameter, try to restore from localStorage
+      const saved = localStorage.getItem(LAST_UPLOADED_PDF_KEY);
+      if (!saved) {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(saved) as {
+          pdfId?: string | null;
+          viewerUrl?: string | null;
+        };
+        if (parsed.pdfId) {
+          setUploadedPdfId(parsed.pdfId);
+        }
+        let viewerUrl = parsed.viewerUrl ?? null;
+        if (!viewerUrl && parsed.pdfId) {
+          viewerUrl = await fetchViewerUrl(parsed.pdfId);
+        }
+        if (viewerUrl) {
+          setCurrentPdfUrl(viewerUrl);
+        }
+      } catch (error) {
+        console.warn("Failed to restore last uploaded PDF", error);
+        localStorage.removeItem(LAST_UPLOADED_PDF_KEY);
+      }
+    };
+
+    loadPdfFromParam();
+  }, [searchParams, navigate]);
+
   const handlePdfUrlChange = (url: string) => {
     setCurrentPdfUrl(url);
     setHighlightTerms([]);
+    if (uploadedPdfId) {
+      localStorage.setItem(
+        LAST_UPLOADED_PDF_KEY,
+        JSON.stringify({ pdfId: uploadedPdfId, viewerUrl: url }),
+      );
+    }
   };
 
   const handlePdfUploaded = ({
@@ -99,10 +194,21 @@ function HomePage({ toggleColorMode }: HomePageProps) {
     viewerUrl?: string;
   }) => {
     setUploadedPdfId(pdfId);
-    if (viewerUrl) {
-      setCurrentPdfUrl(viewerUrl);
-    }
     setHighlightTerms([]);
+    const resolveUrl = async () => {
+      let finalUrl = viewerUrl ?? currentPdfUrl;
+      if (!viewerUrl) {
+        finalUrl = await fetchViewerUrl(pdfId);
+      }
+      if (finalUrl) {
+        setCurrentPdfUrl(finalUrl);
+        localStorage.setItem(
+          LAST_UPLOADED_PDF_KEY,
+          JSON.stringify({ pdfId, viewerUrl: finalUrl }),
+        );
+      }
+    };
+    void resolveUrl();
   };
 
   debug.pdfHighlight("🏠 HOMEPAGE: About to render HomePage");
@@ -186,7 +292,20 @@ function HomePage({ toggleColorMode }: HomePageProps) {
                 height: "100%",
               }}
             >
-              <PDFUpload onUploaded={handlePdfUploaded} />
+              {loading ? (
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    p: 3,
+                  }}
+                >
+                  <Typography>Loading PDF...</Typography>
+                </Box>
+              ) : (
+                <PDFUpload onUploaded={handlePdfUploaded} />
+              )}
               <Box sx={{ flexGrow: 1, minHeight: 0 }}>
                 {currentPdfUrl ? (
                   (() => {
@@ -253,7 +372,9 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             minSize={20}
             maxSize={60}
           >
-            <Box sx={{ p: 2, height: "100%" }}>
+            <Box
+              sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+            >
               <ChatInterface
                 key={uploadedPdfId ?? "no-pdf"}
                 pdfId={uploadedPdfId}
