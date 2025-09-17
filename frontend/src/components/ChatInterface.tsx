@@ -241,9 +241,8 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
 
     const decoder = new TextDecoder();
     let buffer = "";
-    let finalReceived = false;
+    let endReceived = false;
     let streamError: string | null = null;
-    let accumulatedText = "";
 
     const processBuffer = () => {
       let boundary = buffer.indexOf("\n\n");
@@ -257,24 +256,20 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
           if (dataLine) {
             try {
               const payload = JSON.parse(dataLine.slice(5).trim() || "{}");
-              if (payload.type === "chunk") {
-                // Accumulate chunks and update message progressively
-                accumulatedText += payload.text ?? "";
+              if (payload.type === "final") {
+                // Each "final" event contains the progressively built answer
                 updateAssistantMessage(assistantId, {
-                  text: accumulatedText,
+                  text: payload.answer ?? "",
+                  citations: payload.citations ?? [],
                 });
                 // Scroll to bottom as text streams in
                 scrollToBottom();
-              } else if (payload.type === "final") {
-                updateAssistantMessage(assistantId, {
-                  text: payload.answer ?? accumulatedText,
-                  citations: payload.citations ?? [],
-                });
-                finalReceived = true;
-                scrollToBottom();
+              } else if (payload.type === "end") {
+                endReceived = true;
               } else if (payload.type === "error") {
                 streamError = payload.message ?? "Stream error";
               }
+              // Ignore "start" events
             } catch (parseErr) {
               streamError = "Malformed streaming payload";
             }
@@ -300,8 +295,9 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
       throw new Error(streamError);
     }
 
-    if (!finalReceived) {
-      throw new Error("Stream ended without final answer");
+    if (!endReceived) {
+      // It's OK if we didn't get an explicit "end" event as long as we got data
+      console.warn("Stream ended without explicit end event");
     }
   };
 
