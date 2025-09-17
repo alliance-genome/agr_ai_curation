@@ -1,5 +1,7 @@
 # Unified RAG Pipeline Implementation Guide
 
+> **Document family note**: This guide captures the original RAG refactor design. Refer to `multi-agent-implementation-guide.md` for the complementary routing architecture, and to `final-implementation-guide.md` for the authoritative merged plan (takes precedence when instructions conflict).
+
 **Version**: 1.0.0
 **Date**: 2025-01-17
 **Status**: Implementation Ready

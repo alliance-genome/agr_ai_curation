@@ -1,5 +1,7 @@
 # Multi-Agent System Implementation Guide: Context-Aware Retrieve-then-Route Architecture
 
+> **Document family note**: Use this guide for detailed multi-agent routing design. Pair it with `unified-rag-pipeline-guide.md` for pipeline specifics, and default to `final-implementation-guide.md` for the consolidated, up-to-date plan.
+
 **Version**: 1.0.0
 **Date**: 2025-01-17
 **Status**: Implementation Guide
