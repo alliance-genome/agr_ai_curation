@@ -13,8 +13,8 @@ from app.main import app
 from app.database import SessionLocal
 from app.models import Base, ChatSession, PDFDocument
 from app.database import engine as db_engine
-from app.services.orchestrator_service import get_general_orchestrator
-from app.agents.main_orchestrator import OrchestratorResult
+from app.services.orchestrator_service import get_langgraph_runner
+from app.orchestration.general_supervisor import PDFQAState
 
 client = TestClient(app)
 
@@ -76,13 +76,13 @@ def test_create_session_endpoint():
         session.close()
 
 
-class FakeOrchestrator:
-    async def answer_question(self, *, pdf_id, query):
-        return OrchestratorResult(
-            answer="Test answer",
-            citations=[{"page": 1}],
-            metadata={"confidence": 0.9},
-        )
+class FakeRunner:
+    async def run(self, state: PDFQAState) -> PDFQAState:
+        state.answer = "Test answer"
+        state.citations = [{"page": 1}]
+        state.metadata = {"confidence": 0.9}
+        state.specialists_invoked = ["general"]
+        return state
 
 
 def test_question_endpoint_returns_answer(monkeypatch):
@@ -96,14 +96,14 @@ def test_question_endpoint_returns_answer(monkeypatch):
     finally:
         session.close()
 
-    app.dependency_overrides[get_general_orchestrator] = lambda: FakeOrchestrator()
+    app.dependency_overrides[get_langgraph_runner] = lambda: FakeRunner()
     try:
         response = client.post(
             f"/api/rag/sessions/{chat_session.id}/question",
             json={"question": "What is the main finding?"},
         )
     finally:
-        app.dependency_overrides.pop(get_general_orchestrator, None)
+        app.dependency_overrides.pop(get_langgraph_runner, None)
 
     assert response.status_code == 200
     payload = response.json()

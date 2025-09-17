@@ -46,6 +46,10 @@ def test_upload_pdf_invokes_ingest_service(tmp_path: Path, fake_ingestor):
         )
 
     assert response.status_code == 200
+    payload = response.json()
+    assert payload["pdf_id"]
+    assert payload["filename"] == "sample.pdf"
+    assert payload["viewer_url"] == "/uploads/sample.pdf"
     assert fake_ingestor.calls
     stored_path, original_name = fake_ingestor.calls[0]
     assert original_name == "sample.pdf"

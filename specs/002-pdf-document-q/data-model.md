@@ -360,7 +360,7 @@ EmbeddingConfig ─── EmbeddingJobs (queue)
 - `latency_ms`: Integer
 - `specialists_invoked`: JSONB (list of node keys executed)
 - `debug_trace_path`: Text (optional local path to serialized trace)
-- `metadata`: JSONB (SSE channel, admin overrides, etc.)
+- `run_metadata`: JSONB (SSE channel, admin overrides, etc.)
 
 **Validation Rules**:
 

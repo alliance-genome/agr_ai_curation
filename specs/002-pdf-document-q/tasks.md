@@ -95,6 +95,11 @@
 - [ ] T043 [P] Write orchestrator intent detection tests in `backend/tests/unit/test_intent_detection.py` **[TDD-RED]**
 - [ ] T044 Implement intent detection in orchestrator tools **[TDD-GREEN]**
 - [ ] T045 [P] Write full pipeline integration tests in `backend/tests/integration/test_full_pipeline.py` **[TDD-RED]**
+- [x] T061 [P] Write LangGraph state + checkpointer tests in `backend/tests/unit/test_langgraph_state.py` **[TDD-RED]**
+- [x] T062 Implement LangGraph `general_supervisor` graph and state model in `backend/app/orchestration/general_supervisor.py` **[TDD-GREEN]**
+- [x] T063 [P] Write LangGraph node execution tests (intent routing, specialist fanout) in `backend/tests/unit/test_langgraph_supervisor.py` **[TDD-RED]**
+- [x] T064 Implement streaming-friendly LangGraph runner adapter in `backend/app/services/langgraph_runner.py` **[TDD-GREEN]**
+- [x] T065 Persist LangGraph run/node telemetry in `backend/app/repositories/langgraph_runs.py` **[TDD-GREEN]**
 
 ## Priority 4: API & Frontend (Week 2-3)
 
@@ -136,6 +141,8 @@ Job Queue (T011-T015) ───────┴──> Reranker (T026-T030)
                                         v
                               PydanticAI Agents (T031-T040)
                                         │
+                                        v
+                              LangGraph Supervisor (T061-T065)
                                         v
                               API Endpoints (T041-T045)
                                         │

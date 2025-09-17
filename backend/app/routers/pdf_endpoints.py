@@ -38,7 +38,12 @@ async def upload_pdf(
     finally:
         await file.close()
 
-    return {"pdf_id": str(pdf_id)}
+    viewer_url = f"/uploads/{file.filename}"
+    return {
+        "pdf_id": str(pdf_id),
+        "filename": file.filename,
+        "viewer_url": viewer_url,
+    }
 
 
 __all__ = ["router"]

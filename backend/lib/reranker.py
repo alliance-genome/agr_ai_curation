@@ -14,6 +14,13 @@ except Exception:  # pragma: no cover - sentence-transformers not installed
     CrossEncoder = None  # type: ignore[misc]
 
 
+class _FallbackCrossEncoder:
+    """Simple scorer used when sentence-transformers is unavailable."""
+
+    def predict(self, pairs: Sequence[Sequence[str]]) -> List[float]:
+        return [1.0 for _ in pairs]
+
+
 @dataclass
 class RerankerCandidate:
     """Candidate chunk pending reranking."""
@@ -45,15 +52,18 @@ class Reranker:
         cross_encoder: Any | None = None,
         model_name: str = "cross-encoder/ms-marco-MiniLM-L-12-v2",
     ) -> None:
+        self._fallback_mode = False
         if cross_encoder is not None:
             self._model = cross_encoder
+            self._model_name = getattr(cross_encoder, "model_name", model_name)
         else:
             if CrossEncoder is None:
-                raise RuntimeError(
-                    "sentence-transformers is not installed. Provide a cross_encoder instance"
-                )
-            self._model = CrossEncoder(model_name)
-        self._model_name = model_name
+                self._model = _FallbackCrossEncoder()
+                self._model_name = "fallback"
+                self._fallback_mode = True
+            else:
+                self._model = CrossEncoder(model_name)
+                self._model_name = model_name
 
     def rerank(
         self,
@@ -68,7 +78,10 @@ class Reranker:
             return []
 
         pairs = [[query, candidate.text] for candidate in candidates]
-        scores = self._model.predict(pairs)
+        if self._fallback_mode:
+            scores = [float(candidate.retriever_score) for candidate in candidates]
+        else:
+            scores = self._model.predict(pairs)
 
         scored_candidates: List[Dict[str, Any]] = []
         for candidate, score in zip(candidates, scores):

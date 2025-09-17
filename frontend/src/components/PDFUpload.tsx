@@ -2,8 +2,18 @@ import { useState } from "react";
 import { Box, Button, LinearProgress, Alert, Typography } from "@mui/material";
 
 interface PDFUploadProps {
-  onUploaded?: (pdfId: string, file: File) => void;
+  onUploaded?: (info: {
+    pdfId: string;
+    filename: string;
+    viewerUrl?: string;
+  }) => void;
 }
+
+const sanitizeError = (value: string) =>
+  value
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "Upload failed";
 
 const PDFUpload = ({ onUploaded }: PDFUploadProps) => {
   const [isUploading, setIsUploading] = useState(false);
@@ -44,11 +54,14 @@ const PDFUpload = ({ onUploaded }: PDFUploadProps) => {
 
       const payload = await response.json();
       const pdfId = payload.pdf_id as string;
+      const filename = (payload.filename as string) ?? file.name;
+      const viewerUrl = payload.viewer_url as string | undefined;
       setSuccessMessage("Upload complete");
-      onUploaded?.(pdfId, file);
+      onUploaded?.({ pdfId, filename, viewerUrl });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Upload failed";
-      setError(message);
+      const rawMessage = err instanceof Error ? err.message : "Upload failed";
+      const plainMessage = sanitizeError(rawMessage);
+      setError(plainMessage);
     } finally {
       setIsUploading(false);
       event.target.value = "";

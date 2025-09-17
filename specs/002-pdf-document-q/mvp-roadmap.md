@@ -37,7 +37,7 @@ Implement and test (FastAPI):
 - [x] `POST /sessions` – create chat sessions tied to a PDF (T048 simplified)
 - [x] `POST /sessions/{id}/question` – call LangGraph supervisor adapter and return answer JSON (T049; streaming upgrade pending)
 - [ ] (Optional) `GET /jobs/{id}` – track embedding jobs (T050)
-- [ ] Upgrade `/sessions/{id}/question` to SSE once LangGraph edges stream tokens (depends on T064).
+- [x] Upgrade `/sessions/{id}/question` to SSE once LangGraph edges stream tokens (depends on T064).
 
 Contract tests from T046 should accompany these endpoints.
 

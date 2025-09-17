@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
+from time import perf_counter
 from typing import Any, Dict, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import ChatSession, Message, MessageType, PDFDocument
-from app.services.orchestrator_service import get_general_orchestrator
-from app.agents.main_orchestrator import OrchestratorResult
+from app.orchestration.general_supervisor import PDFQAState
+from app.repositories.langgraph_runs import LangGraphRunRepository
+from app.services.orchestrator_service import get_langgraph_runner
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
 
@@ -60,24 +64,106 @@ def create_session(
 async def ask_question(
     session_id: UUID,
     request: QuestionRequest,
-    orchestrator=Depends(get_general_orchestrator),
+    http_request: Request,
+    runner=Depends(get_langgraph_runner),
     db: Session = Depends(get_db),
-) -> QuestionResponse:
+):
     session_obj = db.get(ChatSession, session_id)
     if session_obj is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    result: OrchestratorResult = await orchestrator.answer_question(
+    state = PDFQAState(
+        session_id=session_obj.id,
         pdf_id=session_obj.pdf_id,
-        query=request.question,
+        question=request.question,
+    )
+    repo = LangGraphRunRepository(db)
+    run = repo.start_run(
+        session_id=session_obj.id,
+        pdf_id=session_obj.pdf_id,
+        workflow_name="general_supervisor",
+        question=request.question,
+        run_metadata={"rag_config": session_obj.rag_config or {}},
     )
 
-    _store_messages(db, session_obj, request.question, result)
+    accepts = http_request.headers.get("accept", "").lower()
+    wants_stream = "text/event-stream" in accepts
+
+    if wants_stream:
+        start = perf_counter()
+        final_state_holder: Dict[str, PDFQAState | None] = {"state": None}
+        error_holder: Dict[str, Any | None] = {"error": None}
+
+        async def event_stream():
+            try:
+                yield _encode_sse({"type": "start"})
+                async for chunk in runner.stream(state):
+                    chunk_state = (
+                        chunk
+                        if isinstance(chunk, PDFQAState)
+                        else PDFQAState.model_validate(chunk)
+                    )
+                    final_state_holder["state"] = chunk_state
+                    yield _encode_sse(
+                        {
+                            "type": "final",
+                            "answer": chunk_state.answer or "",
+                            "citations": chunk_state.citations or [],
+                            "metadata": chunk_state.metadata or {},
+                        }
+                    )
+                yield _encode_sse({"type": "end"})
+            except Exception as exc:  # pragma: no cover - propagated via SSE
+                error_holder["error"] = exc
+                yield _encode_sse({"type": "error", "message": str(exc)})
+            finally:
+                latency_ms = int((perf_counter() - start) * 1000)
+                final_state = final_state_holder["state"]
+                if final_state is not None:
+                    repo.complete_run(
+                        run,
+                        state_snapshot=final_state.model_dump(mode="json"),
+                        specialists_invoked=final_state.specialists_invoked or [],
+                        latency_ms=latency_ms,
+                    )
+                    repo.commit()
+                    _store_messages(db, session_obj, request.question, final_state)
+                else:
+                    error_message = error_holder["error"]
+                    repo.complete_run(
+                        run,
+                        state_snapshot={
+                            "error": str(error_message) if error_message else "unknown"
+                        },
+                        specialists_invoked=[],
+                        latency_ms=latency_ms,
+                        status="FAILED",
+                    )
+                    repo.commit()
+
+        headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+        return StreamingResponse(
+            event_stream(), media_type="text/event-stream", headers=headers
+        )
+
+    start = perf_counter()
+    final_state = await runner.run(state)
+    latency_ms = int((perf_counter() - start) * 1000)
+
+    repo.complete_run(
+        run,
+        state_snapshot=final_state.model_dump(mode="json"),
+        specialists_invoked=final_state.specialists_invoked or [],
+        latency_ms=latency_ms,
+    )
+    repo.commit()
+
+    _store_messages(db, session_obj, request.question, final_state)
 
     return QuestionResponse(
-        answer=result.answer,
-        citations=result.citations,
-        metadata=result.metadata,
+        answer=final_state.answer or "",
+        citations=final_state.citations,
+        metadata=final_state.metadata,
     )
 
 
@@ -85,7 +171,7 @@ def _store_messages(
     db: Session,
     session_obj: ChatSession,
     question: str,
-    result: OrchestratorResult,
+    result_state: PDFQAState,
 ) -> None:
     user_message = Message(
         session_id=session_obj.id,
@@ -95,13 +181,17 @@ def _store_messages(
     answer_message = Message(
         session_id=session_obj.id,
         message_type=MessageType.AI_RESPONSE,
-        content=result.answer,
-        citations=result.citations,
-        retrieval_stats=result.metadata,
+        content=result_state.answer or "",
+        citations=result_state.citations,
+        retrieval_stats=result_state.metadata or {},
     )
     session_obj.total_messages += 2
     db.add_all([user_message, answer_message])
     db.commit()
+
+
+def _encode_sse(payload: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
 __all__ = ["router"]

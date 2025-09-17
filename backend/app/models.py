@@ -332,6 +332,9 @@ class ChatSession(Base):
     messages = relationship(
         "Message", back_populates="session", cascade="all, delete-orphan"
     )
+    langgraph_runs = relationship(
+        "LangGraphRun", back_populates="session", cascade="all, delete-orphan"
+    )
 
     # Indexes
     __table_args__ = (
@@ -375,6 +378,83 @@ class Message(Base):
         CheckConstraint(
             "confidence_score >= 0 AND confidence_score <= 1",
             name="check_message_confidence",
+        ),
+    )
+
+
+# ====================
+# LangGraph Telemetry
+# ====================
+
+
+class LangGraphRun(Base):
+    """Stores LangGraph supervisor executions for auditing and replay."""
+
+    __tablename__ = "langgraph_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    session_id = Column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id"), nullable=False
+    )
+    pdf_id = Column(UUID(as_uuid=True), ForeignKey("pdf_documents.id"))
+    workflow_name = Column(String(100), nullable=False)
+    input_query = Column(Text, nullable=False)
+    state_snapshot = Column(JSONB, default=dict)
+    status = Column(String(20), default="PENDING", nullable=False)
+    started_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
+    latency_ms = Column(Integer)
+    specialists_invoked = Column(JSONB, default=list)
+    debug_trace_path = Column(String(500))
+    run_metadata = Column(JSONB, default=dict)
+
+    session = relationship("ChatSession", back_populates="langgraph_runs")
+    pdf_document = relationship("PDFDocument")
+    node_runs = relationship(
+        "LangGraphNodeRun",
+        back_populates="graph_run",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("idx_langgraph_session", "session_id", "started_at"),
+        Index("idx_langgraph_status", "status"),
+        Index("idx_langgraph_workflow", "workflow_name"),
+        CheckConstraint(
+            "latency_ms IS NULL OR latency_ms >= 0", name="check_langgraph_latency"
+        ),
+    )
+
+
+class LangGraphNodeRun(Base):
+    """Captures per-node execution details for LangGraph workflows."""
+
+    __tablename__ = "langgraph_node_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    graph_run_id = Column(
+        UUID(as_uuid=True), ForeignKey("langgraph_runs.id"), nullable=False
+    )
+    node_key = Column(String(150), nullable=False)
+    node_type = Column(String(50), nullable=False)
+    input_state = Column(JSONB, default=dict)
+    output_state = Column(JSONB, default=dict)
+    status = Column(String(20), default="PENDING", nullable=False)
+    started_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
+    latency_ms = Column(Integer)
+    error = Column(Text)
+    deps_snapshot = Column(JSONB)
+
+    graph_run = relationship("LangGraphRun", back_populates="node_runs")
+
+    __table_args__ = (
+        UniqueConstraint("graph_run_id", "node_key", name="uq_langgraph_node_per_run"),
+        Index("idx_langgraph_node_type", "node_type"),
+        Index("idx_langgraph_node_status", "status"),
+        CheckConstraint(
+            "latency_ms IS NULL OR latency_ms >= 0",
+            name="check_langgraph_node_latency",
         ),
     )
 

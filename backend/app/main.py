@@ -13,6 +13,7 @@ from .routers import (
     test_highlights,
     rag_endpoints,
     pdf_endpoints,
+    pdf_data,
 )
 from .database import engine
 from .models import Base  # Import Base from models.py now
@@ -67,6 +68,7 @@ app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(test_highlights.router, prefix="/test", tags=["testing"])
 app.include_router(rag_endpoints.router)
 app.include_router(pdf_endpoints.router)
+app.include_router(pdf_data.router)
 
 
 @app.on_event("startup")

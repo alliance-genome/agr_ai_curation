@@ -4,6 +4,7 @@ import { useMemo, useState, useEffect } from "react";
 import HomePage from "./pages/HomePage";
 import AdminPage from "./pages/AdminPage";
 import SettingsPage from "./pages/SettingsPage";
+import PDFBrowserPage from "./pages/PDFBrowserPage";
 import DebugBadge from "./components/DebugBadge";
 import { debug } from "./utils/debug";
 import axios from "axios";
@@ -115,6 +116,15 @@ function App() {
               <>
                 {console.log("🔧 App: Rendering SettingsPage route")}
                 <SettingsPage />
+              </>
+            }
+          />
+          <Route
+            path="/browser"
+            element={
+              <>
+                {console.log("📄 App: Rendering PDFBrowserPage route")}
+                <PDFBrowserPage toggleColorMode={toggleColorMode} />
               </>
             }
           />

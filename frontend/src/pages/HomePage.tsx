@@ -5,11 +5,13 @@ import {
   Button,
   Box,
   IconButton,
+  Paper,
 } from "@mui/material";
 import {
   Home as HomeIcon,
   AdminPanelSettings as AdminIcon,
   Settings as SettingsIcon,
+  Description,
   Brightness4,
   Brightness7,
 } from "@mui/icons-material";
@@ -18,7 +20,8 @@ import { useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import { useRef, useState } from "react";
 import PdfViewerMultiColorFixed from "../components/PdfViewerMultiColorFixed";
-import AgentInterface from "../components/AgentInterface";
+import ChatInterface from "../components/ChatInterface";
+import PDFUpload from "../components/PDFUpload";
 import CurationPanel from "../components/CurationPanel";
 import { PdfTextData } from "../types/pdf";
 import { debug } from "../utils/debug";
@@ -37,9 +40,8 @@ function HomePage({ toggleColorMode }: HomePageProps) {
   const panelGroupRef = useRef<any>(null);
   const [highlightTerms, setHighlightTerms] = useState<string[]>([]);
   const [pdfTextData, setPdfTextData] = useState<PdfTextData | null>(null);
-  const [currentPdfUrl, setCurrentPdfUrl] = useState<string>(
-    "/api/uploads/test_paper.pdf",
-  );
+  const [currentPdfUrl, setCurrentPdfUrl] = useState<string | null>(null);
+  const [uploadedPdfId, setUploadedPdfId] = useState<string | null>(null);
 
   debug.pdfHighlight("🏠 HOMEPAGE: State initialized:", {
     highlightTerms,
@@ -86,7 +88,20 @@ function HomePage({ toggleColorMode }: HomePageProps) {
   // Handle PDF URL change
   const handlePdfUrlChange = (url: string) => {
     setCurrentPdfUrl(url);
-    // Clear highlights when PDF changes
+    setHighlightTerms([]);
+  };
+
+  const handlePdfUploaded = ({
+    pdfId,
+    viewerUrl,
+  }: {
+    pdfId: string;
+    viewerUrl?: string;
+  }) => {
+    setUploadedPdfId(pdfId);
+    if (viewerUrl) {
+      setCurrentPdfUrl(viewerUrl);
+    }
     setHighlightTerms([]);
   };
 
@@ -132,6 +147,15 @@ function HomePage({ toggleColorMode }: HomePageProps) {
 
           <Button
             color="inherit"
+            startIcon={<Description />}
+            onClick={() => navigate("/browser")}
+            sx={{ mr: 1 }}
+          >
+            Browser
+          </Button>
+
+          <Button
+            color="inherit"
             variant="outlined"
             startIcon={<AdminIcon />}
             onClick={() => navigate("/admin")}
@@ -153,25 +177,56 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             minSize={20}
             maxSize={50}
           >
-            {(() => {
-              debug.pdfHighlight(
-                "🏠 HOMEPAGE: Rendering PdfViewerMultiColorFixed with props:",
-                {
-                  highlightTerms,
-                  currentPdfUrl,
-                  hasOnTextExtracted: !!handlePdfTextExtracted,
-                  hasOnPdfUrlChange: !!handlePdfUrlChange,
-                },
-              );
-              return (
-                <PdfViewerMultiColorFixed
-                  highlightTerms={highlightTerms}
-                  onTextExtracted={handlePdfTextExtracted}
-                  onPdfUrlChange={handlePdfUrlChange}
-                  pdfUrl={currentPdfUrl}
-                />
-              );
-            })()}
+            <Box
+              sx={{
+                p: 2,
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                height: "100%",
+              }}
+            >
+              <PDFUpload onUploaded={handlePdfUploaded} />
+              <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+                {currentPdfUrl ? (
+                  (() => {
+                    debug.pdfHighlight(
+                      "🏠 HOMEPAGE: Rendering PdfViewerMultiColorFixed with props:",
+                      {
+                        highlightTerms,
+                        currentPdfUrl,
+                        hasOnTextExtracted: !!handlePdfTextExtracted,
+                        hasOnPdfUrlChange: !!handlePdfUrlChange,
+                      },
+                    );
+                    return (
+                      <PdfViewerMultiColorFixed
+                        highlightTerms={highlightTerms}
+                        onTextExtracted={handlePdfTextExtracted}
+                        onPdfUrlChange={handlePdfUrlChange}
+                        pdfUrl={currentPdfUrl}
+                      />
+                    );
+                  })()
+                ) : (
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 4,
+                      textAlign: "center",
+                      height: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Typography variant="body1" color="text.secondary">
+                      Upload a PDF to preview it here.
+                    </Typography>
+                  </Paper>
+                )}
+              </Box>
+            </Box>
           </Panel>
 
           <PanelResizeHandle
@@ -198,7 +253,12 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             minSize={20}
             maxSize={60}
           >
-            <AgentInterface pdfTextData={pdfTextData} />
+            <Box sx={{ p: 2, height: "100%" }}>
+              <ChatInterface
+                key={uploadedPdfId ?? "no-pdf"}
+                pdfId={uploadedPdfId}
+              />
+            </Box>
           </Panel>
 
           <PanelResizeHandle

@@ -10,6 +10,8 @@ from app.agents.main_orchestrator import (
     build_pydantic_agent,
 )
 from app.config import get_settings
+from app.orchestration.general_supervisor import build_general_supervisor
+from app.services.langgraph_runner import LangGraphRunner
 from lib.pipelines import build_general_pipeline
 
 
@@ -29,4 +31,19 @@ def get_general_orchestrator() -> GeneralOrchestrator:
     return GeneralOrchestrator(pipeline=pipeline, agent=agent, config=config)
 
 
-__all__ = ["get_general_orchestrator"]
+@lru_cache
+def get_general_supervisor_app():
+    orchestrator = get_general_orchestrator()
+    return build_general_supervisor(orchestrator=orchestrator)
+
+
+@lru_cache
+def get_langgraph_runner() -> LangGraphRunner:
+    return LangGraphRunner(get_general_supervisor_app())
+
+
+__all__ = [
+    "get_general_orchestrator",
+    "get_general_supervisor_app",
+    "get_langgraph_runner",
+]

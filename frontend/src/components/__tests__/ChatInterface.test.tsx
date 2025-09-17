@@ -19,14 +19,39 @@ describe("ChatInterface", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ session_id: "session-1" }),
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
     });
+
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('data: {"type":"start"}\n\n'),
+      encoder.encode(
+        'data: {"type":"final","answer":"BRCA1 repairs DNA.","citations":[{"page":3}]}\n\n',
+      ),
+      encoder.encode('data: {"type":"end"}\n\n'),
+    ];
+    const reader = {
+      read: vi.fn(() => {
+        const value = chunks.shift();
+        if (value) {
+          return Promise.resolve({ value, done: false });
+        }
+        return Promise.resolve({ value: undefined, done: true });
+      }),
+    };
+
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
-        answer: "BRCA1 repairs DNA.",
-        citations: [{ page: 3 }],
-        metadata: {},
-      }),
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "text/event-stream" : null,
+      },
+      body: {
+        getReader: () => reader,
+      },
     });
 
     render(<ChatInterface pdfId={pdfId} />);
@@ -50,8 +75,8 @@ describe("ChatInterface", () => {
     expect(screen.getByText(/BRCA1 repairs DNA/)).toBeInTheDocument();
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/rag/sessions");
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "/api/rag/sessions/session-1/question",
-    );
+    const secondCall = fetchMock.mock.calls[1];
+    expect(secondCall[0]).toBe("/api/rag/sessions/session-1/question");
+    expect(secondCall[1]?.headers?.Accept).toBe("text/event-stream");
   });
 });
