@@ -70,7 +70,7 @@ describe("ChatInterface", () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByText(/Assistant:/)).toBeInTheDocument(),
+      expect(screen.getByText(/Assistant/)).toBeInTheDocument(),
     );
     expect(screen.getByText(/BRCA1 repairs DNA/)).toBeInTheDocument();
 

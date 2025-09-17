@@ -11,7 +11,6 @@ from app.agents.main_orchestrator import (
     GeneralOrchestrator,
     OrchestratorConfig,
     OrchestratorDeps,
-    GeneralAnswer,
 )
 from app.agents.pipeline_models import GeneralPipelineChunk, GeneralPipelineOutput
 
@@ -35,9 +34,10 @@ class FakeAgent:
         self.calls.append({"prompt": prompt, "deps": deps})
 
         class Result:
-            output = GeneralAnswer(answer=self._answer)
+            def __init__(self, answer: str) -> None:
+                self.output = answer
 
-        return Result()
+        return Result(self._answer)
 
 
 @pytest.mark.asyncio

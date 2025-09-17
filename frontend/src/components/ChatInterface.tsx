@@ -65,7 +65,8 @@ const MessagesContainer = styled(Box)(({ theme }) => ({
 const MessageCard = styled(Card, {
   shouldForwardProp: (prop) => prop !== "isUser",
 })<{ isUser: boolean }>(({ theme, isUser }) => ({
-  maxWidth: "75%",
+  width: "fit-content",
+  maxWidth: isUser ? "75%" : "90%",
   padding: theme.spacing(2),
   backgroundColor: isUser
     ? theme.palette.mode === "dark"
@@ -78,6 +79,9 @@ const MessageCard = styled(Card, {
   borderRadius: theme.spacing(2),
   position: "relative",
   boxShadow: theme.shadows[1],
+  overflow: "visible",
+  wordBreak: "break-word",
+  overflowWrap: "anywhere",
 }));
 
 const InputContainer = styled(Box)(({ theme }) => ({
@@ -139,6 +143,17 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
     );
   };
 
+  const appendAssistantMessage = (id: string, delta: string) => {
+    if (!delta) return;
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === id
+          ? { ...message, text: `${message.text}${delta}` }
+          : message,
+      ),
+    );
+  };
+
   const removeAssistantMessage = (id: string) => {
     setMessages((prev) => prev.filter((message) => message.id !== id));
   };
@@ -155,7 +170,8 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
   };
 
   const sendQuestion = async () => {
-    if (!question.trim() || loading) {
+    const trimmed = question.trim();
+    if (!trimmed || loading) {
       return;
     }
 
@@ -167,11 +183,13 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: "user",
-      text: question.trim(),
+      text: trimmed,
       timestamp: new Date(),
     };
 
+    setQuestion("");
     setMessages((prev) => [...prev, userMessage]);
+    scrollToBottom();
     setLoading(true);
     setError(null);
 
@@ -200,7 +218,7 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
           },
-          body: JSON.stringify({ question: question.trim() }),
+          body: JSON.stringify({ question: trimmed }),
         },
       );
 
@@ -256,13 +274,14 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
           if (dataLine) {
             try {
               const payload = JSON.parse(dataLine.slice(5).trim() || "{}");
-              if (payload.type === "final") {
-                // Each "final" event contains the progressively built answer
+              if (payload.type === "delta") {
+                appendAssistantMessage(assistantId, payload.content ?? "");
+                scrollToBottom();
+              } else if (payload.type === "final") {
                 updateAssistantMessage(assistantId, {
                   text: payload.answer ?? "",
                   citations: payload.citations ?? [],
                 });
-                // Scroll to bottom as text streams in
                 scrollToBottom();
               } else if (payload.type === "end") {
                 endReceived = true;

@@ -16,7 +16,10 @@ from app.database import get_db
 from app.models import ChatSession, Message, MessageType, PDFDocument
 from app.orchestration.general_supervisor import PDFQAState
 from app.repositories.langgraph_runs import LangGraphRunRepository
-from app.services.orchestrator_service import get_langgraph_runner
+from app.services.orchestrator_service import (
+    get_langgraph_runner,
+    get_general_orchestrator,
+)
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
 
@@ -90,32 +93,78 @@ async def ask_question(
     wants_stream = "text/event-stream" in accepts
 
     if wants_stream:
+        orchestrator = get_general_orchestrator()
+        prepared = await orchestrator.prepare(
+            pdf_id=session_obj.pdf_id, query=request.question
+        )
         start = perf_counter()
         final_state_holder: Dict[str, PDFQAState | None] = {"state": None}
+        final_answer_holder: Dict[str, str] = {"text": ""}
         error_holder: Dict[str, Any | None] = {"error": None}
 
         async def event_stream():
+            answer_chunks: list[str] = []
+            final_answer: str | None = None
             try:
                 yield _encode_sse({"type": "start"})
-                async for chunk in runner.stream(state):
-                    chunk_state = (
-                        chunk
-                        if isinstance(chunk, PDFQAState)
-                        else PDFQAState.model_validate(chunk)
-                    )
-                    final_state_holder["state"] = chunk_state
-                    yield _encode_sse(
-                        {
-                            "type": "final",
-                            "answer": chunk_state.answer or "",
-                            "citations": chunk_state.citations or [],
-                            "metadata": chunk_state.metadata or {},
-                        }
-                    )
-                yield _encode_sse({"type": "end"})
+                async with orchestrator._agent.run_stream(
+                    prepared.prompt, deps=prepared.deps
+                ) as stream:
+                    async for text_chunk in stream.stream_text(delta=True):
+                        answer_chunks.append(text_chunk)
+                        combined_metadata = dict(state.metadata)
+                        combined_metadata.update(prepared.metadata)
+                        chunk_state = PDFQAState(
+                            session_id=state.session_id,
+                            pdf_id=state.pdf_id,
+                            question=state.question,
+                            intent="general",
+                            answer="".join(answer_chunks),
+                            citations=list(prepared.citations),
+                            metadata=combined_metadata,
+                            specialists_invoked=["general"],
+                        )
+                        final_state_holder["state"] = chunk_state
+                        yield _encode_sse(
+                            {
+                                "type": "delta",
+                                "content": text_chunk,
+                            }
+                        )
+                    try:
+                        final_answer = await stream.get_output()
+                    except Exception:
+                        final_answer = None
             except Exception as exc:  # pragma: no cover - propagated via SSE
                 error_holder["error"] = exc
                 yield _encode_sse({"type": "error", "message": str(exc)})
+                return
+            else:
+                final_text = final_answer if final_answer else "".join(answer_chunks)
+                final_answer_holder["text"] = final_text
+                combined_metadata = dict(state.metadata)
+                combined_metadata.update(prepared.metadata)
+                final_state = PDFQAState(
+                    session_id=state.session_id,
+                    pdf_id=state.pdf_id,
+                    question=state.question,
+                    intent="general",
+                    answer=final_text,
+                    citations=list(prepared.citations),
+                    metadata=combined_metadata,
+                    specialists_invoked=["general"],
+                )
+                final_state_holder["state"] = final_state
+                yield _encode_sse(
+                    {
+                        "type": "final",
+                        "answer": final_text,
+                        "citations": final_state.citations,
+                        "metadata": final_state.metadata,
+                    }
+                )
+                yield _encode_sse({"type": "end"})
+
             finally:
                 latency_ms = int((perf_counter() - start) * 1000)
                 final_state = final_state_holder["state"]
