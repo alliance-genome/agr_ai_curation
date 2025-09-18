@@ -71,8 +71,7 @@ def get_embedding_service() -> EmbeddingService:
         ),
         default_version=get_setting_value(
             "ontology_embedding_model_version",
-            settings.ontology_embedding_model_version
-            or base_config.default_version,
+            settings.ontology_embedding_model_version or base_config.default_version,
             cast=str,
         ),
         max_batch_size=get_setting_value(

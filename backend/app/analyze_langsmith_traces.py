@@ -25,11 +25,13 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
 
     try:
         # Get recent runs
-        runs = list(client.list_runs(
-            project_name=project_name,
-            limit=limit,
-            is_root=True  # Only get root runs
-        ))
+        runs = list(
+            client.list_runs(
+                project_name=project_name,
+                limit=limit,
+                is_root=True,  # Only get root runs
+            )
+        )
 
         if not runs:
             print("No runs found in the project.")
@@ -51,9 +53,9 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
                 print(f"Total Latency: {latency:.2f}s")
 
             # Get metadata
-            if run.extra and 'metadata' in run.extra:
+            if run.extra and "metadata" in run.extra:
                 print(f"\n📝 Metadata:")
-                metadata = run.extra['metadata']
+                metadata = run.extra["metadata"]
                 for key, value in metadata.items():
                     if isinstance(value, (list, dict)):
                         print(f"  {key}: {json.dumps(value, indent=2)}")
@@ -61,11 +63,13 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
                         print(f"  {key}: {value}")
 
             # Get child runs to see the flow
-            child_runs = list(client.list_runs(
-                project_name=project_name,
-                filter=f'eq(parent_run_id, "{run.id}")',
-                limit=50
-            ))
+            child_runs = list(
+                client.list_runs(
+                    project_name=project_name,
+                    filter=f'eq(parent_run_id, "{run.id}")',
+                    limit=50,
+                )
+            )
 
             if child_runs:
                 print(f"\n🔄 Execution Flow ({len(child_runs)} steps):")
@@ -73,26 +77,30 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
                 # Group by node type
                 node_types = defaultdict(list)
                 for child in child_runs:
-                    if child.extra and 'metadata' in child.extra:
-                        node_type = child.extra['metadata'].get('node_type', 'unknown')
+                    if child.extra and "metadata" in child.extra:
+                        node_type = child.extra["metadata"].get("node_type", "unknown")
                         node_types[node_type].append(child)
 
                 # Show execution order
-                sorted_children = sorted(child_runs, key=lambda x: x.start_time or datetime.min)
+                sorted_children = sorted(
+                    child_runs, key=lambda x: x.start_time or datetime.min
+                )
                 for j, child in enumerate(sorted_children[:20], 1):  # Show first 20
                     if child.end_time and child.start_time:
-                        child_latency = (child.end_time - child.start_time).total_seconds() * 1000
+                        child_latency = (
+                            child.end_time - child.start_time
+                        ).total_seconds() * 1000
                         latency_str = f"{child_latency:.0f}ms"
                     else:
                         latency_str = "N/A"
 
                     # Get node metadata
                     node_info = ""
-                    if child.extra and 'metadata' in child.extra:
-                        meta = child.extra['metadata']
-                        if 'node_type' in meta:
+                    if child.extra and "metadata" in child.extra:
+                        meta = child.extra["metadata"]
+                        if "node_type" in meta:
                             node_info = f" [{meta['node_type']}]"
-                        if 'description' in meta:
+                        if "description" in meta:
                             node_info += f" - {meta['description']}"
 
                     print(f"  {j:2}. {child.name}{node_info} ({latency_str})")
@@ -103,12 +111,19 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
                 # Summary by node type
                 print(f"\n📈 Summary by Node Type:")
                 for node_type, runs in node_types.items():
-                    avg_latency = sum(
-                        (r.end_time - r.start_time).total_seconds() * 1000
-                        for r in runs
-                        if r.end_time and r.start_time
-                    ) / len(runs) if runs else 0
-                    print(f"  - {node_type}: {len(runs)} calls, avg {avg_latency:.0f}ms")
+                    avg_latency = (
+                        sum(
+                            (r.end_time - r.start_time).total_seconds() * 1000
+                            for r in runs
+                            if r.end_time and r.start_time
+                        )
+                        / len(runs)
+                        if runs
+                        else 0
+                    )
+                    print(
+                        f"  - {node_type}: {len(runs)} calls, avg {avg_latency:.0f}ms"
+                    )
 
             # Get any errors
             if run.error:
@@ -125,7 +140,11 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
 
             if run.outputs:
                 print(f"\n📤 Outputs:")
-                output_str = json.dumps(run.outputs, indent=2) if isinstance(run.outputs, dict) else str(run.outputs)
+                output_str = (
+                    json.dumps(run.outputs, indent=2)
+                    if isinstance(run.outputs, dict)
+                    else str(run.outputs)
+                )
                 if len(output_str) > 500:
                     print(f"{output_str[:500]}...")
                 else:
@@ -139,7 +158,9 @@ def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):
         successful_runs = [r for r in runs if r.status == "success"]
         failed_runs = [r for r in runs if r.status == "error"]
 
-        print(f"Success Rate: {len(successful_runs)}/{len(runs)} ({len(successful_runs)/len(runs)*100:.1f}%)")
+        print(
+            f"Success Rate: {len(successful_runs)}/{len(runs)} ({len(successful_runs)/len(runs)*100:.1f}%)"
+        )
 
         if successful_runs:
             latencies = [
@@ -179,19 +200,21 @@ def get_detailed_run(run_id: str, project_name: str = "ai-curation-dev"):
         print(f"ID: {run.id}")
 
         # Get full execution tree
-        child_runs = list(client.list_runs(
-            project_name=project_name,
-            filter=f'eq(parent_run_id, "{run.id}")',
-            limit=100
-        ))
+        child_runs = list(
+            client.list_runs(
+                project_name=project_name,
+                filter=f'eq(parent_run_id, "{run.id}")',
+                limit=100,
+            )
+        )
 
         print(f"\n🌳 Execution Tree:")
         _print_tree(client, project_name, run, level=0)
 
         # Analyze token usage if available
-        if run.extra and 'tokens' in run.extra:
+        if run.extra and "tokens" in run.extra:
             print(f"\n💰 Token Usage:")
-            tokens = run.extra['tokens']
+            tokens = run.extra["tokens"]
             print(f"  Total: {tokens.get('total', 'N/A')}")
             print(f"  Prompt: {tokens.get('prompt', 'N/A')}")
             print(f"  Completion: {tokens.get('completion', 'N/A')}")
@@ -215,20 +238,22 @@ def _print_tree(client, project_name, run, level=0, max_level=3):
 
     # Get node info
     node_info = ""
-    if run.extra and 'metadata' in run.extra:
-        meta = run.extra['metadata']
-        if 'node_type' in meta:
+    if run.extra and "metadata" in run.extra:
+        meta = run.extra["metadata"]
+        if "node_type" in meta:
             node_info = f" [{meta['node_type']}]"
 
     print(f"{indent}├─ {run.name}{node_info} ({latency_str})")
 
     # Get children
     try:
-        children = list(client.list_runs(
-            project_name=project_name,
-            filter=f'eq(parent_run_id, "{run.id}")',
-            limit=10
-        ))
+        children = list(
+            client.list_runs(
+                project_name=project_name,
+                filter=f'eq(parent_run_id, "{run.id}")',
+                limit=10,
+            )
+        )
 
         for child in children:
             _print_tree(client, project_name, child, level + 1, max_level)
@@ -254,4 +279,6 @@ if __name__ == "__main__":
     print("\nUsage:")
     print("  python analyze_langsmith_traces.py        # Analyze last 5 runs")
     print("  python analyze_langsmith_traces.py 20     # Analyze last 20 runs")
-    print("  python analyze_langsmith_traces.py detail <run_id>  # Detailed view of specific run")
+    print(
+        "  python analyze_langsmith_traces.py detail <run_id>  # Detailed view of specific run"
+    )

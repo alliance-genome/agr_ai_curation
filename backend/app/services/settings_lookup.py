@@ -40,11 +40,7 @@ def get_setting_value(
 
 
 def _load_raw_value(session: Session, key: str) -> Any:
-    record = (
-        session.query(SettingsModel)
-        .filter(SettingsModel.key == key)
-        .first()
-    )
+    record = session.query(SettingsModel).filter(SettingsModel.key == key).first()
     if record is None or record.value in (None, ""):
         return None
 
