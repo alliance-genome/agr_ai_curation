@@ -6,9 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 from uuid import UUID
 
+from langsmith import traceable
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
+from app.services.langsmith_service import LangSmithService
 from .pipeline_models import GeneralPipelineChunk, GeneralPipelineOutput
 
 
@@ -75,9 +77,20 @@ class GeneralOrchestrator:
         chunk_texts: List[str]
         chunk_count: int
 
+    @traceable(name="orchestrator_prepare", metadata={"stage": "preparation"})
     async def prepare(
         self, *, pdf_id: UUID, query: str
     ) -> "GeneralOrchestrator.PreparedRequest":
+        """Prepare context with LangSmith tracing."""
+
+        # Add preparation metadata
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "pdf_id": str(pdf_id),
+                "query_preview": query[:100],
+            }
+        )
+
         pipeline_output: GeneralPipelineOutput = await self._pipeline.run(
             pdf_id=pdf_id, query=query
         )
@@ -102,6 +115,15 @@ class GeneralOrchestrator:
             "pdf_id": str(pipeline_output.pdf_id),
             "pipeline_metadata": pipeline_output.metadata,
         }
+
+        # Log preparation results
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "chunks_eligible": len(eligible_chunks),
+                "confidence_threshold": self._config.confidence_threshold,
+                "top_k": self._config.top_k,
+            }
+        )
 
         return GeneralOrchestrator.PreparedRequest(
             prompt=prompt,
@@ -148,6 +170,7 @@ class GeneralOrchestrator:
             metadata=metadata,
         )
 
+    @traceable(name="orchestrator_stream", metadata={"stage": "generation"})
     async def stream_with_serialized(
         self,
         *,
@@ -156,10 +179,19 @@ class GeneralOrchestrator:
         citations: List[Dict[str, Any]],
         metadata: Dict[str, Any],
     ):
-        """Stream answer generation with PydanticAI.
+        """Stream answer generation with tracing.
 
         Yields text chunks as they're generated, then returns final result.
         """
+
+        # Log generation request
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "prompt_length": len(prompt),
+                "citations_count": len(citations),
+                "has_context": bool(deps.get("context")),
+            }
+        )
         async with self._agent.run_stream(
             prompt, deps=OrchestratorDeps(**deps)
         ) as stream:

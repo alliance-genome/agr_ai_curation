@@ -14,6 +14,10 @@ from pydantic_ai import Agent
 
 from app.agents.main_orchestrator import GeneralOrchestrator
 from app.agents.disease_ontology_agent import DiseaseOntologyAgent
+from app.services.langsmith_service import LangSmithService, with_langsmith_metadata
+
+# Initialize LangSmith at module level
+LangSmithService.initialize()
 
 
 class IntentAnalysis(BaseModel):
@@ -132,8 +136,32 @@ def build_general_supervisor(
     workflow = StateGraph(PDFQAState)
     disease_agent = disease_agent or DiseaseOntologyAgent()
 
+    @with_langsmith_metadata(node_type="retrieval", description="Retrieve RAG context")
     async def retrieve_context(state: PDFQAState) -> Dict[str, Any]:
+        # Log important metrics to LangSmith
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "pdf_id": str(state.pdf_id),
+                "query_length": len(state.question),
+            }
+        )
+
         prepared = await orchestrator.prepare(pdf_id=state.pdf_id, query=state.question)
+
+        # Add retrieval metrics
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "chunks_retrieved": len(prepared.chunks),
+                "avg_chunk_score": (
+                    sum(c.score for c in prepared.chunks) / len(prepared.chunks)
+                    if prepared.chunks
+                    else 0
+                ),
+                "pages_referenced": list(
+                    set(c.citation.get("page") for c in prepared.chunks if c.citation)
+                ),
+            }
+        )
 
         chunk_payloads = [
             {
@@ -160,6 +188,9 @@ def build_general_supervisor(
             "prepared_deps": prepared.deps.model_dump(),
         }
 
+    @with_langsmith_metadata(
+        node_type="generation", description="Generate final answer"
+    )
     async def general_answer(state: PDFQAState) -> Dict[str, Any]:
         specialist_context_parts: List[str] = []
         if state.specialist_results:
@@ -213,6 +244,16 @@ def build_general_supervisor(
         for citation in result.citations:
             if citation not in combined_citations:
                 combined_citations.append(citation)
+
+        # Log generation metrics
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "specialists_used": state.specialists_invoked,
+                "answer_length": len(result.answer) if result.answer else 0,
+                "citations_count": len(combined_citations),
+            }
+        )
+
         updates: Dict[str, Any] = {
             "answer": result.answer,
             "citations": combined_citations,
@@ -224,20 +265,50 @@ def build_general_supervisor(
             updates["intent"] = "general"
         return updates
 
-    workflow.add_node("retrieve_context", retrieve_context)
-    workflow.add_node("analyze_intent", analyze_intent)
+    @with_langsmith_metadata(node_type="routing", description="Analyze query intent")
+    async def analyze_intent_traced(state: PDFQAState) -> Dict[str, Any]:
+        result = await analyze_intent(state)
 
+        # Log routing decision
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "intent_classification": result.get("intent"),
+                "routing_confidence": result.get("routing_confidence"),
+                "routing_reasoning": result.get("routing_reasoning"),
+            }
+        )
+
+        return result
+
+    workflow.add_node("retrieve_context", retrieve_context)
+    workflow.add_node("analyze_intent", analyze_intent_traced)
+
+    @with_langsmith_metadata(node_type="specialist", specialist="disease")
     async def disease_specialist(state: PDFQAState) -> Dict[str, Any]:
         detected_entities = (
             state.metadata.get("detected_entities", {}).get("diseases", [])
             if state.metadata
             else []
         )
-        agent_output = await disease_agent.lookup_diseases(
-            question=state.question,
-            context=state.retrieved_context or "",
-            detected_entities=list(detected_entities),
-        )
+
+        # Try to lookup diseases, but handle if ontology source isn't available
+        try:
+            agent_output = await disease_agent.lookup_diseases(
+                question=state.question,
+                context=state.retrieved_context or "",
+                detected_entities=list(detected_entities),
+            )
+        except ValueError as e:
+            if "Unknown source type: ontology_disease" in str(e):
+                # Ontology not available, skip disease lookup
+                agent_output = {
+                    "status": "not_available",
+                    "entries": [],
+                    "answer": "Disease ontology lookup is not available.",
+                    "citations": [],
+                }
+            else:
+                raise
 
         specialists = list(state.specialists_invoked)
         specialists.append("disease_ontology")
@@ -246,6 +317,16 @@ def build_general_supervisor(
         for citation in agent_output.get("citations", []):
             if citation not in citations:
                 citations.append(citation)
+
+        # Log specialist results
+        LangSmithService.add_metadata_to_current_trace(
+            {
+                "diseases_found": len(agent_output.get("entries", [])),
+                "disease_ids": [
+                    e.get("term_id") for e in agent_output.get("entries", [])[:5]
+                ],
+            }
+        )
 
         specialist_results = dict(state.specialist_results)
         specialist_results["disease_ontology"] = agent_output
@@ -280,7 +361,16 @@ def build_general_supervisor(
     workflow.add_edge("disease_specialist", "general_answer")
     workflow.add_edge("general_answer", END)
 
-    return workflow.compile(checkpointer=checkpointer or MemorySaver())
+    # Compile with LangSmith-friendly name
+    compiled = workflow.compile(
+        checkpointer=checkpointer or MemorySaver(),
+        debug=True,  # Enable debug mode for richer traces
+    )
+
+    # Add graph metadata
+    compiled.name = "ai_curation_supervisor"
+
+    return compiled
 
 
 @lru_cache

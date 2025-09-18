@@ -21,6 +21,7 @@ from app.models import (
     UnifiedChunk,
 )
 from app.services.embedding_service_factory import get_embedding_service
+from app.services.settings_lookup import get_setting_value
 
 
 def parse_obo_terms(path: Path) -> Iterable[Dict[str, object]]:
@@ -290,10 +291,18 @@ def ingest_ontology(
         session.commit()
 
     chunk_total = chunk_total or len(terms)
-    ontology_model = (
-        settings.ontology_embedding_model_name or settings.embedding_model_name
+    ontology_model = get_setting_value(
+        "ontology_embedding_model_name",
+        settings.ontology_embedding_model_name or settings.embedding_model_name,
+        cast=str,
     )
-    batch_size = settings.ontology_embedding_batch_size or None
+    batch_size = get_setting_value(
+        "ontology_embedding_batch_size",
+        settings.ontology_embedding_batch_size or settings.embedding_default_batch_size,
+        cast=int,
+    )
+    if batch_size and batch_size <= 0:
+        batch_size = None
 
     embed_summary = {
         "embedded": 0,

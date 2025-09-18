@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from .routers import (
     agents,
@@ -19,6 +20,7 @@ from .routers import (
 from .database import engine
 from .models import Base  # Import Base from models.py now
 from .config import get_settings
+from .services.langsmith_service import LangSmithService
 from .middleware.error_handler import (
     ErrorHandlingMiddleware,
     RateLimitMiddleware,
@@ -73,9 +75,34 @@ app.include_router(pdf_data.router)
 app.include_router(ontology.router)
 
 
+# Add middleware for trace context propagation
+@app.middleware("http")
+async def add_trace_context(request: Request, call_next):
+    """Add trace context to all requests."""
+    # Generate trace ID if not present
+    trace_id = request.headers.get("x-trace-id", str(uuid4()))
+
+    # Add to LangSmith metadata
+    LangSmithService.add_metadata_to_current_trace(
+        {
+            "trace_id": trace_id,
+            "path": request.url.path,
+            "method": request.method,
+        }
+    )
+
+    response = await call_next(request)
+    response.headers["x-trace-id"] = trace_id
+    return response
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database with .env values on first run"""
+    """Initialize services on startup."""
+    # Initialize LangSmith tracing
+    LangSmithService.initialize()
+
+    # Initialize database with .env values on first run
     from .services.settings_service import initialize_settings
 
     await initialize_settings()

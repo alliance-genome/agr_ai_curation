@@ -12,6 +12,7 @@ anthropic
 google-generativeai
 pydantic-ai-slim[openai,anthropic,google]
 langgraph
+langsmith
 httpx
 cryptography
 python-jose[cryptography]

@@ -134,3 +134,5 @@ def test_run_embeddings_endpoint(override_dependencies):
     assert response.status_code == 202
     payload = response.json()
     assert payload["summary"]["queued"] is True
+    assert "model" in payload["summary"]
+    assert "total" in payload["summary"]

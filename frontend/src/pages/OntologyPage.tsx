@@ -143,6 +143,9 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
     if (stageKey === "embedding_running") {
       return { label: "Embedding", color: "info" };
     }
+    if (stageKey == "embedding_error") {
+      return { label: "Embedding Error", color: "error" };
+    }
     if (stageKey === "awaiting_embeddings") {
       return { label: "Pending", color: "default" };
     }
@@ -175,6 +178,8 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
           return "Embedding in progress";
         case "awaiting_embeddings":
           return "Awaiting embeddings";
+        case "embedding_error":
+          return "Embedding error";
         case "indexing":
           return "Indexing";
         case "ready":

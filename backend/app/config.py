@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from functools import lru_cache
 import os
 from dotenv import load_dotenv
@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     # API Keys
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+
+    # LangSmith Configuration
+    langsmith_api_key: str = Field(default="", env="LANGSMITH_API_KEY")
+    langsmith_project: str = Field(default="ai-curation-dev", env="LANGSMITH_PROJECT")
+    langsmith_enabled: bool = Field(default=False, env="LANGSMITH_ENABLED")
+    langsmith_tracing_sampling_rate: float = Field(
+        default=1.0, env="LANGSMITH_TRACING_SAMPLING_RATE"
+    )
 
     # Database (using SQLite for testing)
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./test_database.db")
@@ -64,6 +72,11 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
 
     model_config = ConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def langsmith_is_configured(self) -> bool:
+        """Check if LangSmith is properly configured."""
+        return bool(self.langsmith_enabled and self.langsmith_api_key)
 
 
 @lru_cache()

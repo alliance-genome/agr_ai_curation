@@ -21,6 +21,7 @@ from app.services.orchestrator_service import (
     get_langgraph_runner,
     get_general_orchestrator,
 )
+from app.services.langsmith_service import LangSmithService
 from app.agents.main_orchestrator import OrchestratorResult
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
@@ -75,9 +76,30 @@ async def ask_question(
     runner=Depends(get_langgraph_runner),
     db: Session = Depends(get_db),
 ):
+    """Process a question with full LangSmith tracing."""
+
+    # Add request metadata
+    LangSmithService.add_metadata_to_current_trace(
+        {
+            "session_id": str(session_id),
+            "question_length": len(request.question),
+            "streaming_requested": "text/event-stream"
+            in http_request.headers.get("accept", "").lower(),
+        }
+    )
+
     session_obj = db.get(ChatSession, session_id)
     if session_obj is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Log session metadata
+    LangSmithService.add_metadata_to_current_trace(
+        {
+            "pdf_id": str(session_obj.pdf_id),
+            "total_messages": session_obj.total_messages,
+            "rag_config": session_obj.rag_config or {},
+        }
+    )
 
     state = PDFQAState(
         session_id=session_obj.id,
@@ -246,6 +268,16 @@ async def ask_question(
     repo.commit()
 
     _store_messages(db, session_obj, request.question, final_state)
+
+    # Log final metrics before returning
+    LangSmithService.add_metadata_to_current_trace(
+        {
+            "latency_ms": latency_ms,
+            "specialists_invoked": final_state.specialists_invoked or [],
+            "answer_generated": bool(final_state.answer),
+            "streaming_completed": False,
+        }
+    )
 
     return QuestionResponse(
         answer=final_state.answer or "",

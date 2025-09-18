@@ -50,6 +50,10 @@ services:
       TEST_DATABASE_URL: postgresql://curation_user:curation_pass@postgres-test:5432/ai_curation_test # gitleaks:allow
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT}
+      LANGSMITH_ENABLED: ${LANGSMITH_ENABLED}
+      LANGSMITH_TRACING_SAMPLING_RATE: ${LANGSMITH_TRACING_SAMPLING_RATE}
     volumes:
       - ./backend/app:/app/app
       - ./backend/lib:/app/lib
