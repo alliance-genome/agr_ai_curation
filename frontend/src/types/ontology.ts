@@ -42,6 +42,7 @@ export interface OntologyEmbeddingResponse {
     model?: string;
     source_type?: string;
     source_id?: string;
+    total?: number;
     queued?: boolean;
     error?: string;
   };

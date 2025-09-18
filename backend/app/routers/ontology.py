@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -12,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.config import get_settings
 from app.database import SessionLocal
 from app.jobs.ingest_ontology import ingest_ontology
-from app.models import IngestionState, IngestionStatus
+from app.models import IngestionState, IngestionStatus, UnifiedChunk
 from app.repositories.ontology_repository import (
     OntologyRepository,
     OntologyStatusRow,
@@ -114,11 +115,14 @@ async def run_embeddings(
 
     source_type = f"ontology_{ontology_type}"
 
+    total_chunks = _reset_embeddings(source_type=source_type, source_id=source_id)
+
     summary = {
         "queued": True,
         "model": model_name,
         "source_type": source_type,
         "source_id": source_id,
+        "total": total_chunks,
     }
 
     with SessionLocal() as session:
@@ -139,7 +143,18 @@ async def run_embeddings(
                         payload = loaded
                 except (json.JSONDecodeError, TypeError):
                     payload = {}
-            payload.update({"stage": "embedding_running"})
+            payload.update(
+                {
+                    "stage": "embedding_running",
+                    "embedding": {
+                        "embedded": 0,
+                        "skipped": total_chunks,
+                        "total": total_chunks,
+                        "model": model_name,
+                        "started_at": datetime.utcnow().isoformat() + "Z",
+                    },
+                }
+            )
             record.status = IngestionState.INDEXING
             record.message = json.dumps(payload)
             session.commit()
@@ -170,6 +185,7 @@ def _execute_embedding_job(
 ) -> None:
     embedding_service = get_embedding_service()
     source_type = f"ontology_{ontology_type}"
+    total_chunks = _count_chunks(source_type=source_type, source_id=source_id)
 
     try:
         summary = embedding_service.embed_unified_chunks(
@@ -179,11 +195,17 @@ def _execute_embedding_job(
             batch_size=batch_size,
             force=True,
         )
+        summary["total"] = total_chunks
+        summary["completed_at"] = datetime.utcnow().isoformat() + "Z"
         stage = "ready"
         status_value = IngestionState.READY
     except Exception as exc:  # pragma: no cover - defensive
-        summary = {"error": str(exc)}
-        stage = "error"
+        summary = {
+            "error": str(exc),
+            "total": total_chunks,
+            "completed_at": datetime.utcnow().isoformat() + "Z",
+        }
+        stage = "embedding_error"
         status_value = IngestionState.ERROR
 
     with SessionLocal() as session:
@@ -208,6 +230,37 @@ def _execute_embedding_job(
             record.status = status_value
             record.message = json.dumps(payload)
             session.commit()
+
+
+def _reset_embeddings(*, source_type: str, source_id: str) -> int:
+    with SessionLocal() as session:
+        total = (
+            session.query(UnifiedChunk)
+            .filter(
+                UnifiedChunk.source_type == source_type,
+                UnifiedChunk.source_id == source_id,
+            )
+            .count()
+        )
+        if total:
+            session.query(UnifiedChunk).filter(
+                UnifiedChunk.source_type == source_type,
+                UnifiedChunk.source_id == source_id,
+            ).update({UnifiedChunk.embedding: None}, synchronize_session=False)
+            session.commit()
+        return total
+
+
+def _count_chunks(*, source_type: str, source_id: str) -> int:
+    with SessionLocal() as session:
+        return (
+            session.query(UnifiedChunk)
+            .filter(
+                UnifiedChunk.source_type == source_type,
+                UnifiedChunk.source_id == source_id,
+            )
+            .count()
+        )
 
 
 def _serialize_status(row: OntologyStatusRow) -> OntologyStatusResponse:

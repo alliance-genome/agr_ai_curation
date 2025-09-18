@@ -5,6 +5,7 @@ from typing import Dict, Any
 from ..database import get_db
 from app.models import Settings as SettingsModel
 from ..config import get_settings as get_app_settings
+from app.services.embedding_service_factory import get_embedding_service
 import json
 
 SECRET_MASK = "************"
@@ -186,6 +187,11 @@ async def update_settings(settings: SettingsUpdate, db: Session = Depends(get_db
                 db.add(new_setting)
 
         db.commit()
+        try:
+            get_embedding_service.cache_clear()  # type: ignore[attr-defined]
+        except AttributeError:
+            # If cache_clear is unavailable, ignore; service will be rebuilt on restart.
+            pass
         return {"message": "Settings updated successfully"}
     except Exception as e:
         db.rollback()

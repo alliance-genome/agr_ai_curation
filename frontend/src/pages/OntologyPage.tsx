@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AppBar,
@@ -107,6 +107,10 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
     setSnackbar((prev) => ({ ...prev, open: false }));
   };
 
+  useEffect(() => {
+    void fetchStatuses();
+  }, [fetchStatuses]);
+
   const openDetails = (status: OntologyStatus) => {
     setSelectedStatus(status);
     setOboPathOverride("");
@@ -119,16 +123,38 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
     setOboPathOverride("");
   };
 
-  const stateChipColor = (state: OntologyStatus["state"]) => {
-    switch (state) {
+  const extractStageKey = (
+    message: OntologyStatus["message"],
+  ): string | null => {
+    if (!message) {
+      return null;
+    }
+    if (typeof message === "string" || Array.isArray(message)) {
+      return null;
+    }
+    const stage = message.stage;
+    return typeof stage === "string" ? stage : null;
+  };
+
+  const deriveStatusAppearance = (
+    status: OntologyStatus,
+  ): { label: string; color: "success" | "info" | "error" | "default" } => {
+    const stageKey = extractStageKey(status.message);
+    if (stageKey === "embedding_running") {
+      return { label: "Embedding", color: "info" };
+    }
+    if (stageKey === "awaiting_embeddings") {
+      return { label: "Pending", color: "default" };
+    }
+    switch (status.state) {
       case "ready":
-        return "success";
+        return { label: "Ready", color: "success" };
       case "indexing":
-        return "info";
+        return { label: "Indexing", color: "info" };
       case "error":
-        return "error";
+        return { label: "Error", color: "error" };
       default:
-        return "default";
+        return { label: status.state, color: "default" };
     }
   };
 
@@ -142,7 +168,7 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
     if (Array.isArray(message)) {
       return "details";
     }
-    const stage = message.stage;
+    const stage = extractStageKey(message);
     if (typeof stage === "string" && stage.trim().length > 0) {
       switch (stage) {
         case "embedding_running":
@@ -169,7 +195,7 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
       return null;
     }
 
-    const stage = message.stage;
+    const stage = extractStageKey(message);
     const embeddingValue = message.embedding;
 
     if (stage === "embedding_running") {
@@ -180,8 +206,11 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
       ) {
         const info = embeddingValue as Record<string, unknown>;
         const model = typeof info.model === "string" ? info.model : "model";
+        const total = typeof info.total === "number" ? info.total : undefined;
         return {
-          text: `Embedding started with ${model}. Use Refresh to check progress.`,
+          text: total
+            ? `Embedding started with ${model}. Progress: 0 / ${total}. Refresh to check updates.`
+            : `Embedding started with ${model}. Use Refresh to check progress.`,
           showSpinner: true,
         };
       }
@@ -203,11 +232,17 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
       const embedded = info.embedded;
       const skipped = info.skipped;
       const model = info.model;
+      const total = info.total;
+      const completed = info.completed_at;
       if (typeof embedded === "number") {
         return {
-          text: `Last embedding run: ${embedded} chunks embedded, ${
-            typeof skipped === "number" ? skipped : 0
-          } skipped (${typeof model === "string" ? model : "model"}).`,
+          text: `Last embedding run: ${embedded} embedded${
+            typeof total === "number" ? ` / ${total}` : ""
+          }, ${typeof skipped === "number" ? skipped : 0} skipped (${typeof model === "string" ? model : "model"})${
+            typeof completed === "string"
+              ? ` at ${new Date(completed).toLocaleString()}`
+              : ""
+          }.`,
           showSpinner: false,
         };
       }
@@ -286,14 +321,17 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
       );
       const summary = response.data?.summary;
       const model = summary?.model;
+      const total = summary?.total;
       setSnackbar({
         open: true,
         severity: "info",
         message: model
-          ? `Embedding job started with ${model}. Press Refresh to see progress.`
+          ? `Embedding job started with ${model}${
+              typeof total === "number" ? ` (${total} chunks)` : ""
+            }. Press Refresh to see progress.`
           : "Embedding job queued. Refresh periodically to monitor progress.",
       });
-      // Give the background job a moment before we refresh status
+      void fetchStatuses();
       window.setTimeout(() => {
         void fetchStatuses();
       }, 5000);
@@ -497,11 +535,16 @@ function OntologyPage({ toggleColorMode }: OntologyPageProps) {
                         <TableCell>{status.ontology_type}</TableCell>
                         <TableCell>{status.source_id}</TableCell>
                         <TableCell>
-                          <Chip
-                            label={status.state}
-                            color={stateChipColor(status.state)}
-                            size="small"
-                          />
+                          {(() => {
+                            const appearance = deriveStatusAppearance(status);
+                            return (
+                              <Chip
+                                label={appearance.label}
+                                color={appearance.color}
+                                size="small"
+                              />
+                            );
+                          })()}
                         </TableCell>
                         <TableCell>
                           <Stack spacing={1}>
