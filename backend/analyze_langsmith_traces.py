@@ -9,9 +9,12 @@ from collections import defaultdict
 
 from langsmith import Client
 from dotenv import load_dotenv
+import sys
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from the parent directory's .env file
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 
 def analyze_traces(project_name: str = "ai-curation-dev", limit: int = 10):

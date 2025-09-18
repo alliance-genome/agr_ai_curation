@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Model Settings
     default_model: str = "gpt-4o"
+    intent_router_model: str = "gpt-4o-mini"  # Faster model for intent routing
     max_tokens: int = 2048
     temperature: float = 0.7
 
