@@ -299,7 +299,7 @@ information is clearly requested.
         model=model_name,
         output_type=IntentAnalysis,
         system_prompt=system_prompt,
-        max_retries=2,
+        retries=2,
     )
 
 

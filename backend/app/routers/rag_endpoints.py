@@ -21,6 +21,7 @@ from app.services.orchestrator_service import (
     get_langgraph_runner,
     get_general_orchestrator,
 )
+from app.agents.main_orchestrator import OrchestratorResult
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
 
@@ -104,56 +105,98 @@ async def ask_question(
             final_sent = False
             try:
                 yield _encode_sse({"type": "start"})
-                async for event in runner.stream(state):
-                    event_type = event.get("type")
 
-                    if event_type == "agent_start":
-                        yield _encode_sse(event)
-                        continue
+                # First, run LangGraph to get routing and context (non-streaming)
+                prepared_state = await runner.run(state)
 
-                    if event_type == "delta":
-                        yield _encode_sse(event)
-                        continue
+                # Now stream the answer generation directly from orchestrator
+                orchestrator = get_general_orchestrator()
 
-                    if event_type == "agent_finish":
-                        yield _encode_sse(event)
-                        continue
+                # Prepare prompt with specialist context if any
+                specialist_context_parts = []
+                if prepared_state.specialist_results:
+                    for name, payload in prepared_state.specialist_results.items():
+                        if not isinstance(payload, dict):
+                            continue
+                        section_lines = [f"[{name}] specialist findings:"]
+                        answer = payload.get("answer")
+                        if answer:
+                            section_lines.append(str(answer))
+                        entries = payload.get("entries") or []
+                        for entry in entries[:5]:
+                            if not isinstance(entry, dict):
+                                continue
+                            term_id = entry.get("term_id")
+                            definition = entry.get("definition")
+                            if term_id or definition:
+                                section_lines.append(f"- {term_id}: {definition}")
+                        specialist_context_parts.append("\n".join(section_lines))
 
-                    if event_type == "error":
-                        error_holder["error"] = event
-                        yield _encode_sse(event)
-                        continue
+                prompt = prepared_state.prepared_prompt or ""
+                augmented_prompt = prompt
+                if specialist_context_parts:
+                    augmented_prompt += "\n\nSpecialist Findings:\n" + "\n\n".join(
+                        specialist_context_parts
+                    )
 
-                    if event_type == "final":
-                        final_sent = True
-                        raw_state = event.get("state")
-                        coerced_state: PDFQAState | None = None
-                        if isinstance(raw_state, PDFQAState):
-                            coerced_state = raw_state
-                        elif isinstance(raw_state, dict):
-                            with suppress(Exception):
-                                coerced_state = PDFQAState.model_validate(raw_state)
-                        if coerced_state is None:
-                            coerced_state = state.model_copy(
-                                update={
-                                    "answer": event.get("answer", ""),
-                                    "citations": event.get("citations", []),
-                                    "metadata": event.get("metadata", {}),
-                                }
-                            )
+                deps = prepared_state.prepared_deps or {
+                    "query": prepared_state.question,
+                    "context": prepared_state.retrieved_context or "",
+                }
+                if specialist_context_parts:
+                    augmented_context = deps.get("context", "")
+                    augmented_context += "\n\nSpecialist Findings:\n" + "\n\n".join(
+                        specialist_context_parts
+                    )
+                    deps = dict(deps)
+                    deps["context"] = augmented_context
 
-                        final_state_holder["state"] = coerced_state
-                        yield _encode_sse(
-                            {
-                                "type": "final",
-                                "answer": event.get("answer", ""),
-                                "citations": event.get("citations", []),
-                                "metadata": event.get("metadata", {}),
-                                "specialist_results": coerced_state.specialist_results,
-                                "specialists_invoked": coerced_state.specialists_invoked,
-                            }
-                        )
-                        continue
+                # Stream from orchestrator
+                accumulated_text = ""
+                final_result = None
+
+                async for chunk in orchestrator.stream_with_serialized(
+                    prompt=augmented_prompt,
+                    deps=deps,
+                    citations=list(prepared_state.citations),
+                    metadata=dict(prepared_state.metadata),
+                ):
+                    if chunk.get("type") == "delta":
+                        text_chunk = chunk.get("content", "")
+                        accumulated_text += text_chunk
+                        yield _encode_sse({"type": "delta", "content": text_chunk})
+                    elif chunk.get("type") == "final":
+                        final_result = chunk.get("result")
+
+                # Update state with final answer
+                if final_result:
+                    prepared_state = prepared_state.model_copy(
+                        update={
+                            "answer": final_result.answer,
+                            "citations": final_result.citations,
+                            "metadata": {
+                                **prepared_state.metadata,
+                                **final_result.metadata,
+                            },
+                        }
+                    )
+                else:
+                    prepared_state = prepared_state.model_copy(
+                        update={"answer": accumulated_text}
+                    )
+
+                final_state_holder["state"] = prepared_state
+                final_sent = True
+                yield _encode_sse(
+                    {
+                        "type": "final",
+                        "answer": prepared_state.answer or accumulated_text,
+                        "citations": prepared_state.citations,
+                        "metadata": prepared_state.metadata,
+                        "specialist_results": prepared_state.specialist_results,
+                        "specialists_invoked": prepared_state.specialists_invoked,
+                    }
+                )
 
             except Exception as exc:  # pragma: no cover - propagated via SSE
                 error_holder["error"] = exc

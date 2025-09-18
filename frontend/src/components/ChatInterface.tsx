@@ -387,25 +387,43 @@ const ChatInterface = ({ pdfId }: ChatInterfaceProps) => {
                   >
                     {message.text || "Thinking..."}
                   </Typography>
-                  {message.citations && message.citations.length > 0 && (
-                    <Box
-                      sx={{
-                        mt: 1,
-                        display: "flex",
-                        gap: 0.5,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      {message.citations.map((citation, idx) => (
-                        <Chip
-                          key={idx}
-                          label={`Page ${citation.page ?? "?"}`}
-                          size="small"
-                          variant="outlined"
-                        />
-                      ))}
-                    </Box>
-                  )}
+                  {message.role === "assistant" &&
+                    message.citations &&
+                    message.citations.length > 0 && (
+                      <Box
+                        sx={{
+                          mt: 1,
+                          pt: 1,
+                          borderTop: 1,
+                          borderColor: "divider",
+                          display: "flex",
+                          gap: 0.5,
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ mr: 1 }}
+                        >
+                          Sources:
+                        </Typography>
+                        {message.citations.map((citation, idx) => (
+                          <Chip
+                            key={idx}
+                            label={`Page ${citation.page ?? "?"}`}
+                            size="small"
+                            variant="outlined"
+                            sx={{
+                              opacity: 0.7,
+                              fontSize: "0.75rem",
+                              height: "20px",
+                            }}
+                          />
+                        ))}
+                      </Box>
+                    )}
                 </Box>
                 <Tooltip title="Copy message">
                   <IconButton

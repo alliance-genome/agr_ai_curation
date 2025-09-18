@@ -148,6 +148,49 @@ class GeneralOrchestrator:
             metadata=metadata,
         )
 
+    async def stream_with_serialized(
+        self,
+        *,
+        prompt: str,
+        deps: Dict[str, Any],
+        citations: List[Dict[str, Any]],
+        metadata: Dict[str, Any],
+    ):
+        """Stream answer generation with PydanticAI.
+
+        Yields text chunks as they're generated, then returns final result.
+        """
+        async with self._agent.run_stream(
+            prompt, deps=OrchestratorDeps(**deps)
+        ) as stream:
+            # Stream text chunks
+            async for text_chunk in stream.stream_text(delta=True):
+                yield {"type": "delta", "content": text_chunk}
+
+            # Get final result
+            try:
+                final_output = await stream.get_result()
+                answer_text = (
+                    final_output.output
+                    if isinstance(final_output.output, str)
+                    else getattr(
+                        final_output.output, "answer", str(final_output.output)
+                    )
+                )
+            except Exception:
+                # If we can't get the final result, use what we streamed
+                answer_text = ""
+
+            # Yield final result with citations and metadata
+            yield {
+                "type": "final",
+                "result": OrchestratorResult(
+                    answer=answer_text,
+                    citations=citations,
+                    metadata=metadata,
+                ),
+            }
+
     def _build_prompt(self, *, query: str, chunks: List[GeneralPipelineChunk]) -> str:
         context = self._format_context(chunks)
         return (

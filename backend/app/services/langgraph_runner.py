@@ -35,6 +35,7 @@ class LangGraphRunner:
         config = {"thread_id": str(state.session_id)}
         final_state: Optional[PDFQAState] = None
         final_emitted = False
+        accumulated_text = ""
 
         async for event in self._graph.astream_events(
             state, config=config, version="v2"
