@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import text
@@ -33,35 +33,60 @@ class VectorSearch:
     def query(
         self,
         *,
-        pdf_id: UUID,
         embedding: Sequence[float],
         top_k: int = 5,
+        pdf_id: Optional[UUID] = None,
+        source_type: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[SearchResult]:
         if top_k <= 0:
             return []
 
         vector_literal = self._format_vector(embedding)
 
-        stmt = text(
-            """
-            SELECT chunk_id, embedding <-> CAST(:embedding AS vector) AS distance
-            FROM pdf_embeddings
-            WHERE pdf_id = :pdf_id AND model_name = :model_name
-            ORDER BY embedding <-> CAST(:embedding AS vector)
-            LIMIT :limit
-            """
-        )
+        if pdf_id is None and (source_type is None or source_id is None):
+            raise ValueError(
+                "VectorSearch.query requires either pdf_id or source_type/source_id."
+            )
+
+        if pdf_id is not None:
+            stmt = text(
+                """
+                SELECT chunk_id, embedding <-> CAST(:embedding AS vector) AS distance
+                FROM pdf_embeddings
+                WHERE pdf_id = :pdf_id AND model_name = :model_name
+                ORDER BY embedding <-> CAST(:embedding AS vector)
+                LIMIT :limit
+                """
+            )
+            params = {
+                "embedding": vector_literal,
+                "pdf_id": str(pdf_id),
+                "model_name": self._model_name,
+                "limit": top_k,
+            }
+        else:
+            stmt = text(
+                """
+                SELECT id AS chunk_id,
+                       embedding <-> CAST(:embedding AS vector) AS distance
+                FROM unified_chunks
+                WHERE source_type = :source_type
+                  AND source_id = :source_id
+                  AND embedding IS NOT NULL
+                ORDER BY embedding <-> CAST(:embedding AS vector)
+                LIMIT :limit
+                """
+            )
+            params = {
+                "embedding": vector_literal,
+                "source_type": source_type,
+                "source_id": source_id,
+                "limit": top_k,
+            }
 
         with self._engine.connect() as connection:
-            rows = connection.execute(
-                stmt,
-                {
-                    "embedding": vector_literal,
-                    "pdf_id": str(pdf_id),
-                    "model_name": self._model_name,
-                    "limit": top_k,
-                },
-            ).all()
+            rows = connection.execute(stmt, params).all()
 
         return [
             SearchResult(chunk_id=row.chunk_id, distance=row.distance) for row in rows

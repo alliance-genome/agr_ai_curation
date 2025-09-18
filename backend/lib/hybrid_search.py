@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import text
@@ -37,6 +37,7 @@ class HybridSearchResult:
     is_figure: bool
     vector_distance: Optional[float] = None
     lexical_rank: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -55,6 +56,7 @@ class _ChunkMetadata:
     section: Optional[str]
     is_table: bool
     is_figure: bool
+    metadata: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -95,13 +97,15 @@ class HybridSearch:
     def query(
         self,
         *,
-        pdf_id: UUID,
         embedding: Sequence[float],
         query: str,
         vector_top_k: int = 50,
         lexical_top_k: int = 50,
         max_results: int = 20,
         vector_weight: float = 0.6,
+        pdf_id: Optional[UUID] = None,
+        source_type: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> HybridSearchResponse:
         if max_results <= 0:
             empty_metrics = HybridSearchMetrics(
@@ -112,22 +116,31 @@ class HybridSearch:
             )
             return HybridSearchResponse(results=[], metrics=empty_metrics)
 
+        if pdf_id is None and (source_type is None or source_id is None):
+            raise ValueError(
+                "HybridSearch.query requires either pdf_id or source_type/source_id."
+            )
+
         weight = _clamp(vector_weight, 0.0, 1.0)
 
         vector_results: List[SearchResult] = []
         if vector_top_k > 0:
             vector_results = self._vector_search.query(
-                pdf_id=pdf_id,
                 embedding=embedding,
                 top_k=vector_top_k,
+                pdf_id=pdf_id,
+                source_type=source_type,
+                source_id=source_id,
             )
 
         lexical_results: List[LexicalResult] = []
         if lexical_top_k > 0:
             lexical_results = self._lexical_search.query(
-                pdf_id=pdf_id,
                 query=query,
                 top_k=lexical_top_k,
+                pdf_id=pdf_id,
+                source_type=source_type,
+                source_id=source_id,
             )
 
         candidates: Dict[UUID, _Candidate] = {}
@@ -199,7 +212,12 @@ class HybridSearch:
 
         top_candidates = sorted_candidates[:max_results]
         chunk_ids = [candidate.chunk_id for candidate in top_candidates]
-        metadata_map = self._fetch_chunk_metadata(chunk_ids)
+        metadata_map = self._fetch_chunk_metadata(
+            chunk_ids,
+            pdf_id=pdf_id,
+            source_type=source_type,
+            source_id=source_id,
+        )
 
         results: List[HybridSearchResult] = []
         for candidate in top_candidates:
@@ -232,6 +250,7 @@ class HybridSearch:
                     is_figure=metadata.is_figure if metadata else False,
                     vector_distance=candidate.vector_distance,
                     lexical_rank=candidate.lexical_rank,
+                    metadata=metadata.metadata if metadata else None,
                 )
             )
 
@@ -248,33 +267,63 @@ class HybridSearch:
         return HybridSearchResponse(results=results, metrics=metrics)
 
     def _fetch_chunk_metadata(
-        self, chunk_ids: Sequence[UUID]
+        self,
+        chunk_ids: Sequence[UUID],
+        *,
+        pdf_id: Optional[UUID],
+        source_type: Optional[str],
+        source_id: Optional[str],
     ) -> Dict[UUID, _ChunkMetadata]:
         if not chunk_ids:
             return {}
 
         placeholders = ", ".join(f":id_{idx}" for idx in range(len(chunk_ids)))
-        stmt = text(
-            ""
-            "SELECT id, text, page_start, page_end, section_path, is_table, is_figure\n"
-            "FROM pdf_chunks\n"
-            "WHERE id IN (" + placeholders + ")"
-        )
         params = {f"id_{idx}": str(chunk_id) for idx, chunk_id in enumerate(chunk_ids)}
+
+        if pdf_id is not None:
+            stmt = text(
+                ""
+                "SELECT id, text, page_start, page_end, section_path, is_table, is_figure, meta_data\n"
+                "FROM pdf_chunks\n"
+                "WHERE id IN (" + placeholders + ")"
+            )
+        else:
+            stmt = text(
+                ""
+                "SELECT id, chunk_text, chunk_metadata\n"
+                "FROM unified_chunks\n"
+                "WHERE id IN (" + placeholders + ")"
+                " AND source_type = :source_type AND source_id = :source_id"
+            )
+            params.update({"source_type": source_type, "source_id": source_id})
 
         with self._engine.connect() as connection:
             rows = connection.execute(stmt, params).all()
 
         metadata: Dict[UUID, _ChunkMetadata] = {}
         for row in rows:
-            metadata[row.id] = _ChunkMetadata(
-                text=row.text,
-                page_start=row.page_start,
-                page_end=row.page_end,
-                section=row.section_path,
-                is_table=bool(row.is_table),
-                is_figure=bool(row.is_figure),
-            )
+            if pdf_id is not None:
+                metadata[row.id] = _ChunkMetadata(
+                    text=row.text,
+                    page_start=row.page_start,
+                    page_end=row.page_end,
+                    section=row.section_path,
+                    is_table=bool(row.is_table),
+                    is_figure=bool(row.is_figure),
+                    metadata=row.meta_data if hasattr(row, "meta_data") else None,
+                )
+            else:
+                metadata[row.id] = _ChunkMetadata(
+                    text=row.chunk_text,
+                    page_start=None,
+                    page_end=None,
+                    section=None,
+                    is_table=False,
+                    is_figure=False,
+                    metadata=(
+                        row.chunk_metadata if hasattr(row, "chunk_metadata") else None
+                    ),
+                )
 
         return metadata
 

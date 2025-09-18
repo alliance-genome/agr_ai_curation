@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
     event,
+    Computed,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from pgvector.sqlalchemy import Vector
@@ -108,6 +109,15 @@ class FigureType(str, PyEnum):
     DIAGRAM = "DIAGRAM"
     IMAGE = "IMAGE"
     PLOT = "PLOT"
+
+
+class IngestionState(str, PyEnum):
+    """Lifecycle state for external knowledge source ingestions."""
+
+    NOT_INDEXED = "not_indexed"
+    INDEXING = "indexing"
+    READY = "ready"
+    ERROR = "error"
 
 
 class PDFDocument(Base):
@@ -306,6 +316,136 @@ class ChunkSearch(Base):
     __table_args__ = (
         Index("idx_search_vector_gin", "search_vector", postgresql_using="gin"),
         Index("idx_search_chunk_id", "chunk_id"),
+    )
+
+
+class UnifiedChunk(Base):
+    """Storage for all chunked knowledge sources used by the unified pipeline."""
+
+    __tablename__ = "unified_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_type = Column(String(50), nullable=False)
+    source_id = Column(String(255), nullable=False)
+    chunk_id = Column(String(255), nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    chunk_metadata = Column(JSONB, default=dict)
+    embedding = Column(Vector(1536), nullable=True)
+    search_vector = Column(
+        TSVECTOR,
+        Computed("to_tsvector('english'::regconfig, chunk_text)", persisted=True),
+    )
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type", "source_id", "chunk_id", name="uq_unified_chunk_identity"
+        ),
+        Index(
+            "idx_unified_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("idx_unified_search_vector", "search_vector", postgresql_using="gin"),
+        Index("idx_unified_source", "source_type", "source_id"),
+    )
+
+
+class OntologyTerm(Base):
+    """Normalized ontology term metadata."""
+
+    __tablename__ = "ontology_terms"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    ontology_type = Column(String(50), nullable=False)
+    source_id = Column(String(255), nullable=False)
+    term_id = Column(String(255), nullable=False)
+    name = Column(String(512))
+    definition = Column(Text)
+    synonyms = Column(JSONB, default=list)
+    xrefs = Column(JSONB, default=list)
+    term_metadata = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ontology_type", "source_id", "term_id", name="uq_ontology_term"
+        ),
+        Index("idx_ontology_term_type", "ontology_type"),
+        Index("idx_ontology_term_source", "source_id"),
+        Index("idx_ontology_term_name", "name"),
+    )
+
+
+class OntologyTermRelation(Base):
+    """Hierarchy relationships between ontology terms."""
+
+    __tablename__ = "ontology_term_relations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    ontology_type = Column(String(50), nullable=False)
+    source_id = Column(String(255), nullable=False)
+    child_term_id = Column(String(255), nullable=False)
+    parent_term_id = Column(String(255), nullable=False)
+    relation_type = Column(String(50), default="is_a")
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ontology_type",
+            "source_id",
+            "child_term_id",
+            "parent_term_id",
+            "relation_type",
+            name="uq_ontology_relation",
+        ),
+        Index(
+            "idx_ontology_relation_child",
+            "ontology_type",
+            "source_id",
+            "child_term_id",
+        ),
+        Index(
+            "idx_ontology_relation_parent",
+            "ontology_type",
+            "source_id",
+            "parent_term_id",
+        ),
+    )
+
+
+class IngestionStatus(Base):
+    """Tracks ingestion lifecycle for each registered document source."""
+
+    __tablename__ = "ingestion_status"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_type = Column(String(50), nullable=False)
+    source_id = Column(String(255), nullable=False)
+    status = Column(
+        Enum(IngestionState, name="ingestion_state"),
+        nullable=False,
+        default=IngestionState.NOT_INDEXED,
+    )
+    message = Column(Text)
+    updated_at = Column(
+        DateTime(timezone=True), default=func.now(), onupdate=func.now()
+    )
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type", "source_id", name="uq_ingestion_status_identity"
+        ),
+        Index("idx_ingestion_status_source", "source_type", "source_id"),
     )
 
 

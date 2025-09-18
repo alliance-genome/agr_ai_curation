@@ -71,6 +71,9 @@ class GeneralOrchestrator:
         deps: OrchestratorDeps
         citations: List[Dict[str, Any]]
         metadata: Dict[str, Any]
+        chunks: List[GeneralPipelineChunk]
+        chunk_texts: List[str]
+        chunk_count: int
 
     async def prepare(
         self, *, pdf_id: UUID, query: str
@@ -105,11 +108,34 @@ class GeneralOrchestrator:
             deps=deps,
             citations=citations,
             metadata=metadata,
+            chunks=eligible_chunks,
+            chunk_texts=[chunk.text for chunk in eligible_chunks],
+            chunk_count=len(eligible_chunks),
         )
 
     async def answer_question(self, *, pdf_id: UUID, query: str) -> OrchestratorResult:
         prepared = await self.prepare(pdf_id=pdf_id, query=query)
-        run_result = await self._agent.run(prepared.prompt, deps=prepared.deps)
+        return await self.run_with_prepared(prepared)
+
+    async def run_with_prepared(
+        self, prepared: "GeneralOrchestrator.PreparedRequest"
+    ) -> OrchestratorResult:
+        return await self.run_with_serialized(
+            prompt=prepared.prompt,
+            deps=prepared.deps.model_dump(),
+            citations=prepared.citations,
+            metadata=prepared.metadata,
+        )
+
+    async def run_with_serialized(
+        self,
+        *,
+        prompt: str,
+        deps: Dict[str, Any],
+        citations: List[Dict[str, Any]],
+        metadata: Dict[str, Any],
+    ) -> OrchestratorResult:
+        run_result = await self._agent.run(prompt, deps=OrchestratorDeps(**deps))
         answer_output = run_result.output
         answer_text = (
             answer_output
@@ -118,8 +144,8 @@ class GeneralOrchestrator:
         )
         return OrchestratorResult(
             answer=answer_text,
-            citations=prepared.citations,
-            metadata=prepared.metadata,
+            citations=citations,
+            metadata=metadata,
         )
 
     def _build_prompt(self, *, query: str, chunks: List[GeneralPipelineChunk]) -> str:

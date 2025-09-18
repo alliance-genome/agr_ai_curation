@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any, Dict, List
 from uuid import UUID
 
+from contextlib import suppress
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -41,6 +42,8 @@ class QuestionResponse(BaseModel):
     answer: str
     citations: List[Dict[str, Any]]
     metadata: Dict[str, Any]
+    specialist_results: Dict[str, Any]
+    specialists_invoked: List[str]
 
 
 @router.post("/sessions", response_model=SessionResponse)
@@ -93,78 +96,68 @@ async def ask_question(
     wants_stream = "text/event-stream" in accepts
 
     if wants_stream:
-        orchestrator = get_general_orchestrator()
-        prepared = await orchestrator.prepare(
-            pdf_id=session_obj.pdf_id, query=request.question
-        )
         start = perf_counter()
         final_state_holder: Dict[str, PDFQAState | None] = {"state": None}
-        final_answer_holder: Dict[str, str] = {"text": ""}
         error_holder: Dict[str, Any | None] = {"error": None}
 
         async def event_stream():
-            answer_chunks: list[str] = []
-            final_answer: str | None = None
+            final_sent = False
             try:
                 yield _encode_sse({"type": "start"})
-                async with orchestrator._agent.run_stream(
-                    prepared.prompt, deps=prepared.deps
-                ) as stream:
-                    async for text_chunk in stream.stream_text(delta=True):
-                        answer_chunks.append(text_chunk)
-                        combined_metadata = dict(state.metadata)
-                        combined_metadata.update(prepared.metadata)
-                        chunk_state = PDFQAState(
-                            session_id=state.session_id,
-                            pdf_id=state.pdf_id,
-                            question=state.question,
-                            intent="general",
-                            answer="".join(answer_chunks),
-                            citations=list(prepared.citations),
-                            metadata=combined_metadata,
-                            specialists_invoked=["general"],
-                        )
-                        final_state_holder["state"] = chunk_state
+                async for event in runner.stream(state):
+                    event_type = event.get("type")
+
+                    if event_type == "agent_start":
+                        yield _encode_sse(event)
+                        continue
+
+                    if event_type == "delta":
+                        yield _encode_sse(event)
+                        continue
+
+                    if event_type == "agent_finish":
+                        yield _encode_sse(event)
+                        continue
+
+                    if event_type == "error":
+                        error_holder["error"] = event
+                        yield _encode_sse(event)
+                        continue
+
+                    if event_type == "final":
+                        final_sent = True
+                        raw_state = event.get("state")
+                        coerced_state: PDFQAState | None = None
+                        if isinstance(raw_state, PDFQAState):
+                            coerced_state = raw_state
+                        elif isinstance(raw_state, dict):
+                            with suppress(Exception):
+                                coerced_state = PDFQAState.model_validate(raw_state)
+                        if coerced_state is None:
+                            coerced_state = state.model_copy(
+                                update={
+                                    "answer": event.get("answer", ""),
+                                    "citations": event.get("citations", []),
+                                    "metadata": event.get("metadata", {}),
+                                }
+                            )
+
+                        final_state_holder["state"] = coerced_state
                         yield _encode_sse(
                             {
-                                "type": "delta",
-                                "content": text_chunk,
+                                "type": "final",
+                                "answer": event.get("answer", ""),
+                                "citations": event.get("citations", []),
+                                "metadata": event.get("metadata", {}),
+                                "specialist_results": coerced_state.specialist_results,
+                                "specialists_invoked": coerced_state.specialists_invoked,
                             }
                         )
-                    try:
-                        final_answer = await stream.get_output()
-                    except Exception:
-                        final_answer = None
+                        continue
+
             except Exception as exc:  # pragma: no cover - propagated via SSE
                 error_holder["error"] = exc
                 yield _encode_sse({"type": "error", "message": str(exc)})
-                return
-            else:
-                final_text = final_answer if final_answer else "".join(answer_chunks)
-                final_answer_holder["text"] = final_text
-                combined_metadata = dict(state.metadata)
-                combined_metadata.update(prepared.metadata)
-                final_state = PDFQAState(
-                    session_id=state.session_id,
-                    pdf_id=state.pdf_id,
-                    question=state.question,
-                    intent="general",
-                    answer=final_text,
-                    citations=list(prepared.citations),
-                    metadata=combined_metadata,
-                    specialists_invoked=["general"],
-                )
-                final_state_holder["state"] = final_state
-                yield _encode_sse(
-                    {
-                        "type": "final",
-                        "answer": final_text,
-                        "citations": final_state.citations,
-                        "metadata": final_state.metadata,
-                    }
-                )
-                yield _encode_sse({"type": "end"})
-
             finally:
                 latency_ms = int((perf_counter() - start) * 1000)
                 final_state = final_state_holder["state"]
@@ -190,6 +183,8 @@ async def ask_question(
                     )
                     repo.commit()
 
+                yield _encode_sse({"type": "end"})
+
         headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
         return StreamingResponse(
             event_stream(), media_type="text/event-stream", headers=headers
@@ -213,6 +208,8 @@ async def ask_question(
         answer=final_state.answer or "",
         citations=final_state.citations,
         metadata=final_state.metadata,
+        specialist_results=final_state.specialist_results,
+        specialists_invoked=final_state.specialists_invoked,
     )
 
 
@@ -232,7 +229,11 @@ def _store_messages(
         message_type=MessageType.AI_RESPONSE,
         content=result_state.answer or "",
         citations=result_state.citations,
-        retrieval_stats=result_state.metadata or {},
+        retrieval_stats={
+            **(result_state.metadata or {}),
+            "specialist_results": result_state.specialist_results or {},
+            "specialists_invoked": result_state.specialists_invoked or [],
+        },
     )
     session_obj.total_messages += 2
     db.add_all([user_message, answer_message])

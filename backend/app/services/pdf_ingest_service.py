@@ -16,6 +16,7 @@ from app.models import (
     PDFDocument,
     PDFChunk,
     Settings as SettingsModel,
+    UnifiedChunk,
 )
 from lib.pdf_processor import PDFProcessor, ExtractionResult
 from lib.chunk_manager import ChunkManager, ChunkResult, ChunkingStrategy
@@ -63,6 +64,11 @@ class PDFIngestService:
         self._chunk_pdf(pdf_id=pdf_id, extraction=extraction)
         self._embedding_service.embed_pdf(
             pdf_id=pdf_id, model_name=self._settings.embedding_model_name
+        )
+        self._embedding_service.embed_unified_chunks(
+            source_type="pdf",
+            source_id=str(pdf_id),
+            model_name=self._settings.embedding_model_name,
         )
         return pdf_id, True
 
@@ -208,6 +214,24 @@ class PDFIngestService:
                         "length": len(chunk.text),
                         "lang": "english",
                     },
+                )
+
+                unified_metadata = {
+                    "page": chunk.page_start,
+                    "section": chunk.section_path,
+                    "chunk_index": chunk.chunk_index,
+                    "token_count": chunk.token_count,
+                    "char_range": [chunk.char_start, chunk.char_end],
+                }
+
+                session.merge(
+                    UnifiedChunk(
+                        source_type="pdf",
+                        source_id=str(pdf_id),
+                        chunk_id=str(db_chunk.id),
+                        chunk_text=chunk.text,
+                        chunk_metadata=unified_metadata,
+                    )
                 )
 
             session.commit()

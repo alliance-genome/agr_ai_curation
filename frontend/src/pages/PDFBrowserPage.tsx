@@ -32,6 +32,7 @@ import {
   Brightness7,
   DeleteForever,
   OpenInNew,
+  AccountTree,
 } from "@mui/icons-material";
 import { useTheme } from "@mui/material/styles";
 import { useNavigate } from "react-router-dom";
@@ -323,6 +324,15 @@ function PDFBrowserPage({ toggleColorMode }: PDFBrowserPageProps) {
             sx={{ mr: 1 }}
           >
             Browser
+          </Button>
+
+          <Button
+            color="inherit"
+            startIcon={<AccountTree />}
+            onClick={() => navigate("/ontology")}
+            sx={{ mr: 1 }}
+          >
+            Ontologies
           </Button>
 
           <Button

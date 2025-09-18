@@ -14,6 +14,7 @@ import {
   Description,
   Brightness4,
   Brightness7,
+  AccountTree,
 } from "@mui/icons-material";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -258,6 +259,15 @@ function HomePage({ toggleColorMode }: HomePageProps) {
             sx={{ mr: 1 }}
           >
             Browser
+          </Button>
+
+          <Button
+            color="inherit"
+            startIcon={<AccountTree />}
+            onClick={() => navigate("/ontology")}
+            sx={{ mr: 1 }}
+          >
+            Ontologies
           </Button>
 
           <Button

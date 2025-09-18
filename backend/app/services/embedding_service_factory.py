@@ -33,7 +33,7 @@ def get_embedding_service() -> EmbeddingService:
     settings = get_settings()
     client = OpenAIEmbeddingClient(api_key=settings.openai_api_key)
 
-    model_config = EmbeddingModelConfig(
+    base_config = EmbeddingModelConfig(
         name=settings.embedding_model_name,
         dimensions=settings.embedding_dimensions,
         default_version=settings.embedding_model_version,
@@ -41,10 +41,30 @@ def get_embedding_service() -> EmbeddingService:
         default_batch_size=settings.embedding_default_batch_size,
     )
 
+    models = {base_config.name: base_config}
+
+    ontology_model_name = settings.ontology_embedding_model_name or base_config.name
+
+    ontology_config = EmbeddingModelConfig(
+        name=ontology_model_name,
+        dimensions=(settings.ontology_embedding_dimensions or base_config.dimensions),
+        default_version=(
+            settings.ontology_embedding_model_version or base_config.default_version
+        ),
+        max_batch_size=(
+            settings.ontology_embedding_max_batch_size or base_config.max_batch_size
+        ),
+        default_batch_size=(
+            settings.ontology_embedding_batch_size or base_config.default_batch_size
+        ),
+    )
+
+    models[ontology_config.name] = ontology_config
+
     return EmbeddingService(
         session_factory=SessionLocal,
         embedding_client=client,
-        models={model_config.name: model_config},
+        models=models,
     )
 
 

@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import PDFDocument, PDFChunk, PDFEmbedding
+from app.models import PDFDocument, PDFChunk, PDFEmbedding, UnifiedChunk
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,87 @@ class EmbeddingService:
     def list_models(self):
         """Return configured model metadata."""
         return list(self._models.values())
+
+    def embed_unified_chunks(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        model_name: str,
+        batch_size: int | None = None,
+        force: bool = False,
+    ) -> Dict[str, int | str]:
+        config = self._models.get(model_name)
+        if config is None:
+            raise ValueError(f"Unknown embedding model '{model_name}'")
+
+        if batch_size is not None:
+            if batch_size <= 0:
+                raise ValueError("batch_size must be positive")
+            if batch_size > config.max_batch_size:
+                raise ValueError("batch_size exceeds configured max_batch_size")
+            effective_batch_size = batch_size
+        else:
+            effective_batch_size = config.default_batch_size
+
+        if effective_batch_size <= 0:
+            effective_batch_size = config.max_batch_size
+
+        effective_batch_size = min(effective_batch_size, config.max_batch_size)
+
+        with self._session_factory() as session:
+            chunks: List[UnifiedChunk] = (
+                session.query(UnifiedChunk)
+                .filter(
+                    UnifiedChunk.source_type == source_type,
+                    UnifiedChunk.source_id == source_id,
+                )
+                .order_by(UnifiedChunk.created_at.asc())
+                .all()
+            )
+
+            if not chunks:
+                return {
+                    "embedded": 0,
+                    "skipped": 0,
+                    "model": model_name,
+                    "source_type": source_type,
+                    "source_id": source_id,
+                }
+
+            target_chunks = [
+                chunk for chunk in chunks if force or chunk.embedding is None
+            ]
+
+            if not target_chunks:
+                return {
+                    "embedded": 0,
+                    "skipped": len(chunks),
+                    "model": model_name,
+                    "source_type": source_type,
+                    "source_id": source_id,
+                }
+
+            texts = [chunk.chunk_text for chunk in target_chunks]
+            vectors = self._embed_in_batches(texts, model_name, effective_batch_size)
+
+            if len(vectors) != len(target_chunks):
+                raise ValueError(
+                    "Embedding client returned unexpected number of vectors"
+                )
+
+            for chunk, vector in zip(target_chunks, vectors, strict=True):
+                chunk.embedding = vector
+
+            session.commit()
+
+            return {
+                "embedded": len(target_chunks),
+                "skipped": len(chunks) - len(target_chunks),
+                "model": model_name,
+                "source_type": source_type,
+                "source_id": source_id,
+            }
 
     def embed_pdf(
         self,

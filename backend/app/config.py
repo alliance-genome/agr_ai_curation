@@ -32,6 +32,20 @@ class Settings(BaseSettings):
         os.getenv("EMBEDDING_DEFAULT_BATCH_SIZE", 64)
     )
 
+    ontology_embedding_model_name: str = os.getenv("ONTOLOGY_EMBEDDING_MODEL_NAME", "")
+    ontology_embedding_model_version: str = os.getenv(
+        "ONTOLOGY_EMBEDDING_MODEL_VERSION", ""
+    )
+    ontology_embedding_batch_size: int = int(
+        os.getenv("ONTOLOGY_EMBEDDING_BATCH_SIZE", 0)
+    )
+    ontology_embedding_dimensions: int = int(
+        os.getenv("ONTOLOGY_EMBEDDING_DIMENSIONS", 0)
+    )
+    ontology_embedding_max_batch_size: int = int(
+        os.getenv("ONTOLOGY_EMBEDDING_MAX_BATCH_SIZE", 0)
+    )
+
     # Retrieval/Reranking Settings
     rag_rerank_top_k: int = int(os.getenv("RAG_RERANK_TOP_K", 5))
     rag_confidence_threshold: float = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", 0.2))
@@ -42,13 +56,14 @@ class Settings(BaseSettings):
 
     uploads_dir: str = os.getenv("UPLOADS_DIR", "/tmp/uploads")
     pdf_extraction_strategy: str = os.getenv("PDF_EXTRACTION_STRATEGY", "fast")
+    disease_ontology_path: str = os.getenv("DISEASE_ONTOLOGY_PATH", "doid.obo.txt")
 
     # Application Settings
     debug_mode: bool = False
     api_url: str = "http://localhost:8002"
     frontend_url: str = "http://localhost:3000"
 
-    model_config = ConfigDict(env_file=".env")
+    model_config = ConfigDict(env_file=".env", extra="ignore")
 
 
 @lru_cache()

@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS deps
 
 WORKDIR /app
 
-# Install system dependencies (cached layer)
+# Install system dependencies once in the dependency layer
 RUN apt-get update && apt-get install -y \
     gcc \
     postgresql-client \
@@ -15,16 +15,18 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user early (cached layer)
-RUN useradd -m -u 1000 appuser
-
 # Copy only requirements first (cached layer if requirements don't change)
-COPY --chown=appuser:appuser backend/requirements.txt .
+COPY backend/requirements.txt ./
 
 # Install Python dependencies with caching
-# Using cache mount for pip to speed up rebuilds
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
+
+
+FROM deps AS runtime
+
+# Create non-root user in the runtime layer
+RUN useradd -m -u 1000 appuser
 
 # Copy application code last (changes most frequently)
 COPY --chown=appuser:appuser backend/app ./app

@@ -2,40 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+from typing import Dict, List
 from uuid import UUID
-
-from openai import OpenAI
 
 from app.config import get_settings
 from app.database import engine as default_engine
+from app.agents.pipeline_models import GeneralPipelineChunk, GeneralPipelineOutput
 from lib.hybrid_search import HybridSearch, HybridSearchResult
 from lib.reranker import (
     Reranker,
     RerankerCandidate,
     RerankedResult,
 )
-
-from app.agents.pipeline_models import GeneralPipelineChunk, GeneralPipelineOutput
-
-
-class QueryEmbedderProtocol:
-    def __call__(self, query: str) -> Sequence[float]:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-
-class OpenAIQueryEmbedder(QueryEmbedderProtocol):
-    """Embed queries using the OpenAI embeddings API."""
-
-    def __init__(self, *, api_key: str, model: str) -> None:
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY must be configured to embed queries.")
-        self._client = OpenAI(api_key=api_key)
-        self._model = model
-
-    def __call__(self, query: str) -> Sequence[float]:
-        response = self._client.embeddings.create(model=self._model, input=[query])
-        return response.data[0].embedding
+from lib.pipelines.query_embedder import (
+    OpenAIQueryEmbedder,
+    QueryEmbedderProtocol,
+)
 
 
 class GeneralPipeline:

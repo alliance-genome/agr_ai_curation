@@ -21,6 +21,9 @@ def _coerce_value(key: str, value: Any) -> Any:
         "embedding_dimensions",
         "embedding_max_batch_size",
         "embedding_default_batch_size",
+        "ontology_embedding_dimensions",
+        "ontology_embedding_max_batch_size",
+        "ontology_embedding_batch_size",
         "rag_rerank_top_k",
         "hybrid_vector_k",
         "hybrid_lexical_k",
@@ -61,6 +64,11 @@ class SettingsUpdate(BaseModel):
     embedding_dimensions: int | None = None
     embedding_max_batch_size: int | None = None
     embedding_default_batch_size: int | None = None
+    ontology_embedding_model_name: str | None = None
+    ontology_embedding_model_version: str | None = None
+    ontology_embedding_batch_size: int | None = None
+    ontology_embedding_dimensions: int | None = None
+    ontology_embedding_max_batch_size: int | None = None
     rag_rerank_top_k: int | None = None
     rag_confidence_threshold: float | None = None
     hybrid_vector_k: int | None = None
@@ -103,6 +111,26 @@ async def get_settings(db: Session = Depends(get_db)):
         "embedding_max_batch_size": getattr(config, "embedding_max_batch_size", 128),
         "embedding_default_batch_size": getattr(
             config, "embedding_default_batch_size", 64
+        ),
+        "ontology_embedding_model_name": (
+            getattr(config, "ontology_embedding_model_name", "")
+            or getattr(config, "embedding_model_name", "text-embedding-3-small")
+        ),
+        "ontology_embedding_model_version": (
+            getattr(config, "ontology_embedding_model_version", "")
+            or getattr(config, "embedding_model_version", "1.0")
+        ),
+        "ontology_embedding_batch_size": (
+            getattr(config, "ontology_embedding_batch_size", 0)
+            or getattr(config, "embedding_default_batch_size", 64)
+        ),
+        "ontology_embedding_dimensions": (
+            getattr(config, "ontology_embedding_dimensions", 0)
+            or getattr(config, "embedding_dimensions", 1536)
+        ),
+        "ontology_embedding_max_batch_size": (
+            getattr(config, "ontology_embedding_max_batch_size", 0)
+            or getattr(config, "embedding_max_batch_size", 128)
         ),
         "rag_rerank_top_k": getattr(config, "rag_rerank_top_k", 5),
         "rag_confidence_threshold": getattr(config, "rag_confidence_threshold", 0.2),

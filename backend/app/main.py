@@ -10,6 +10,7 @@ from .routers import (
     entities,
     settings,
     health,
+    ontology,
     test_highlights,
     rag_endpoints,
     pdf_endpoints,
@@ -69,6 +70,7 @@ app.include_router(test_highlights.router, prefix="/test", tags=["testing"])
 app.include_router(rag_endpoints.router)
 app.include_router(pdf_endpoints.router)
 app.include_router(pdf_data.router)
+app.include_router(ontology.router)
 
 
 @app.on_event("startup")

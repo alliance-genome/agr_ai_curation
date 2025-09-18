@@ -29,6 +29,8 @@ import {
   Brightness4,
   Brightness7,
   Save,
+  AccountTree,
+  Description,
 } from "@mui/icons-material";
 import axios from "axios";
 import { debug } from "../utils/debug";
@@ -45,13 +47,18 @@ type NumericField =
   | "temperature"
   | "embedding_dimensions"
   | "embedding_max_batch_size"
-  | "embedding_default_batch_size";
+  | "embedding_default_batch_size"
+  | "ontology_embedding_batch_size"
+  | "ontology_embedding_dimensions"
+  | "ontology_embedding_max_batch_size";
 
 type TextFieldKey =
   | "default_model"
   | "database_url"
   | "embedding_model_name"
-  | "embedding_model_version";
+  | "embedding_model_version"
+  | "ontology_embedding_model_name"
+  | "ontology_embedding_model_version";
 
 interface SettingsState {
   openai_api_key: string;
@@ -69,6 +76,11 @@ interface SettingsState {
   embedding_max_batch_size: string;
   embedding_default_batch_size: string;
   pdf_extraction_strategy: string;
+  ontology_embedding_model_name: string;
+  ontology_embedding_model_version: string;
+  ontology_embedding_batch_size: string;
+  ontology_embedding_dimensions: string;
+  ontology_embedding_max_batch_size: string;
 }
 
 interface AdminPageProps {
@@ -91,6 +103,11 @@ const initialState: SettingsState = {
   embedding_max_batch_size: "128",
   embedding_default_batch_size: "64",
   pdf_extraction_strategy: "fast",
+  ontology_embedding_model_name: "text-embedding-3-small",
+  ontology_embedding_model_version: "1.0",
+  ontology_embedding_batch_size: "64",
+  ontology_embedding_dimensions: "1536",
+  ontology_embedding_max_batch_size: "128",
 };
 
 function AdminPage({ toggleColorMode }: AdminPageProps) {
@@ -154,6 +171,26 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
         pdf_extraction_strategy: parseString(
           data.pdf_extraction_strategy,
           initialState.pdf_extraction_strategy,
+        ),
+        ontology_embedding_model_name: parseString(
+          data.ontology_embedding_model_name,
+          initialState.ontology_embedding_model_name,
+        ),
+        ontology_embedding_model_version: parseString(
+          data.ontology_embedding_model_version,
+          initialState.ontology_embedding_model_version,
+        ),
+        ontology_embedding_batch_size: parseString(
+          data.ontology_embedding_batch_size,
+          initialState.ontology_embedding_batch_size,
+        ),
+        ontology_embedding_dimensions: parseString(
+          data.ontology_embedding_dimensions,
+          initialState.ontology_embedding_dimensions,
+        ),
+        ontology_embedding_max_batch_size: parseString(
+          data.ontology_embedding_max_batch_size,
+          initialState.ontology_embedding_max_batch_size,
         ),
       });
       setDirty(false);
@@ -278,6 +315,24 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
         label: "Embedding Default Batch Size",
         parser: (val) => parseInt(val, 10),
       },
+      {
+        key: "ontology_embedding_batch_size",
+        value: settings.ontology_embedding_batch_size,
+        label: "Ontology Embedding Batch Size",
+        parser: (val) => parseInt(val, 10),
+      },
+      {
+        key: "ontology_embedding_dimensions",
+        value: settings.ontology_embedding_dimensions,
+        label: "Ontology Embedding Dimensions",
+        parser: (val) => parseInt(val, 10),
+      },
+      {
+        key: "ontology_embedding_max_batch_size",
+        value: settings.ontology_embedding_max_batch_size,
+        label: "Ontology Embedding Max Batch Size",
+        parser: (val) => parseInt(val, 10),
+      },
     ];
 
     const payload: Record<string, unknown> = {};
@@ -309,6 +364,22 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
     payload.debug_mode = settings.debug_mode;
     payload.embedding_model_name = settings.embedding_model_name;
     payload.embedding_model_version = settings.embedding_model_version;
+    payload.ontology_embedding_model_name =
+      settings.ontology_embedding_model_name;
+    payload.ontology_embedding_model_version =
+      settings.ontology_embedding_model_version;
+    payload.ontology_embedding_batch_size = parseInt(
+      settings.ontology_embedding_batch_size,
+      10,
+    );
+    payload.ontology_embedding_dimensions = parseInt(
+      settings.ontology_embedding_dimensions,
+      10,
+    );
+    payload.ontology_embedding_max_batch_size = parseInt(
+      settings.ontology_embedding_max_batch_size,
+      10,
+    );
     payload.pdf_extraction_strategy = settings.pdf_extraction_strategy;
 
     const secretFields: Array<{
@@ -391,18 +462,35 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
           </Button>
           <Button
             color="inherit"
-            startIcon={<AdminIcon />}
-            onClick={() => navigate("/admin")}
+            startIcon={<SettingsIcon />}
+            onClick={() => navigate("/settings")}
             sx={{ mr: 1 }}
           >
-            Admin
+            Settings
           </Button>
           <Button
             color="inherit"
-            startIcon={<SettingsIcon />}
-            onClick={() => navigate("/settings")}
+            startIcon={<Description />}
+            onClick={() => navigate("/browser")}
+            sx={{ mr: 1 }}
           >
-            Settings
+            Browser
+          </Button>
+          <Button
+            color="inherit"
+            startIcon={<AccountTree />}
+            onClick={() => navigate("/ontology")}
+            sx={{ mr: 1 }}
+          >
+            Ontologies
+          </Button>
+          <Button
+            color="inherit"
+            variant="outlined"
+            startIcon={<AdminIcon />}
+            onClick={() => navigate("/admin")}
+          >
+            Admin
           </Button>
         </Toolbar>
       </AppBar>
@@ -577,7 +665,7 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
             <Divider sx={{ my: 3 }} />
 
             <Typography variant="subtitle1" sx={{ mb: 2 }}>
-              Embedding Settings
+              PDF Embedding Settings
             </Typography>
             <Grid container spacing={2} sx={{ mb: 3 }}>
               <Grid item xs={12} md={4}>
@@ -629,6 +717,74 @@ function AdminPage({ toggleColorMode }: AdminPageProps) {
                 />
               </Grid>
             </Grid>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              These settings apply to PDF re-embedding jobs triggered from the
+              data browser.
+            </Typography>
+
+            <Typography variant="subtitle1" sx={{ mb: 2 }}>
+              Ontology Embedding Settings
+            </Typography>
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Ontology Embedding Model Name"
+                  value={settings.ontology_embedding_model_name}
+                  onChange={handleTextChange("ontology_embedding_model_name")}
+                  helperText="Model identifier for ontology chunk embeddings"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Ontology Embedding Model Version"
+                  value={settings.ontology_embedding_model_version}
+                  onChange={handleTextChange(
+                    "ontology_embedding_model_version",
+                  )}
+                  helperText="Optional version tag for ontology embeddings"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Ontology Embedding Batch Size"
+                  type="number"
+                  value={settings.ontology_embedding_batch_size}
+                  onChange={handleNumberChange("ontology_embedding_batch_size")}
+                  helperText="Chunks processed per batch when embedding ontologies"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Ontology Embedding Dimensions"
+                  type="number"
+                  value={settings.ontology_embedding_dimensions}
+                  onChange={handleNumberChange("ontology_embedding_dimensions")}
+                  helperText="Vector dimension expected from the ontology model"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Ontology Embedding Max Batch Size"
+                  type="number"
+                  value={settings.ontology_embedding_max_batch_size}
+                  onChange={handleNumberChange(
+                    "ontology_embedding_max_batch_size",
+                  )}
+                  helperText="Upper bound for ontology embedding batch sizes"
+                />
+              </Grid>
+            </Grid>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              The ontology page uses these values when reindexing or
+              regenerating embeddings for hierarchical vocabularies.
+            </Typography>
 
             <Divider sx={{ my: 3 }} />
 

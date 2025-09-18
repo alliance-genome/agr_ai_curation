@@ -86,11 +86,30 @@ class FakeChunkManager:
 
 class FakeEmbeddingService:
     def __init__(self):
-        self.calls = []
+        self.pdf_calls = []
+        self.unified_calls = []
 
     def embed_pdf(self, *, pdf_id: uuid4, model_name: str, version: str | None = None, batch_size: int | None = None, force: bool = False):  # type: ignore[override]
-        self.calls.append(pdf_id)
+        self.pdf_calls.append(pdf_id)
         return {"embedded": 1, "skipped": 0, "model": model_name, "version": "1"}
+
+    def embed_unified_chunks(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        model_name: str,
+        batch_size: int | None = None,
+        force: bool = False,
+    ):
+        self.unified_calls.append((source_type, source_id))
+        return {
+            "embedded": 1,
+            "skipped": 0,
+            "model": model_name,
+            "source_type": source_type,
+            "source_id": source_id,
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -170,7 +189,7 @@ def test_ingest_skips_duplicate_pdf(service, tmp_pdf):
         session.close()
 
     # Embedding service should not be invoked again for duplicates.
-    assert len(service._embedding_service.calls) == 1  # type: ignore[attr-defined]
+    assert len(service._embedding_service.pdf_calls) == 1  # type: ignore[attr-defined]
 
 
 def test_ingest_uses_configured_extraction_strategy(service, tmp_pdf):
