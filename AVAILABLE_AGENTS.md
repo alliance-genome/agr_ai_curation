@@ -31,9 +31,9 @@ The AI Curation System uses multiple specialized agents, each designed to answer
 For more information about the implementation, agent configurations, and tool definitions, see the [private prototype repository](https://github.com/alliance-genome/ai_curation_prototype).
 
 ### Agent Configuration
-- Agent definitions: `backend/src/crew_config/agents.yaml`
-- Tool implementations: `backend/src/lib/chat/tools/`
-- Database schemas: `backend/schemas/`
+- Agent definitions: [`backend/src/crew_config/agents.yaml`](https://github.com/alliance-genome/ai_curation_prototype/blob/main/backend/src/crew_config/agents.yaml)
+- Tool implementations: [`backend/src/lib/chat/tools/`](https://github.com/alliance-genome/ai_curation_prototype/tree/main/backend/src/lib/chat/tools)
+- Database schemas: [`backend/schemas/`](https://github.com/alliance-genome/ai_curation_prototype/tree/main/backend/schemas)
 
 ## Adding New Agents
 
