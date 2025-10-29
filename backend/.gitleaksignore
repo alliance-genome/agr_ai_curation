@@ -1,3 +1,0 @@
-# Test database URLs are not real secrets - they use local test credentials
-docker-compose.test.yml:database-url:19
-docker-compose.test.yml:database-url:20
