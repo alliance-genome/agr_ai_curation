@@ -6,12 +6,14 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 The AI Curation System provides intelligent assistance for biological curation tasks by connecting to various authoritative data sources. You can ask questions about:
 
+- **Gene Expression Curation** - Extract gene expression patterns from research papers with ontology term mapping
 - **Disease Ontology** - Disease classifications, hierarchies, and term relationships
 - **Chemical Entities** - Chemical compounds and their properties via ChEBI
 - **Gene Information** - Gene details across model organisms
 - **Gene Ontology** - GO terms, hierarchies, and biological processes
 - **GO Annotations** - Gene annotations with evidence codes
 - **Orthology Relationships** - Cross-species gene relationships
+- **Ontology Term Mapping** - Map anatomical, developmental, and cellular component labels to official term IDs
 - **Research Papers** - Information extracted from uploaded PDF documents
 
 ## How It Works

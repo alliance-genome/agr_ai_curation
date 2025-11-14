@@ -10,6 +10,8 @@ The AI Curation System uses multiple specialized agents, each designed to answer
 
 | Agent Name | Connects To | Data Source Details | Example Questions |
 |-----------|-------------|---------------------|-------------------|
+| **Gene Expression Curation Agent** | Vector Database + AGR Curation DB | Extracts gene expression patterns from research papers using Weaviate semantic search. Captures spatial (anatomical), temporal (developmental stages), and subcellular locations with reagent details. Multi-organism support. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
+| **Ontology Mapping Agent** | AGR Curation Database | Maps human-readable labels to official ontology term IDs. Supports multiple ontology types across organisms (see [Supported Ontology Types](#supported-ontology-types) below). Uses `agr_curation_query` tool with organism-specific data providers. | "Map 'linker cell' to WBbt term" "Find CURIE for 'L3 larval stage'" "What is the term ID for 'nucleus'?" |
 | **Disease Ontology Agent** | SQL Database | Disease Ontology (DOID.OBO) in database form. Executes SQL queries against PostgreSQL database containing disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
 | **Gene Curation Agent** | AGR Curation Database | Alliance of Genome Resources internal curation database. Queries curated gene data including symbols, names, IDs, genomic locations (chromosome, start, end, strand), and cross-references (NCBI, UniProt, Ensembl). Uses `agr_curation_query` tool from [agr_curation_api_client](https://github.com/alliance-genome/agr_curation_api_client). | "What genes are on chromosome 2?" "Show me gene symbols for WBGene00001345" "Find genes with NCBI cross-reference X" "What is the genomic location of dpy-5?" |
 | **Allele Curation Agent** | AGR Curation Database | Alliance of Genome Resources internal curation database. Queries curated allele data including symbols, variant types, references, and associated genes. Uses `agr_curation_query` tool from [agr_curation_api_client](https://github.com/alliance-genome/agr_curation_api_client). | "What alleles are associated with gene X?" "Show me variant information for allele Y" "Find alleles with specific variant types" "What references support allele Z?" |
@@ -19,6 +21,89 @@ The AI Curation System uses multiple specialized agents, each designed to answer
 | **Alliance Orthologs Agent** | REST API | Alliance Genome Orthology API (https://www.alliancegenome.org/api)<br>**Endpoints:**<br>• `/gene/{id}/orthologs` - Get orthology relationships with confidence scores and prediction methods | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
 | **PDF Specialist Agent** | Vector Database | Weaviate vector database containing embeddings of uploaded research papers. Enables semantic search across scientific literature. | "What does paper X say about gene regulation?" "Find information about disease Y in the uploaded papers" "Summarize methods from document Z" |
 | **Supervisor Agent** | Orchestrator | No external data source - coordinates other agents. Routes questions to appropriate specialists and synthesizes responses. | Handles all questions by delegating to specialist agents. |
+
+## Supported Ontology Types
+
+The **Ontology Mapping Agent** supports mapping labels to official term IDs across **45 distinct ontology types** in the AGR Curation Database. These ontologies cover anatomy, life stages, phenotypes, diseases, chemicals, experimental conditions, cell types, sequences, evidence codes, and more.
+
+### Complete Ontology Type List
+
+#### ANATOMY ONTOLOGIES (9 types)
+- **WBBTTerm** (WBbt:) - C. elegans anatomy
+- **DAOTerm** (FBbt:) - D. melanogaster anatomy
+- **EMAPATerm** (EMAPA:) - Mouse embryo anatomy
+- **MATerm** (MA:) - Mouse adult anatomy
+- **UBERONTerm** (UBERON:) - Multi-species anatomy
+- **ZFATerm** (ZFA:) - Zebrafish anatomy
+- **XBATerm** (XAO:) - Xenopus anatomy
+- **XBSTerm** (XAO:) - Xenopus anatomy stage
+- **BTOTerm** (BTO:) - BRENDA Tissue Ontology
+
+#### LIFE STAGE/DEVELOPMENT ONTOLOGIES (5 types)
+- **WBLSTerm** (WBls:) - C. elegans life stage
+- **FBDVTerm** (FBdv:) - D. melanogaster development
+- **MMUSDVTerm** (MmusDv:) - Mouse development stage
+- **ZFSTerm** (ZFS:) - Zebrafish life stage
+- **XBEDTerm** (XBED:) - Xenopus development
+
+#### PHENOTYPE ONTOLOGIES (7 types)
+- **WBPhenotypeTerm** (WBPhenotype:) - C. elegans phenotype
+- **FBCVTerm** (FBcv:) - D. melanogaster controlled vocabulary
+- **MPTerm** (MP:) - Mammalian phenotype
+- **HPTerm** (HP:) - Human phenotype
+- **XPOTerm** (XPO:) - Xenopus phenotype
+- **APOTerm** (APO:) - Ascomycete phenotype
+- **VTTerm** (VT:) - Vertebrate trait
+
+#### GENE ONTOLOGY (1 type)
+- **GOTerm** (GO:) - Gene Ontology (cellular_component, biological_process, molecular_function)
+
+#### DISEASE ONTOLOGIES (2 types)
+- **DOTerm** (DOID:) - Disease Ontology
+- **MPATHTerm** (MPATH:) - Mouse pathology
+
+#### CHEMICAL/MOLECULAR ONTOLOGIES (5 types)
+- **CHEBITerm** (CHEBI:) - Chemical entities
+- **Molecule** (WB:) - WormBase molecules
+- **XSMOTerm** (XSMO:) - Xenopus small molecule
+- **MODTerm** (MOD:) - Protein modification
+- **ATPTerm** (ATP:) - Anatomical therapeutic chemical
+
+#### EXPERIMENTAL/CONDITION ONTOLOGIES (4 types)
+- **XCOTerm** (XCO:) - Experimental condition
+- **ZECOTerm** (ZECO:) - Zebrafish experimental condition
+- **CMOTerm** (CMO:) - Clinical measurement
+- **MMOTerm** (MMO:) - Measurement method
+
+#### CELL/TISSUE ONTOLOGIES (2 types)
+- **CLTerm** (CL:) - Cell type
+- **BSPOTerm** (BSPO:) - Spatial ontology
+
+#### SEQUENCE/GENETICS ONTOLOGIES (5 types)
+- **SOTerm** (SO:) - Sequence ontology
+- **GENOTerm** (GENO:) - Genotype ontology
+- **MITerm** (MI:) - Molecular interaction
+- **ROTerm** (RO:) - Relation ontology
+- **RSTerm** (RS:) - Rat strain
+
+#### EVIDENCE/QUALITY ONTOLOGIES (3 types)
+- **ECOTerm** (ECO:) - Evidence code
+- **PATOTerm** (PATO:) - Quality/attribute
+- **OBITerm** (OBI:) - Biomedical investigation
+
+#### PATHWAY/PROCESS ONTOLOGIES (1 type)
+- **PWTerm** (PW:) - Pathway ontology
+
+#### TAXONOMY ONTOLOGIES (1 type)
+- **NCBITaxonTerm** (NCBITaxon:) - NCBI Taxonomy
+
+### Mapping Workflow
+
+When you request ontology mappings, the agent:
+1. Identifies the organism from context
+2. Selects appropriate ontology types for that organism
+3. Queries the AGR Curation Database for term matches across all 45 ontology types
+4. Returns CURIEs (e.g., `WBbt:0005062`, `GO:0005634`) with confidence scores
 
 ## How Agents Work Together
 
