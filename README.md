@@ -2,6 +2,15 @@
 
 Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide will help you understand what types of questions the AI can answer and which specialized agents are available to assist with your curation tasks.
 
+## Start Here
+
+**New to the AI Curation System?**
+
+1. **[Getting Started](GETTING_STARTED.md)** - Learn how to access the system, navigate the interface, and run your first queries
+2. **[Best Practices](BEST_PRACTICES.md)** - Master the art of writing effective queries for optimal results
+
+Already familiar with the basics? Continue reading below or jump to [Available Agents](AVAILABLE_AGENTS.md) to see all databases and ontologies.
+
 ## What Can the AI Help With?
 
 The AI Curation System provides intelligent assistance for biological curation tasks by connecting to various authoritative data sources. You can ask questions about:
@@ -30,4 +39,6 @@ The AI Curation System is currently in active development. For more technical de
 
 ## Questions or Feedback?
 
-If you have questions about using the AI Curation System or suggestions for improvements, please reach out to the development team.
+**The best way to provide feedback:** Use the **triple-dot menu (⋮)** button on any AI response in the chat interface. This automatically captures your prompts, the AI's responses, and all database traces, giving developers the full context they need to help you.
+
+For general questions or suggestions, please reach out to the development team.
