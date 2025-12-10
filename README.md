@@ -8,7 +8,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 1. **[Getting Started](GETTING_STARTED.md)** - Learn how to access the system, navigate the interface, and run your first queries
 2. **[Best Practices](BEST_PRACTICES.md)** - Master the art of writing effective queries for optimal results
-3. **[Prompt Explorer](PROMPT_EXPLORER.md)** - Understand and improve the AI prompts that power the system
+3. **[Workflow Analysis](WORKFLOW_ANALYSIS.md)** - Understand and improve the AI prompts that power the system
 
 Already familiar with the basics? Continue reading below or jump to [Available Agents](AVAILABLE_AGENTS.md) to see all databases and ontologies.
 
@@ -42,6 +42,6 @@ The AI Curation System is currently in active development. For more technical de
 
 **The best way to provide feedback:** Use the **triple-dot menu (⋮)** button on any AI response in the chat interface. This automatically captures your prompts, the AI's responses, and all database traces, giving developers the full context they need to help you.
 
-**Want to understand or improve AI behavior?** Check out the **[Prompt Explorer](PROMPT_EXPLORER.md)** - browse the exact prompts given to each AI agent, discuss them with Claude Opus 4.5, and submit improvement suggestions based on your domain expertise.
+**Want to understand or improve AI behavior?** Check out **[Workflow Analysis](WORKFLOW_ANALYSIS.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus 4.5, and submit improvement suggestions based on your domain expertise.
 
 For general questions or suggestions, please reach out to the development team.
