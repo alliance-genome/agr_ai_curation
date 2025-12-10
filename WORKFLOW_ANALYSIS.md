@@ -13,17 +13,29 @@ Click **"Workflow Analysis"** in the navigation bar at the top of the applicatio
 A dedicated chat interface where you can have conversations with Claude Opus 4.5 (Anthropic's most capable model) about prompts and AI behavior.
 
 **Key Features:**
-- **Extended Thinking** - Toggle deep reasoning mode for complex analyses (appears as 💭 icon in Opus responses)
-- **Effort Control** - Adjust thinking depth from "Low" to "Maximum" using the slider
 - **Conversation History** - All chats are preserved and can be continued later
-- **Tool Access** - Opus can submit suggestions directly to the development team
+- **Tool Access** - Opus has powerful diagnostic capabilities (see below)
+- **Trace Analysis** - Open traces from the main chat to discuss specific interactions
+- **Direct Feedback** - Submit suggestions via AI-Assisted or Manual buttons
+
+**What Opus Can Do:**
+
+Opus has access to the same tools that specialist agents use, making it a true debugging partner:
+
+- **Analyze Traces** - Query trace data dynamically (tool calls, conversation flow, citations, token usage, agent context)
+- **Read Logs** - Access Docker container logs to investigate errors
+- **Query Databases** - Search genes, alleles, ontology terms via AGR Curation Database
+- **Execute SQL** - Run diagnostic queries on the curation database
+- **Call APIs** - Query ChEBI (chemicals), QuickGO (GO terms), GO annotations
+- **Inspect Prompts** - View any agent's prompt, including MOD-specific rules
+- **Submit Feedback** - Create suggestions for the development team
 
 **Example questions you can ask:**
-- "Why does the gene expression agent extract information this way?"
-- "How could we improve this prompt for FlyBase conventions?"
-- "What would happen if we changed this instruction?"
-- "Can you explain what this section of the prompt does?"
-- "Review this trace and identify any prompt issues"
+- "Can you check the trace for this interaction and see why it failed?"
+- "Look at the backend logs and tell me what went wrong"
+- "Query the database for this gene symbol and verify the ID is correct"
+- "What does the gene expression agent prompt say about anatomy terms?"
+- "Review this trace - are there any duplicate tool calls or inefficiencies?"
 
 ### Right Panel: Prompt Browser
 
@@ -146,27 +158,6 @@ When you submit a suggestion:
 
 Your suggestions help make the AI better for everyone. Even if a specific change isn't implemented, the feedback helps us understand curator needs.
 
-## Extended Thinking Mode
-
-The 💭 icon in Opus responses indicates Extended Thinking mode is active. When enabled, Opus performs additional reasoning steps before responding, which:
-
-- **Improves accuracy** for complex analyses
-- **Shows its reasoning** in a collapsed section you can expand
-- **Takes more time** (typically 10-30 seconds longer)
-
-**When to use Extended Thinking:**
-- Analyzing complex prompt behavior
-- Reviewing traces with multiple agent interactions
-- Comparing different approaches to a problem
-- Debugging subtle issues
-
-**When to disable it:**
-- Quick questions with straightforward answers
-- Iterative conversations where speed matters
-- Brainstorming sessions
-
-Use the **effort slider** (Low → Medium → High → Maximum) to control how deeply Opus thinks.
-
 ## Common Questions
 
 ### Do I need to select an agent to submit feedback?
@@ -184,7 +175,8 @@ Each Model Organism Database has decades of curated data and organism-specific c
 ### What's the difference between Workflow Analysis's Opus and the main chat?
 
 The main chat uses a multi-agent system optimized for curation tasks. Workflow Analysis's chat uses Claude Opus 4.5 directly, which is better for open-ended discussions about prompts and AI behavior. Opus in Workflow Analysis also has access to:
-- Extended Thinking mode for deeper reasoning
+- Powerful diagnostic tools (trace analysis, logs, database queries, API calls)
+- The ability to inspect prompts and system behavior
 - The suggestion submission tool
 - Full trace context when opened from the main chat
 - Conversation history preservation
