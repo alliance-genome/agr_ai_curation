@@ -62,9 +62,14 @@ The system will automatically determine which databases to query based on your q
 
 ## Next Steps
 
-- Review **[BEST_PRACTICES.md](BEST_PRACTICES.md)** for tips on writing effective queries
-- Check **[AVAILABLE_AGENTS.md](AVAILABLE_AGENTS.md)** to see all available databases and ontologies
+### Learn the Basics
+- Review **[Best Practices](BEST_PRACTICES.md)** for tips on writing effective queries
+- Check **[Available Agents](AVAILABLE_AGENTS.md)** to see all available databases and ontologies
 - Start asking questions and exploring!
+
+### Explore Advanced Features
+- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Claude Opus 4.5 about prompts, browse agent configurations, and analyze traces
+- **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain agents together and export results to CSV, TSV, or JSON files
 
 ## Need Help?
 

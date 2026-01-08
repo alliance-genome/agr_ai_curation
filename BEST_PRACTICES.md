@@ -118,6 +118,54 @@ The AI Curation System connects to **specialized agents** that query authoritati
 - What types of queries each agent supports
 - Example queries for each agent type
 
+## Best Practices for Curation Flows
+
+When building **[Curation Flows](CURATION_FLOWS.md)**, follow these guidelines for optimal results:
+
+### Task Descriptions
+
+The task input is the starting point for your flow. Write clear, specific task descriptions:
+
+❌ "Process this paper."
+
+✅ "Extract all C. elegans gene expression data from this paper, mapping anatomical locations to WBbt terms and developmental stages to WBls terms."
+
+### Flow Design
+
+**Start Simple:** Begin with a linear flow (Input → Extract → Output) before building complex pipelines.
+
+**Test Incrementally:** Add one agent at a time and verify results before adding more.
+
+**Use Verify with Claude:** Before running on important documents, let Claude check your flow for issues.
+
+### Choosing Output Formats
+
+| Format | Best For |
+|--------|----------|
+| **Chat Output** | Quick review, iterative refinement, exploration |
+| **CSV** | Spreadsheets, database import, sharing with collaborators |
+| **TSV** | Bioinformatics pipelines, AGR data submission |
+| **JSON** | API integration, preserving complex nested data |
+
+### Combining Chat and File Outputs
+
+You can connect the same agent to both Chat Output AND a file formatter to:
+- Review results immediately in chat
+- Download a file for database import
+- Compare visual review with exported data
+
+### Flow Naming
+
+Use descriptive flow names that indicate:
+- Organism (e.g., "C. elegans", "Zebrafish")
+- Data type (e.g., "Expression", "Phenotype")
+- Output format (e.g., "to CSV", "to JSON")
+
+**Examples:**
+- "WormBase Expression Extraction to TSV"
+- "Zebrafish Gene-Disease Mapping to CSV"
+- "Multi-species Ortholog Query to JSON"
+
 ## Additional Tips
 
 ### 1. **Provide Context**

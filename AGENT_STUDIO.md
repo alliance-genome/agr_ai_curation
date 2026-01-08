@@ -1,16 +1,18 @@
-# Workflow Analysis Guide
+# Agent Studio Guide
 
-The Workflow Analysis tool helps curators understand, analyze, and improve the AI prompts that power the curation assistant. It provides transparency into how the AI agents work, allows you to review interactions in detail, and gives you a direct way to suggest improvements.
+Agent Studio is a powerful development environment for understanding, analyzing, and improving the AI agents that power the curation system. It provides transparency into how agents work, allows you to review interactions in detail, chat with Claude Opus 4.5 about prompts and traces, and build visual curation workflows.
 
-## Accessing Workflow Analysis
+## Accessing Agent Studio
 
-Click **"Workflow Analysis"** in the navigation bar at the top of the application.
+Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-### Left Panel: Chat with Claude Opus 4.5
+Agent Studio has four main components accessible via tabs:
 
-A dedicated chat interface where you can have conversations with Claude Opus 4.5 (Anthropic's most capable model) about prompts and AI behavior.
+### 1. Opus Chat
+
+A dedicated chat interface where you can have conversations with Claude Opus 4.5 (Anthropic's most capable model) about prompts, traces, and AI behavior.
 
 **Key Features:**
 - **Conversation History** - All chats are preserved and can be continued later
@@ -37,7 +39,7 @@ Opus has access to the same tools that specialist agents use, making it a true d
 - "What does the gene expression agent prompt say about anatomy terms?"
 - "Review this trace - are there any duplicate tool calls or inefficiencies?"
 
-### Right Panel: Prompt Browser
+### 2. Prompt Browser
 
 Browse all agent prompts organized by category:
 
@@ -45,19 +47,43 @@ Browse all agent prompts organized by category:
 - **Extraction** - Gene Expression Specialist and Formatter agents
 - **Database Query** - Gene, Allele, Disease, Chemical, GO Term, and other lookup agents
 - **Validation** - Ontology mapping and term validation agents
+- **Output** - Chat Output, CSV Formatter, TSV Formatter, JSON Formatter agents
 
 For each agent, you can view:
 - **Base Prompt** - The core instructions given to the agent
-- **MOD-Specific Rules** - How the prompt is customized for each Model Organism Database (WormBase, FlyBase, MGI, ZFIN, RGD, SGD)
+- **MOD-Specific Rules** - How the prompt is customized for each Model Organism Database (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
 - **Combined View** - See the base prompt with MOD rules injected
+- **Version History** - Track changes to prompts over time
+
+### 3. Flow Builder
+
+Create visual curation workflows that chain multiple agents together. See **[Curation Flows](CURATION_FLOWS.md)** for comprehensive documentation on building and running flows.
+
+**Quick Overview:**
+- Drag-and-drop interface for building workflows
+- 12+ available agents from extraction to file output
+- Save, load, and share flows with other curators
+- Run flows with "Verify with Claude" integration
+
+### 4. Trace Analysis
+
+When you open a trace from the main chat (via the fingerprint icon or triple-dot menu), Agent Studio provides detailed analysis:
+
+- **Trace ID** - Unique identifier for the interaction
+- **User Query** - What you asked
+- **Final Response** - What the AI answered
+- **Agents Involved** - Which specialists handled the query
+- **Tool Calls** - What database queries or operations were performed
+- **Timing Data** - How long each operation took
+- **PDF Citations** - Document sections referenced
 
 ## Submitting Feedback and Suggestions
 
-Workflow Analysis provides multiple ways to suggest improvements:
+Agent Studio provides multiple ways to suggest improvements:
 
 ### 1. AI-Assisted Suggestions
 
-Click the **"AI-Assisted"** (✨) button in the chat header. This asks Opus to help you draft a suggestion based on your conversation. Opus will:
+Click the **"AI-Assisted"** button in the chat header. This asks Opus to help you draft a suggestion based on your conversation. Opus will:
 - Analyze the full conversation history
 - Summarize the issue you've discussed
 - Propose a concrete improvement
@@ -67,7 +93,7 @@ Click the **"AI-Assisted"** (✨) button in the chat header. This asks Opus to h
 
 ### 2. Manual Suggestions
 
-Click the **"Manual"** (✍️) button to fill out a suggestion form yourself. You'll provide:
+Click the **"Manual"** button to fill out a suggestion form yourself. You'll provide:
 - **Suggestion Type** - What kind of change is this?
   - *Improvement* - General enhancement
   - *Bug* - Incorrect or unexpected behavior
@@ -87,9 +113,9 @@ This is the most powerful way to provide feedback because it includes full conte
 
 1. In the main chat interface, find an AI response you want to discuss
 2. Click the **triple-dot menu (⋮)** on that message
-3. Select **"Open in Workflow Analysis"**
+3. Select **"Open in Agent Studio"**
 
-This opens Workflow Analysis with the full trace context automatically loaded, including:
+This opens Agent Studio with the full trace context automatically loaded, including:
 - Your original query
 - The AI's response
 - Which agents were involved
@@ -101,18 +127,18 @@ You can then discuss this specific interaction with Opus and submit targeted sug
 
 ## Understanding Trace Context
 
-When you open Workflow Analysis from a trace, Opus has access to:
+When you open Agent Studio from a trace, Opus has access to:
 
-- **Trace ID** - Unique identifier for the interaction (clickable fingerprint icon 🔍)
+- **Trace ID** - Unique identifier for the interaction (clickable fingerprint icon)
 - **User Query** - What you asked
 - **Final Response** - What the AI answered
 - **Agents Involved** - Which specialists handled the query
-- **Tool Calls** - What database queries or operations were performed (viewable via trace review service)
+- **Tool Calls** - What database queries or operations were performed
 - **Timing Data** - How long each operation took
 
 ### Viewing Detailed Trace Information
 
-Click the **fingerprint icon (🔍)** next to any message to:
+Click the **fingerprint icon** next to any message to:
 - Copy the trace ID
 - View detailed trace breakdown showing:
   - All tool calls in chronological order
@@ -166,15 +192,15 @@ No. If you have feedback based on a trace or general conversation that isn't abo
 
 ### Can I see what prompts are currently being used?
 
-Yes! That's the main purpose of Workflow Analysis. Browse the right panel to see the exact instructions given to each agent.
+Yes! That's the main purpose of the Prompt Browser tab. Browse all agent prompts organized by category and see exactly what instructions each agent receives.
 
 ### Why are there MOD-specific rules?
 
 Each Model Organism Database has decades of curated data and organism-specific conventions. MOD rules customize the AI's behavior to respect these conventions - for example, using WormBase anatomy terms (WBbt) for C. elegans or FlyBase allele naming patterns.
 
-### What's the difference between Workflow Analysis's Opus and the main chat?
+### What's the difference between Agent Studio's Opus and the main chat?
 
-The main chat uses a multi-agent system optimized for curation tasks. Workflow Analysis's chat uses Claude Opus 4.5 directly, which is better for open-ended discussions about prompts and AI behavior. Opus in Workflow Analysis also has access to:
+The main chat uses a multi-agent system optimized for curation tasks. Agent Studio's Opus Chat uses Claude Opus 4.5 directly, which is better for open-ended discussions about prompts and AI behavior. Opus in Agent Studio also has access to:
 - Powerful diagnostic tools (trace analysis, logs, database queries, API calls)
 - The ability to inspect prompts and system behavior
 - The suggestion submission tool
@@ -183,7 +209,7 @@ The main chat uses a multi-agent system optimized for curation tasks. Workflow A
 
 ### How do I use the trace review feature?
 
-1. Click the fingerprint icon (🔍) next to any message in the main chat or Workflow Analysis
+1. Click the fingerprint icon next to any message in the main chat or Agent Studio
 2. This copies the trace ID and shows a detailed breakdown
 3. You can discuss the trace with Opus, who can analyze:
    - Tool call patterns (e.g., redundant searches)
@@ -193,13 +219,17 @@ The main chat uses a multi-agent system optimized for curation tasks. Workflow A
 
 ### What's the difference between AI-Assisted and Manual feedback?
 
-- **AI-Assisted (✨)**: Opus reviews your conversation and drafts the suggestion for you. Best when you've been discussing an issue and want Opus to formalize it.
-- **Manual (✍️)**: You fill out the form yourself. Best when you have a clear, specific suggestion ready to submit.
+- **AI-Assisted**: Opus reviews your conversation and drafts the suggestion for you. Best when you've been discussing an issue and want Opus to formalize it.
+- **Manual**: You fill out the form yourself. Best when you have a clear, specific suggestion ready to submit.
 
 Both options capture the same context (trace ID, conversation, agent/MOD selection) in the final submission.
 
+### How do I build curation flows?
+
+See the **[Curation Flows](CURATION_FLOWS.md)** guide for complete documentation on using the Flow Builder to create visual curation workflows.
+
 ## Need Help?
 
-If you have questions about using Workflow Analysis or need help formulating feedback, just ask Opus! It's designed to help you navigate prompt engineering concepts and translate your domain expertise into actionable suggestions.
+If you have questions about using Agent Studio or need help formulating feedback, just ask Opus! It's designed to help you navigate prompt engineering concepts and translate your domain expertise into actionable suggestions.
 
 **Pro tip:** Start a conversation with Opus about any aspect of the system you're curious about. It has access to all the prompts and can explain how they work, why certain decisions were made, and how to improve them.

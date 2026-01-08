@@ -22,6 +22,28 @@ The AI Curation System uses multiple specialized agents, each designed to answer
 | **PDF Specialist Agent** | Vector Database | Weaviate vector database containing embeddings of uploaded research papers. Enables semantic search across scientific literature. | "What does paper X say about gene regulation?" "Find information about disease Y in the uploaded papers" "Summarize methods from document Z" |
 | **Supervisor Agent** | Orchestrator | No external data source - coordinates other agents. Routes questions to appropriate specialists and synthesizes responses. | Handles all questions by delegating to specialist agents. |
 
+## Output Formatter Agents
+
+These agents are used in **[Curation Flows](CURATION_FLOWS.md)** to generate downloadable files from extracted data.
+
+| Agent Name | Output Format | Description | Use Cases |
+|-----------|---------------|-------------|-----------|
+| **Chat Output Agent** | Chat Message | Sends formatted results to the chat interface for review and discussion. | Quick review, iterative refinement, sharing results in conversation |
+| **CSV Formatter Agent** | CSV File | Generates comma-separated value files for spreadsheet applications and database import. | Excel/Google Sheets, bulk database import, data sharing |
+| **TSV Formatter Agent** | TSV File | Generates tab-separated value files preferred by many bioinformatics tools and databases. | Database import scripts, bioinformatics pipelines, AGR data submission |
+| **JSON Formatter Agent** | JSON File | Generates structured JSON files preserving complex nested data structures. | API integration, custom scripts, preserving hierarchical data |
+
+### File Output Features
+
+When flows generate files, they appear in the chat as downloadable cards showing:
+- File name and format
+- File size
+- Generation timestamp
+- Model used for generation
+- Download count
+
+Files remain available throughout your session. Download important files before ending your session.
+
 ## Supported Ontology Types
 
 The **Ontology Mapping Agent** supports mapping labels to official term IDs across **45 distinct ontology types** in the AGR Curation Database. These ontologies cover anatomy, life stages, phenotypes, diseases, chemicals, experimental conditions, cell types, sequences, evidence codes, and more.
