@@ -12,7 +12,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 **Ready for advanced features?**
 
-4. **[Agent Studio](AGENT_STUDIO.md)** - Explore prompts, debug AI behavior, and chat with Claude Opus 4.5
+4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus 4.5
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
 
 ## What Can the AI Help With?
@@ -38,11 +38,11 @@ The AI Curation System provides intelligent assistance for biological curation t
 - **Export Results** - Generate CSV, TSV, or JSON files from your workflows
 - **Save and Reuse** - Store flows for repeated use across documents
 
-### Debug and Improve AI Behavior
+### Understand and Improve AI Behavior
 
-- **Agent Studio** - Chat with Claude Opus 4.5 about prompts and traces
+- **Agent Studio** - Browse prompts, build flows, and chat with Claude Opus 4.5
 - **Prompt Browser** - View exact instructions given to each agent
-- **Trace Analysis** - Understand why the AI made specific decisions
+- **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
 ## How It Works
@@ -78,10 +78,9 @@ The main interaction area for asking questions about uploaded documents or query
 
 ### Agent Studio
 Tools for understanding and improving AI behavior:
-- **Opus Chat** - Discuss prompts and traces with Claude Opus 4.5
-- **Prompt Browser** - View all agent prompts organized by category
-- **Flow Builder** - Create visual curation workflows
-- **Trace Analysis** - See why the AI made specific decisions
+- **Prompts Tab** - Browse agent prompts and chat with Opus about them
+- **Flows Tab** - Build visual workflows and use "Verify with Claude"
+- **Discuss Responses** - Use triple-dot menu on any chat response to discuss it with Opus
 
 ### Curation Flows
 Visual workflows that automate multi-step curation tasks:
@@ -138,5 +137,5 @@ For general questions or suggestions, please reach out to the development team.
 | [Getting Started](GETTING_STARTED.md) | First-time setup and basic usage |
 | [Best Practices](BEST_PRACTICES.md) | Tips for writing effective queries |
 | [Available Agents](AVAILABLE_AGENTS.md) | All specialist agents and their capabilities |
-| [Agent Studio](AGENT_STUDIO.md) | Prompt exploration and AI debugging |
+| [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, chat with Opus |
 | [Curation Flows](CURATION_FLOWS.md) | Visual workflow builder guide |

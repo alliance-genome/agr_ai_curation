@@ -1,6 +1,6 @@
 # Agent Studio Guide
 
-Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can chat with Claude Opus 4.5 about why the AI made certain decisions, browse the instructions given to each agent, build visual curation workflows, and submit suggestions based on your domain expertise.
+Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and chat with Claude Opus 4.5 about any of it.
 
 ## Accessing Agent Studio
 
@@ -8,28 +8,15 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has four main tabs:
+Agent Studio has two main tabs: **Prompts** and **Flows**. Both tabs include a chat panel where you can talk with Claude Opus 4.5.
 
-### 1. Opus Chat
+### Prompts Tab
 
-A chat interface where you can talk directly with Claude Opus 4.5 (Anthropic's most capable model) about the AI's behavior and your curation questions.
+Browse the instructions given to each AI agent and chat with Opus about them.
 
-**What you can ask Opus:**
-- "Why did the AI suggest this ontology term instead of that one?"
-- "Can you explain what the gene expression agent is looking for?"
-- "I think this prompt is missing something - can you help me write a suggestion?"
-- "Look at this trace and tell me why the AI missed the gene in paragraph 3"
-- "What databases does the disease agent query?"
+**Prompt Browser (Left Panel)**
 
-**Key Features:**
-- **Understands the system** - Opus knows how all the agents work and can explain their behavior
-- **Trace Analysis** - Open traces from the main chat to discuss specific interactions
-- **Direct Feedback** - Submit suggestions via AI-Assisted or Manual buttons
-
-### 2. Prompt Browser
-
-Browse the instructions given to each AI agent, organized by category:
-
+See all agent prompts organized by category:
 - **Routing** - Supervisor agent that routes your queries to specialists
 - **Extraction** - Gene Expression Specialist and Formatter agents
 - **Database Query** - Gene, Allele, Disease, Chemical, GO Term, and other lookup agents
@@ -42,35 +29,62 @@ For each agent, you can view:
 - **Combined View** - See the base prompt with MOD rules injected
 - **Version History** - Track changes to prompts over time
 
-This is helpful when you want to understand *why* an agent behaves a certain way, or when you want to suggest improvements.
+**Opus Chat (Right Panel)**
 
-### 3. Flow Builder
+Chat with Claude Opus 4.5 about the prompts you're viewing:
+- "Why does this agent look for negative evidence?"
+- "I think this prompt is missing guidance about [organism-specific convention]"
+- "Can you help me write a suggestion to improve this?"
+- "What does this instruction mean in practice?"
 
-Create visual curation workflows that chain multiple agents together. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide.
+### Flows Tab
 
-**Quick Overview:**
-- Drag-and-drop interface for building workflows
+Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
+
+**Flow Builder (Left Panel)**
+
+Create workflows by dragging agents onto a canvas and connecting them:
 - 12+ available agents from extraction to file output
-- Save, load, and share flows with other curators
-- Run flows with "Verify with Claude" integration
+- Save, load, and reuse flows
+- Generate downloadable CSV, TSV, or JSON files
 
-### 4. Trace Analysis
+**Verify with Claude (Important!)**
 
-When you open a trace from the main chat (via the fingerprint icon or triple-dot menu), you can see exactly what happened during that interaction:
+Before running a flow, click the **"Verify with Claude"** button. Claude will:
+- Check your flow structure for issues
+- Identify missing connections or problematic configurations
+- Suggest improvements
+- Confirm your flow is ready to run
 
-- **Your Query** - What you asked
-- **AI's Response** - What it answered
-- **Agents Involved** - Which specialists handled your question
-- **Database Queries** - What searches were performed
-- **Timing** - How long each step took
+This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
 
-This helps you understand why the AI gave a particular answer and identify where things went wrong if the response wasn't what you expected.
+**Opus Chat (Right Panel)**
+
+Chat with Claude Opus 4.5 about your flows:
+- "Does this flow make sense for extracting expression data?"
+- "What agent should I add to map anatomy terms to WBbt IDs?"
+- "Why isn't my flow generating the output I expected?"
+
+## Discussing a Chat Response
+
+If you want to talk about the results from a conversation you're having in the main chat, you can bring that into Agent Studio:
+
+1. In the main chat, find the AI response you want to discuss
+2. Click the **triple-dot menu (⋮)** on that message
+3. Select **"Open in Agent Studio"**
+
+This opens Agent Studio with your conversation loaded, so Opus knows exactly what you're referring to. You can then ask questions like:
+- "Why did the AI suggest this ontology term instead of that one?"
+- "The AI missed the gene mentioned in paragraph 3 - what went wrong?"
+- "Can you help me understand why I got this response?"
+
+This is the best way to get help understanding unexpected AI behavior or to formulate improvement suggestions.
 
 ## Submitting Feedback and Suggestions
 
-Your domain expertise is invaluable for improving the AI. Agent Studio provides multiple ways to suggest improvements:
+Your domain expertise is invaluable for improving the AI. Agent Studio provides two ways to submit suggestions:
 
-### 1. AI-Assisted Suggestions
+### AI-Assisted Suggestions
 
 Click the **"AI-Assisted"** button in the chat header. Opus will:
 - Review your conversation
@@ -80,7 +94,7 @@ Click the **"AI-Assisted"** button in the chat header. Opus will:
 
 **When to use:** After discussing a specific issue with Opus, this is the fastest way to submit actionable feedback.
 
-### 2. Manual Suggestions
+### Manual Suggestions
 
 Click the **"Manual"** button to fill out a suggestion form yourself:
 
@@ -97,16 +111,6 @@ Click the **"Manual"** button to fill out a suggestion form yourself:
 
 **When to use:** When you have a clear suggestion and don't need Opus's help drafting it.
 
-### 3. Trace-Based Feedback (from Main Chat)
-
-This is the most powerful way to provide feedback because it includes full context:
-
-1. In the main chat, find an AI response you want to discuss
-2. Click the **triple-dot menu (⋮)** on that message
-3. Select **"Open in Agent Studio"**
-
-This opens Agent Studio with the full trace context automatically loaded. You can then discuss this specific interaction with Opus and submit targeted suggestions.
-
 ## Tips for Effective Feedback
 
 ### Be Specific
@@ -121,8 +125,8 @@ If your MOD has specific naming conventions, annotation rules, or curation pract
 ### Check MOD-Specific Rules First
 Before suggesting a change to a base prompt, check if your MOD already has specific rules in the Prompt Browser. The issue might be that your MOD's rules need updating rather than the base prompt.
 
-### Use Trace Context
-When providing feedback about a specific interaction, always open it from the trace (triple-dot menu) rather than describing it manually. This ensures the development team has the full context.
+### Use "Open in Agent Studio"
+When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives Opus (and the development team) the full context.
 
 ## What Happens to Your Suggestions
 
@@ -139,11 +143,11 @@ Your suggestions help make the AI better for everyone!
 
 ### Do I need to select an agent to submit feedback?
 
-No. If you have feedback based on a trace or general conversation, you can submit "General" feedback without selecting a specific agent.
+No. If you have feedback based on a conversation or general observation, you can submit "General" feedback without selecting a specific agent.
 
 ### Can I see what prompts are currently being used?
 
-Yes! That's the main purpose of the Prompt Browser tab. Browse all agent prompts and see exactly what instructions each agent receives.
+Yes! That's the main purpose of the Prompts tab. Browse all agent prompts and see exactly what instructions each agent receives.
 
 ### Why are there MOD-specific rules?
 
@@ -151,7 +155,7 @@ Each Model Organism Database has decades of curated data and organism-specific c
 
 ### What's the difference between Agent Studio's Opus and the main chat?
 
-The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's Opus Chat is for open-ended discussions about how the AI works, why it made certain decisions, and how to improve it.
+The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's Opus is for discussing how the AI works, understanding specific responses, and improving the system.
 
 ### How do I build curation flows?
 
@@ -160,5 +164,3 @@ See the **[Curation Flows](CURATION_FLOWS.md)** guide for complete documentation
 ## Need Help?
 
 If you have questions about using Agent Studio or need help formulating feedback, just ask Opus! It's designed to help you translate your domain expertise into actionable suggestions.
-
-**Pro tip:** If you're curious about why the AI does something a certain way, start by asking Opus. It can explain how the agents work and help you decide whether to submit a suggestion.
