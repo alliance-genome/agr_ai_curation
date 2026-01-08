@@ -10,11 +10,15 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 Agent Studio has two main tabs: **Prompts** and **Flows**. Both tabs include a chat panel where you can talk with Claude Opus 4.5.
 
+### Opus Chat (Left Panel)
+
+On both tabs, the left panel is your chat with Claude Opus 4.5. You can ask Opus about whatever you're viewing on the right - prompts or flows.
+
 ### Prompts Tab
 
 Browse the instructions given to each AI agent and chat with Opus about them.
 
-**Prompt Browser (Left Panel)**
+**Prompt Browser (Right Panel)**
 
 See all agent prompts organized by category:
 - **Routing** - Supervisor agent that routes your queries to specialists
@@ -29,9 +33,7 @@ For each agent, you can view:
 - **Combined View** - See the base prompt with MOD rules injected
 - **Version History** - Track changes to prompts over time
 
-**Opus Chat (Right Panel)**
-
-Chat with Claude Opus 4.5 about the prompts you're viewing:
+**Ask Opus about prompts:**
 - "Why does this agent look for negative evidence?"
 - "I think this prompt is missing guidance about [organism-specific convention]"
 - "Can you help me write a suggestion to improve this?"
@@ -41,7 +43,7 @@ Chat with Claude Opus 4.5 about the prompts you're viewing:
 
 Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
 
-**Flow Builder (Left Panel)**
+**Flow Builder (Right Panel)**
 
 Create workflows by dragging agents onto a canvas and connecting them:
 - 12+ available agents from extraction to file output
@@ -58,9 +60,7 @@ Before running a flow, click the **"Verify with Claude"** button. Claude will:
 
 This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
 
-**Opus Chat (Right Panel)**
-
-Chat with Claude Opus 4.5 about your flows:
+**Ask Opus about flows:**
 - "Does this flow make sense for extracting expression data?"
 - "What agent should I add to map anatomy terms to WBbt IDs?"
 - "Why isn't my flow generating the output I expected?"
