@@ -2,6 +2,8 @@
 
 Curation Flows are visual workflows that let you chain multiple AI agents together. You build them once, save them, and reuse them across documents.
 
+> **Note:** Flows currently support **sequential (linear) pipelines only** - each agent connects to the next in a chain. Branching workflows (one agent connecting to multiple outputs) are coming soon.
+
 ## Why Use Curation Flows?
 
 **Time Savings**
@@ -128,11 +130,11 @@ After building and saving your flow:
 4. **Find your saved flow** in the list
 5. **Click the "Run" button** next to your flow
 
-The flow executes and results appear based on your output agents (chat message, downloadable file, or both).
+The flow executes and results appear based on your output agent (chat message or downloadable file).
 
 ## Output Options
 
-Flows can output results in multiple ways. You can even use multiple outputs in the same flow.
+Flows can output results in different ways. Choose the output agent that fits your needs.
 
 ### Chat Output Agent
 
@@ -200,13 +202,16 @@ Initial Instructions → General PDF Agent → Gene Expression Extractor → Ont
 **Instructions for Ontology Mapping Agent node:**
 "Map all anatomy terms to WBbt IDs and all stage terms to WBls IDs."
 
-### Example 3: Review in Chat AND Export
+### Example 3: Full Pipeline with File Export
 
-**Goal:** See results in chat for review while also generating a file
+**Goal:** Extract expression data, validate terms, and export to TSV
 
-Connect Gene Expression Extractor to **both**:
-- Chat Output Agent (for review)
-- CSV File Formatter (for download)
+```
+Initial Instructions → General PDF Agent → Gene Expression Extractor → Gene Validation Agent → TSV File Formatter
+```
+
+**Instructions for Initial Instructions node:**
+"Extract gene expression data and validate all gene identifiers before export."
 
 ## Managing Flows
 
@@ -239,8 +244,8 @@ Take advantage of the ability to add specific instructions to each agent node.
 ### Use Verify with Claude
 Always verify your flow before running it on important documents.
 
-### Use Multiple Outputs
-Connect to both Chat Output AND a file formatter to review results while generating a downloadable file.
+### Test with Chat Output First
+Use Chat Output Agent at the end of your flow to review results before switching to a file formatter for final export.
 
 ### Name Flows Descriptively
 Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
@@ -278,7 +283,7 @@ Generated files are available during your session. Download files you want to ke
 - **Chat Output:** Shows results in the chat for review and discussion
 - **File Formatters:** Generate downloadable files (CSV, TSV, JSON)
 
-Use both in the same flow to review AND download.
+Use Chat Output first to review results, then switch to a File Formatter when ready to export.
 
 ## Next Steps
 
