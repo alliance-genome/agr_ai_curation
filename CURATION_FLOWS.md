@@ -165,12 +165,12 @@ unc-54,body wall muscle,WBbt:0005781,adult,IEP
 
 ### TSV Formatter
 
-Creates tab-separated value files, preferred by many databases.
+Creates tab-separated value files, preferred by many databases and bioinformatics tools.
 
 **Use cases:**
-- Database import scripts
-- Bioinformatics pipelines
-- Systems that expect tab-delimited data
+- Database import
+- AGR data submission
+- Sharing with bioinformatics pipelines
 
 **Example output:**
 ```tsv
@@ -181,12 +181,12 @@ unc-54	body wall muscle	WBbt:0005781	adult	IEP
 
 ### JSON Formatter
 
-Creates structured JSON files for programmatic use.
+Creates structured JSON files that preserve complex nested data.
 
 **Use cases:**
-- API integration
-- Custom data processing scripts
-- Preserving complex nested data structures
+- Data with hierarchical structure (e.g., expression data with nested anatomy/stage info)
+- Sharing with computational biologists
+- When you need to preserve relationships between data fields
 
 **Example output:**
 ```json
@@ -306,8 +306,9 @@ Let Claude check your flow before running it on important documents.
 
 ### Choose the Right Output
 - **Chat Output** - For quick review and iteration
-- **CSV/TSV** - For data that will be imported into databases or spreadsheets
-- **JSON** - For complex structured data or API integration
+- **CSV** - For spreadsheets (Excel, Google Sheets)
+- **TSV** - For database import and AGR submission
+- **JSON** - For complex nested data that needs to preserve structure
 
 ### Name Flows Clearly
 Use descriptive names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".

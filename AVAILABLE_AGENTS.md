@@ -8,19 +8,19 @@ The AI Curation System uses multiple specialized agents, each designed to answer
 
 ## Specialist Agents
 
-| Agent Name | Connects To | Data Source Details | Example Questions |
-|-----------|-------------|---------------------|-------------------|
-| **Gene Expression Curation Agent** | Vector Database + AGR Curation DB | Extracts gene expression patterns from research papers using Weaviate semantic search. Captures spatial (anatomical), temporal (developmental stages), and subcellular locations with reagent details. Multi-organism support. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
-| **Ontology Mapping Agent** | AGR Curation Database | Maps human-readable labels to official ontology term IDs. Supports multiple ontology types across organisms (see [Supported Ontology Types](#supported-ontology-types) below). Uses `agr_curation_query` tool with organism-specific data providers. | "Map 'linker cell' to WBbt term" "Find CURIE for 'L3 larval stage'" "What is the term ID for 'nucleus'?" |
-| **Disease Ontology Agent** | SQL Database | Disease Ontology (DOID.OBO) in database form. Executes SQL queries against PostgreSQL database containing disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
-| **Gene Curation Agent** | AGR Curation Database | Alliance of Genome Resources internal curation database. Queries curated gene data including symbols, names, IDs, genomic locations (chromosome, start, end, strand), and cross-references (NCBI, UniProt, Ensembl). Uses `agr_curation_query` tool from [agr_curation_api_client](https://github.com/alliance-genome/agr_curation_api_client). | "What genes are on chromosome 2?" "Show me gene symbols for WBGene00001345" "Find genes with NCBI cross-reference X" "What is the genomic location of dpy-5?" |
-| **Allele Curation Agent** | AGR Curation Database | Alliance of Genome Resources internal curation database. Queries curated allele data including symbols, variant types, references, and associated genes. Uses `agr_curation_query` tool from [agr_curation_api_client](https://github.com/alliance-genome/agr_curation_api_client). | "What alleles are associated with gene X?" "Show me variant information for allele Y" "Find alleles with specific variant types" "What references support allele Z?" |
-| **Chemical Ontology Agent** | REST API | ChEBI REST API at EBI (https://www.ebi.ac.uk/chebi)<br>**Endpoints:**<br>• `/backend/api/public/es_search/?term=` - Search compounds<br>• `/backend/api/public/compound/{id}/` - Get compound details<br>• `/backend/api/public/ontology/parents/{id}/` - Get classifications<br>• `/backend/api/public/ontology/children/{id}/` - Get child compounds | "What is cytidine?" "Show me chemical properties of aspirin" "Find compounds related to glucose" |
-| **Gene Ontology Agent** | REST API | QuickGO REST API at EBI (https://www.ebi.ac.uk/QuickGO/services)<br>**Endpoints:**<br>• `/ontology/go/search?query=` - Search GO terms<br>• `/ontology/go/terms/{id}` - Get term information<br>• `/ontology/go/terms/{id}/children` - Get child terms<br>• `/ontology/go/terms/{id}/ancestors` - Get parent terms | "What is GO:0008150?" "Show me child terms of DNA repair" "What does biological process mean?" |
-| **GO Annotations Agent** | REST API | GO Consortium API (https://api.geneontology.org/api)<br>**Endpoints:**<br>• `/bioentity/gene/{id}/function` - Get gene GO annotations with evidence codes (IDA, IMP, IEA, etc.) | "What GO terms are annotated to gene X?" "Show me annotations with IDA evidence" "What biological processes involve this gene?" |
-| **Alliance Orthologs Agent** | REST API | Alliance Genome Orthology API (https://www.alliancegenome.org/api)<br>**Endpoints:**<br>• `/gene/{id}/orthologs` - Get orthology relationships with confidence scores and prediction methods | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
-| **PDF Specialist Agent** | Vector Database | Weaviate vector database containing embeddings of uploaded research papers. Enables semantic search across scientific literature. | "What does paper X say about gene regulation?" "Find information about disease Y in the uploaded papers" "Summarize methods from document Z" |
-| **Supervisor Agent** | Orchestrator | No external data source - coordinates other agents. Routes questions to appropriate specialists and synthesizes responses. | Handles all questions by delegating to specialist agents. |
+| Agent Name | Data Source | What It Does | Example Questions |
+|-----------|-------------|--------------|-------------------|
+| **Gene Expression Curation Agent** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
+| **Ontology Mapping Agent** | AGR Curation Database | Maps human-readable labels to official ontology term IDs across 45+ ontology types (see [Supported Ontology Types](#supported-ontology-types) below). | "Map 'linker cell' to WBbt term" "Find CURIE for 'L3 larval stage'" "What is the term ID for 'nucleus'?" |
+| **Disease Ontology Agent** | Disease Ontology (DOID) | Searches disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
+| **Gene Curation Agent** | AGR Curation Database | Queries curated gene data including symbols, names, IDs, genomic locations, and cross-references (NCBI, UniProt, Ensembl). | "What genes are on chromosome 2?" "Show me gene symbols for WBGene00001345" "What is the genomic location of dpy-5?" |
+| **Allele Curation Agent** | AGR Curation Database | Queries curated allele data including symbols, variant types, references, and associated genes. | "What alleles are associated with gene X?" "Show me variant information for allele Y" "What references support allele Z?" |
+| **Chemical Ontology Agent** | ChEBI (EBI) | Searches chemical compounds, their properties, classifications, and relationships. | "What is cytidine?" "Show me chemical properties of aspirin" "Find compounds related to glucose" |
+| **Gene Ontology Agent** | QuickGO (EBI) | Searches GO terms, definitions, hierarchies (parent/child terms), and relationships. | "What is GO:0008150?" "Show me child terms of DNA repair" "What does biological process mean?" |
+| **GO Annotations Agent** | GO Consortium | Retrieves gene GO annotations with evidence codes (IDA, IMP, IEA, etc.). | "What GO terms are annotated to gene X?" "Show me annotations with IDA evidence" "What biological processes involve this gene?" |
+| **Alliance Orthologs Agent** | Alliance Genome | Finds cross-species orthology relationships with confidence scores. | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
+| **PDF Specialist Agent** | Uploaded Papers | Searches across your uploaded research papers to find relevant information. | "What does paper X say about gene regulation?" "Find information about disease Y in the uploaded papers" "Summarize methods from document Z" |
+| **Supervisor Agent** | Routes to Specialists | Coordinates other agents - analyzes your question and sends it to the right specialist(s). | Handles all questions by delegating to specialist agents. |
 
 ## Output Formatter Agents
 
@@ -29,9 +29,9 @@ These agents are used in **[Curation Flows](CURATION_FLOWS.md)** to generate dow
 | Agent Name | Output Format | Description | Use Cases |
 |-----------|---------------|-------------|-----------|
 | **Chat Output Agent** | Chat Message | Sends formatted results to the chat interface for review and discussion. | Quick review, iterative refinement, sharing results in conversation |
-| **CSV Formatter Agent** | CSV File | Generates comma-separated value files for spreadsheet applications and database import. | Excel/Google Sheets, bulk database import, data sharing |
-| **TSV Formatter Agent** | TSV File | Generates tab-separated value files preferred by many bioinformatics tools and databases. | Database import scripts, bioinformatics pipelines, AGR data submission |
-| **JSON Formatter Agent** | JSON File | Generates structured JSON files preserving complex nested data structures. | API integration, custom scripts, preserving hierarchical data |
+| **CSV Formatter Agent** | CSV File | Generates comma-separated value files for spreadsheet applications. | Excel/Google Sheets, database import, data sharing |
+| **TSV Formatter Agent** | TSV File | Generates tab-separated value files preferred by many databases. | Database import, AGR data submission, bioinformatics tools |
+| **JSON Formatter Agent** | JSON File | Generates structured JSON files preserving complex nested data. | Data with hierarchical structure, sharing with computational biologists |
 
 ### File Output Features
 
@@ -134,15 +134,6 @@ When you request ontology mappings, the agent:
 3. **Specialists retrieve data** - Each specialist queries its specific data source
 4. **Response is synthesized** - Results are combined into a comprehensive answer
 
-## Technical Details
+## Suggestions for New Agents
 
-For more information about the implementation, agent configurations, and tool definitions, see the [private prototype repository](https://github.com/alliance-genome/ai_curation_prototype).
-
-### Agent Configuration
-- Agent definitions: [`backend/src/crew_config/agents.yaml`](https://github.com/alliance-genome/ai_curation_prototype/blob/main/backend/src/crew_config/agents.yaml)
-- Tool implementations: [`backend/src/lib/chat/tools/`](https://github.com/alliance-genome/ai_curation_prototype/tree/main/backend/src/lib/chat/tools)
-- Database schemas: [`backend/schemas/`](https://github.com/alliance-genome/ai_curation_prototype/tree/main/backend/schemas)
-
-## Adding New Agents
-
-The system is designed to be extensible. New specialist agents can be added to support additional data sources or types of biological questions. Contact the development team if you have suggestions for new agents.
+Have an idea for a new agent or data source? Contact the development team - we're always looking to expand the system's capabilities based on curator needs.

@@ -77,11 +77,11 @@ See **[Curation Flows](CURATION_FLOWS.md)** for complete documentation.
 The main interaction area for asking questions about uploaded documents or querying databases directly. The supervisor agent automatically routes your questions to the appropriate specialists.
 
 ### Agent Studio
-A powerful development environment for understanding and improving AI behavior:
+Tools for understanding and improving AI behavior:
 - **Opus Chat** - Discuss prompts and traces with Claude Opus 4.5
 - **Prompt Browser** - View all agent prompts organized by category
 - **Flow Builder** - Create visual curation workflows
-- **Trace Analysis** - Debug specific interactions
+- **Trace Analysis** - See why the AI made specific decisions
 
 ### Curation Flows
 Visual workflows that automate multi-step curation tasks:
@@ -94,7 +94,7 @@ Visual workflows that automate multi-step curation tasks:
 Real-time transparency into AI operations:
 - Tracks all AI actions and decisions
 - Shows which databases were queried
-- Displays tool calls and data sources
+- Displays what information was retrieved
 - Provides full traceability
 
 ## Available Agents
@@ -117,9 +117,9 @@ Curation Flows can generate downloadable files in multiple formats:
 
 | Format | Agent | Use Case |
 |--------|-------|----------|
-| **CSV** | CSV Formatter | Spreadsheet-compatible data |
-| **TSV** | TSV Formatter | Tab-separated for databases |
-| **JSON** | JSON Formatter | Structured data for APIs |
+| **CSV** | CSV Formatter | Spreadsheet-compatible data (Excel, Google Sheets) |
+| **TSV** | TSV Formatter | Tab-separated for database import |
+| **JSON** | JSON Formatter | Structured data with nested information |
 
 Files appear in the chat as downloadable cards with metadata including file size, generation model, and download count.
 
@@ -130,10 +130,6 @@ Files appear in the chat as downloadable cards with metadata including file size
 **Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus 4.5, and submit improvement suggestions based on your domain expertise.
 
 For general questions or suggestions, please reach out to the development team.
-
-## Technical Documentation
-
-For more information about the implementation, see the [private prototype repository](https://github.com/alliance-genome/ai_curation_prototype).
 
 ## Documentation Index
 
