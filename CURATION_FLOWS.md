@@ -143,9 +143,18 @@ Before running a complex flow, you can verify it with Claude:
 
 This is especially useful for new flows or when troubleshooting.
 
-## File Outputs
+## Output Options
 
-One of the most powerful features of flows is generating downloadable files.
+Flows can output results in multiple ways - to the chat for quick review, or as downloadable files. You can even use multiple outputs in the same flow.
+
+### Chat Output
+
+Sends results directly to the chat interface.
+
+**Use cases:**
+- Quick review before generating a file
+- Iterating on your flow to get the output right
+- Discussing results with Opus in Agent Studio
 
 ### CSV Formatter
 
@@ -304,11 +313,13 @@ Add one agent at a time and verify it works before adding more.
 ### Use Verify with Claude
 Let Claude check your flow before running it on important documents.
 
-### Choose the Right Output
-- **Chat Output** - For quick review and iteration
-- **CSV** - For spreadsheets (Excel, Google Sheets)
-- **TSV** - For database import and AGR submission
-- **JSON** - For complex nested data that needs to preserve structure
+### Choose the Right Output (or Use Multiple!)
+- **Chat Output** - Quick review and iteration
+- **CSV** - Spreadsheets (Excel, Google Sheets)
+- **TSV** - Database import and AGR submission
+- **JSON** - Complex nested data that needs to preserve structure
+
+**Tip:** Connect your flow to both Chat Output AND a file formatter to review results in chat while also generating a downloadable file.
 
 ### Name Flows Clearly
 Use descriptive names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".

@@ -77,17 +77,23 @@ See **[Curation Flows](CURATION_FLOWS.md)** for complete documentation.
 The main interaction area for asking questions about uploaded documents or querying databases directly. The supervisor agent automatically routes your questions to the appropriate specialists.
 
 ### Agent Studio
-Tools for understanding and improving AI behavior:
-- **Prompts Tab** - Browse agent prompts and chat with Opus about them
-- **Flows Tab** - Build visual workflows and use "Verify with Claude"
-- **Discuss Responses** - Use triple-dot menu on any chat response to discuss it with Opus
+Tools for understanding, building, and improving AI behavior:
 
-### Curation Flows
-Visual workflows that automate multi-step curation tasks:
-- **Drag-and-Drop** - Build flows without writing code
-- **12+ Agents** - From PDF extraction to file formatting
-- **File Outputs** - Export results as CSV, TSV, or JSON
-- **Save and Reuse** - Store workflows for repeated use
+**Prompts Tab**
+- Browse all agent prompts organized by category
+- See MOD-specific rules for each agent
+- Chat with Opus about how prompts work
+
+**Flows Tab (Curation Flows)**
+- Build visual workflows with drag-and-drop
+- Chain 12+ agents together (PDF extraction → validation → output)
+- Output to chat, CSV, TSV, or JSON files
+- Use "Verify with Claude" to check your flow before running
+- Save and reuse flows across documents
+
+**Discuss Responses**
+- Use triple-dot menu on any chat response to open it in Agent Studio
+- Chat with Opus about why the AI gave that specific response
 
 ### Audit Panel
 Real-time transparency into AI operations:
@@ -110,17 +116,20 @@ The system includes 16+ specialist agents organized by function:
 
 For detailed agent documentation, see **[Available Agents](AVAILABLE_AGENTS.md)**.
 
-## File Export Capabilities
+## Flow Output Options
 
-Curation Flows can generate downloadable files in multiple formats:
+Curation Flows can output results in multiple ways:
 
-| Format | Agent | Use Case |
+| Output | Agent | Use Case |
 |--------|-------|----------|
+| **Chat** | Chat Output | Quick review and discussion in the chat interface |
 | **CSV** | CSV Formatter | Spreadsheet-compatible data (Excel, Google Sheets) |
 | **TSV** | TSV Formatter | Tab-separated for database import |
 | **JSON** | JSON Formatter | Structured data with nested information |
 
-Files appear in the chat as downloadable cards with metadata including file size, generation model, and download count.
+You can use multiple outputs in the same flow - for example, send results to chat for review AND generate a CSV file for download.
+
+File outputs appear in the chat as downloadable cards with metadata including file size and download count.
 
 ## Questions or Feedback?
 
