@@ -122,7 +122,7 @@ This is especially valuable when building new flows.
 
 After building and saving your flow:
 
-1. **Navigate to the main chat screen** (click the title "Alliance AI-Assisted Curation Interface" in the top left)
+1. **Navigate to the main chat screen** (click "Home" in the navigation bar)
 2. **Load a PDF document** if your flow uses PDF extraction agents
 3. **Click the "Tools" tab** on the right panel
 4. **Find your saved flow** in the list
