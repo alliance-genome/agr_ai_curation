@@ -40,8 +40,8 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 ### Understand and Improve AI Behavior
 
-- **Agent Studio** - Browse prompts, build flows, and chat with Claude Opus 4.5
-- **Prompt Browser** - View exact instructions given to each agent
+- **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus 4.5
+- **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -79,10 +79,11 @@ The main interaction area for asking questions about uploaded documents or query
 ### Agent Studio
 Tools for understanding, building, and improving AI behavior:
 
-**Prompts Tab**
+**Agents Tab**
 - Browse all agent prompts organized by category
 - See MOD-specific rules for each agent
-- Chat with Opus about how prompts work
+- Click tool names to view detailed tool documentation
+- Chat with Opus about how agents and prompts work
 
 **Flows Tab (Curation Flows)**
 - Build visual workflows with drag-and-drop

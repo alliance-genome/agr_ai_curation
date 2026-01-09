@@ -8,17 +8,17 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has two main tabs: **Prompts** and **Flows**. Both tabs include a chat panel where you can talk with Claude Opus 4.5.
+Agent Studio has two main tabs: **Agents** and **Flows**. Both tabs include a chat panel where you can talk with Claude Opus 4.5.
 
 ### Opus Chat (Left Panel)
 
-On both tabs, the left panel is your chat with Claude Opus 4.5. You can ask Opus about whatever you're viewing on the right - prompts or flows.
+On both tabs, the left panel is your chat with Claude Opus 4.5. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
 
-### Prompts Tab
+### Agents Tab
 
 Browse the instructions given to each AI agent and chat with Opus about them.
 
-**Prompt Browser (Right Panel)**
+**Agent Browser (Right Panel)**
 
 See all agent prompts organized by category:
 - **Routing** - Supervisor agent that routes your queries to specialists
@@ -32,8 +32,19 @@ For each agent, you can view:
 - **MOD-Specific Rules** - How the prompt is customized for each Model Organism Database (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
 - **Combined View** - See the base prompt with MOD rules injected
 - **Version History** - Track changes to prompts over time
+- **Tools** - The tools available to each agent (listed in the agent card)
 
-**Ask Opus about prompts:**
+**Clickable Tool Names**
+
+Tool names in agent cards are clickable! Click any tool name to open a detailed panel showing:
+- **Description** - What the tool does
+- **Parameters** - Input parameters with types and descriptions
+- **Methods** - For multi-method tools (like database queries), see all available methods with examples
+- **Agent Context** - Which methods are relevant to the selected agent
+
+This helps you understand exactly what capabilities each agent has and how they interact with databases and APIs.
+
+**Ask Opus about agents:**
 - "Why does this agent look for negative evidence?"
 - "I think this prompt is missing guidance about [organism-specific convention]"
 - "Can you help me write a suggestion to improve this?"
@@ -123,7 +134,7 @@ If you see a pattern of errors, describe 2-3 specific cases. This helps identify
 If your MOD has specific naming conventions, annotation rules, or curation practices that the AI doesn't follow, explain them. **You're the expert on your organism!**
 
 ### Check MOD-Specific Rules First
-Before suggesting a change to a base prompt, check if your MOD already has specific rules in the Prompt Browser. The issue might be that your MOD's rules need updating rather than the base prompt.
+Before suggesting a change to a base prompt, check if your MOD already has specific rules in the Agent Browser. The issue might be that your MOD's rules need updating rather than the base prompt.
 
 ### Use "Open in Agent Studio"
 When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives Opus (and the development team) the full context.
@@ -147,7 +158,7 @@ No. If you have feedback based on a conversation or general observation, you can
 
 ### Can I see what prompts are currently being used?
 
-Yes! That's the main purpose of the Prompts tab. Browse all agent prompts and see exactly what instructions each agent receives.
+Yes! That's the main purpose of the Agents tab. Browse all agent prompts and see exactly what instructions each agent receives.
 
 ### Why are there MOD-specific rules?
 
