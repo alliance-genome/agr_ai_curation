@@ -14,6 +14,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus 4.5
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
+6. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
 
 ## What Can the AI Help With?
 
@@ -37,6 +38,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 - **Chain Specialists Together** - Connect extraction, validation, and output agents
 - **Export Results** - Generate CSV, TSV, or JSON files from your workflows
 - **Save and Reuse** - Store flows for repeated use across documents
+- **Batch Processing** - Run saved flows against multiple documents automatically with real-time progress tracking
 
 ### Understand and Improve AI Behavior
 
@@ -149,3 +151,4 @@ For general questions or suggestions, please reach out to the development team.
 | [Available Agents](AVAILABLE_AGENTS.md) | All specialist agents and their capabilities |
 | [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, chat with Opus |
 | [Curation Flows](CURATION_FLOWS.md) | Visual workflow builder guide |
+| [Batch Processing](BATCH_PROCESSING.md) | Process multiple documents through flows |
