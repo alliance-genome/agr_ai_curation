@@ -29,8 +29,8 @@ On the Batch page, you'll see your selected documents and a flow selector:
 
 1. Choose from your saved Curation Flows in the dropdown
 2. The system validates that your flow is compatible with batch processing:
-   - Flow must have PDF input (reads from uploaded documents)
-   - Flow must have file output (CSV, TSV, or JSON formatter)
+   - Flow must contain a PDF input agent (to read from the selected documents)
+   - Flow must end with a file output agent (CSV, TSV, or JSON formatter)
 3. A green "Valid" message appears if the flow is compatible
 
 **Don't have a saved flow?** See [Curation Flows](CURATION_FLOWS.md) to learn how to build and save flows.
@@ -179,7 +179,7 @@ You need to create and save a Curation Flow first. See [Curation Flows](CURATION
 ### Flow validation fails
 
 Your flow must:
-- Start with PDF input (reads from uploaded documents)
+- Contain a PDF input agent (to read from the selected documents)
 - End with a file output agent (CSV, TSV, or JSON Formatter)
 
 Flows that output to chat only cannot be used for batch processing.
