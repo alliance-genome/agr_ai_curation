@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
-import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button } from '@mui/material'
+import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip } from '@mui/material'
 import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, Home as HomeIcon, Settings as SettingsIcon, HelpOutline as HelpIcon } from '@mui/icons-material'
+import { getVersionDisplay, getFullVersionInfo } from './config/version'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AgentMetadataProvider } from './contexts/AgentMetadataContext'
@@ -97,22 +98,44 @@ function AppContent() {
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
         <Toolbar>
-          <Typography
-            variant="h1"
-            component={Link}
-            to="/"
-            sx={{
-              flexGrow: 1,
-              textDecoration: 'none',
-              color: 'inherit',
-              cursor: 'pointer',
-              '&:hover': {
-                opacity: 0.9
-              }
-            }}
-          >
-            Alliance AI-Assisted Curation Interface
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
+            <Typography
+              variant="h1"
+              component={Link}
+              to="/"
+              sx={{
+                textDecoration: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                '&:hover': {
+                  opacity: 0.9
+                }
+              }}
+            >
+              Alliance AI-Assisted Curation Interface
+            </Typography>
+            <Tooltip title={getFullVersionInfo()} arrow>
+              <Typography
+                variant="caption"
+                sx={{
+                  opacity: 0.7,
+                  fontSize: '0.7rem',
+                  fontFamily: 'monospace',
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  px: 0.75,
+                  py: 0.25,
+                  borderRadius: 0.5,
+                  cursor: 'default',
+                  '&:hover': {
+                    opacity: 1,
+                    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                  }
+                }}
+              >
+                {getVersionDisplay()}
+              </Typography>
+            </Tooltip>
+          </Box>
           <Box
             component={Link}
             to="/"

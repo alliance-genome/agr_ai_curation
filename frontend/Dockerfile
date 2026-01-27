@@ -5,8 +5,10 @@ FROM public.ecr.aws/docker/library/node:20-alpine AS builder
 
 WORKDIR /app
 
-# Build argument for DEV_MODE (Vite uses VITE_* prefix)
+# Build arguments for Vite environment variables (VITE_* prefix)
 ARG VITE_DEV_MODE=true
+ARG VITE_APP_VERSION=0.0.0-dev
+ARG VITE_GIT_SHA=unknown
 
 # Copy package files
 COPY package.json package-lock.json* ./
@@ -17,9 +19,11 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build the app for production with DEV_MODE environment variable
+# Build the app for production with environment variables
 # Vite embeds VITE_* environment variables at build time
 ENV VITE_DEV_MODE=$VITE_DEV_MODE
+ENV VITE_APP_VERSION=$VITE_APP_VERSION
+ENV VITE_GIT_SHA=$VITE_GIT_SHA
 RUN npm run build
 
 # Stage 2: Serve with Nginx

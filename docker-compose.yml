@@ -91,6 +91,8 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_DEV_MODE: ${DEV_MODE:-true}  # Pass DEV_MODE as build arg (Vite uses VITE_* prefix)
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-0.0.0-dev}  # Version from package.json or release
+        VITE_GIT_SHA: ${VITE_GIT_SHA:-unknown}  # Git commit SHA for traceability
     restart: unless-stopped
     depends_on:
       - backend
