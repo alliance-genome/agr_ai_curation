@@ -972,7 +972,7 @@ export function PdfViewer() {
             )}
           </Stack>
         ) : (
-          <Typography variant="h6">Select a document to load the PDF viewer</Typography>
+          <Typography variant="h6">No document loaded</Typography>
         )}
       </Box>
 
@@ -983,12 +983,23 @@ export function PdfViewer() {
               position: 'absolute',
               inset: 0,
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
               color: 'text.secondary',
+              textAlign: 'center',
+              px: 3,
             }}
           >
-            <Typography variant="body1">PDF preview will appear here.</Typography>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              To load a document, click the <strong>Documents</strong> tab in the top right.
+            </Typography>
+            <Typography variant="body2" component="div">
+              <ul style={{ textAlign: 'left', margin: 0, paddingLeft: '1.5rem' }}>
+                <li>To upload a new PDF: Click <strong>Upload Document</strong>, then click <strong>Load for Chat</strong> when processing completes.</li>
+                <li>To load an existing document: Click the green <strong>file icon</strong> in the Actions column.</li>
+              </ul>
+            </Typography>
           </Box>
         )}
 
