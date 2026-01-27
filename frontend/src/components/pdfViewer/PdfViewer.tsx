@@ -992,12 +992,12 @@ export function PdfViewer() {
             }}
           >
             <Typography variant="body1" sx={{ mb: 2 }}>
-              To load a document, click the <strong>Documents</strong> tab in the top right.
+              To load a document, click <strong>Documents</strong> in the top right.
             </Typography>
             <Typography variant="body2" component="div">
               <ul style={{ textAlign: 'left', margin: 0, paddingLeft: '1.5rem' }}>
-                <li>To upload a new PDF: Click <strong>Upload Document</strong>, then click <strong>Load for Chat</strong> when processing completes.</li>
-                <li>To load an existing document: Click the green <strong>file icon</strong> in the Actions column.</li>
+                <li style={{ marginBottom: '0.75rem' }}>To upload a new PDF: Click <strong>Upload Document</strong>, then click <strong>Load for Chat</strong> when processing completes.</li>
+                <li>To load an existing PDF: Click the green <strong>file icon</strong> in the Actions column.</li>
               </ul>
             </Typography>
           </Box>
