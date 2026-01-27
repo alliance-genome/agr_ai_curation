@@ -53,9 +53,9 @@ dev: check-env ## Start all services (sources env from ~/.agr_ai_curation/.env)
 	@set -a && . "$(ENV_FILE)" && set +a && docker compose up
 
 .PHONY: dev-build
-dev-build: check-env ## Rebuild and start all services
+dev-build: check-env ## Rebuild and start all services (includes git SHA in frontend build)
 	@echo "$(GREEN)Rebuilding and starting all services...$(NC)"
-	@set -a && . "$(ENV_FILE)" && set +a && docker compose up --build
+	@set -a && . "$(ENV_FILE)" && export VITE_GIT_SHA=$$(git rev-parse --short HEAD) && set +a && docker compose up --build
 
 .PHONY: dev-detached
 dev-detached: check-env ## Start all services in background (detached)
@@ -93,9 +93,10 @@ rebuild-backend: check-env ## Rebuild and restart backend
 	@set -a && . "$(ENV_FILE)" && set +a && docker compose up -d --build backend
 
 .PHONY: rebuild-frontend
-rebuild-frontend: ## Rebuild and restart frontend
+rebuild-frontend: ## Rebuild and restart frontend (includes git SHA in build)
 	@echo "$(GREEN)Rebuilding frontend...$(NC)"
-	@docker compose up -d --build frontend
+	@VITE_GIT_SHA=$$(git rev-parse --short HEAD) docker compose up -d --build frontend
+	@echo "$(GREEN)Built with version from package.json, SHA: $$(git rev-parse --short HEAD)$(NC)"
 
 .PHONY: up-core
 up-core: check-env ## Start core services only (postgres, redis, weaviate) - no app

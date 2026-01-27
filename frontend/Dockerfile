@@ -7,7 +7,6 @@ WORKDIR /app
 
 # Build arguments for Vite environment variables (VITE_* prefix)
 ARG VITE_DEV_MODE=true
-ARG VITE_APP_VERSION=0.0.0-dev
 ARG VITE_GIT_SHA=unknown
 
 # Copy package files
@@ -21,10 +20,12 @@ COPY . .
 
 # Build the app for production with environment variables
 # Vite embeds VITE_* environment variables at build time
+# Version is auto-extracted from package.json; SHA can be passed as build arg
 ENV VITE_DEV_MODE=$VITE_DEV_MODE
-ENV VITE_APP_VERSION=$VITE_APP_VERSION
 ENV VITE_GIT_SHA=$VITE_GIT_SHA
-RUN npm run build
+RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
+    echo "Building version: $VITE_APP_VERSION (SHA: $VITE_GIT_SHA)" && \
+    npm run build
 
 # Stage 2: Serve with Nginx
 FROM public.ecr.aws/nginx/nginx:alpine
