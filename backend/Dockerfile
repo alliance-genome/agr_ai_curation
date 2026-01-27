@@ -35,7 +35,6 @@ COPY src/ ./src/
 COPY main.py .
 COPY alembic/ ./alembic/
 COPY alembic.ini .
-COPY scripts/ ./scripts/
 COPY tests/ ./tests/
 COPY pytest.ini .
 # Set Python path
