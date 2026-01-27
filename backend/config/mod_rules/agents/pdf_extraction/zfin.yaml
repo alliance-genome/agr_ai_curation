@@ -1,0 +1,24 @@
+# ZFIN (Zebrafish Information Network) PDF Extraction Rules
+# Model organism: Danio rerio (zebrafish)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with zebrafish data.
+# Expand with zebrafish-specific paper conventions as needed.
+
+mod_id: ZFIN
+species: Danio rerio
+data_provider: ZFIN
+taxon: NCBITaxon:7955
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## ZFIN PDF Extraction Strategy (Danio rerio)
+
+  ### General Guidelines
+
+  - Zebrafish papers use lowercase gene symbols (tp53, brca2)
+  - Morpholino knockdowns are common experimental approaches
+  - Look for ZFIN stock numbers and line designations
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add zebrafish-specific PDF extraction strategies here.

@@ -1,0 +1,98 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=ai_curation_prototype"]
+    relabel_configs:
+      # Use container name as job label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+
+      # Extract service name from compose
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+
+      # Add compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'compose_project'
+
+      # Add custom labels if they exist
+      - source_labels: ['__meta_docker_container_label_log_env']
+        target_label: 'environment'
+
+      - source_labels: ['__meta_docker_container_label_log_tier']
+        target_label: 'tier'
+
+      # Keep important Docker metadata
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project_config_files']
+        target_label: 'compose_file'
+
+      # Add image name
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_image']
+        target_label: 'image'
+
+      # Special handling for specific services
+      - source_labels: ['service']
+        regex: 'weaviate'
+        target_label: 'database_type'
+        replacement: 'vector'
+
+      - source_labels: ['service']
+        regex: 'backend'
+        target_label: 'application_type'
+        replacement: 'api'
+
+      - source_labels: ['service']
+        regex: 'frontend'
+        target_label: 'application_type'
+        replacement: 'web'
+
+    pipeline_stages:
+      # Parse JSON logs if they exist (common for many services)
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            time: time
+            error: error
+
+      # Extract log level from various formats
+      - regex:
+          expression: '(?P<level>(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE|debug|info|warn|warning|error|fatal|trace))'
+
+      # Label extraction
+      - labels:
+          level:
+
+      # Timestamp extraction for various formats
+      - timestamp:
+          source: time
+          format: RFC3339
+          fallback_formats:
+            - UnixMs
+            - Unix
+            - RFC3339Nano
+
+      # Drop debug logs if needed (comment out to keep all logs)
+      # - drop:
+      #     expression: '.*DEBUG.*'
+
+      # Multiline handling for Python tracebacks
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2}'
+          max_wait_time: 3s
+          max_lines: 128

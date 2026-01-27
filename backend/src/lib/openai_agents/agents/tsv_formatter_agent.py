@@ -1,0 +1,99 @@
+"""TSV Formatter Agent using OpenAI Agents SDK.
+
+This agent formats data as TSV (tab-separated values) files for download.
+It uses a tool to save the file and returns FileInfo for the frontend.
+
+Key Design:
+- Context (trace_id, session_id, curator_id) captured at INVOCATION time from contextvars
+- NO parameters passed to factory - all context from contextvars
+- Simple prompt, no reasoning mode needed
+"""
+
+import logging
+from agents import Agent
+
+from src.lib.prompts.cache import get_prompt
+from src.lib.prompts.context import set_pending_prompts
+
+from ..config import (
+    build_model_settings,
+    get_agent_config,
+    get_model_for_agent,
+    log_agent_config,
+)
+from ..tools.file_output_tools import create_tsv_tool
+
+logger = logging.getLogger(__name__)
+
+
+def create_tsv_formatter_agent() -> Agent:
+    """Create a TSV Formatter agent.
+
+    Note: trace_id, session_id, curator_id are NOT passed as parameters.
+    They are captured from context variables at tool INVOCATION time
+    (not tool creation time), which is necessary because trace_id isn't
+    available until after the Langfuse trace is created.
+
+    Returns:
+        An Agent instance configured for TSV formatting
+    """
+    # Get config from registry + environment
+    config = get_agent_config("tsv_formatter")
+    log_agent_config("TSV Formatter", config)
+
+    # Get prompts from cache (zero DB queries at runtime)
+    base_prompt = get_prompt("tsv_formatter", "system")
+    prompts_used = [base_prompt]
+
+    # Build instructions from cached prompt
+    instructions = base_prompt.content
+
+    # Get model (returns LitellmModel for Gemini, string for OpenAI)
+    model = get_model_for_agent(config.model)
+
+    # Build model settings - NO reasoning for formatters (simple task)
+    # Use build_model_settings to handle models that don't support temperature (e.g., GPT-5)
+    model_settings = build_model_settings(
+        model=config.model,
+        temperature=config.temperature,
+        reasoning_effort=None,  # Formatters don't use reasoning
+        parallel_tool_calls=False,
+    )
+
+    # Create tool with context captured via closure
+    save_tsv = create_tsv_tool()
+
+    logger.info(
+        f"[OpenAI Agents] Creating TSV Formatter agent, "
+        f"model={config.model}, temp={config.temperature}, "
+        f"prompt_v={base_prompt.version}"
+    )
+
+    # Log agent configuration to Langfuse for trace visibility
+    from ..langfuse_client import log_agent_config as log_to_langfuse
+    log_to_langfuse(
+        agent_name="TSV Formatter",
+        instructions=instructions,
+        model=config.model,
+        tools=["save_tsv_file"],
+        model_settings={
+            "temperature": config.temperature,
+            "reasoning": None,
+            "prompt_version": base_prompt.version,
+        },
+    )
+
+    # Create the formatter agent
+    agent = Agent(
+        name="TSV Formatter",
+        instructions=instructions,
+        model=model,
+        model_settings=model_settings,
+        tools=[save_tsv],
+        output_type=None,
+    )
+
+    # Register prompts for execution logging
+    set_pending_prompts(agent.name, prompts_used)
+
+    return agent

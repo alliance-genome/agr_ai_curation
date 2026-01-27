@@ -1,0 +1,33 @@
+# SGD (Saccharomyces Genome Database) Gene Rules
+# Model organism: Saccharomyces cerevisiae (budding yeast)
+#
+# PLACEHOLDER: This file contains minimal rules for SGD gene lookups.
+# Expand with yeast-specific gene conventions as needed.
+
+mod_id: SGD
+species: Saccharomyces cerevisiae
+data_provider: SGD
+taxon: NCBITaxon:559292
+
+# Placeholder search strategy
+search_strategy: |
+  ## SGD Gene Search Strategy (Saccharomyces cerevisiae)
+
+  ### General Guidelines
+
+  - Yeast gene names are typically 3-letter codes in uppercase (e.g., GAL4, TRP1)
+  - Standard names may differ from systematic names (YBR155W)
+  - Search using the gene symbol as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add yeast gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting SGD Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add yeast gene-specific interpretation guidelines as needed.

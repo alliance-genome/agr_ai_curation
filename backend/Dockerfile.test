@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+WORKDIR /app/backend
+
+# Install build dependencies first (rarely changes)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only requirements first for better caching
+COPY requirements.txt .
+
+# Upgrade pip first
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install heavy ML dependencies separately first (these rarely change)
+RUN pip install --no-cache-dir \
+    unstructured[pdf,local-inference] \
+    unstructured-inference
+
+# Install remaining Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install runtime system dependencies after Python deps
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
+    libmagic1 \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source code and tests last (changes most frequently)
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY main.py ./
+
+# Set Python path
+ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH
+
+# Default command runs all tests
+CMD ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]

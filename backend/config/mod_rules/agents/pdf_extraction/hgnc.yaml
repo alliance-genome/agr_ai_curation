@@ -1,0 +1,24 @@
+# HGNC (HUGO Gene Nomenclature Committee) PDF Extraction Rules
+# Model organism: Homo sapiens (human)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with human data.
+# Expand with human-specific paper conventions as needed.
+
+mod_id: HGNC
+species: Homo sapiens
+data_provider: HGNC
+taxon: NCBITaxon:9606
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## HGNC PDF Extraction Strategy (Homo sapiens)
+
+  ### General Guidelines
+
+  - Human papers use uppercase gene symbols (TP53, BRCA1)
+  - Variant nomenclature follows HGVS guidelines
+  - Look for patient cohort details and cell line names
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add human-specific PDF extraction strategies here.

@@ -1,0 +1,33 @@
+# MGI (Mouse Genome Informatics) Gene Rules
+# Model organism: Mus musculus (mouse)
+#
+# PLACEHOLDER: This file contains minimal rules for MGI gene lookups.
+# Expand with mouse-specific gene conventions as needed.
+
+mod_id: MGI
+species: Mus musculus
+data_provider: MGI
+taxon: NCBITaxon:10090
+
+# Placeholder search strategy
+search_strategy: |
+  ## MGI Gene Search Strategy (Mus musculus)
+
+  ### General Guidelines
+
+  - Mouse gene symbols use initial capital letter (e.g., Trp53, Bmal1)
+  - Papers often use protein names or common names instead of official symbols
+  - Search the exact name from the paper - synonym matching will find it
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add mouse gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting MGI Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add mouse gene-specific interpretation guidelines as needed.

@@ -1,0 +1,127 @@
+"""
+Gene Curation Agent using OpenAI Agents SDK.
+
+This agent specializes in querying the Alliance Genome Resources
+Curation Database for gene information across multiple model organisms.
+
+Supports MOD-specific rule injection based on user context (Cognito groups).
+"""
+
+import logging
+from typing import List, Optional
+
+from agents import Agent
+
+from ..models import GeneResult, GeneResultEnvelope
+from ..prompt_utils import inject_structured_output_instruction
+
+# Prompt cache and context tracking imports
+from src.lib.prompts.cache import get_prompt
+from src.lib.prompts.context import set_pending_prompts
+
+logger = logging.getLogger(__name__)
+
+
+def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
+    """
+    Create a Gene Curation specialist agent.
+
+    All settings configured via environment variables. See config.py.
+
+    This agent runs in isolation when called as a tool by the supervisor.
+    It has full autonomy to make multiple tool calls internally.
+
+    Args:
+        active_mods: Optional list of MOD IDs to inject rules for (e.g., ["MGI", "FB"]).
+                     If provided, MOD-specific rules will be appended to the base prompt.
+                     These rules come from the prompt cache (database).
+
+    Returns:
+        An Agent instance configured for Gene Curation queries
+    """
+    from ..tools.agr_curation import agr_curation_query
+    from ..config import get_agent_config, log_agent_config
+
+    # Get config from registry + environment
+    config = get_agent_config("gene")
+    log_agent_config("Gene Specialist", config)
+
+    # Get base prompt from cache (zero DB queries at runtime)
+    base_prompt = get_prompt("gene")
+    prompts_used = [base_prompt]
+
+    # Build instructions from cached prompt
+    instructions = base_prompt.content
+
+    # Inject structured output requirement to prevent silent failures
+    instructions = inject_structured_output_instruction(
+        instructions,
+        output_type=GeneResultEnvelope
+    )
+
+    # Inject MOD-specific rules if provided
+    if active_mods:
+        try:
+            from config.mod_rules.mod_config import inject_mod_rules
+
+            instructions = inject_mod_rules(
+                base_prompt=instructions,
+                mod_ids=active_mods,
+                component_type="agents",
+                component_name="gene",
+                prompts_out=prompts_used,  # Collect MOD prompts for tracking
+            )
+            logger.info(f"Gene agent configured with MOD-specific rules: {active_mods}")
+        except ImportError as e:
+            logger.warning(f"Could not import mod_config, skipping injection: {e}")
+        except Exception as e:
+            logger.error(f"Failed to inject MOD rules: {e}")
+
+    # Build model settings using shared helper (supports both OpenAI and Gemini)
+    from ..config import build_model_settings, get_model_for_agent
+    effective_settings = build_model_settings(
+        model=config.model,
+        temperature=config.temperature,
+        reasoning_effort=config.reasoning,
+        tool_choice=config.tool_choice,
+        parallel_tool_calls=True,
+    )
+
+    # Get the model (returns LitellmModel for Gemini, string for OpenAI)
+    model = get_model_for_agent(config.model)
+
+    logger.info(
+        f"[OpenAI Agents] Creating Gene agent, model={config.model}, "
+        f"prompt_v={base_prompt.version}, mods={active_mods}"
+    )
+
+    # Log agent configuration to Langfuse for trace visibility
+    from ..langfuse_client import log_agent_config
+    log_agent_config(
+        agent_name="Gene Specialist",
+        instructions=instructions,  # Use potentially modified instructions
+        model=config.model,
+        tools=["agr_curation_query"],
+        model_settings={
+            "temperature": config.temperature,
+            "reasoning": config.reasoning,
+            "tool_choice": config.tool_choice,
+            "active_mods": active_mods,  # Log which MODs are active
+            "prompt_version": base_prompt.version,
+        }
+    )
+
+    # Create the agent
+    agent = Agent(
+        name="Gene Specialist",
+        instructions=instructions,  # Use potentially modified instructions
+        model=model,  # LitellmModel for Gemini, string for OpenAI
+        model_settings=effective_settings,
+        tools=[agr_curation_query],
+        output_type=GeneResultEnvelope,
+    )
+
+    # Register prompts for execution logging (committed when agent actually runs)
+    set_pending_prompts(agent.name, prompts_used)
+
+    return agent

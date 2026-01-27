@@ -1,0 +1,61 @@
+# Core dependencies
+fastapi
+uvicorn[standard]
+python-multipart  # Required for file uploads
+pydantic>=2.0
+pydantic-settings
+python-dotenv
+pyyaml
+
+# Authentication (AWS Cognito - Okta completely removed)
+# RIP AND REPLACE complete: All Okta code deleted, including vendor/agr_fastapi_okta
+
+# AWS Cognito Authentication
+boto3>=1.34.0  # AWS SDK for Python (moved from AWS Services section)
+fastapi-cognito>=1.0.0  # FastAPI integration for AWS Cognito
+pyjwt[crypto]>=2.8.0  # JWT token handling with cryptography support
+python-jose[cryptography]>=3.3.0  # JWT validation and JWKS handling
+
+# AI and Chat dependencies
+openai
+openai-agents[litellm]  # OpenAI Agents SDK for multi-agent orchestration (with LiteLLM for Gemini support)
+anthropic>=0.40.0  # Anthropic SDK for Opus 4.5 chat in Prompt Explorer
+aiohttp  # Async HTTP client for Docling service
+langfuse>=3.0.0  # Observability for LLM applications (v3 has start_as_current_span for OTEL context)
+
+# Database dependencies
+sqlalchemy>=2.0
+psycopg2-binary
+alembic
+git+https://github.com/alliance-genome/agr_curation_api_client.git@feature/ontology-search-methods  # Modified version with all 45 ontology types tested and bug fix
+
+# Ontology processing
+pronto  # OBO file parsing for biological ontologies
+
+# Weaviate client - per weaviate-client 4.18.3 compatibility check:
+# protobuf >= 6.30.0 requires grpcio >= 1.72.0
+weaviate-client>=4.0
+grpcio>=1.72.0  # Required for protobuf 6.x per weaviate-client compatibility matrix
+
+# Redis for cross-worker state (stream cancellation)
+redis>=5.0
+
+# AWS Services (Feature 005-user-feedback-system SNS notifications)
+# boto3>=1.34.0  # Moved to Authentication section for Cognito support
+
+# PDF processing is done remotely by Docling service (configure DOCLING_SERVICE_URL)
+
+# CLI support
+click
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+httpx
+
+# Development
+black
+flake8
+mypy
+numpy>=2.0.0

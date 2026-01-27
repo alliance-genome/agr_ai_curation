@@ -1,0 +1,101 @@
+# Docker Compose configuration for running tests
+# Usage: docker compose -f docker-compose.test.yml run --rm backend-tests
+#
+# To build the image with caching:
+# docker compose -f docker-compose.test.yml build backend-tests
+
+services:
+  backend-tests:
+    image: ai-curation-backend-tests:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./backend:/app/backend
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_PORT=8080
+      - WEAVIATE_SCHEME=http
+    depends_on:
+      weaviate-test:
+        condition: service_healthy
+    command: python -m pytest tests/ -v --tb=short
+    networks:
+      - test-network
+
+  # Test-specific Weaviate instance
+  weaviate-test:
+    image: semitechnologies/weaviate:latest
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      ENABLE_MODULES: ''
+      CLUSTER_HOSTNAME: weaviate-test
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - test-network
+
+  # Run specific test files
+  backend-unit-tests:
+    image: ai-curation-backend-tests:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./backend:/app/backend
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -m pytest tests/unit/ -v --tb=short
+    networks:
+      - test-network
+
+  backend-integration-tests:
+    image: ai-curation-backend-tests:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./backend:/app/backend
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_PORT=8080
+      - WEAVIATE_SCHEME=http
+    depends_on:
+      weaviate-test:
+        condition: service_healthy
+    command: python -m pytest tests/integration/ -v --tb=short
+    networks:
+      - test-network
+
+  backend-contract-tests:
+    image: ai-curation-backend-tests:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./backend:/app/backend
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_PORT=8080
+      - WEAVIATE_SCHEME=http
+      - OPENAI_API_KEY=test-key
+      - UNSTRUCTURED_API_URL=http://test-unstructured
+    depends_on:
+      weaviate-test:
+        condition: service_healthy
+    command: python -m pytest tests/contract/ -v --tb=short
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge

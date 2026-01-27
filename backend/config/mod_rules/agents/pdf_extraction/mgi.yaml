@@ -1,0 +1,24 @@
+# MGI (Mouse Genome Informatics) PDF Extraction Rules
+# Model organism: Mus musculus (mouse)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with mouse data.
+# Expand with mouse-specific paper conventions as needed.
+
+mod_id: MGI
+species: Mus musculus
+data_provider: MGI
+taxon: NCBITaxon:10090
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## MGI PDF Extraction Strategy (Mus musculus)
+
+  ### General Guidelines
+
+  - Mouse papers often describe genotypes using notation like fl/fl, -/-, +/-
+  - Tissue-specific knockout prefixes (cs, ns) indicate where deletion occurs
+  - Look for Materials & Methods section for strain/genotype details
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add mouse-specific PDF extraction strategies here.

@@ -1,0 +1,33 @@
+# FlyBase (Drosophila melanogaster) Allele Rules
+# Model organism: Drosophila melanogaster (fruit fly)
+#
+# PLACEHOLDER: This file contains minimal rules for FlyBase alleles.
+# Expand with fly-specific conventions as needed.
+
+mod_id: FB
+species: Drosophila melanogaster
+data_provider: FlyBase
+taxon: NCBITaxon:7227
+
+# Placeholder search strategy
+search_strategy: |
+  ## FlyBase Allele Search Strategy (Drosophila melanogaster)
+
+  ### General Guidelines
+
+  - FlyBase allele symbols typically use superscript notation: gene<sup>allele</sup>
+  - Search using the symbol as written in the paper
+  - Common allele types include: null, hypomorphic, gain-of-function
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add fly-specific allele search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting FlyBase Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the allele type matches what's described in the paper
+
+  This is a placeholder. Add fly-specific interpretation guidelines as needed.

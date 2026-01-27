@@ -1,0 +1,33 @@
+# ZFIN (Zebrafish Information Network) Gene Rules
+# Model organism: Danio rerio (zebrafish)
+#
+# PLACEHOLDER: This file contains minimal rules for ZFIN gene lookups.
+# Expand with zebrafish-specific gene conventions as needed.
+
+mod_id: ZFIN
+species: Danio rerio
+data_provider: ZFIN
+taxon: NCBITaxon:7955
+
+# Placeholder search strategy
+search_strategy: |
+  ## ZFIN Gene Search Strategy (Danio rerio)
+
+  ### General Guidelines
+
+  - Zebrafish gene symbols are lowercase (e.g., tp53, brca2)
+  - Human orthologs use lowercase version of human symbol
+  - Search using the gene symbol as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add zebrafish gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting ZFIN Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add zebrafish gene-specific interpretation guidelines as needed.

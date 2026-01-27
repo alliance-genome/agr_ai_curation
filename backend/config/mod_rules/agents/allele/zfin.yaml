@@ -1,0 +1,33 @@
+# ZFIN (Zebrafish Information Network) Allele Rules
+# Model organism: Danio rerio (zebrafish)
+#
+# PLACEHOLDER: This file contains minimal rules for ZFIN alleles.
+# Expand with zebrafish-specific conventions as needed.
+
+mod_id: ZFIN
+species: Danio rerio
+data_provider: ZFIN
+taxon: NCBITaxon:7955
+
+# Placeholder search strategy
+search_strategy: |
+  ## ZFIN Allele Search Strategy (Danio rerio)
+
+  ### General Guidelines
+
+  - Zebrafish gene symbols are typically lowercase (e.g., tp53, brca2)
+  - Mutant allele names include lab designation codes
+  - Search using the symbol as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add zebrafish-specific allele search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting ZFIN Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the allele type matches what's described in the paper
+
+  This is a placeholder. Add zebrafish-specific interpretation guidelines as needed.

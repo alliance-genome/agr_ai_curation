@@ -1,0 +1,399 @@
+# RGD (Rat Genome Database) Allele Rules
+# Model organism: Rattus norvegicus (rat)
+#
+# RGD allele fullnames contain institution/creator information similar to MGI.
+# Most RGD alleles are associated with institutions like Medical College of Wisconsin.
+
+mod_id: RGD
+species: Rattus norvegicus
+data_provider: RGD
+taxon: NCBITaxon:10116
+
+# Genotype notation (similar to mouse)
+genotype_notation:
+  description: |
+    Papers describe rat genotypes using notation similar to mouse.
+    Strip these patterns before searching.
+
+  suffixes:
+    - pattern: "+/+"
+      meaning: "wild-type homozygous"
+      action: "strip suffix, search base symbol"
+
+    - pattern: "+/-"
+      meaning: "heterozygous"
+      action: "strip suffix, search base symbol"
+
+    - pattern: "-/-"
+      meaning: "null/knockout homozygous"
+      action: "strip suffix, search base symbol"
+
+# Search strategy
+search_strategy: |
+  <rgd_search_rules>
+  <role>
+  You are searching the RGD (Rat Genome Database) for rat alleles. RGD follows naming conventions similar to MGI (Mouse Genome Database), and papers often use genotype notation that is never stored in the database.
+  </role>
+
+  ## RGD ALLELE SEARCH STRATEGY (Rattus norvegicus)
+
+  <preprocessing>
+  ### Strip Genotype Notation Before Searching
+
+  **CRITICAL**: Rat papers use zygosity notation (+/+, +/-, -/-) that is NEVER stored in databases.
+  You MUST strip these exact suffix patterns before searching:
+
+  | Paper Format | Meaning | Search Term |
+  |--------------|---------|-------------|
+  | Gene +/+ | Wild-type homozygous | Gene |
+  | Gene +/- | Heterozygous | Gene |
+  | Gene -/- | Null/knockout homozygous | Gene |
+
+  **Examples:**
+  - Paper: "Cyp1a1 -/-" → Search: "Cyp1a1"
+  - Paper: "Apoe +/-" → Search: "Apoe"
+  - Paper: "Slc6a3 +/+" → Search: "Slc6a3"
+
+  **Constraints:**
+  - ONLY strip these exact three patterns at the end of gene symbols
+  - Do NOT strip +/- characters that appear within gene names (e.g., "Tcp1-ps1")
+  - Strip the pattern BEFORE searching, not after getting results
+  </preprocessing>
+
+  <search_guidelines>
+  ### Before Searching: Preprocessing Checklist
+
+  1. Check if the paper's gene mention ends with +/+, +/-, or -/-
+  2. If yes: Remove the suffix and search the base symbol only
+  3. If no: Search the symbol exactly as written in the paper
+
+  ### Search Guidelines
+
+  - **Capitalization**: Rat gene symbols follow mouse conventions (initial capital letter: Cyp1a1, not CYP1A1)
+  - **Case sensitivity**: Allele searches are case-sensitive; use the exact capitalization from the paper
+  - **Common allele types**: Knockout and transgenic alleles are frequently used in rat research
+  - **Symbol priority**: Search using the gene symbol exactly as written; do NOT translate between protein names (CYP1A1) and gene symbols (Cyp1a1) manually
+
+  ### What NOT to Do
+
+  - Do NOT search for protein names when the paper mentions gene symbols
+  - Do NOT add zygosity notation to your search (database never contains it)
+  - Do NOT guess at alternative spellings; use exact paper text after preprocessing
+  - Do NOT translate between human (CYP1A1) and rat (Cyp1a1) ortholog symbols automatically
+  </search_guidelines>
+  </rgd_search_rules>
+
+# Author/Laboratory Disambiguation (RGD-specific feature)
+# RGD allele fullnames often contain institution info
+author_disambiguation:
+  description: |
+    RGD allele fullnames typically include institution information.
+    The API extracts this as the `fullname_attribution` field.
+
+  fullname_attribution_field:
+    description: |
+      Search results for RGD alleles may include a `fullname_attribution` field
+      containing text extracted from the allele's full name.
+
+    structure: |
+      {
+        "value": "Medical College of Wisconsin",  // Extracted text (usually institution)
+        "confidence": "probable",                  // "probable" (2+ words) or "uncertain"
+        "source": "fullname_suffix"                // Always this value - heuristic extraction
+      }
+
+    important_notes:
+      - This is HEURISTIC extraction based on naming conventions
+      - RGD alleles often have institution names rather than person names
+      - Use as a STRONG indicator, not definitive proof
+      - Cross-reference with the full `name` field to verify
+
+  common_institutions:
+    - Medical College of Wisconsin
+    - Sage Labs
+    - Horizon Discovery
+    - Transposagen Biopharmaceuticals
+
+  when_to_use: |
+    When papers mention allele source (e.g., "obtained from MCW", "Sage Labs knockout"):
+    1. Search for the allele symbol as usual
+    2. Check if any results have `fullname_attribution.value` matching the mentioned source
+    3. If institution matches → likely correct allele
+
+# Attribution search strategy (injected into prompt)
+attribution_strategy: |
+  <rgd_attribution>
+  ## RGD ALLELE ATTRIBUTION DISAMBIGUATION
+
+  <when_to_use>
+  Use this strategy when papers mention the allele source institution or creator:
+  - "obtained from Medical College of Wisconsin" / "from MCW"
+  - "Sage Labs knockout" / "Sage Labs model"
+  - "purchased from Horizon Discovery"
+  - "generated by Transposagen"
+  - "consortium allele from..."
+
+  **Context**: RGD alleles are often created by large research institutions or commercial vendors rather than individual labs, so institution names (not person names) frequently appear in allele fullnames.
+  </when_to_use>
+
+  <field_description>
+  ### The `fullname_attribution` Field
+
+  RGD search results include institution info extracted from allele fullnames using heuristic regex patterns:
+
+  ```json
+  {
+    "value": "Medical College of Wisconsin",  // Extracted text (usually institution)
+    "confidence": "probable",                  // "probable" (2+ words) or "uncertain" (1 word)
+    "source": "fullname_suffix"                // Always this value - regex extraction from fullname
+  }
+  ```
+
+  **IMPORTANT LIMITATIONS**:
+  - This is HEURISTIC extraction (regex-based pattern matching), not authoritative metadata
+  - Extraction can fail or capture incorrect text
+  - Use as a **strong indicator** (80%+ confidence when matched), not definitive proof
+  - Always cross-reference with the full `name` field to verify the extraction looks correct
+  </field_description>
+
+  <common_institutions>
+  ### Common RGD Allele Sources
+
+  | Full Name | Common Abbreviations | Type |
+  |-----------|---------------------|------|
+  | Medical College of Wisconsin | MCW | Academic institution |
+  | Sage Labs | Sage | Commercial vendor |
+  | Horizon Discovery | Horizon | Commercial vendor |
+  | Transposagen Biopharmaceuticals | Transposagen | Commercial vendor |
+  </common_institutions>
+
+  <workflow>
+  ### Attribution-Based Selection Workflow
+
+  **Complete Example:**
+
+  Paper text: *"We used Cyp1a1 knockout rats obtained from the Medical College of Wisconsin"*
+
+  1. **Preprocess**: Strip any +/- notation → Search term: "Cyp1a1"
+  2. **Search**: Query RGD for "Cyp1a1"
+  3. **Check attribution**: Look for results where `fullname_attribution.value` contains "Medical College of Wisconsin" or "MCW"
+  4. **Evaluate confidence**:
+     - If institution matches AND `fullname_attribution.confidence` is "probable": **80%+ confidence** this is correct
+     - If institution matches but confidence is "uncertain": **60% confidence** - verify fullname manually
+     - If NO institution match: Check fullname text manually, or report multiple results
+  5. **Select**: Choose the allele with matching institution attribution
+
+  **Confidence levels:**
+  - Institution match + "probable" confidence = 80%+ confidence (strong selection)
+  - Institution match + "uncertain" confidence = 60% confidence (verify fullname)
+  - No institution match = Check manually or report all matches with explanation
+  </workflow>
+
+  <fallback>
+  ### When `fullname_attribution` is Null or Missing
+
+  This means the heuristic extraction failed to identify institution info:
+
+  1. **Manual check**: Examine the full `name` field for institution names
+  2. **Common causes**: Fullname pattern doesn't match expected format, allele is very old, or naming convention differs
+  3. **Action if still ambiguous**: Report ALL matching alleles with explanations of why each is a candidate
+
+  **Example:**
+  If paper mentions "MCW Cyp1a1 knockout" but you get 3 Cyp1a1 results with null `fullname_attribution`:
+  - Report all 3 results
+  - Note: "Paper mentions MCW source, but fullname_attribution extraction failed for all results"
+  - Include the full `name` field for each so curator can manually check
+  </fallback>
+
+  <constraints>
+  ### Important Constraints
+
+  - **Do NOT use institution as the SOLE selection criterion**: Always verify the allele type (knockout, transgene, etc.) matches the paper's description
+  - **Do NOT assume perfect extraction**: The `fullname_attribution` field is heuristic and can be wrong
+  - **Do NOT ignore other matching criteria**: Symbol, allele type, and organism must still match
+  - **If multiple results have the same institution**: Report all of them with explanations
+  </constraints>
+  </rgd_attribution>
+
+# Result interpretation
+result_interpretation: |
+  <rgd_results>
+  ## INTERPRETING RGD SEARCH RESULTS
+
+  <context>
+  RGD allele searches may return multiple results, especially for common alleles or generic knockouts. Your job is to validate results and determine if there's a single clear match or if ambiguity requires reporting multiple candidates.
+  </context>
+
+  <before_accepting>
+  ### Before Accepting Any Result
+
+  Ask yourself:
+  1. Does the `matched_on` field show it matched what I searched for?
+  2. Does the allele type match what the paper describes?
+  3. If the paper mentioned a source institution, does `fullname_attribution` match?
+  4. If there are multiple results, can I definitively pick one?
+  </before_accepting>
+
+  <result_fields>
+  ### Key Fields in Search Results
+
+  - **`matched_on`**: The exact text that matched your query (symbol, synonym, or name fragment)
+    - **Validation**: Verify this is the gene symbol you intended to search for
+    - **Example**: If you searched "Cyp1a1", `matched_on` should be "Cyp1a1" or a close variant
+
+  - **`symbol`**: The official allele symbol in RGD
+    - **Format**: Usually `GeneSymbol<superscript>` (e.g., `Cyp1a1<em1Mcwi>`)
+    - **Validation**: Should start with the gene symbol you searched for
+
+  - **`name`**: Full descriptive allele name
+    - **Contains**: Gene, allele type, mutation details, and often institution/creator
+    - **Example**: "cytochrome P450, family 1, subfamily a, polypeptide 1; endonuclease-mediated mutation 1, Medical College of Wisconsin"
+
+  - **`fullname_attribution`**: Extracted institution info (see Attribution Disambiguation)
+    - **When present**: Use to match against paper's mentioned source
+    - **When null**: Check `name` field manually for institution info
+  </result_fields>
+
+  <validation>
+  ### Validation Checklist
+
+  **For EVERY result, verify:**
+
+  1. **`matched_on` is correct**
+     - Does it match your search term (after preprocessing)?
+     - If it matched a synonym, does that synonym make sense for the paper's context?
+
+  2. **Allele type matches paper description**
+     - Paper says "knockout" → Look for "null", "deletion", "disruption" in the name
+     - Paper says "transgenic" → Look for "transgene", "construct", "insertion" in the name
+     - Paper describes specific mutation → Verify mutation details in name match
+
+  3. **Institution matches (if paper mentioned source)**
+     - Use `fullname_attribution.value` to check against paper's mentioned institution
+     - Cross-reference with the full `name` field to confirm extraction is correct
+     - If no institution mentioned in paper, skip this check
+
+  4. **If multiple matches exist**
+     - **DO NOT guess**: Report ALL matching alleles with explanations
+     - Note why each is a candidate (matched symbol, type, etc.)
+     - Note what's ambiguous (missing institution info, multiple knockouts exist, etc.)
+  </validation>
+
+  <examples>
+  ### Example 1: Clear Single Match
+
+  **Search**: "Cyp1a1"
+  **Results**: 1 result
+
+  ```json
+  {
+    "symbol": "Cyp1a1<em1Mcwi>",
+    "matched_on": "Cyp1a1",
+    "name": "cytochrome P450, family 1, subfamily a, polypeptide 1; endonuclease-mediated mutation 1, Medical College of Wisconsin",
+    "fullname_attribution": {
+      "value": "Medical College of Wisconsin",
+      "confidence": "probable"
+    }
+  }
+  ```
+
+  **Paper context**: "Cyp1a1 knockout from MCW"
+
+  **Interpretation**: ✅ **ACCEPT**
+  - `matched_on` = "Cyp1a1" ✓
+  - Name indicates knockout (endonuclease-mediated mutation) ✓
+  - Institution matches paper (MCW) ✓
+  - Single result, no ambiguity ✓
+
+  ---
+
+  ### Example 2: Multiple Results - Use Attribution
+
+  **Search**: "Apoe"
+  **Results**: 3 results
+
+  **Result A**:
+  ```json
+  {
+    "symbol": "Apoe<em1Sage>",
+    "matched_on": "Apoe",
+    "name": "apolipoprotein E; endonuclease-mediated mutation 1, Sage Labs",
+    "fullname_attribution": {"value": "Sage Labs", "confidence": "probable"}
+  }
+  ```
+
+  **Result B**:
+  ```json
+  {
+    "symbol": "Apoe<em2Mcwi>",
+    "matched_on": "Apoe",
+    "name": "apolipoprotein E; endonuclease-mediated mutation 2, Medical College of Wisconsin",
+    "fullname_attribution": {"value": "Medical College of Wisconsin", "confidence": "probable"}
+  }
+  ```
+
+  **Result C**:
+  ```json
+  {
+    "symbol": "Apoe<tm1Unc>",
+    "matched_on": "Apoe",
+    "name": "apolipoprotein E; targeted mutation 1, University of North Carolina",
+    "fullname_attribution": {"value": "University of North Carolina", "confidence": "probable"}
+  }
+  ```
+
+  **Paper context**: "Apoe knockout rats from Sage Labs"
+
+  **Interpretation**: ✅ **SELECT Result A**
+  - All results match on "Apoe" ✓
+  - All are knockouts ✓
+  - Result A institution matches paper (Sage Labs) ✓✓
+  - Clear winner based on attribution
+
+  ---
+
+  ### Example 3: Ambiguous - Report All
+
+  **Search**: "Slc6a3"
+  **Results**: 2 results
+
+  **Result A**:
+  ```json
+  {
+    "symbol": "Slc6a3<em1Mcwi>",
+    "matched_on": "Slc6a3",
+    "name": "solute carrier family 6 member 3; endonuclease-mediated mutation 1, Medical College of Wisconsin",
+    "fullname_attribution": null
+  }
+  ```
+
+  **Result B**:
+  ```json
+  {
+    "symbol": "Slc6a3<em1Sage>",
+    "matched_on": "Slc6a3",
+    "name": "solute carrier family 6 member 3; endonuclease-mediated mutation 1, Sage",
+    "fullname_attribution": null
+  }
+  ```
+
+  **Paper context**: "Slc6a3 knockout" (no source institution mentioned)
+
+  **Interpretation**: ⚠️ **REPORT BOTH**
+  - Both match on "Slc6a3" ✓
+  - Both are knockouts (endonuclease-mediated) ✓
+  - Paper doesn't mention source institution ✗
+  - `fullname_attribution` extraction failed for both ✗
+  - **Action**: Report both results with explanation: "Paper does not specify allele source. RGD contains multiple Slc6a3 knockouts from MCW and Sage Labs. Manual curator review required."
+  </examples>
+
+  <constraints>
+  ### Decision Constraints
+
+  - **NEVER select based on symbol match alone** if multiple results exist
+  - **NEVER guess** which result is correct when attribution is ambiguous
+  - **ALWAYS report all candidates** when you cannot definitively pick one
+  - **ALWAYS explain** why results are ambiguous (missing institution, multiple same-type alleles, etc.)
+  - **DO NOT prefer** newer alleles over older ones without evidence from the paper
+  </constraints>
+  </rgd_results>

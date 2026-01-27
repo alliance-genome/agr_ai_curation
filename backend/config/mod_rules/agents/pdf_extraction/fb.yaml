@@ -1,0 +1,24 @@
+# FlyBase (Drosophila melanogaster) PDF Extraction Rules
+# Model organism: Drosophila melanogaster (fruit fly)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with fly data.
+# Expand with fly-specific paper conventions as needed.
+
+mod_id: FB
+species: Drosophila melanogaster
+data_provider: FlyBase
+taxon: NCBITaxon:7227
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## FlyBase PDF Extraction Strategy (Drosophila melanogaster)
+
+  ### General Guidelines
+
+  - Fly papers may use descriptive gene names (white, yellow, hedgehog)
+  - Look for fly stock center numbers (Bloomington, VDRC)
+  - Materials & Methods typically lists fly strains used
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add fly-specific PDF extraction strategies here.

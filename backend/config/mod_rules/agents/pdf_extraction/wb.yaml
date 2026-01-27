@@ -1,0 +1,24 @@
+# WormBase (Caenorhabditis elegans) PDF Extraction Rules
+# Model organism: Caenorhabditis elegans (nematode worm)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with worm data.
+# Expand with worm-specific paper conventions as needed.
+
+mod_id: WB
+species: Caenorhabditis elegans
+data_provider: WormBase
+taxon: NCBITaxon:6239
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## WormBase PDF Extraction Strategy (Caenorhabditis elegans)
+
+  ### General Guidelines
+
+  - Worm papers use gene-number notation (e.g., unc-4, lin-12)
+  - Allele names typically contain mutation codes (e.g., e1315)
+  - CGC (Caenorhabditis Genetics Center) strain names are common
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add worm-specific PDF extraction strategies here.

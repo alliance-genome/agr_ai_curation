@@ -1,0 +1,169 @@
+# Environment files (sensitive)
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+backend/venv/
+backend/extraction_venv/
+.hfenv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Node/Frontend
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+.npm
+.eslintcache
+frontend/dist/
+frontend/build/
+
+# Docker
+*.log
+docker-compose.override.yml
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+weaviate_data/
+langfuse_postgres_data/
+langfuse_clickhouse_data/
+langfuse_minio_data/
+loki-data/
+pg_data/
+
+# PDF Storage (if large)
+pdf_storage/
+
+# File Outputs (generated CSV, TSV, JSON exports)
+file_outputs/outputs/**
+file_outputs/temp/**
+!file_outputs/**/.gitkeep
+
+# Logs
+*.log
+logs/
+backend/logs/
+langfuse_traces/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code
+CLAUDE.md
+CLAUDE.local.md
+.playwright-mcp/
+
+# Local plans/designs (not committed)
+.plans/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+*.swp
+temp/
+tmp/
+
+# Cleanup artifacts
+cleanup_artifacts/
+assessment/
+categorization/
+organization/
+
+# Archives (optional - may want to keep some)
+archive/
+
+# Test output
+test_output*.log
+test_output.json
+
+# Test documentation (generated reports/fixes)
+docs/test_reports/
+docs/test_fixes/*.md
+!docs/test_fixes/README.md
+docs/todos/
+scripts/testing/test_*.sh
+
+# Credentials and secrets
+*.pem
+*.key
+*.ovpn
+*credentials*
+*secrets*
+scripts/local_db_tunnel_env.sh
+
+# Backup files
+*.tar.gz
+*.zip
+*.backup
+
+# Alembic
+alembic.ini.bak
+
+# Specification tool artifacts
+.specify/artifacts/
+
+# Temporary experimental directories
+temp_*/
+*_temp/
+test_taskid_fix*
+
+# Route53 backups (sensitive)
+route53-*.json
+
+# VPN configs (sensitive)
+*.ovpn
+
+# Large data exports
+*_export.sql
+ontology_data_export.sql
+
+# Ontology files
+*.obo
+doid.obo
+
+# Langfuse data
+langfuse_data/
+
+# Use cases (gitignored for internal development/testing)
+use_cases/
+
+# Debugging/one-off scripts and trace files in root
+trace_*.json
+check_*.py
+delete_*.py
+find_*.py
+*_debug.py
+*_test.py
+SECTION_HIERARCHY_PLAN.md
+
+# Claude Code settings
+.claude/
+
+# Git worktrees
+.worktrees/

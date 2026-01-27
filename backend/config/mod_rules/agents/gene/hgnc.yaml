@@ -1,0 +1,33 @@
+# HGNC (HUGO Gene Nomenclature Committee) Gene Rules
+# Model organism: Homo sapiens (human)
+#
+# PLACEHOLDER: This file contains minimal rules for HGNC gene lookups.
+# Expand with human-specific gene conventions as needed.
+
+mod_id: HGNC
+species: Homo sapiens
+data_provider: HGNC
+taxon: NCBITaxon:9606
+
+# Placeholder search strategy
+search_strategy: |
+  ## HGNC Gene Search Strategy (Homo sapiens)
+
+  ### General Guidelines
+
+  - Human gene symbols are typically uppercase (e.g., TP53, BRCA1)
+  - Official symbols are defined by HGNC
+  - Search using the gene symbol as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add human gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting HGNC Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add human gene-specific interpretation guidelines as needed.

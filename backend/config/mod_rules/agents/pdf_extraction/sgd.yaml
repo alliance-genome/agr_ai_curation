@@ -1,0 +1,24 @@
+# SGD (Saccharomyces Genome Database) PDF Extraction Rules
+# Model organism: Saccharomyces cerevisiae (budding yeast)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with yeast data.
+# Expand with yeast-specific paper conventions as needed.
+
+mod_id: SGD
+species: Saccharomyces cerevisiae
+data_provider: SGD
+taxon: NCBITaxon:559292
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## SGD PDF Extraction Strategy (Saccharomyces cerevisiae)
+
+  ### General Guidelines
+
+  - Yeast papers use uppercase gene symbols (GAL4, TRP1)
+  - Deletion strains noted with delta symbol or ::marker notation
+  - Look for strain background (BY4741, S288C, W303)
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add yeast-specific PDF extraction strategies here.

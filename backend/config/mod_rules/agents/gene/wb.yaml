@@ -1,0 +1,33 @@
+# WormBase (Caenorhabditis elegans) Gene Rules
+# Model organism: Caenorhabditis elegans (nematode worm)
+#
+# PLACEHOLDER: This file contains minimal rules for WormBase gene lookups.
+# Expand with worm-specific gene conventions as needed.
+
+mod_id: WB
+species: Caenorhabditis elegans
+data_provider: WormBase
+taxon: NCBITaxon:6239
+
+# Placeholder search strategy
+search_strategy: |
+  ## WormBase Gene Search Strategy (Caenorhabditis elegans)
+
+  ### General Guidelines
+
+  - C. elegans gene names follow pattern: 3- to 4-letter prefix + hyphen + number (e.g., unc-4, lin-12, egl-30)
+  - Gene symbols are lowercase and italicized
+  - Search using the gene name as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add worm gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting WormBase Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add worm gene-specific interpretation guidelines as needed.

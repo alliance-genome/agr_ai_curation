@@ -1,0 +1,453 @@
+# AI Curation Platform Docker Compose
+# OpenAI Agents SDK + Weaviate Vector Database + Langfuse Observability
+services:
+  # Langfuse Worker for background processing
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: always
+    depends_on: &langfuse-depends-on
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:3030:3030
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3030/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres}
+      SALT: ${SALT:-CHANGE_ME_RANDOM_SALT}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-CHANGE_ME_64_CHAR_HEX_KEY_HERE_________________________________________________}
+      TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      CLICKHOUSE_MIGRATION_URL: ${CLICKHOUSE_MIGRATION_URL:-clickhouse://clickhouse:9000}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-CHANGE_ME_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: ${CLICKHOUSE_CLUSTER_ENABLED:-false}
+      LANGFUSE_USE_AZURE_BLOB: ${LANGFUSE_USE_AZURE_BLOB:-false}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-auto}
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-CHANGE_ME_MINIO_SECRET}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: ${LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT:-http://minio:9000}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: ${LANGFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_MEDIA_UPLOAD_BUCKET:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${LANGFUSE_S3_MEDIA_UPLOAD_REGION:-auto}
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY:-CHANGE_ME_MINIO_SECRET}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT:-http://localhost:9090}
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE:-true}
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: ${LANGFUSE_S3_MEDIA_UPLOAD_PREFIX:-media/}
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: ${LANGFUSE_S3_BATCH_EXPORT_ENABLED:-false}
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: ${LANGFUSE_S3_BATCH_EXPORT_BUCKET:-langfuse}
+      LANGFUSE_S3_BATCH_EXPORT_PREFIX: ${LANGFUSE_S3_BATCH_EXPORT_PREFIX:-exports/}
+      LANGFUSE_S3_BATCH_EXPORT_REGION: ${LANGFUSE_S3_BATCH_EXPORT_REGION:-auto}
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: ${LANGFUSE_S3_BATCH_EXPORT_ENDPOINT:-http://minio:9000}
+      LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: ${LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT:-http://localhost:9090}
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: ${LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID:-minio}
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY:-CHANGE_ME_MINIO_SECRET}
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: ${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}
+      LANGFUSE_INGESTION_QUEUE_DELAY_MS: ${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}
+      LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_AUTH: ${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
+
+  # Langfuse Web UI and API
+  langfuse:
+    image: docker.io/langfuse/langfuse:3
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - 3000:3000
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-CHANGE_ME_RANDOM_SECRET}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-your-org-id}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-your-org}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-your-project-id}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-your-project}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-your-public-key}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@example.com}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-CHANGE_ME_SECURE_PASSWORD}
+  # Frontend service (Nginx serving React app)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_DEV_MODE: ${DEV_MODE:-true}  # Pass DEV_MODE as build arg (Vite uses VITE_* prefix)
+    restart: unless-stopped
+    depends_on:
+      - backend
+    labels:
+      log_env: dev
+      log_tier: web
+      log_component: nextjs
+    ports:
+      - "3002:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Unified Backend API service (OpenAI Agents SDK Chat + Weaviate Control Panel)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # Environment loaded from shell (via Makefile) or optional local .env
+    env_file:
+      - path: .env
+        required: false
+    command: bash -c "/app/scripts/refresh_prefixes_on_start.sh; exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
+    depends_on:
+      langfuse:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      log_env: dev
+      log_tier: api
+      log_component: openai-agents
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
+      - DOCKER_COMPOSE_DIR=/app  # For Docker logs API (docker-compose.yml location)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus 4.5 chat
+      # Langfuse Observability Configuration
+      - LANGFUSE_HOST=http://langfuse:3000
+      - LANGFUSE_PUBLIC_URL=${LANGFUSE_PUBLIC_URL:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-your-public-key}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - WEAVIATE_HOST=${WEAVIATE_HOST:-weaviate}
+      - WEAVIATE_PORT=${WEAVIATE_PORT:-8080}
+      - WEAVIATE_SCHEME=${WEAVIATE_SCHEME:-http}
+      - WEAVIATE_GRPC_HOST=${WEAVIATE_GRPC_HOST:-weaviate}
+      - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
+      - WEAVIATE_GRPC_SECURE=${WEAVIATE_GRPC_SECURE:-false}
+      - PDF_STORAGE_PATH=${PDF_STORAGE_PATH:-/app/pdf_storage}
+      - FILE_OUTPUT_STORAGE_PATH=${FILE_OUTPUT_STORAGE_PATH:-/app/file_outputs}
+      - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-}
+      - UNSTRUCTURED_API_KEY=${UNSTRUCTURED_API_KEY:-}
+      - DEBUG=true
+      - POSTHOG_DISABLED=true  # Disable PostHog telemetry
+      - ANONYMIZED_TELEMETRY=False  # Disable ChromaDB telemetry (capital F required)
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_curation}
+      # Valid MOD identifiers for prompt templates (must match database CHECK constraint)
+      - VALID_MOD_IDS=${VALID_MOD_IDS}
+      # Ontology Database Configuration
+      - ONTOLOGY_ADMIN_USER=${ONTOLOGY_ADMIN_USER:-ontology_admin}
+      - ONTOLOGY_ADMIN_PASSWORD=${ONTOLOGY_ADMIN_PASSWORD:-CHANGE_ME_ONTOLOGY_ADMIN_PASSWORD}
+      - ONTOLOGY_READER_PASSWORD=${ONTOLOGY_READER_PASSWORD:-CHANGE_ME_ONTOLOGY_READER_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-ai_curation}
+      # External Database URLs (read-only access via SSH tunnel)
+      - CURATION_DB_URL=${CURATION_DB_URL}
+      - LITERATURE_DB_URL=${LITERATURE_DB_URL}
+      # Chat History Configuration
+      - CHAT_HISTORY_ENABLED=${CHAT_HISTORY_ENABLED:-true}
+      - CHAT_MAX_HISTORY_EXCHANGES=${CHAT_MAX_HISTORY_EXCHANGES:-20}
+      - CHAT_HISTORY_IN_ROUTING=${CHAT_HISTORY_IN_ROUTING:-true}
+      - CHAT_HISTORY_IN_RESPONSE=${CHAT_HISTORY_IN_RESPONSE:-true}
+      - CHAT_MAX_SESSIONS_IN_MEMORY=${CHAT_MAX_SESSIONS_IN_MEMORY:-100}
+      # Feedback System SNS Configuration (Feature 005-user-feedback-system)
+      - SNS_TOPIC_ARN=${SNS_TOPIC_ARN:-}
+      - SNS_REGION=${SNS_REGION:-us-east-1}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
+      # AWS Cognito Authentication Configuration
+      - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}
+      - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID:-}
+      - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET:-}
+      - COGNITO_DOMAIN=${COGNITO_DOMAIN:-https://auth.alliancegenome.org}
+      - COGNITO_REDIRECT_URI=${COGNITO_REDIRECT_URI:-http://localhost:3002/auth/callback}
+      - SESSION_TIMEOUT_HOURS=${SESSION_TIMEOUT_HOURS:-24}
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}
+      # API Key Authentication (for testing/monitoring with X-API-Key header)
+      - TESTING_API_KEY=${TESTING_API_KEY:-}
+      - TESTING_API_KEY_USER=${TESTING_API_KEY_USER:-testuser}
+      - TESTING_API_KEY_EMAIL=${TESTING_API_KEY_EMAIL:-testuser@example.org}
+      - TESTING_API_KEY_GROUPS=${TESTING_API_KEY_GROUPS:-developers}
+      - TESTING_API_KEY_MODS=${TESTING_API_KEY_MODS:-}
+      # Redis for cross-worker state (requires password for Langfuse compatibility)
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}@redis:6379/0}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./backend/src:/app/backend/src:ro
+      - ./backend/main.py:/app/backend/main.py:ro
+      - ./backend/schemas:/app/backend/schemas:ro
+      - ./backend/tests:/app/backend/tests:ro  # Mount tests for running routing consistency checks
+      - ./backend/alembic:/app/backend/alembic:ro  # Mount migrations for alembic upgrade
+      - ./pdf_storage:/app/pdf_storage
+      - ./file_outputs:/app/file_outputs
+      - ./scripts/refresh_prefixes_on_start.sh:/app/scripts/refresh_prefixes_on_start.sh:ro
+      - ./scripts/extract_identifier_prefixes.py:/app/scripts/extract_identifier_prefixes.py:ro
+      - ./backend/config:/app/backend/config
+      - ./docker-compose.yml:/app/docker-compose.yml:ro  # For docker compose logs command
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for logs access (read-only)
+      - ./config:/app/config:ro  # Config files including maintenance_message.txt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux for AWS DB tunnels
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # TraceReview Backend API for trace analysis (Agent Studio feature)
+  trace_review_backend:
+    build:
+      context: ./trace_review/backend
+      dockerfile: Dockerfile
+    network_mode: host  # Use host network to access VPN (Alliance internal Langfuse)
+    # Environment loaded from shell (via Makefile) or optional local .env
+    env_file:
+      - path: ./trace_review/backend/.env
+        required: false
+    environment:
+      # trace_review environment variables
+      # Priority: TRACE_REVIEW_* prefix (from main .env) > non-prefixed (from trace_review .env) > defaults
+      # This allows using either the main .env with prefixes or a separate trace_review/.env
+      #
+      # Cognito Authentication (falls back to main app's Cognito config)
+      - COGNITO_REGION=${TRACE_REVIEW_COGNITO_REGION:-${COGNITO_REGION:-us-east-1}}
+      - COGNITO_USER_POOL_ID=${TRACE_REVIEW_COGNITO_USER_POOL_ID:-${COGNITO_USER_POOL_ID}}
+      - COGNITO_CLIENT_ID=${TRACE_REVIEW_COGNITO_CLIENT_ID:-${COGNITO_CLIENT_ID}}
+      - COGNITO_CLIENT_SECRET=${TRACE_REVIEW_COGNITO_CLIENT_SECRET:-${COGNITO_CLIENT_SECRET}}
+      - COGNITO_DOMAIN=${TRACE_REVIEW_COGNITO_DOMAIN:-${COGNITO_DOMAIN}}
+      - COGNITO_REDIRECT_URI=${TRACE_REVIEW_COGNITO_REDIRECT_URI:-${COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}}
+      # Development Mode
+      - DEV_MODE=${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}
+      - SECURE_COOKIES=${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}
+      # Langfuse (trace_review uses Alliance internal instance by default)
+      - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-${LANGFUSE_HOST:-http://langfuse-internal.alliancegenome.org:3000}}
+      - LANGFUSE_PUBLIC_KEY=${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY}}
+      - LANGFUSE_SECRET_KEY=${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-${LANGFUSE_SECRET_KEY}}
+      # Local Langfuse alternative
+      - LANGFUSE_LOCAL_HOST=${TRACE_REVIEW_LANGFUSE_LOCAL_HOST:-${LANGFUSE_LOCAL_HOST:-http://localhost:3000}}
+      - LANGFUSE_LOCAL_PUBLIC_KEY=${TRACE_REVIEW_LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_LOCAL_PUBLIC_KEY}}
+      - LANGFUSE_LOCAL_SECRET_KEY=${TRACE_REVIEW_LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_LOCAL_SECRET_KEY}}
+      # Server config
+      - BACKEND_HOST=${TRACE_REVIEW_BACKEND_HOST:-${BACKEND_HOST:-localhost}}
+      - BACKEND_PORT=${TRACE_REVIEW_BACKEND_PORT:-${BACKEND_PORT:-8001}}
+      - FRONTEND_URL=${TRACE_REVIEW_FRONTEND_URL:-${FRONTEND_URL:-http://localhost:3001}}
+      - CACHE_TTL_HOURS=${TRACE_REVIEW_CACHE_TTL_HOURS:-1}
+    restart: unless-stopped
+    labels:
+      log_env: dev
+      log_tier: api
+      log_component: trace-review
+    # Note: Port 8001 is accessed via host network (localhost:8001)
+    # No explicit ports mapping needed due to network_mode: host
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Weaviate Vector Database
+  weaviate:
+    image: semitechnologies/weaviate:latest
+    restart: always
+    depends_on:
+      reranker-transformers:
+        condition: service_healthy
+    labels:
+      log_env: dev
+      log_tier: database
+      log_component: weaviate
+    ports:
+      - "8080:8080"
+      - "50051:50051"  # gRPC port
+    environment:
+      QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: ${WEAVIATE_ANONYMOUS_ACCESS:-true}
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: text2vec-openai
+      ENABLE_MODULES: 'text2vec-openai,reranker-transformers'
+      OPENAI_APIKEY: ${OPENAI_API_KEY}
+      RERANKER_INFERENCE_API: http://reranker-transformers:8080
+      CLUSTER_HOSTNAME: weaviate
+      LOG_LEVEL: debug
+      # gRPC Configuration
+      GRPC_HOST: weaviate  # Use service name directly
+      GRPC_PORT: 50051
+      GRPC_SECURE: "false"  # Disable SSL for internal Docker communication
+    volumes:
+      - ./weaviate_data:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Reranker service for Weaviate
+  reranker-transformers:
+    image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
+    restart: always
+    labels:
+      log_env: dev
+      log_tier: ml
+      log_component: reranker
+    environment:
+      ENABLE_CUDA: 0  # Set to 1 if you have GPU support
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Redis for cross-worker state (stream cancellation, etc.) and Langfuse
+  redis:
+    image: docker.io/redis:7-alpine
+    restart: always
+    command: >
+      --requirepass ${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}
+    labels:
+      log_env: dev
+      log_tier: cache
+      log_component: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  # ClickHouse for Langfuse analytics
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-CHANGE_ME_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native protocol
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # MinIO for Langfuse object storage
+  minio:
+    image: docker.io/minio/minio
+    restart: always
+    entrypoint: sh
+    # create the 'langfuse' bucket before starting the service
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-CHANGE_ME_MINIO_SECRET}
+    ports:
+      - 9090:9000
+      - 127.0.0.1:9091:9001
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  # PostgreSQL for PDF viewer metadata and feedback storage
+  postgres:
+    image: docker.io/postgres:16
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - 127.0.0.1:5434:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Loki for log aggregation
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # Promtail for log collection
+  promtail:
+    image: grafana/promtail:latest
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on:
+      - loki
+    volumes:
+      # Discover containers and read their log files
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+
+volumes:
+  postgres_data:
+    driver: local
+  loki-data:
+    driver: local
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local
+
+networks:
+  default:
+    name: ai-curation-network

@@ -1,0 +1,33 @@
+# WormBase (Caenorhabditis elegans) Allele Rules
+# Model organism: Caenorhabditis elegans (nematode worm)
+#
+# PLACEHOLDER: This file contains minimal rules for WormBase alleles.
+# Expand with worm-specific conventions as needed.
+
+mod_id: WB
+species: Caenorhabditis elegans
+data_provider: WormBase
+taxon: NCBITaxon:6239
+
+# Placeholder search strategy
+search_strategy: |
+  ## WormBase Allele Search Strategy (Caenorhabditis elegans)
+
+  ### General Guidelines
+
+  - C. elegans gene names are typically lowercase and italicized (e.g., unc-4)
+  - Allele names follow the pattern: mutation-type + number (e.g., e1315)
+  - Search using the allele designation as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add worm-specific allele search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting WormBase Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the allele type matches what's described in the paper
+
+  This is a placeholder. Add worm-specific interpretation guidelines as needed.

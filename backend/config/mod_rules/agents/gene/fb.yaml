@@ -1,0 +1,33 @@
+# FlyBase (Drosophila melanogaster) Gene Rules
+# Model organism: Drosophila melanogaster (fruit fly)
+#
+# PLACEHOLDER: This file contains minimal rules for FlyBase gene lookups.
+# Expand with fly-specific gene conventions as needed.
+
+mod_id: FB
+species: Drosophila melanogaster
+data_provider: FlyBase
+taxon: NCBITaxon:7227
+
+# Placeholder search strategy
+search_strategy: |
+  ## FlyBase Gene Search Strategy (Drosophila melanogaster)
+
+  ### General Guidelines
+
+  - Fly gene names can be descriptive (e.g., white, notch, hedgehog)
+  - Gene symbols are typically lowercase and italicized
+  - Search using the gene name as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add fly gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting FlyBase Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add fly gene-specific interpretation guidelines as needed.

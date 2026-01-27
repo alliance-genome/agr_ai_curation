@@ -1,0 +1,24 @@
+# RGD (Rat Genome Database) PDF Extraction Rules
+# Model organism: Rattus norvegicus (rat)
+#
+# PLACEHOLDER: This file contains minimal rules for PDF extraction with rat data.
+# Expand with rat-specific paper conventions as needed.
+
+mod_id: RGD
+species: Rattus norvegicus
+data_provider: RGD
+taxon: NCBITaxon:10116
+
+# Placeholder extraction strategy
+extraction_strategy: |
+  ## RGD PDF Extraction Strategy (Rattus norvegicus)
+
+  ### General Guidelines
+
+  - Rat papers often reference common strains (Sprague-Dawley, Wistar)
+  - Gene nomenclature similar to mouse
+  - Look for RGD strain IDs and knockout designations
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add rat-specific PDF extraction strategies here.

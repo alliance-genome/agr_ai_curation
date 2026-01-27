@@ -1,0 +1,26 @@
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - VITE_API_URL=http://localhost:8001
+      - VITE_DEV_MODE=${VITE_DEV_MODE:-false}
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    network_mode: host  # Use host network to access VPN (EC2 Langfuse)
+    # Environment loaded from shell (via Makefile) or optional local .env
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Langfuse config comes from .env (supports both local and remote sources)
+      # - source="remote" uses LANGFUSE_HOST (EC2 VPN)
+      # - source="local" uses LANGFUSE_LOCAL_HOST (host.docker.internal)
+      - DEV_MODE=${DEV_MODE:-false}
+      - CACHE_TTL_HOURS=1

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Scrolling Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            height: 100%;
+            overflow: hidden;
+            background: #121212;
+            font-family: Arial, sans-serif;
+        }
+
+        .app {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background-color: #2196f3;
+            padding: 1rem 2rem;
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 1.5rem;
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            min-height: 0;
+            padding: 1rem;
+        }
+
+        .panel {
+            flex: 1;
+            display: flex;
+            margin: 0 0.5rem;
+            background: #1e1e1e;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .chat-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: transparent;
+        }
+
+        .chat-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            flex-shrink: 0;
+            color: white;
+        }
+
+        .messages-container {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .message {
+            padding: 1rem;
+            border-radius: 8px;
+            color: white;
+            max-width: 70%;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            background: #424242;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+
+        .assistant-message {
+            background: #1565c0;
+            align-self: flex-start;
+        }
+
+        .input-container {
+            padding: 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            flex-shrink: 0;
+            display: flex;
+            gap: 1rem;
+        }
+
+        .message-input {
+            flex: 1;
+            background: transparent;
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.23);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+        }
+
+        .send-button {
+            background-color: #2196f3;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            cursor: pointer;
+        }
+
+        /* Scrollbar styling */
+        .messages-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .messages-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+
+        .messages-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="header">
+            <h1>Alliance AI-Assisted Curation Interface</h1>
+        </div>
+
+        <div class="main-container">
+            <!-- Left Panel (PDF Viewer placeholder) -->
+            <div class="panel">
+                <div style="padding: 2rem; color: #999; text-align: center;">
+                    PDF Viewer Panel
+                </div>
+            </div>
+
+            <!-- Middle Panel (Chat) -->
+            <div class="panel">
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <h2>AI Assistant Chat</h2>
+                        <div style="color: #999; font-size: 0.9rem; margin-top: 0.5rem;">
+                            Test: Messages should scroll, header/input should stay fixed
+                        </div>
+                    </div>
+
+                    <div class="messages-container" id="messages">
+                        <!-- Messages will be added here -->
+                    </div>
+
+                    <div class="input-container">
+                        <input class="message-input" placeholder="Type your message..." id="input">
+                        <button class="send-button" onclick="addMessage()">→</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel (Workflow notes placeholder) -->
+            <div class="panel">
+                <div style="padding: 2rem; color: #999; text-align: center;">
+                    Workflow Notes Panel
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let messageCount = 0;
+        const messagesContainer = document.getElementById('messages');
+        const input = document.getElementById('input');
+
+        function addMessage() {
+            const text = input.value || `Test message ${++messageCount}`;
+
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user-message';
+            userMsg.textContent = text;
+            messagesContainer.appendChild(userMsg);
+
+            // Add assistant response
+            setTimeout(() => {
+                const assistantMsg = document.createElement('div');
+                assistantMsg.className = 'message assistant-message';
+                assistantMsg.textContent = `Response to: ${text}. This is a longer response to test scrolling behavior. The messages area should scroll while the header and input stay fixed.`;
+                messagesContainer.appendChild(assistantMsg);
+
+                // Scroll to bottom
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }, 500);
+
+            input.value = '';
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Add some initial messages
+        for (let i = 1; i <= 10; i++) {
+            const msg = document.createElement('div');
+            msg.className = `message ${i % 2 === 0 ? 'assistant-message' : 'user-message'}`;
+            msg.textContent = `Message ${i}: This is a test message to demonstrate scrolling. The chat area should scroll independently while keeping the header and input fixed.`;
+            messagesContainer.appendChild(msg);
+        }
+
+        // Allow Enter key to send
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                addMessage();
+            }
+        });
+    </script>
+</body>
+</html>

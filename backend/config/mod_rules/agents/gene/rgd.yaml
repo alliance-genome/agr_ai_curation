@@ -1,0 +1,33 @@
+# RGD (Rat Genome Database) Gene Rules
+# Model organism: Rattus norvegicus (rat)
+#
+# PLACEHOLDER: This file contains minimal rules for RGD gene lookups.
+# Expand with rat-specific gene conventions as needed.
+
+mod_id: RGD
+species: Rattus norvegicus
+data_provider: RGD
+taxon: NCBITaxon:10116
+
+# Placeholder search strategy
+search_strategy: |
+  ## RGD Gene Search Strategy (Rattus norvegicus)
+
+  ### General Guidelines
+
+  - Rat gene symbols follow similar conventions to mouse (initial cap)
+  - Many genes have same symbol as mouse ortholog
+  - Search using the gene symbol as written in the paper
+
+  ### Placeholder - Expand as Needed
+
+  This is a placeholder file. Add rat gene-specific search strategies here.
+
+# Placeholder result interpretation
+result_interpretation: |
+  ### Interpreting RGD Gene Search Results
+
+  - Check the `matched_on` field to see what text matched your query
+  - Verify the gene matches what's described in the paper
+
+  This is a placeholder. Add rat gene-specific interpretation guidelines as needed.

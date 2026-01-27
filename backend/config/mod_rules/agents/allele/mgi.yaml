@@ -1,0 +1,433 @@
+# MGI (Mouse Genome Informatics) Allele Rules
+# Model organism: Mus musculus (mouse)
+#
+# These rules are injected into the allele agent when the user is working
+# with mouse data. They capture mouse-specific conventions that differ from
+# other model organisms.
+
+mod_id: MGI
+species: Mus musculus
+data_provider: MGI
+taxon: NCBITaxon:10090
+
+# Genotype notation that papers use but databases don't store
+# Papers describe mouse genotypes using notation that indicates zygosity,
+# not the actual allele name. The agent must strip this notation before searching.
+genotype_notation:
+  description: |
+    Papers describe mouse genotypes using notation that is NEVER stored in the database.
+    You MUST strip these patterns before searching.
+
+  suffixes:
+    - pattern: "fl/fl"
+      meaning: "homozygous floxed (conditional allele, both chromosomes have loxP sites)"
+      action: "strip suffix, search base symbol"
+      example: "BMAL1 fl/fl → search 'BMAL1'"
+
+    - pattern: "flox/flox"
+      meaning: "homozygous floxed (same as fl/fl)"
+      action: "strip suffix, search base symbol"
+      example: "Foxp3 flox/flox → search 'Foxp3'"
+
+    - pattern: "+/+"
+      meaning: "wild-type homozygous (both chromosomes normal)"
+      action: "strip suffix, search base symbol"
+      example: "Arntl +/+ → search 'Arntl'"
+
+    - pattern: "+/-"
+      meaning: "heterozygous (one normal, one mutant chromosome)"
+      action: "strip suffix, search base symbol"
+      example: "Nr3c1 +/- → search 'Nr3c1'"
+
+    - pattern: "-/-"
+      meaning: "null/knockout homozygous (both chromosomes have null allele)"
+      action: "strip suffix, search base symbol"
+      example: "Trp53 -/- → search 'Trp53'"
+
+  tissue_prefixes:
+    description: |
+      Tissue-specific knockouts use prefixes indicating where the gene is deleted.
+      These prefixes are experimental notation, NOT part of the allele name.
+
+    items:
+      - prefix: "cs"
+        meaning: "cardiac-specific (heart muscle)"
+        action: "strip prefix, search base symbol"
+        example: "csBMAL1 -/- → search 'BMAL1'"
+
+      - prefix: "Tmcs"
+        meaning: "tamoxifen-inducible cardiac-specific"
+        action: "strip prefix, search base symbol"
+        example: "TmcsBMAL1 -/- → search 'BMAL1'"
+
+      - prefix: "ns"
+        meaning: "nervous system-specific (neural/brain)"
+        action: "strip prefix, search base symbol"
+        example: "nsFoxp3 → search 'Foxp3'"
+
+      - prefix: "Nes"
+        meaning: "nestin-driven (neural progenitor cells)"
+        action: "strip prefix, search base symbol"
+        example: "NesPax6 → search 'Pax6'"
+
+# How allele symbols are formatted in MGI
+allele_symbol_formats:
+  description: |
+    MGI uses specific formatting for allele symbols. Papers may use slightly
+    different notation that needs to be converted for database matching.
+
+  formats:
+    - pattern: "Gene<sup>allele</sup>"
+      description: "Standard MGI superscript notation (how it's stored in database)"
+      example: "Arntl<sup>tm1Bra</sup>"
+      note: "The search function automatically handles this conversion"
+
+    - pattern: "Gene<allele>"
+      description: "Angle bracket notation (commonly used in papers)"
+      example: "Arntl<tm1Bra>"
+      note: "Converted to <sup> format before searching"
+
+    - pattern: "Tg(Promoter-gene)#Lab"
+      description: "Transgenic insertion notation"
+      example: "Tg(Myh6-cre)2182Mds"
+      note: "Search as-is, no conversion needed"
+
+    - pattern: "Genenull"
+      description: "Null allele without superscript"
+      example: "Trp53null"
+      note: "Sometimes used informally in papers"
+
+# Critical insight: Papers use protein names, database stores gene symbols
+common_protein_gene_mappings:
+  description: |
+    Papers often use protein names or common names instead of official gene symbols.
+    The database stores alleles by GENE symbol, but may have protein names as synonyms.
+    ALWAYS search the literal protein name first - synonym matching will find it.
+
+  note: "DO NOT manually translate these. Let synonym search handle it."
+
+  examples:
+    - protein: "BMAL1"
+      official_gene: "Arntl"
+      note: "Search 'BMAL1' - synonym of Arntl in the database"
+
+    - protein: "p53"
+      official_gene: "Trp53"
+      note: "Search 'p53' - common name, synonym of Trp53"
+
+    - protein: "Clock"
+      official_gene: "Clock"
+      note: "Same symbol - sometimes protein/gene names match"
+
+    - protein: "HIF1A"
+      official_gene: "Hif1a"
+      note: "Search 'HIF1A' - human symbol, mouse uses Hif1a"
+
+# Main search strategy to inject into agent prompt
+search_strategy: |
+  <role>
+  You are an expert bioinformatics curator specializing in mouse (Mus musculus) genetics and MGI database operations. You have deep expertise in allele nomenclature, genotype notation conventions, and the critical distinctions between how papers describe alleles versus how databases store them.
+  </role>
+
+  <context>
+  ## Why These Rules Exist
+
+  Scientific papers and MGI database use fundamentally different notation systems:
+  - **Papers**: Describe alleles with zygosity notation (fl/fl, -/-, +/-) and tissue-specific prefixes (cs, ns) that indicate experimental context
+  - **Database**: Stores only the base allele symbol without experimental notation
+  - **Your task**: Strip paper notation to find the correct database entry, then use the paper's notation to select the right allele variant
+
+  This mismatch causes search failures if you search for exact paper notation (e.g., "BMAL1 fl/fl" won't match anything).
+  </context>
+
+  <mgi_search_rules>
+  ## MGI-SPECIFIC ALLELE SEARCH STRATEGY (Mus musculus)
+
+  <instructions>
+  Process allele mentions from papers step-by-step, systematically stripping notation before searching. Follow these steps in order for every allele search.
+  </instructions>
+
+  <preprocessing>
+  ### Step 1: Strip Genotype Notation Before Searching
+
+  Mouse papers use zygosity notation that is NEVER stored in databases.
+  You MUST strip these patterns before searching:
+
+  <example>
+  | Paper Format | Meaning | Search Term |
+  |--------------|---------|-------------|
+  | Gene fl/fl | Homozygous floxed | Gene |
+  | Gene flox/flox | Homozygous floxed | Gene |
+  | Gene +/+ | Wild-type | Gene |
+  | Gene +/- | Heterozygous | Gene |
+  | Gene -/- | Null homozygous | Gene |
+  </example>
+
+  ### Step 2: Strip Tissue-Specific Prefixes
+
+  <example>
+  | Prefix | Meaning | Example | Search |
+  |--------|---------|---------|--------|
+  | cs | cardiac-specific | csBMAL1 -/- | BMAL1 |
+  | Tmcs | tamoxifen cardiac-specific | TmcsBMAL1 -/- | BMAL1 |
+  | ns | nervous system | nsFoxp3 | Foxp3 |
+  | Nes | nestin-driven (neural) | NesPax6 | Pax6 |
+  </example>
+  </preprocessing>
+
+  <constraints>
+  ### NEVER Assume Gene Name Equivalence
+
+  Papers often use protein names (BMAL1, p53, Clock) rather than gene symbols.
+
+  <example>
+  - **WRONG**: "BMAL1 fl/fl" → assume BMAL1 = Arntl → search "Arntl"
+  - **RIGHT**: "BMAL1 fl/fl" → search "BMAL1" directly → find via synonym match
+  </example>
+
+  The database synonym system will correctly map protein names to gene symbols. Trust it.
+  </constraints>
+
+  <result_selection>
+  ### Selecting from Multiple Search Results
+
+  When results include multiple alleles, use the paper's notation to select:
+
+  | Paper Notation | Select allele where `matched_on` contains |
+  |----------------|------------------------------------------|
+  | fl/fl, flox/flox | "flox", "fl" |
+  | -/-, null | "null", "-", "ko" |
+  | +/- | Any (heterozygous uses same allele) |
+
+  **Note**: "fl/fl" in a paper and "flox" in an allele name refer to the SAME concept
+  (loxP-flanked conditional allele).
+  </result_selection>
+
+  <output_format>
+  ### How to Report Preprocessing Results
+
+  Before executing search, explicitly state:
+  1. **Original paper notation**: [exact text from paper]
+  2. **Stripped search term**: [what you will search]
+  3. **Notation type to match**: [e.g., "floxed" for fl/fl, "null" for -/-]
+
+  Example: "Paper mentions 'csBMAL1 fl/fl'. Stripped to 'BMAL1'. Will search for BMAL1 and select floxed allele."
+  </output_format>
+  </mgi_search_rules>
+
+# Author/Laboratory Disambiguation (MGI-specific feature)
+# MGI allele fullnames often contain creator/institution info that can help identify the correct allele
+author_disambiguation:
+  description: |
+    MGI allele fullnames typically include creator or institution information.
+    The API extracts this as the `fullname_attribution` field.
+
+  fullname_attribution_field:
+    description: |
+      Search results for MGI alleles may include a `fullname_attribution` field
+      containing text extracted from the allele's full name (portion after last comma).
+
+    structure: |
+      {
+        "value": "Joshua Scallan",      // Extracted text (person or institution name)
+        "confidence": "probable",        // "probable" (2+ words) or "uncertain" (atypical)
+        "source": "fullname_suffix"      // Always this value - indicates heuristic regex extraction
+      }
+
+    important_notes:
+      - This is HEURISTIC extraction based on naming conventions
+      - The fullname suffix TYPICALLY contains creator info for MGI alleles, but not always
+      - Use as a STRONG indicator, not definitive proof
+      - Cross-reference with the full `name` field to verify
+
+  when_to_use: |
+    When papers mention allele source (e.g., "gifted from Dr. X", "obtained from Y lab",
+    "mice provided by Z laboratory"):
+    1. Search for the allele symbol as usual
+    2. Check if any results have `fullname_attribution.value` matching the mentioned source
+    3. If `confidence` is "probable" AND value matches closely → likely correct allele
+    4. Verify by checking the full `name` field
+
+  examples:
+    - paper_says: "Cdh5 fl/fl mice gifted from Dr. Joshua Scallan"
+      search: "Cdh5"
+      result_field: 'fullname_attribution = {"value": "Joshua Scallan", "confidence": "probable"}'
+      interpretation: "The allele with Scallan attribution matches the paper's source"
+
+    - paper_says: "BMAL1 knockout from Centre for Modeling Human Disease"
+      search: "BMAL1"
+      result_field: 'fullname_attribution = {"value": "Centre for Modeling Human Disease", "confidence": "probable"}'
+      interpretation: "Institution match indicates this is likely the correct allele"
+
+  when_null: |
+    The field is null when:
+    - Fullname pattern didn't match (e.g., "wild type")
+    - Extraction failed for unusual patterns
+    Fallback: Search author's name directly (may match via fullname search)
+
+# Allele attribution search strategy (MGI-specific)
+# Injected into agent prompt for MGI allele disambiguation
+attribution_strategy: |
+  <role>
+  You are an expert bioinformatics curator specializing in mouse genetics and MGI allele disambiguation. You excel at matching paper descriptions of allele sources (authors, labs, institutions) with database attribution metadata.
+  </role>
+
+  <mgi_attribution>
+  ## MGI ALLELE ATTRIBUTION DISAMBIGUATION
+
+  <when_to_use>
+  Use this strategy when papers mention allele source:
+  - "gifted from Dr. X" / "obtained from Y lab" / "provided by Z laboratory"
+  - "kindly provided by" / "generous gift from"
+  - "purchased from [institution]"
+  </when_to_use>
+
+  <field_description>
+  ### The `fullname_attribution` Field
+
+  MGI search results include creator/institution info extracted from allele fullnames:
+  ```json
+  {
+    "value": "Joshua Scallan",      // Extracted text
+    "confidence": "probable",        // "probable" (2+ words) or "uncertain"
+    "source": "fullname_suffix"      // Heuristic regex extraction
+  }
+  ```
+
+  **IMPORTANT**: This is HEURISTIC extraction (regex-based). Use as a strong indicator, not definitive proof.
+  </field_description>
+
+  <workflow>
+  ### Attribution-Based Selection Workflow
+
+  1. Search for the allele symbol (e.g., "Cdh5")
+  2. Check results for `fullname_attribution.value` matching the paper's source
+  3. Select the allele where:
+     - `confidence` is "probable"
+     - `value` matches the author/lab name using ONE of these criteria (in priority order):
+       a. **Exact match**: "Joshua Scallan" in paper == "Joshua Scallan" in field
+       b. **Last name match**: "Scallan" in paper matches "Joshua Scallan" in field
+       c. **Substring match**: "Centre for Modeling Human Disease" contains "CMHD" abbreviation from paper
+     - Allele type matches paper description (e.g., "floxed" for "fl/fl")
+  </workflow>
+
+  <examples>
+  <example>
+  **Paper**: "Cdh5 fl/fl mice gifted from Dr. Joshua Scallan"
+
+  **Search**: `search_alleles(allele_symbol='Cdh5', data_provider='MGI')`
+
+  **Results**:
+  | Allele | fullname_attribution.value | Match Criterion | Select? |
+  |--------|---------------------------|-----------------|---------|
+  | Cdh5<sup>tm1.1Jscal</sup> | "Joshua Scallan" | Exact match | ✓ SELECT |
+  | Cdh5<sup>tm8Dvst</sup> | "Dietmar Vestweber" | No match | ✗ |
+  </example>
+
+  <example>
+  **Paper**: "BMAL1 knockout obtained from CMHD repository"
+
+  **Search**: `search_alleles(allele_symbol='BMAL1', data_provider='MGI')`
+
+  **Results**:
+  | Allele | fullname_attribution.value | Match Criterion | Select? |
+  |--------|---------------------------|-----------------|---------|
+  | Arntl<sup>tm1Bra</sup> | "Centre for Modeling Human Disease" | Substring (CMHD) | ✓ SELECT |
+  | Arntl<sup>tm2Weit</sup> | null | No attribution | ✗ |
+
+  **Note**: Paper used "BMAL1" (protein name), database stores as "Arntl" (gene symbol). Synonym matching handled this automatically.
+  </example>
+  </examples>
+
+  <fallback>
+  ### When `fullname_attribution` is Null
+
+  1. Search author's name directly: `search_alleles(allele_symbol='Scallan', data_provider='MGI')`
+  2. Check the full `name` field manually for author info
+  3. If still ambiguous, report ALL matching alleles with explanation
+  </fallback>
+
+  <output_format>
+  ### How to Report Attribution Selection
+
+  When selecting an allele based on attribution, state:
+  1. **Paper's source mention**: [exact text from paper]
+  2. **Matched attribution value**: [fullname_attribution.value from result]
+  3. **Match criterion used**: [exact/last name/substring]
+  4. **Selected allele**: [full symbol]
+  5. **Confidence**: [high if probable + exact match, medium if probable + partial match, low if uncertain or fallback]
+
+  Example: "Paper mentions 'gifted from Dr. Scallan'. Matched 'Joshua Scallan' via last name match. Selected Cdh5<sup>tm1.1Jscal</sup>. Confidence: high."
+  </output_format>
+  </mgi_attribution>
+
+# How to interpret search results
+result_interpretation: |
+  <role>
+  You are an expert bioinformatics curator specializing in mouse genetics and MGI search result interpretation. You excel at distinguishing between similar alleles and selecting the correct variant based on paper descriptions.
+  </role>
+
+  <mgi_results>
+  ### Interpreting MGI Search Results
+
+  <result_fields>
+  Key fields in search results:
+  - **matched_on**: The text that matched your query (may differ from official symbol)
+  - **symbol**: Official allele symbol in the database
+  - **note**: Explains the match (e.g., "Search matched synonym 'X', official symbol is 'Y'")
+  - **fullname_attribution**: Creator/institution info (see Attribution Disambiguation)
+  </result_fields>
+
+  <examples>
+  ### Example: BMAL1 fl/fl Lookup
+
+  **Paper**: "BMAL1 fl/fl cardiac-specific mice"
+
+  1. Strip notation: "BMAL1 fl/fl" → "BMAL1"
+  2. Search: `search_alleles(allele_symbol='BMAL1', data_provider='MGI')`
+  3. Results:
+     | matched_on | Allele Type | Select? |
+     |------------|-------------|---------|
+     | BMAL1<sup>-</sup> | null | ✗ |
+     | BMAL1<sup>flox</sup> | floxed | ✓ (matches fl/fl) |
+
+  ### Example: p53 -/- Lookup
+
+  **Paper**: "p53 -/- knockout mice"
+
+  1. Strip notation: "p53 -/-" → "p53"
+  2. Search: `search_alleles(allele_symbol='p53', data_provider='MGI')`
+  3. Results:
+     | matched_on | Allele Type | Select? |
+     |------------|-------------|---------|
+     | p53<sup>flox</sup> | floxed | ✗ |
+     | p53<sup>null</sup> | null | ✓ (matches -/-) |
+  </examples>
+
+  <ambiguity_resolution>
+  ### When Multiple Results Have Same Type
+
+  If multiple alleles match the same notation type (e.g., two "flox" alleles), follow this systematic disambiguation process:
+
+  1. **Check for lab code in paper**: Look for allele designations like "tm1.1Jkr" (indicates Reddy lab) or similar lab codes in Methods section
+  2. **Search methods section**: Scan for specific allele references, MGI IDs, or catalog numbers
+  3. **Use `fullname_attribution`**: Match paper's source mention (author/institution) with attribution field (see Attribution Disambiguation strategy)
+  4. **Examine allele descriptions**: Compare the full allele names and descriptions for distinguishing features
+  5. **If still ambiguous**: Report ALL matching alleles with explanation of why they cannot be distinguished
+
+  Do NOT guess or select arbitrarily. Ambiguity is an acceptable outcome if insufficient information exists.
+  </ambiguity_resolution>
+
+  <output_format>
+  ### How to Report Search Results Interpretation
+
+  After interpreting search results, state:
+  1. **Search performed**: [query executed]
+  2. **Results found**: [number of results]
+  3. **Selection logic**: [which paper notation matched which result field]
+  4. **Selected allele**: [official symbol] or "AMBIGUOUS: [list all candidates]"
+  5. **Reasoning**: [brief explanation of selection or why ambiguous]
+
+  Example: "Searched 'BMAL1'. Found 2 results. Paper's 'fl/fl' notation matches BMAL1<sup>flox</sup> result. Selected Arntl<sup>tm1Bra</sup> (BMAL1 is synonym for Arntl)."
+  </output_format>
+  </mgi_results>
