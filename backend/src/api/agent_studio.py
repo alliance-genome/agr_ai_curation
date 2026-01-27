@@ -13,7 +13,8 @@ import re
 from typing import Any, Dict, List, Optional
 
 import anthropic
-from fastapi import APIRouter, HTTPException, Path
+import boto3
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Path
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -954,6 +955,135 @@ class DirectSubmissionResponse(BaseModel):
     error: Optional[str] = None
 
 
+def _send_error_notification_sns(user_email: str, error_message: str, context: Optional[ChatContext] = None) -> None:
+    """
+    Send an error notification via SNS when background suggestion processing fails.
+
+    Uses the same SNS topic as prompt suggestions (PROMPT_SUGGESTIONS_SNS_TOPIC_ARN).
+
+    Args:
+        user_email: The curator who submitted the suggestion
+        error_message: Description of what went wrong
+        context: Optional context (trace_id, agent_id) for debugging
+    """
+    try:
+        # Use same topic and guard as suggestion service
+        sns_topic_arn = os.getenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN")
+        use_sns = os.getenv("PROMPT_SUGGESTIONS_USE_SNS", "false").lower() == "true"
+
+        if not use_sns or not sns_topic_arn:
+            logger.info("SNS notifications disabled or not configured, skipping error notification")
+            return
+
+        sns_region = os.getenv("SNS_REGION", "us-east-1")
+        aws_profile = os.getenv("AWS_PROFILE")
+        if aws_profile:
+            session = boto3.Session(profile_name=aws_profile)
+            sns_client = session.client("sns", region_name=sns_region)
+        else:
+            sns_client = boto3.client("sns", region_name=sns_region)
+
+        subject = f"[Submission Error] Failed for {user_email}"
+
+        # Build error message with context
+        message_parts = [
+            f"AI-Assisted Suggestion Submission Failed",
+            f"",
+            f"User: {user_email}",
+            f"Error: {error_message}",
+        ]
+        if context:
+            if context.trace_id:
+                message_parts.append(f"Trace ID: {context.trace_id}")
+            if context.selected_agent_id:
+                message_parts.append(f"Agent: {context.selected_agent_id}")
+
+        message_parts.append("")
+        message_parts.append("Please investigate the backend logs for more details.")
+
+        response = sns_client.publish(
+            TopicArn=sns_topic_arn,
+            Subject=subject[:100],
+            Message="\n".join(message_parts),
+            MessageAttributes={
+                "type": {"DataType": "String", "StringValue": "submission_error"},
+            }
+        )
+        logger.info(f"Error notification sent to SNS: {response['MessageId']}")
+
+    except Exception as e:
+        logger.error(f"Failed to send error notification via SNS: {e}", exc_info=True)
+
+
+async def _process_suggestion_background(
+    messages: List[Dict[str, str]],
+    system_prompt: str,
+    context: Optional[ChatContext],
+    user_email: str,
+    api_key: str,
+) -> None:
+    """
+    Background task that processes the Opus suggestion submission.
+
+    This runs after the HTTP response has been sent to the user.
+    On success, sends the suggestion via SNS.
+    On failure, sends an error notification via SNS.
+    """
+    try:
+        logger.info(f"[Background] Starting Opus suggestion processing for {user_email}")
+
+        # Call Opus synchronously to get the tool call
+        client = anthropic.Anthropic(api_key=api_key)
+
+        response = client.messages.create(
+            model="claude-opus-4-5-20251101",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=messages,
+            tools=[ANTHROPIC_SUGGESTION_TOOL],
+            tool_choice={"type": "tool", "name": "submit_prompt_suggestion"},
+        )
+
+        # Extract tool use from response
+        tool_use_block = None
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "submit_prompt_suggestion":
+                tool_use_block = block
+                break
+
+        if not tool_use_block:
+            error_msg = "Opus did not call submit_prompt_suggestion despite forced tool choice"
+            logger.error(f"[Background] {error_msg}")
+            _send_error_notification_sns(user_email, error_msg, context)
+            return
+
+        # Execute the tool
+        tool_result = await _handle_tool_call(
+            tool_name="submit_prompt_suggestion",
+            tool_input=tool_use_block.input,
+            context=context,
+            user_email=user_email,
+            messages=messages,
+        )
+
+        if tool_result.get("success"):
+            logger.info(f"[Background] Suggestion submitted successfully for {user_email}: {tool_result.get('suggestion_id')}")
+        else:
+            error_msg = tool_result.get("error", "Unknown error during tool execution")
+            logger.error(f"[Background] Tool execution failed: {error_msg}")
+            _send_error_notification_sns(user_email, error_msg, context)
+
+    except anthropic.APIError as e:
+        error_msg = f"Anthropic API error: {str(e)}"
+        logger.error(f"[Background] {error_msg}", exc_info=True)
+        _send_error_notification_sns(user_email, error_msg, context)
+
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        logger.error(f"[Background] {error_msg}", exc_info=True)
+        _send_error_notification_sns(user_email, error_msg, context)
+
+
 @router.post(
     "/submit-suggestion-direct",
     summary="Direct AI-assisted suggestion submission",
@@ -968,14 +1098,15 @@ class DirectSubmissionResponse(BaseModel):
 )
 async def submit_suggestion_direct(
     request: DirectSubmissionRequest,
+    background_tasks: BackgroundTasks,
     user: dict = get_auth_dependency(),
 ):
     """
     Directly trigger Opus to submit a suggestion based on available context.
 
-    This endpoint forces Opus to call submit_prompt_suggestion without requiring
-    the user to manually send a chat message. Opus will analyze the available
-    context (trace_id, selected_agent_id) and generate an appropriate suggestion.
+    This endpoint validates the request and spawns a background task to process
+    the suggestion via Opus. Returns immediately so the curator can continue working.
+    On success or failure, notifications are sent via SNS.
     """
     try:
         user_email = user.get("email", "unknown@localhost")
@@ -1026,76 +1157,34 @@ Please review our conversation history above and submit a general suggestion usi
                 {"role": msg.role, "content": msg.content}
                 for msg in request.messages
             ]
-            logger.info(f"[AI-Assisted Debug] Received {len(messages)} messages from frontend")
-            for i, msg in enumerate(messages):
-                logger.info(f"[AI-Assisted Debug] Message {i}: role={msg['role']}, content_length={len(msg['content'])}")
+            logger.info(f"[AI-Assisted Submit] Received {len(messages)} messages from frontend")
         else:
-            logger.warning("[AI-Assisted Debug] No messages provided by frontend!")
+            logger.warning("[AI-Assisted Submit] No messages provided by frontend!")
 
         # Append the forced message
         messages.append({
             "role": "user",
             "content": forced_message,
         })
-        logger.info(f"[AI-Assisted Debug] Total messages after appending forced message: {len(messages)}")
 
-        # Call Opus synchronously (not streaming) to get the tool call
-        client = anthropic.Anthropic(api_key=api_key)
-
-        # Force tool use by providing only the suggestion tool
-        response = client.messages.create(
-            model="claude-opus-4-5-20251101",
-            max_tokens=4096,
-            system=system_prompt,
+        # Spawn background task and return immediately
+        background_tasks.add_task(
+            _process_suggestion_background,
             messages=messages,
-            tools=[ANTHROPIC_SUGGESTION_TOOL],
-            tool_choice={"type": "tool", "name": "submit_prompt_suggestion"},  # Force this tool
-        )
-
-        # Extract tool use from response
-        tool_use_block = None
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "submit_prompt_suggestion":
-                tool_use_block = block
-                break
-
-        if not tool_use_block:
-            logger.error("Opus did not call submit_prompt_suggestion despite forced tool choice")
-            return DirectSubmissionResponse(
-                success=False,
-                message="Failed to generate suggestion",
-                error="Opus did not call the expected tool"
-            )
-
-        # Execute the tool
-        tool_result = await _handle_tool_call(
-            tool_name="submit_prompt_suggestion",
-            tool_input=tool_use_block.input,
+            system_prompt=system_prompt,
             context=request.context,
             user_email=user_email,
-            messages=messages,
+            api_key=api_key,
         )
 
-        if tool_result.get("success"):
-            return DirectSubmissionResponse(
-                success=True,
-                suggestion_id=tool_result.get("suggestion_id"),
-                message=tool_result.get("message", "Suggestion submitted successfully"),
-            )
-        else:
-            return DirectSubmissionResponse(
-                success=False,
-                message="Failed to submit suggestion",
-                error=tool_result.get("error", "Unknown error")
-            )
-
-    except anthropic.APIError as e:
-        logger.error(f"Anthropic API error in direct submission: {e}", exc_info=True)
+        logger.info(f"[AI-Assisted Submit] Background task spawned for {user_email}")
         return DirectSubmissionResponse(
-            success=False,
-            message="API error occurred",
-            error=str(e)
+            success=True,
+            message="Submission sent",
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Direct submission error: {e}", exc_info=True)
         return DirectSubmissionResponse(
