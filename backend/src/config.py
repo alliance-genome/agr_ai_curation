@@ -385,8 +385,82 @@ def is_running_on_ec2() -> bool:
     return False
 
 
-# Cache EC2 detection result to avoid repeated metadata calls
+def _get_ec2_instance_metadata() -> tuple[str | None, str | None]:
+    """Get EC2 instance ID and region from metadata service.
+
+    Returns:
+        Tuple of (instance_id, region) or (None, None) if not on EC2
+    """
+    try:
+        # Get IMDSv2 token
+        token_req = urllib.request.Request(
+            'http://169.254.169.254/latest/api/token',
+            headers={'X-aws-ec2-metadata-token-ttl-seconds': '21600'},
+            method='PUT'
+        )
+        with urllib.request.urlopen(token_req, timeout=1) as response:
+            token = response.read().decode('utf-8')
+
+        # Get instance ID
+        id_req = urllib.request.Request(
+            'http://169.254.169.254/latest/meta-data/instance-id',
+            headers={'X-aws-ec2-metadata-token': token}
+        )
+        with urllib.request.urlopen(id_req, timeout=1) as response:
+            instance_id = response.read().decode('utf-8')
+
+        # Get region from availability zone
+        az_req = urllib.request.Request(
+            'http://169.254.169.254/latest/meta-data/placement/availability-zone',
+            headers={'X-aws-ec2-metadata-token': token}
+        )
+        with urllib.request.urlopen(az_req, timeout=1) as response:
+            az = response.read().decode('utf-8')
+            # Region is AZ minus the last character (e.g., us-east-1a -> us-east-1)
+            region = az[:-1] if az else None
+
+        return instance_id, region
+    except Exception:
+        return None, None
+
+
+def _check_ec2_tag(tag_key: str, expected_value: str) -> bool:
+    """Check if the current EC2 instance has a specific tag value.
+
+    This uses the EC2 API to check instance tags, which is more secure than
+    environment variables since tags can only be set via AWS console/CLI.
+
+    Args:
+        tag_key: The tag key to check (e.g., "AllowDevMode")
+        expected_value: The expected tag value (e.g., "true")
+
+    Returns:
+        True if the instance has the tag with the expected value, False otherwise
+    """
+    instance_id, region = _get_ec2_instance_metadata()
+    if not instance_id or not region:
+        return False
+
+    try:
+        import boto3
+        ec2 = boto3.client('ec2', region_name=region)
+        response = ec2.describe_tags(
+            Filters=[
+                {'Name': 'resource-id', 'Values': [instance_id]},
+                {'Name': 'key', 'Values': [tag_key]},
+            ]
+        )
+        for tag in response.get('Tags', []):
+            if tag.get('Key') == tag_key and tag.get('Value', '').lower() == expected_value.lower():
+                return True
+    except Exception as e:
+        logger.debug("Failed to check EC2 tag %s: %s", tag_key, e)
+    return False
+
+
+# Cache EC2 detection and dev mode permission results
 _ec2_detection_cache = None
+_dev_mode_allowed_cache = None
 
 
 def _get_ec2_status() -> bool:
@@ -394,12 +468,28 @@ def _get_ec2_status() -> bool:
     global _ec2_detection_cache
     if _ec2_detection_cache is None:
         _ec2_detection_cache = is_running_on_ec2()
-        if _ec2_detection_cache:
-            logger.warning(
-                "EC2 environment detected - DEV_MODE is BLOCKED for security. "
-                "Authentication will be enforced regardless of DEV_MODE setting."
-            )
     return _ec2_detection_cache
+
+
+def _is_dev_mode_allowed_on_ec2() -> bool:
+    """Check if dev mode is allowed on this EC2 instance via instance tag.
+
+    Looks for the EC2 tag: AllowDevMode=true
+
+    This is more secure than environment variables because:
+    - Tags are set on the instance itself, not in config files
+    - Can't be accidentally copied between environments
+    - Requires AWS console/CLI access to modify
+    """
+    global _dev_mode_allowed_cache
+    if _dev_mode_allowed_cache is None:
+        _dev_mode_allowed_cache = _check_ec2_tag('AllowDevMode', 'true')
+        if _dev_mode_allowed_cache:
+            logger.warning(
+                "EC2 tag AllowDevMode=true detected - dev mode is ALLOWED on this instance. "
+                "Ensure this is NOT a production server!"
+            )
+    return _dev_mode_allowed_cache
 
 
 def is_dev_mode() -> bool:
@@ -408,18 +498,32 @@ def is_dev_mode() -> bool:
     When DEV_MODE=true, authentication is bypassed and a mock user is used.
     This simplifies local development without requiring Cognito configuration.
 
-    SECURITY: Dev mode is BLOCKED on EC2 instances to prevent unauthorized
-    access to LLM endpoints. Anyone could hit the public URL and run requests
-    through the LLM if dev mode were allowed on production.
+    SECURITY: Dev mode is BLOCKED on EC2 instances by default to prevent
+    unauthorized access to LLM endpoints. Anyone could hit the public URL
+    and run requests through the LLM if dev mode were allowed on production.
+
+    To enable dev mode on a dev/staging EC2 instance, add this EC2 tag:
+        AllowDevMode = true
+
+    This is safer than environment variables because tags are tied to the
+    instance and can't be accidentally copied via config files.
 
     Returns:
-        True if DEV_MODE=true AND not running on EC2
-        False if running on EC2 (regardless of DEV_MODE setting)
+        True if DEV_MODE=true AND (not on EC2 OR instance has AllowDevMode=true tag)
+        False otherwise
     """
-    # SECURITY CHECK: Block dev mode on EC2 instances
+    # SECURITY CHECK: Block dev mode on EC2 instances unless tag allows it
     if _get_ec2_status():
-        # Log only once per startup (cached)
-        return False
+        if not _is_dev_mode_allowed_on_ec2():
+            # Only log once on first check
+            if _dev_mode_allowed_cache is False:
+                pass  # Already logged in _is_dev_mode_allowed_on_ec2
+            elif _dev_mode_allowed_cache is None:
+                logger.warning(
+                    "EC2 environment detected - DEV_MODE is BLOCKED for security. "
+                    "Add EC2 tag 'AllowDevMode=true' to enable dev mode on this instance."
+                )
+            return False
 
     value = os.getenv('DEV_MODE', 'false')
     return value.lower() == 'true'
