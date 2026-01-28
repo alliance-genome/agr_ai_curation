@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { debug } from '@/utils/env'
-import { Box, Backdrop, CircularProgress, Typography, Stack } from '@mui/material'
+import { Box, Backdrop, CircularProgress, Typography, Stack, Button, Alert } from '@mui/material'
 import { alpha, styled } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
@@ -73,6 +73,7 @@ function HomePage() {
 
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
+  const [loadingError, setLoadingError] = useState<string | null>(null)
 
   // Right panel tab state (persisted)
   const [rightPanelTab, setRightPanelTab] = useState<number>(() => {
@@ -198,7 +199,7 @@ function HomePage() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
-  // Handle document loading overlay
+  // Handle document loading overlay with timeout safety net
   useEffect(() => {
     // Check if we're in the middle of loading a document (e.g., after navigation)
     if (sessionStorage.getItem('document-loading') === 'true') {
@@ -208,11 +209,13 @@ function HomePage() {
     const handleLoadStart = () => {
       debug.log('[HomePage] Document load started')
       setLoadingDocument(true)
+      setLoadingError(null)
     }
 
     const handleLoadComplete = () => {
       debug.log('[HomePage] Document load complete')
       setLoadingDocument(false)
+      setLoadingError(null)
     }
 
     window.addEventListener('document-load-start', handleLoadStart)
@@ -222,6 +225,27 @@ function HomePage() {
       window.removeEventListener('document-load-start', handleLoadStart)
       window.removeEventListener('document-load-complete', handleLoadComplete)
     }
+  }, [])
+
+  // Timeout safety net: if loading takes too long, show an error
+  useEffect(() => {
+    if (!loadingDocument) return
+
+    const timeoutId = window.setTimeout(() => {
+      debug.log('[HomePage] Document loading timeout - showing error')
+      setLoadingError('Document loading timed out. The PDF may be unavailable or too large.')
+    }, 30000) // 30 second timeout
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [loadingDocument])
+
+  // Dismiss loading overlay and clear error state
+  const handleDismissLoading = useCallback(() => {
+    setLoadingDocument(false)
+    setLoadingError(null)
+    sessionStorage.removeItem('document-loading')
   }, [])
 
   // Handle session changes from child components (e.g., Chat reset)
@@ -300,11 +324,35 @@ function HomePage() {
         }}
         open={loadingDocument}
       >
-        <Stack spacing={2} alignItems="center">
-          <CircularProgress color="inherit" size={60} />
-          <Typography variant="h6" color="inherit">
-            Loading document...
-          </Typography>
+        <Stack spacing={2} alignItems="center" sx={{ maxWidth: 400 }}>
+          {loadingError ? (
+            <>
+              <Alert
+                severity="error"
+                sx={{
+                  width: '100%',
+                  '& .MuiAlert-message': { color: 'inherit' }
+                }}
+              >
+                {loadingError}
+              </Alert>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleDismissLoading}
+                sx={{ mt: 1 }}
+              >
+                Dismiss
+              </Button>
+            </>
+          ) : (
+            <>
+              <CircularProgress color="inherit" size={60} />
+              <Typography variant="h6" color="inherit">
+                Loading document...
+              </Typography>
+            </>
+          )}
         </Stack>
       </Backdrop>
     </Root>

@@ -191,6 +191,15 @@ export function PdfViewer() {
   const [overlays, setOverlays] = useState<OverlayPayload[]>([])
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
 
+  /**
+   * Signal that document loading is complete (whether success or failure).
+   * Clears the sessionStorage flag and dispatches the event to dismiss the loading overlay.
+   */
+  const signalLoadComplete = useCallback(() => {
+    sessionStorage.removeItem('document-loading')
+    window.dispatchEvent(new CustomEvent('document-load-complete'))
+  }, [])
+
   useEffect(() => {
     const handleOverlayUpdate = (event: Event) => {
       const detail = (event as CustomEvent<OverlayPayload>).detail
@@ -531,6 +540,7 @@ export function PdfViewer() {
         setStatus('error')
         setError('Timed out waiting for the PDF viewer to initialise.')
         loadStartRef.current = null
+        signalLoadComplete()
       }
     }, 8000)
 
@@ -682,7 +692,7 @@ export function PdfViewer() {
       unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
-  }, [applyHighlights, beginDocumentLoad, clearAllHighlights])
+  }, [applyHighlights, beginDocumentLoad, clearAllHighlights, signalLoadComplete])
 
   useEffect(() => {
     return () => {
@@ -723,6 +733,7 @@ export function PdfViewer() {
       setStatus('error')
       setError('Failed to load the PDF viewer frame.')
       loadStartRef.current = null
+      signalLoadComplete()
     }
 
     iframe.addEventListener('load', handleLoad)
@@ -731,7 +742,7 @@ export function PdfViewer() {
       iframe.removeEventListener('load', handleLoad)
       iframe.removeEventListener('error', handleError)
     }
-  }, [initialisePdfApplication, viewerSrc])
+  }, [initialisePdfApplication, viewerSrc, signalLoadComplete])
 
   useEffect(() => {
     if (activeDocument) {
@@ -931,6 +942,7 @@ export function PdfViewer() {
           setStatus('error')
           setError('Unable to reach the PDF document. Please retry or re-upload.')
           loadStartRef.current = null
+          signalLoadComplete()
         }
       } finally {
         window.clearTimeout(timeoutId)
@@ -944,7 +956,7 @@ export function PdfViewer() {
       controller.abort()
       window.clearTimeout(timeoutId)
     }
-  }, [activeDocument])
+  }, [activeDocument, signalLoadComplete])
 
   return (
     <Paper
