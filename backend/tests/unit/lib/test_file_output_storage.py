@@ -70,7 +70,8 @@ class TestStorageServiceInit:
             return_value=temp_storage_dir,
         ):
             service = FileOutputStorageService()
-            assert service.base_path == temp_storage_dir
+            # Compare resolved paths to handle symlinks (e.g., /tmp -> /private/tmp)
+            assert service.base_path.resolve() == temp_storage_dir.resolve()
 
 
 class TestInputValidation:

@@ -99,6 +99,35 @@ def validate_param_type(param_type: str) -> List[str]:
     return warnings
 
 
+def _split_respecting_brackets(s: str, delimiter: str = ",") -> List[str]:
+    """Split string by delimiter, respecting brackets.
+
+    Handles commas inside brackets like Dict[str, Any].
+    """
+    result = []
+    current = []
+    bracket_depth = 0
+
+    for char in s:
+        if char == "[":
+            bracket_depth += 1
+            current.append(char)
+        elif char == "]":
+            bracket_depth -= 1
+            current.append(char)
+        elif char == delimiter and bracket_depth == 0:
+            result.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+
+    # Don't forget the last segment
+    if current:
+        result.append("".join(current))
+
+    return result
+
+
 def parse_params(params_str: str) -> List[ToolParam]:
     """Parse parameter string into ToolParam list.
 
@@ -106,12 +135,14 @@ def parse_params(params_str: str) -> List[ToolParam]:
     Examples:
         "query:str,limit:int=10"
         "gene_id:str,include_orthologs:bool=False"
+        "items:List[str],mapping:Dict[str, Any]"
     """
     if not params_str or not params_str.strip():
         return []
 
     params = []
-    for param_def in params_str.split(","):
+    # Use bracket-aware splitting to handle types like Dict[str, Any]
+    for param_def in _split_respecting_brackets(params_str, ","):
         param_def = param_def.strip()
         if not param_def:
             continue

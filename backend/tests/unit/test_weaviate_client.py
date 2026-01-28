@@ -78,6 +78,7 @@ async def test_async_list_documents_normalises_results():
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(mock_collection, mock_collection)), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="test_tenant"):
         from src.models.api_schemas import DocumentFilter, PaginationParams
 

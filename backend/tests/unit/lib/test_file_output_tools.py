@@ -264,10 +264,21 @@ class TestSaveJsonImpl:
         mock_storage = MagicMock()
         mock_storage.save_output.side_effect = capture_save_output
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-123"
+
         # Test with pretty=True (default)
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             await _save_json_impl(
                 data_json=json.dumps({"a": 1}), filename="test", pretty=True
@@ -280,6 +291,12 @@ class TestSaveJsonImpl:
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             await _save_json_impl(
                 data_json=json.dumps({"a": 1}), filename="test", pretty=False
@@ -318,9 +335,20 @@ class TestContextCaptureAtInvocationTime:
             [],
         )
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-456"
+
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             result = await _save_csv_impl(
                 data_json=json.dumps([{"test": "data"}]),

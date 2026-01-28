@@ -165,7 +165,7 @@ class TestGenerateRegistryEntry:
         )
         entry = generate_registry_entry(config)
         assert entry["name"] == "Test Agent"
-        assert entry["icon"] == "🧪"
+        assert entry["frontend"]["icon"] == "🧪"
         assert entry["category"] == "Validation"
 
     def test_includes_supervisor_config(self):
