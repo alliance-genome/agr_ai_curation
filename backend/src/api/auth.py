@@ -1,6 +1,5 @@
 """Authentication API router with AWS Cognito integration.
 
-Task: T023 - Migrated from Okta to AWS Cognito
 Implements:
 - AWS Cognito authentication
 - GET /auth/login endpoint (redirects to Cognito Hosted UI)
@@ -9,7 +8,6 @@ Implements:
 - GET /users/me endpoint (in users.py)
 
 Pattern follows OAuth2 Authorization Code flow with PKCE.
-Complete RIP AND REPLACE - all Okta code removed.
 """
 
 import base64
@@ -535,8 +533,7 @@ async def logout(
     Contract: POST /auth/logout
     Requirements: FR-009, FR-010
 
-    Per contract spec (specs/007-okta-login/contracts/auth_endpoints.yaml),
-    this endpoint returns 200 with JSON response, NOT a redirect.
+    Per contract spec, this endpoint returns 200 with JSON response, NOT a redirect.
 
     Args:
         response: FastAPI response object for setting cookies
@@ -610,14 +607,13 @@ async def logout(
 # Exports for other modules
 # ============================================================================
 
-# Compatibility shim for tests that expect the old Okta pattern
+# Compatibility shim for tests that use dependency override pattern
 # Tests use: app.dependency_overrides[auth.get_user] = lambda: mock_user
-# This provides backward compatibility with the old fastapi_okta.OktaAuth pattern
 class _AuthCompat:
-    """Compatibility wrapper for legacy test patterns.
+    """Compatibility wrapper for test dependency overrides.
 
     Provides a `get_user` attribute that can be used as a dependency override key.
-    This allows tests to continue using the pattern:
+    This allows tests to use the pattern:
         app.dependency_overrides[auth.get_user] = lambda: mock_user
 
     The actual dependency function is _get_user_from_cookie_impl.

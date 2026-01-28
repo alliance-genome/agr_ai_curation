@@ -389,7 +389,7 @@ export const fetchApi = async <T>(
         localStorage.removeItem('chat-active-document');
         sessionStorage.setItem('intendedPath', window.location.pathname + window.location.search);
 
-        // Redirect to login endpoint (backend will redirect to Okta)
+        // Redirect to login endpoint (backend will redirect to Cognito)
         window.location.href = '/api/auth/login';
 
         // Throw error for any pending promises (though redirect will interrupt execution)

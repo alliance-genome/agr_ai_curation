@@ -42,7 +42,7 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
         "src.lib.pipeline.store.store_to_weaviate",
         new=AsyncMock()
     ) as mock_store:
-        result = await orchestrator.process_pdf_document(sample_pdf, document_id, "test_okta_user", validate_first=False)
+        result = await orchestrator.process_pdf_document(sample_pdf, document_id, "test_user", validate_first=False)
 
     assert result.success is True
     assert result.total_chunks == 1
@@ -67,7 +67,7 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
         "is_valid": False,
         "errors": ["invalid"]
     }):
-        result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_okta_user", validate_first=True)
+        result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_user", validate_first=True)
 
     assert result.success is False
     assert ProcessingStage.PARSING not in result.stages_completed
@@ -76,7 +76,7 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
 @pytest.mark.asyncio
 async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf):
     with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(side_effect=RuntimeError("boom"))):
-        result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_okta_user", validate_first=False)
+        result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_user", validate_first=False)
 
     assert result.success is False
     assert ProcessingStage.PARSING not in result.stages_completed
@@ -100,7 +100,7 @@ async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
         "src.lib.pipeline.store.store_to_weaviate",
         new=AsyncMock()
     ):
-        result = await process_pdf_document(sample_pdf, "doc-xyz", mock_weaviate_client, "test_okta_user")
+        result = await process_pdf_document(sample_pdf, "doc-xyz", mock_weaviate_client, "test_user")
 
     assert result.success is True
     assert result.total_chunks == 0

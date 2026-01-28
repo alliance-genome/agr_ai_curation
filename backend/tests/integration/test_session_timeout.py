@@ -7,7 +7,7 @@ Requirements: FR-018, FR-019 (session expiration and redirect)
 Tests that:
 1. Expired JWT tokens are rejected with 401 Unauthorized
 2. Frontend redirects to login page when session expires
-3. Token expiration is enforced by agr_fastapi_okta library
+3. Token expiration is enforced by authentication library
 4. SESSION_TIMEOUT_HOURS configuration works correctly
 
 CRITICAL: This test validates that inactive sessions expire after timeout period.
@@ -23,8 +23,6 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta, timezone
 import jwt
-
-from fastapi_okta import OktaUser
 
 
 @pytest.fixture
@@ -44,7 +42,7 @@ def expired_token():
         "name": "Expired Curator",
         "exp": int(expired_time.timestamp()),
         "iat": int((expired_time - timedelta(hours=24)).timestamp()),
-        "iss": "https://dev-test.okta.com",
+        "iss": "https://cognito-idp.us-east-1.amazonaws.com/test-pool",
         "aud": "https://api.alliancegenome.org",
     }
 
@@ -55,10 +53,10 @@ def expired_token():
 
 @pytest.fixture
 def mock_expired_auth():
-    """Mock Okta auth that rejects expired tokens with 401."""
+    """Mock auth that rejects expired tokens with 401."""
     from fastapi import HTTPException
 
-    class MockExpiredOkta:
+    class MockExpiredAuth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -69,7 +67,7 @@ def mock_expired_auth():
                 detail="Token has expired"
             )
 
-    return MockExpiredOkta()
+    return MockExpiredAuth()
 
 
 @pytest.fixture
@@ -82,8 +80,6 @@ def client_with_expired_token(monkeypatch, mock_expired_auth):
     # Set required environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os
@@ -121,7 +117,7 @@ def valid_token():
         "name": "Valid Curator",
         "exp": int(future_time.timestamp()),
         "iat": int(datetime.now(timezone.utc).timestamp()),
-        "iss": "https://dev-test.okta.com",
+        "iss": "https://cognito-idp.us-east-1.amazonaws.com/test-pool",
         "aud": "https://api.alliancegenome.org",
     }
 
@@ -131,22 +127,22 @@ def valid_token():
 
 @pytest.fixture
 def mock_valid_auth():
-    """Mock Okta auth that accepts valid tokens."""
+    """Mock auth that accepts valid tokens."""
+    from conftest import MockCognitoUser
 
-    class MockValidOkta:
+    class MockValidAuth:
         def __init__(self, *args, **kwargs):
             pass
 
         async def get_user(self):
-            """Mock get_user that returns valid OktaUser."""
-            return OktaUser(**{
-                "uid": "test_valid_user_00u1abc2def4",
-                "cid": "test_client",
-                "sub": "valid_curator@alliancegenome.org",
-                "Groups": []
-            })
+            """Mock get_user that returns valid user."""
+            return MockCognitoUser(
+                uid="test_valid_user_00u1abc2def4",
+                sub="valid_curator@alliancegenome.org",
+                groups=[]
+            )
 
-    return MockValidOkta()
+    return MockValidAuth()
 
 
 @pytest.fixture
@@ -154,8 +150,6 @@ def client_with_valid_token(monkeypatch, mock_valid_auth):
     """Create test client with valid token authentication."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os

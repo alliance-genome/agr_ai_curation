@@ -26,10 +26,10 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timezone
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
+from conftest import MockCognitoUser
 
 # Note: test_db and cleanup_db fixtures are now in conftest.py
 # Note: curator1_user and curator2_user are pre-registered as "chat1" and "chat2" in conftest.py
@@ -184,7 +184,7 @@ class TestChatIsolation:
                 call_args = mock_execute.call_args
                 # Check that user_id was passed to chat flow
                 assert curator1_user.uid in str(call_args), \
-                    "Chat flow should receive user's Okta ID"
+                    "Chat flow should receive user's ID"
 
     def test_chat_queries_isolated_between_users(
         self, test_db, curator1_user, curator2_user,

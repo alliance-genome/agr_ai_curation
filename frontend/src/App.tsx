@@ -32,7 +32,7 @@ const queryClient = new QueryClient()
 
 /**
  * ProtectedRoutes: Wrapper component that checks authentication before rendering routes
- * If not authenticated, redirects to Okta login
+ * If not authenticated, redirects to login
  */
 function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, login } = useAuth();

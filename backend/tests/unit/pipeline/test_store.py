@@ -27,7 +27,7 @@ def test_generate_deterministic_uuid_is_stable():
 @pytest.mark.asyncio
 async def test_store_to_weaviate_requires_chunks():
     with pytest.raises(StorageError, match="No chunks to store"):
-        await store_to_weaviate([], "doc-1", user_id="test_okta_user")
+        await store_to_weaviate([], "doc-1", user_id="test_user")
 
 
 @pytest.mark.asyncio
@@ -40,13 +40,13 @@ async def test_store_to_weaviate_calls_status_updates():
     async def fake_chunks_store(chunks_arg, doc_id, client, user_id):  # noqa: ANN001
         assert doc_id == document_id
         assert chunks_arg == chunks
-        assert user_id == "test_okta_user"
+        assert user_id == "test_user"
         return {"stored_count": 1, "failed_count": 0, "stored_ids": ["uuid"]}
 
     with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store), patch(
         "src.lib.pipeline.store.update_document_metadata", new=AsyncMock()
     ) as mock_metadata, patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()) as mock_status:
-        stats = await store_to_weaviate(chunks, document_id, weaviate_client, user_id="test_okta_user")
+        stats = await store_to_weaviate(chunks, document_id, weaviate_client, user_id="test_user")
 
     assert stats["stored_chunks"] == 1
     mock_status.assert_awaited_once()
@@ -78,7 +78,7 @@ async def test_store_chunks_to_weaviate_raises_when_collection_missing():
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop):
         with pytest.raises(CollectionNotFoundError):
-            await store_chunks_to_weaviate([], "doc-1", weaviate_client, "test_okta_user")
+            await store_chunks_to_weaviate([], "doc-1", weaviate_client, "test_user")
 
 
 @pytest.mark.asyncio
@@ -132,7 +132,7 @@ async def test_store_chunks_to_weaviate_success_path():
     # Mock get_user_collections to return tenant-scoped collections
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        result = await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_okta_user")
+        result = await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
 
     assert result["stored_count"] == 2
     assert batch_ctx.add_object.call_count == 2
@@ -164,7 +164,7 @@ async def test_store_chunks_to_weaviate_handles_batch_error():
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop):
         with pytest.raises(BatchInsertError):
-            await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_okta_user")
+            await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
 
 
 @pytest.mark.asyncio
@@ -187,6 +187,6 @@ async def test_update_document_metadata_best_effort():
 
     # Mock get_user_collections to return tenant-scoped collections
     with patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        await update_document_metadata("doc-1", stats, weaviate_client, "test_okta_user")
+        await update_document_metadata("doc-1", stats, weaviate_client, "test_user")
 
     pdf_collection.data.update.assert_called_once()

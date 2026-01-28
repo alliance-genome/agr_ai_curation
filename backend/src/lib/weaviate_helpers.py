@@ -67,7 +67,7 @@ def get_user_collections(
 
     Args:
         client: Weaviate client instance from connection.session()
-        user_id: Okta user identifier from authenticated request
+        user_id: User identifier from authenticated request
 
     Returns:
         Tuple of (document_chunk_collection, pdf_document_collection)
@@ -83,7 +83,7 @@ def get_user_collections(
         >>> from src.api.auth import auth
         >>>
         >>> @router.get("/documents")
-        >>> def list_documents(user: OktaUser = Security(auth.get_user)):
+        >>> def list_documents(user: CognitoUser = Security(auth.get_user)):
         >>>     connection = get_connection()
         >>>     with connection.session() as client:
         >>>         chunk_col, pdf_col = get_user_collections(client, user.uid)

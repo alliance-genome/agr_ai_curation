@@ -56,7 +56,7 @@ class DoclingParser:
         Args:
             file_path: Path to PDF file
             document_id: Document UUID
-            user_id: Okta user identifier for tenant-scoped file storage (T032, FR-012)
+            user_id: User identifier for tenant-scoped file storage (T032, FR-012)
             extraction_strategy: Extraction strategy (optional)
             enable_table_extraction: Enable table extraction (optional)
 
@@ -159,7 +159,7 @@ class DoclingParser:
         Args:
             result: Docling JSON response
             document_id: Document UUID
-            user_id: Okta user identifier for tenant-scoped storage (T032, FR-012)
+            user_id: User identifier for tenant-scoped storage (T032, FR-012)
 
         Returns:
             Path relative to pdf_storage root: {user_id}/docling_json/{doc_id}.json
@@ -190,7 +190,7 @@ class DoclingParser:
         Args:
             elements: Processed/cleaned elements
             document_id: Document UUID
-            user_id: Okta user identifier for tenant-scoped storage (T032, FR-012)
+            user_id: User identifier for tenant-scoped storage (T032, FR-012)
 
         Returns:
             Path relative to pdf_storage root: {user_id}/processed_json/{doc_id}.json
@@ -230,7 +230,7 @@ async def parse_pdf_document(
     Args:
         file_path: Path to PDF file
         document_id: Document UUID
-        user_id: Okta user identifier for tenant-scoped file storage (T032, FR-012)
+        user_id: User identifier for tenant-scoped file storage (T032, FR-012)
                  **REQUIRED in multi-tenant mode** - ensures all derived files
                  (Docling JSON, processed JSON) are stored in user-specific directories
         extraction_strategy: Extraction strategy (optional)

@@ -3,7 +3,7 @@
 Enables curators to run saved flows on multiple documents sequentially.
 Provides batch creation, status tracking, streaming progress, and cancellation.
 
-All endpoints require Okta JWT authentication via Security(get_auth_dependency()).
+All endpoints require Cognito JWT authentication via Security(get_auth_dependency()).
 Batch ownership is enforced - users can only access their own batches.
 """
 
@@ -58,7 +58,7 @@ async def create_batch(
     Args:
         request: Batch creation request with flow_id and document_ids
         background_tasks: FastAPI background tasks for async processing
-        user: Authenticated user from Okta JWT
+        user: Authenticated user from Cognito JWT
         db: Database session
 
     Returns:
@@ -238,7 +238,7 @@ async def download_batch_zip(
 
     Args:
         batch_id: UUID of the batch to download
-        user: Authenticated user from Okta JWT
+        user: Authenticated user from Cognito JWT
         db: Database session
 
     Returns:
@@ -394,7 +394,7 @@ async def stream_batch_progress(
 
     Args:
         batch_id: UUID of the batch to stream
-        user: Authenticated user from Okta JWT
+        user: Authenticated user from Cognito JWT
         db: Database session
 
     Returns:
@@ -567,7 +567,7 @@ async def cancel_batch(
 
     Args:
         batch_id: UUID of the batch to cancel
-        user: Authenticated user from Okta JWT
+        user: Authenticated user from Cognito JWT
         db: Database session
 
     Returns:

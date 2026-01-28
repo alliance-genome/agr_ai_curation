@@ -1,7 +1,7 @@
 """Documents API endpoints for Weaviate Control Panel.
 
 Task: T026 - Add Security() dependency injection to document endpoints
-All endpoints now require valid Okta JWT token via Security(auth.get_user).
+All endpoints now require valid AWS Cognito JWT token via Security(auth.get_user).
 """
 
 from fastapi import APIRouter, HTTPException, Query, Path, Depends, UploadFile, File, BackgroundTasks, Security
@@ -198,14 +198,14 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
 def verify_document_ownership(
     db: Session,
     document_id: str,
-    okta_user: Dict[str, Any]
+    auth_user: Dict[str, Any]
 ) -> ViewerPDFDocument:
     """Verify document ownership and return document if authorized.
 
     Args:
         db: Database session
         document_id: Document UUID to check
-        okta_user: Authenticated Okta user
+        auth_user: Authenticated user from AWS Cognito JWT
 
     Returns:
         ViewerPDFDocument if user owns the document
@@ -216,7 +216,7 @@ def verify_document_ownership(
     Requirements: FR-014 (cross-user access prevention with 403)
     """
     # Get database user
-    db_user = set_global_user_from_cognito(db, okta_user)
+    db_user = set_global_user_from_cognito(db, auth_user)
 
     # Query document from PostgreSQL
     doc = db.query(ViewerPDFDocument).filter(

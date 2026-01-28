@@ -26,7 +26,6 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument

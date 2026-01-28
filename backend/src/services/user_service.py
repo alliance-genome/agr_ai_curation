@@ -1,13 +1,11 @@
 """User provisioning and management service.
 
-Task: T024 - User provisioning with Weaviate tenant creation (migrated to Cognito)
 Implements:
 - set_global_user_from_cognito(): Auto-create users on first login
 - provision_weaviate_tenants(): Create Weaviate tenants for new users
 
 Pattern follows AGR Literature Service reference implementation.
 Requirements: FR-005, FR-006
-Complete RIP AND REPLACE - all Okta code removed.
 """
 
 import logging

@@ -4,7 +4,7 @@ Task: T017 - Contract test GET /weaviate/documents/{document_id}/download/pdf
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 219-251
 
 This test validates that the PDF download endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns application/pdf Content-Type with binary data
 3. Enforces user-specific access (returns 403 for other users' documents)
 4. Returns 404 for non-existent documents
@@ -25,11 +25,8 @@ from datetime import datetime
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -74,7 +71,7 @@ class TestDocumentsDownloadPdfEndpoint:
     def test_download_pdf_requires_authentication(self, client):
         """Test PDF download endpoint requires valid authentication token.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
@@ -112,7 +109,7 @@ class TestDocumentsDownloadPdfEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "owner@alliancegenome.org"
@@ -184,7 +181,7 @@ class TestDocumentsDownloadPdfEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "owner@alliancegenome.org"
@@ -261,7 +258,7 @@ class TestDocumentsDownloadPdfEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token (user ID 123)
+        # Mock authenticated user from token (user ID 123)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "user1@alliancegenome.org"
@@ -326,7 +323,7 @@ class TestDocumentsDownloadPdfEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "user@alliancegenome.org"
@@ -393,7 +390,7 @@ class TestDocumentsDownloadPdfEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "owner@alliancegenome.org"

@@ -4,7 +4,7 @@ Task: T014 - Contract test for GET /weaviate/documents/{document_id}
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 114-145
 
 This test validates that the GET /weaviate/documents/{document_id} endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns Document schema with all required fields including weaviate_tenant
 3. Returns 404 for non-existent document_id
 4. Returns 403 when user tries to access another user's document (cross-user access)
@@ -17,7 +17,7 @@ IMPORTANT: 403 vs 404 distinction:
 NOTE: This test will FAIL until T025 implements document router with GET /{document_id} endpoint.
 
 IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
-mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
+mock FastAPI dependencies.
 """
 
 import pytest
@@ -37,11 +37,8 @@ from .test_uuids import (
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -88,7 +85,7 @@ class TestGetDocumentEndpoint:
     def test_get_document_requires_authentication(self, client):
         """Test GET /weaviate/documents/{document_id} requires authentication.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
@@ -141,7 +138,7 @@ class TestGetDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator@alliancegenome.org"
@@ -260,7 +257,7 @@ class TestGetDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator@alliancegenome.org"
@@ -322,7 +319,7 @@ class TestGetDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser (user_id = 123)
+        # Mock authenticated user (user_id = 123)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator1@alliancegenome.org"
@@ -398,7 +395,7 @@ class TestGetDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator@alliancegenome.org"
@@ -563,7 +560,7 @@ class TestGetDocumentEndpointEdgeCases:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator@alliancegenome.org"

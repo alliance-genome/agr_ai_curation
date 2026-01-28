@@ -25,7 +25,7 @@ async def async_list_documents(
     """List documents with pagination and filtering using Weaviate v4 collections API.
 
     Args:
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         filter_obj: Document filter object
         pagination: Pagination parameters
 
@@ -246,7 +246,7 @@ def list_documents(
     into the pydantic models used by the async implementation.
 
     Args:
-        user_id: Okta user identifier for tenant scoping (FR-011, FR-014)
+        user_id: User identifier for tenant scoping (FR-011, FR-014)
         page: Page number (1-indexed)
         page_size: Number of items per page
         search_term: Optional search term for filtering
@@ -293,7 +293,7 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
     """Get detailed information about a specific document.
 
     Args:
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         document_id: Document UUID
 
     Returns:
@@ -530,7 +530,7 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
     """Delete a document and all its chunks.
 
     Args:
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         document_id: Document UUID
 
     Returns:
@@ -646,7 +646,7 @@ async def re_embed_document(
 
     Args:
         document_id: Document UUID
-        user_id: Okta user ID for tenant scoping (required, FR-011, FR-014)
+        user_id: User ID for tenant scoping (required, FR-011, FR-014)
         embedding_config: Optional embedding configuration
         batch_size: Batch size for re-embedding
 
@@ -725,7 +725,7 @@ async def update_document_status_detailed(
 
     Args:
         document_id: Document UUID
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         processing_status: New processing status (pending, parsing, chunking,
                          embedding, storing, completed, failed)
         embedding_status: New embedding status (pending, processing,
@@ -846,7 +846,7 @@ async def update_document_status(document_id: str, user_id: str, status: str) ->
 
     Args:
         document_id: Document UUID
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         status: New status
 
     Returns:
@@ -902,7 +902,7 @@ async def search_similar(document_id: str, user_id: str, limit: int = 5) -> List
 
     Args:
         document_id: Document UUID
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         limit: Maximum number of similar documents
 
     Returns:
@@ -984,7 +984,7 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
     """Create a new document in Weaviate using v4 collections API.
 
     Args:
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         document: Document object to create
 
     Returns:

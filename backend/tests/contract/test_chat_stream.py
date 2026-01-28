@@ -1,10 +1,9 @@
 """Contract tests for POST /api/chat (streaming).
 
 Task: T020 [P] - Contract test POST /api/chat (streaming)
-Contract: specs/007-okta-login/contracts/chat_endpoints.yaml lines 18-76
 
 This test validates the FUTURE contract (not current implementation):
-1. POST /api/chat (NOT /api/chat/stream) requires Okta JWT
+1. POST /api/chat (NOT /api/chat/stream) requires authentication
 2. Returns SSE stream with contract-specified event types: token, done
 3. Events match contract examples exactly (NOT current OpenAI Agents SDK events)
 4. Query scoped to user's Weaviate tenant (FR-014)
@@ -26,10 +25,8 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 @pytest.fixture
 def client(monkeypatch):
-    """Create test client with mocked dependencies and JWKS requests."""
+    """Create test client with mocked dependencies."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
@@ -110,10 +107,10 @@ class TestChatStreamEndpoint:
         from main import app
         from src.api.auth import auth
 
-        # Mock authentication to bypass Okta (for testing response format)
+        # Mock authentication (for testing response format)
         from dataclasses import dataclass
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -125,7 +122,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Note: Current endpoint is /api/chat/stream, contract is /api/chat
         # This test validates contract requirement
@@ -157,7 +154,7 @@ class TestChatStreamEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -169,7 +166,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.post(
             "/api/chat",
@@ -222,7 +219,7 @@ class TestChatStreamEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -234,7 +231,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Missing required 'message' field
         response = client.post(
@@ -256,7 +253,7 @@ class TestChatStreamEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -268,7 +265,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.post(
             "/api/chat",
@@ -289,7 +286,7 @@ class TestChatStreamEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -301,7 +298,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Request without session_id
         response = client.post(
@@ -326,7 +323,7 @@ class TestChatStreamEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -338,7 +335,7 @@ class TestChatStreamEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.post(
             "/api/chat",
@@ -371,7 +368,7 @@ class TestChatTenantIsolation:
         from unittest.mock import patch, MagicMock
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "user_a_user_id"
             cid: str = "client_id"
             email: str = "userA@test.com"
@@ -383,7 +380,7 @@ class TestChatTenantIsolation:
                 if self.groups is None:
                     self.groups = []
 
-        mock_user = MockOktaUser()
+        mock_user = MockCognitoUser()
         app.dependency_overrides[auth.get_user] = lambda: mock_user
 
         # Mock the chat flow to verify tenant parameter is passed
@@ -418,7 +415,7 @@ class TestChatTenantIsolation:
             # Verify the correct user identity was passed (second positional argument)
             user_id_arg = call_args[1]
             assert user_id_arg == "user_a_user_id", \
-                f"FR-014 requires authenticated user's Okta ID to be passed for tenant scoping (got {user_id_arg})"
+                f"FR-014 requires authenticated user's ID to be passed for tenant scoping (got {user_id_arg})"
 
     def test_chat_prevents_cross_user_data_access(self, client):
         """Test User A cannot access User B's documents via chat.

@@ -4,7 +4,7 @@ Task: T013 - Contract test for POST /weaviate/documents/upload
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 76-112
 
 This test validates that the /weaviate/documents/upload endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Accepts multipart/form-data PDF file uploads
 3. Returns 201 with Document schema on success
 4. Returns 400 for invalid file types or missing file parameter
@@ -20,10 +20,10 @@ Document schema (required fields):
   "weaviate_tenant": "00u1abc2_def3_ghi4_jkl5"
 }
 
-NOTE: This test will FAIL until document upload endpoint is implemented with Okta auth.
+NOTE: This test will FAIL until document upload endpoint is implemented with auth.
 
 IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
-mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
+mock FastAPI dependencies.
 """
 
 import pytest
@@ -36,11 +36,8 @@ from datetime import datetime
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -153,7 +150,7 @@ class TestDocumentsUploadEndpoint:
     def test_upload_requires_authentication(self, client):
         """Test upload endpoint requires valid authentication token.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Create test PDF file
@@ -207,7 +204,7 @@ class TestDocumentsUploadEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"  # With hyphens
         mock_user.email = "curator@alliancegenome.org"
@@ -306,7 +303,7 @@ class TestDocumentsUploadEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser with hyphenated user_id
+        # Mock authenticated user with hyphenated user_id
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
         mock_user.email = "curator@alliancegenome.org"

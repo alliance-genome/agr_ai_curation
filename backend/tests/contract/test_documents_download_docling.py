@@ -4,7 +4,7 @@ Task: T018 - Contract test GET /weaviate/documents/{document_id}/download/doclin
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 253-285
 
 This test validates that the /weaviate/documents/{document_id}/download/docling_json endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns raw Docling JSON output (application/json Content-Type)
 3. Returns valid JSON object (not array or primitive)
 4. Returns 403 when user attempts to download another user's document (FR-014)
@@ -35,11 +35,8 @@ from .test_uuids import (
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -84,7 +81,7 @@ class TestDownloadDoclingJsonEndpoint:
     def test_download_docling_json_requires_authentication(self, client):
         """Test endpoint requires valid authentication token.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
@@ -120,7 +117,7 @@ class TestDownloadDoclingJsonEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -179,7 +176,7 @@ class TestDownloadDoclingJsonEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -245,7 +242,7 @@ class TestDownloadDoclingJsonEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser (user_id = 123)
+        # Mock authenticated user (user_id = 123)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -305,7 +302,7 @@ class TestDownloadDoclingJsonEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"

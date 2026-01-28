@@ -32,7 +32,7 @@ def cli(ctx, url: str, api_key: Optional[str]):
 
 
 @cli.command()
-@click.option('--user-id', required=True, help='Okta user ID for tenant scoping (FR-011, FR-014)')
+@click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
 @click.option('--page', default=1, type=int, help='Page number (1-indexed)')
 @click.option('--page-size', default=20, type=int, help='Items per page')
 @click.option('--search', help='Search term for filename/metadata')
@@ -101,7 +101,7 @@ def list_documents_cmd(ctx, user_id: str, page: int, page_size: int, search: Opt
 
 @cli.command()
 @click.argument('document_id')
-@click.option('--user-id', required=True, help='Okta user ID for tenant scoping (FR-011, FR-014)')
+@click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
 @click.option('--show-chunks', is_flag=True, help='Show chunk preview')
 @click.option('--output-format', type=click.Choice(['json', 'text']), default='text',
               help='Output format')
@@ -150,7 +150,7 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
 
 @cli.command()
 @click.argument('document_id')
-@click.option('--user-id', required=True, help='Okta user ID for tenant scoping (FR-011, FR-014)')
+@click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
 @click.confirmation_option(prompt='Are you sure you want to delete this document?')
 def delete_document_cmd(document_id: str, user_id: str):
     """Delete a document and all its chunks.
@@ -176,7 +176,7 @@ def delete_document_cmd(document_id: str, user_id: str):
 
 @cli.command()
 @click.argument('document_id')
-@click.option('--user-id', required=True, help='Okta user ID for tenant scoping (FR-011, FR-014)')
+@click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
 def re_embed_document_cmd(document_id: str, user_id: str):
     """Trigger re-embedding for a document.
 
@@ -289,7 +289,7 @@ def available_models():
 
 @cli.command()
 @click.argument('document_id')
-@click.option('--user-id', required=True, help='Okta user ID for tenant scoping (FR-011, FR-014)')
+@click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
 @click.option('--page', default=1, type=int, help='Page number')
 @click.option('--page-size', default=50, type=int, help='Items per page')
 @click.option('--include-metadata', is_flag=True, default=True, help='Include chunk metadata')

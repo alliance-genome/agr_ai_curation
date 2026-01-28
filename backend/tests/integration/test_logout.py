@@ -1,11 +1,10 @@
 """Integration test for end-to-end logout flow.
 
 Task: T050 - Integration test for logout flow
-Requirements: specs/007-okta-login/quickstart.md lines 162-180
-              specs/007-okta-login/spec.md FR-009, FR-010
+Requirements: FR-009, FR-010
 
 Tests the complete logout workflow:
-1. Authenticate user with mock Okta credentials
+1. Authenticate user with mock Cognito credentials
 2. Verify authenticated access to protected endpoint (GET /users/me)
 3. Call POST /auth/logout to terminate session
 4. Verify subsequent requests without re-auth return 401 Unauthorized
@@ -13,7 +12,6 @@ Tests the complete logout workflow:
 6. Verify user must re-authenticate after logout
 
 Pattern follows: backend/tests/integration/test_login_provisioning.py lines 101-144
-Contract reference: specs/007-okta-login/contracts/auth_endpoints.yaml lines 46-66
 
 CRITICAL PATTERN:
 - Patch get_auth_dependency BEFORE importing main.py
@@ -28,9 +26,9 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from fastapi import Depends, HTTPException
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
+from conftest import MockCognitoUser
 
 
 @pytest.fixture
@@ -106,11 +104,6 @@ def client(test_db, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    # CRITICAL: Set Okta env vars so auth.py thinks Okta is configured
-    # This prevents auth = None and get_auth_dependency() returning Depends(raise_503)
-    monkeypatch.setenv("OKTA_DOMAIN", "test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "test-audience")
-
     import sys
     import os
     from fastapi import Security
@@ -121,18 +114,17 @@ def client(test_db, monkeypatch):
     )
 
     # Create mock user
-    test_user = OktaUser(**{
-        "uid": "test_logout_user_00u1abc",
-        "cid": "test_client",
-        "sub": "test.curator.logout@alliancegenome.org",
-        "Groups": []
-    })
+    test_user = MockCognitoUser(
+        uid="test_logout_user_00u1abc",
+        sub="test.curator.logout@alliancegenome.org",
+        groups=[]
+    )
 
     # Mutable container to track authentication state
     auth_state = {"authenticated": True, "user": test_user}
 
-    # Mock Okta class to prevent real Okta initialization
-    class MockOkta:
+    # Mock auth class for controllable authentication
+    class MockAuth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -153,11 +145,10 @@ def client(test_db, monkeypatch):
     for module_name in modules_to_clear:
         del sys.modules[module_name]
 
-    # Patch BOTH Okta class AND get_auth_dependency BEFORE importing the app
-    with patch("fastapi_okta.Okta", MockOkta), \
-         patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    # Patch get_auth_dependency BEFORE importing the app
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
 
-        mock_auth_instance = MockOkta()
+        mock_auth_instance = MockAuth()
         mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
 
         # Now import the app
@@ -367,7 +358,7 @@ class TestLogoutFlowEdgeCases:
     """Edge case tests for logout flow."""
 
     def test_protected_endpoints_after_logout(self, client):
-        """Test that all Okta-protected endpoints require re-auth after logout.
+        """Test that all protected endpoints require re-auth after logout.
 
         Requirements: FR-009, FR-010
         """

@@ -26,7 +26,6 @@ from unittest.mock import patch, MagicMock
 import time
 from statistics import mean, median
 from datetime import datetime, timezone
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
 
@@ -116,7 +115,7 @@ class TestPerformance:
 
         Note: This test measures the time to make an authenticated request,
         which includes token validation overhead. In production, the full
-        authentication flow (including Okta redirect) should be < 3s.
+        authentication flow (including Cognito redirect) should be < 3s.
         """
         # Measure time to access user profile (first authenticated request)
         start = time.perf_counter()
@@ -312,27 +311,27 @@ class TestPerformance:
         Note: TestClient is synchronous, so this simulates sequential
         requests from different users, not true concurrency.
         """
-        # Create two users
-        user1 = OktaUser(**{
-            "uid": "test_perf_user1_00u1abc",
-            "cid": "test_client",
-            "sub": "perf_user1@alliancegenome.org",
-            "Groups": []
-        })
+        # Create two users using MockCognitoUser from conftest
+        from conftest import MockCognitoUser
 
-        user2 = OktaUser(**{
-            "uid": "test_perf_user2_00u2def",
-            "cid": "test_client",
-            "sub": "perf_user2@alliancegenome.org",
-            "Groups": []
-        })
+        user1 = MockCognitoUser(
+            uid="test_perf_user1_00u1abc",
+            sub="perf_user1@alliancegenome.org",
+            groups=[]
+        )
+
+        user2 = MockCognitoUser(
+            uid="test_perf_user2_00u2def",
+            sub="perf_user2@alliancegenome.org",
+            groups=[]
+        )
 
         # Add users to database
-        for okta_user in [user1, user2]:
+        for cognito_user in [user1, user2]:
             user = User(
-                user_id=okta_user.uid,
-                email=okta_user.email,
-                display_name=okta_user.email,
+                user_id=cognito_user.uid,
+                email=cognito_user.sub,
+                display_name=cognito_user.sub,
                 created_at=datetime.now(timezone.utc),
                 last_login=datetime.now(timezone.utc),
                 is_active=True
@@ -341,7 +340,7 @@ class TestPerformance:
         test_db.commit()
 
         # Create clients for each user
-        def create_client_for_user(okta_user):
+        def create_client_for_user(cognito_user):
             import sys
             import os
             from fastapi import Depends
@@ -352,7 +351,7 @@ class TestPerformance:
             )
 
             def get_mock_user():
-                return okta_user
+                return cognito_user
 
             with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
                 mock_get_auth_dep.return_value = Depends(get_mock_user)

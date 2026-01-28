@@ -25,7 +25,8 @@ import pytest
 import io
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
-from fastapi_okta import OktaUser
+
+from conftest import MockCognitoUser
 
 
 @pytest.fixture
@@ -122,10 +123,6 @@ def client(test_db, monkeypatch):
     monkeypatch.setenv("WEAVIATE_HOST", "weaviate")
     monkeypatch.setenv("WEAVIATE_PORT", "8080")
 
-    # CRITICAL: Set Okta env vars so auth.py thinks Okta is configured
-    # This prevents auth = None and get_auth_dependency() returning Depends(raise_503)
-    monkeypatch.setenv("OKTA_DOMAIN", "test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "test-audience")
 
     import sys
     import os
@@ -137,25 +134,23 @@ def client(test_db, monkeypatch):
     )
 
     # Create two mock users for isolation testing
-    user_a = OktaUser(**{
-        "uid": "test_user_a_00u1abc",
-        "cid": "test_client_a",
-        "sub": "curator_a@test.com",
-        "Groups": []
-    })
+    user_a = MockCognitoUser(
+        uid="test_user_a_00u1abc",
+        sub="curator_a@test.com",
+        groups=[]
+    )
 
-    user_b = OktaUser(**{
-        "uid": "test_user_b_00u2def",
-        "cid": "test_client_b",
-        "sub": "curator_b@test.com",
-        "Groups": []
-    })
+    user_b = MockCognitoUser(
+        uid="test_user_b_00u2def",
+        sub="curator_b@test.com",
+        groups=[]
+    )
 
     # Store current user in a mutable container so we can switch between users
     current_user = {"user": user_a}
 
-    # Mock Okta class to prevent real Okta initialization
-    class MockOkta:
+    # Mock auth class for controllable authentication
+    class MockAuth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -174,11 +169,10 @@ def client(test_db, monkeypatch):
     for module_name in modules_to_clear:
         del sys.modules[module_name]
 
-    # Patch BOTH Okta class AND get_auth_dependency BEFORE importing the app
-    with patch("fastapi_okta.Okta", MockOkta), \
-         patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    # Patch get_auth_dependency BEFORE importing the app
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
 
-        mock_auth_instance = MockOkta()
+        mock_auth_instance = MockAuth()
         mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
 
         # Now import the app

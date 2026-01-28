@@ -14,11 +14,11 @@ Requirements from quickstart.md:59-72 and tasks.md:T047:
 - Test user profile endpoint (/users/me)
 - Verify 401 responses include appropriate error message
 
-CRITICAL: This test MUST PASS after T039-T046 implementation (Okta authentication).
+CRITICAL: This test MUST PASS after T039-T046 implementation (Cognito authentication).
 
 Pattern: Patch get_auth_dependency() BEFORE importing app to return a dependency
 that raises 401 for all protected endpoints. This simulates missing auth token
-without trying to contact Okta JWKS (which would cause 503 errors).
+without trying to contact Cognito JWKS (which would cause 503 errors).
 """
 
 from typing import Optional
@@ -32,11 +32,11 @@ from unittest.mock import patch
 def client(monkeypatch):
     """Create test client that simulates unauthenticated requests.
 
-    This fixture patches Okta initialization BEFORE importing the app,
+    This fixture patches auth initialization BEFORE importing the app,
     making it successfully initialize but always reject auth with 401.
 
     The approach:
-    1. Mock fastapi_okta.Okta class to create a fake auth object
+    1. Mock auth class to create a fake auth object
     2. Mock auth.get_user to raise 401 (simulating missing/invalid token)
     3. Patch get_auth_dependency() to return Security(mock_auth.get_user)
     4. Import app (routes register with our mocked dependencies)
@@ -49,10 +49,6 @@ def client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    # Set Okta variables so initialization succeeds
-    monkeypatch.setenv("OKTA_DOMAIN", "test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "test-audience")
-
     import sys
     import os
     from fastapi import HTTPException, Security
@@ -62,7 +58,7 @@ def client(monkeypatch):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockOkta:
+    class MockUnauthenticatedAuth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -78,10 +74,9 @@ def client(monkeypatch):
             )
 
     # Patch dependencies BEFORE importing the app so routes capture them
-    with patch("fastapi_okta.Okta", MockOkta), \
-         patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
 
-        mock_auth_instance = MockOkta()
+        mock_auth_instance = MockUnauthenticatedAuth()
         mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
 
         # Now import the app (which will create routes with mocked auth)

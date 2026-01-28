@@ -1,9 +1,9 @@
-"""Integration test for Okta login flow and user provisioning.
+"""Integration test for Cognito login flow and user provisioning.
 
 Task: T048 - Integration test for login flow and user provisioning
 
 Tests the complete workflow:
-1. User authenticates via Okta (mocked)
+1. User authenticates via AWS Cognito (mocked)
 2. GET /users/me triggers user provisioning
 3. User record created in PostgreSQL database
 4. Weaviate tenants created for user's document collections
@@ -17,9 +17,9 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from datetime import datetime
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
+from conftest import MockCognitoUser
 
 
 @pytest.fixture
@@ -45,19 +45,16 @@ def test_db():
 
 
 @pytest.fixture
-def mock_okta_user():
-    """Create a mock Okta user for testing.
+def mock_cognito_user():
+    """Create a mock Cognito user for testing.
 
-    Returns an OktaUser instance with test credentials.
-    Note: OktaUser.email field has alias='sub', so we pass it as 'sub' in the dict.
+    Returns a MockCognitoUser instance with test credentials.
     """
-    # OktaUser expects 'sub' (email is aliased to 'sub')
-    return OktaUser(**{
-        "uid": "test_00u1abc2def3ghi4jkl5",
-        "cid": "test_client_id",
-        "sub": "test_curator@alliancegenome.org",
-        "Groups": []
-    })
+    return MockCognitoUser(
+        uid="test_00u1abc2def3ghi4jkl5",
+        sub="test_curator@alliancegenome.org",
+        groups=[]
+    )
 
 
 @pytest.fixture
@@ -99,10 +96,10 @@ def mock_weaviate():
 
 
 @pytest.fixture
-def client(test_db, mock_okta_user, monkeypatch):
-    """Create test client with mocked Okta authentication.
+def client(test_db, mock_cognito_user, monkeypatch):
+    """Create test client with mocked Cognito authentication.
 
-    This client bypasses Okta OAuth flow and directly provides a mock OktaUser.
+    This client bypasses Cognito OAuth flow and directly provides a mock user.
     We patch get_auth_dependency at import time to avoid the 503 error.
     """
     # Set required environment variables
@@ -120,7 +117,7 @@ def client(test_db, mock_okta_user, monkeypatch):
 
     # Create a simple dependency that returns our mock user
     def get_mock_user():
-        return mock_okta_user
+        return mock_cognito_user
 
     # Patch get_auth_dependency BEFORE importing the app
     # This ensures the users router registers with our mocked dependency
@@ -148,20 +145,20 @@ class TestLoginProvisioning:
     """Integration tests for login flow and user provisioning."""
 
     def test_first_login_creates_user_and_weaviate_tenants(
-        self, client, test_db, mock_okta_user, mock_weaviate
+        self, client, test_db, mock_cognito_user, mock_weaviate
     ):
-        """Test that first Okta login creates user record and Weaviate tenants.
+        """Test that first Cognito login creates user record and Weaviate tenants.
 
         This is the main integration test for FR-005 and FR-006.
 
         Flow:
-        1. Call GET /users/me with mocked Okta auth
+        1. Call GET /users/me with mocked Cognito auth
         2. Verify user record created in users table
         3. Verify Weaviate tenants created in both collections
         """
         # Ensure user doesn't exist before test
         existing_user = test_db.query(User).filter_by(
-            user_id=mock_okta_user.uid
+            user_id=mock_cognito_user.uid
         ).first()
         assert existing_user is None, "Test user should not exist before test"
 
@@ -176,18 +173,18 @@ class TestLoginProvisioning:
         # Should return user information
         assert response.status_code == 200
         data = response.json()
-        assert data["user_id"] == mock_okta_user.uid
-        assert data["email"] == mock_okta_user.email
+        assert data["user_id"] == mock_cognito_user.uid
+        assert data["email"] == mock_cognito_user.email
         assert data["is_active"] is True
         assert "user_id" in data
         assert "created_at" in data
         assert "last_login" in data
 
         # Verify user record created in database
-        db_user = test_db.query(User).filter_by(user_id=mock_okta_user.uid).first()
+        db_user = test_db.query(User).filter_by(user_id=mock_cognito_user.uid).first()
         assert db_user is not None
-        assert db_user.user_id == mock_okta_user.uid
-        assert db_user.email == mock_okta_user.email
+        assert db_user.user_id == mock_cognito_user.uid
+        assert db_user.email == mock_cognito_user.email
         assert db_user.is_active is True
         assert db_user.created_at is not None
         assert db_user.last_login is not None
@@ -209,7 +206,7 @@ class TestLoginProvisioning:
         assert created_pdf_tenant.name == expected_tenant_name
 
     def test_subsequent_login_updates_last_login(
-        self, client, test_db, mock_okta_user, mock_weaviate
+        self, client, test_db, mock_cognito_user, mock_weaviate
     ):
         """Test that subsequent logins update last_login timestamp.
 
@@ -220,9 +217,9 @@ class TestLoginProvisioning:
         from datetime import timezone
         initial_login_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         existing_user = User(
-            user_id=mock_okta_user.uid,
-            email=mock_okta_user.email,
-            display_name=mock_okta_user.email,
+            user_id=mock_cognito_user.uid,
+            email=mock_cognito_user.email,
+            display_name=mock_cognito_user.email,
             created_at=initial_login_time,
             last_login=initial_login_time,
             is_active=True
@@ -243,22 +240,22 @@ class TestLoginProvisioning:
         # Convert both to UTC timezone for comparison
         assert existing_user.last_login.replace(tzinfo=timezone.utc) > initial_login_time
         assert existing_user.user_id == initial_user_id  # Same user record
-        assert existing_user.user_id == mock_okta_user.uid
+        assert existing_user.user_id == mock_cognito_user.uid
 
-    def test_email_update_from_okta(
-        self, client, test_db, mock_okta_user, mock_weaviate
+    def test_email_update_from_cognito(
+        self, client, test_db, mock_cognito_user, mock_weaviate
     ):
-        """Test that email changes in Okta are synced to user record.
+        """Test that email changes in Cognito are synced to user record.
 
-        Verifies that set_global_user_from_okta() updates changed fields.
+        Verifies that set_global_user_from_cognito() updates changed fields.
 
-        Note: This test creates a user with a different email than the mock_okta_user,
-        then verifies that on next login, the email is updated to match Okta.
+        Note: This test creates a user with a different email than the mock_cognito_user,
+        then verifies that on next login, the email is updated to match Cognito.
         """
-        # Create user with old email (simulating email changed in Okta)
+        # Create user with old email (simulating email changed in Cognito)
         old_email = "old_email@example.com"
         existing_user = User(
-            user_id=mock_okta_user.uid,
+            user_id=mock_cognito_user.uid,
             email=old_email,
             display_name=old_email,
             created_at=datetime.utcnow(),
@@ -269,21 +266,21 @@ class TestLoginProvisioning:
         test_db.commit()
         test_db.refresh(existing_user)
 
-        # Call GET /users/me (should update email to match mock_okta_user.email)
+        # Call GET /users/me (should update email to match mock_cognito_user.email)
         response = client.get("/users/me")
 
         assert response.status_code == 200
         data = response.json()
-        # Email should now match what's in Okta (mock_okta_user.email)
-        assert data["email"] == mock_okta_user.email
+        # Email should now match what's in Cognito (mock_cognito_user.email)
+        assert data["email"] == mock_cognito_user.email
 
         # Verify email updated in database
         test_db.refresh(existing_user)
-        assert existing_user.email == mock_okta_user.email
+        assert existing_user.email == mock_cognito_user.email
         assert existing_user.email != old_email
 
     def test_weaviate_provisioning_failure_does_not_break_user_creation(
-        self, client, test_db, mock_okta_user
+        self, client, test_db, mock_cognito_user
     ):
         """Test that Weaviate provisioning failures don't prevent user creation.
 
@@ -300,18 +297,18 @@ class TestLoginProvisioning:
             assert response.status_code == 200
 
             # Verify user record created despite Weaviate failure
-            db_user = test_db.query(User).filter_by(user_id=mock_okta_user.uid).first()
+            db_user = test_db.query(User).filter_by(user_id=mock_cognito_user.uid).first()
             assert db_user is not None
-            assert db_user.user_id == mock_okta_user.uid
+            assert db_user.user_id == mock_cognito_user.uid
 
-    def test_tenant_name_format(self, mock_okta_user):
+    def test_tenant_name_format(self, mock_cognito_user):
         """Test that tenant names follow naming convention.
 
         Verifies that get_tenant_name() replaces hyphens with underscores.
         """
         from src.lib.weaviate_helpers import get_tenant_name
 
-        # Test with Okta ID containing hyphens
+        # Test with Cognito ID containing hyphens
         user_id_with_hyphens = "00u1abc2-def3-ghi4-jkl5"
         tenant_name = get_tenant_name(user_id_with_hyphens)
 
@@ -320,7 +317,7 @@ class TestLoginProvisioning:
         assert "-" not in tenant_name
 
     def test_user_provisioning_idempotent(
-        self, client, test_db, mock_okta_user, mock_weaviate
+        self, client, test_db, mock_cognito_user, mock_weaviate
     ):
         """Test that multiple calls to provisioning are idempotent.
 
@@ -341,6 +338,6 @@ class TestLoginProvisioning:
 
         # Should only have one user record in database
         user_count = test_db.query(User).filter_by(
-            user_id=mock_okta_user.uid
+            user_id=mock_cognito_user.uid
         ).count()
         assert user_count == 1

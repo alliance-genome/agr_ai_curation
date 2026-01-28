@@ -26,8 +26,9 @@ Implementation Notes:
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-from fastapi_okta import OktaUser
 from fastapi import HTTPException, Security, Depends
+
+from conftest import MockCognitoUser
 
 
 @pytest.fixture
@@ -35,8 +36,6 @@ def unauthenticated_client(monkeypatch):
     """Create test client without authentication (simulates missing token)."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os
@@ -46,7 +45,7 @@ def unauthenticated_client(monkeypatch):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockOkta:
+    class MockUnauthenticatedAuth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -54,10 +53,9 @@ def unauthenticated_client(monkeypatch):
             """Raise 401 for unauthenticated requests."""
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-    with patch("fastapi_okta.Okta", MockOkta), \
-         patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
 
-        mock_auth = MockOkta()
+        mock_auth = MockUnauthenticatedAuth()
         mock_get_auth_dep.return_value = Security(mock_auth.get_user)
 
         from main import app
@@ -72,8 +70,6 @@ def authenticated_client(monkeypatch):
     """Create test client with valid authentication."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os
@@ -83,22 +79,21 @@ def authenticated_client(monkeypatch):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockValidOkta:
+    class MockValidAuth:
         def __init__(self, *args, **kwargs):
             pass
 
         async def get_user(self):
-            """Mock get_user that returns valid OktaUser."""
-            return OktaUser(**{
-                "uid": "test_protected_user",
-                "cid": "test_client",
-                "sub": "protected_test@alliancegenome.org",
-                "Groups": []
-            })
+            """Mock get_user that returns valid user."""
+            return MockCognitoUser(
+                uid="test_protected_user",
+                sub="protected_test@alliancegenome.org",
+                groups=[]
+            )
 
     # Patch the auth object itself BEFORE importing app
     # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", MockValidOkta()):
+    with patch("src.api.auth.auth", MockValidAuth()):
         # Also mock provision_weaviate_tenants to prevent real tenant creation
         with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
             with patch("src.services.user_service.get_connection"):

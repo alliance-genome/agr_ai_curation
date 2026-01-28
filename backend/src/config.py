@@ -282,11 +282,7 @@ def get_typed_config() -> Dict[str, Any]:
     }
 
 
-# Okta functions REMOVED - RIP AND REPLACE with Cognito
-# No fallback support needed
-
-
-# AWS Cognito Configuration (Cognito Migration)
+# AWS Cognito Configuration
 def get_cognito_region() -> Optional[str]:
     """Get AWS Cognito region from environment (e.g., 'us-east-1')."""
     return os.getenv('COGNITO_REGION', 'us-east-1')

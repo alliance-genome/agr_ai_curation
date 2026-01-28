@@ -11,22 +11,37 @@ Key fixtures:
 
 import pytest
 from unittest.mock import patch, MagicMock
-from fastapi_okta import OktaUser
-from typing import Dict
+from typing import Dict, Any
+from dataclasses import dataclass, field
+
+
+@dataclass
+class MockCognitoUser:
+    """Mock user object matching AWS Cognito JWT token claims."""
+    uid: str  # User ID (maps to Cognito 'sub' claim)
+    sub: str  # Email/subject
+    groups: list = field(default_factory=list)  # cognito:groups claim
+
+    def __getitem__(self, key: str) -> Any:
+        """Allow dict-like access for backward compatibility."""
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Allow dict-like .get() for backward compatibility."""
+        return getattr(self, key, default)
 
 
 # Registry of mock users for the test suite
-MOCK_USERS: Dict[str, OktaUser] = {}
+MOCK_USERS: Dict[str, MockCognitoUser] = {}
 
 
-def register_mock_user(user_id: str, email: str, uid: str) -> OktaUser:
+def register_mock_user(user_id: str, email: str, uid: str) -> MockCognitoUser:
     """Register a mock user for the test suite."""
-    user = OktaUser(**{
-        "uid": user_id,
-        "cid": "test_client",
-        "sub": email,
-        "Groups": []
-    })
+    user = MockCognitoUser(
+        uid=user_id,
+        sub=email,
+        groups=[]
+    )
     MOCK_USERS[user_id] = user
     return user
 
@@ -94,8 +109,8 @@ def mock_auth_system():
     # Set required environment variables (do it directly, not via monkeypatch)
     os.environ["OPENAI_API_KEY"] = "test-key"
     os.environ["UNSTRUCTURED_API_URL"] = "http://test-unstructured"
-    os.environ["OKTA_DOMAIN"] = "dev-test.okta.com"
-    os.environ["OKTA_API_AUDIENCE"] = "https://api.alliancegenome.org"
+    # Note: Cognito configuration is handled via environment variables in .env
+    # No mock Cognito config needed here - auth is fully mocked
 
     # Patch auth BEFORE any imports of main
     with patch("src.api.auth.auth", _unified_auth):
@@ -125,7 +140,7 @@ def get_auth_mock():
 def curator1_user():
     """Get the curator1 (chat1) mock user object.
 
-    Returns the OktaUser object for use in tests that need user attributes.
+    Returns the MockCognitoUser object for use in tests that need user attributes.
     """
     return MOCK_USERS["chat1"]
 
@@ -134,7 +149,7 @@ def curator1_user():
 def curator2_user():
     """Get the curator2 (chat2) mock user object.
 
-    Returns the OktaUser object for use in tests that need user attributes.
+    Returns the MockCognitoUser object for use in tests that need user attributes.
     """
     return MOCK_USERS["chat2"]
 

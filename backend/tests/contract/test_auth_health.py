@@ -6,7 +6,7 @@ Contract: specs/007-okta-login/contracts/auth_endpoints.yaml lines 17-44
 This test validates that the health endpoint:
 1. Does NOT require authentication (security: [] override)
 2. Returns status="ok" on success
-3. Includes okta_configured field (added for auth feature)
+3. Includes cognito_configured field (added for auth feature)
 4. Maintains backward compatibility with existing infrastructure
 """
 
@@ -18,9 +18,9 @@ from unittest.mock import patch, AsyncMock
 def client(monkeypatch):
     """Create test client with mocked dependencies."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    # Set Okta env vars to test okta_configured field
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
+    # Set Cognito env vars to test cognito_configured field
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_test123")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id-12345")
 
     from fastapi.testclient import TestClient
     import sys
@@ -61,13 +61,13 @@ class TestAuthHealthEndpoint:
         # Should return 200, not 401
         assert response.status_code == 200
 
-    def test_health_response_schema_with_okta_field(self, client, mock_weaviate_connection):
-        """Test health endpoint returns correct schema with okta_configured field.
+    def test_health_response_schema_with_cognito_field(self, client, mock_weaviate_connection):
+        """Test health endpoint returns correct schema with cognito_configured field.
 
         Contract schema:
         {
           "status": "ok",
-          "okta_configured": true/false  // NEW field for auth feature
+          "cognito_configured": true/false  // NEW field for auth feature
         }
 
         Note: Existing health endpoint returns more detailed schema.
@@ -88,33 +88,15 @@ class TestAuthHealthEndpoint:
         assert "status" in data
 
         # NEW field from auth feature contract (T028 will implement)
-        # This assertion will FAIL until T028 adds okta_configured field
-        assert "okta_configured" in data, "okta_configured field missing - T028 not yet implemented"
-        assert isinstance(data["okta_configured"], bool)
+        # This assertion will FAIL until T028 adds cognito_configured field
+        assert "cognito_configured" in data, "cognito_configured field missing - T028 not yet implemented"
+        assert isinstance(data["cognito_configured"], bool)
 
-    def test_health_with_okta_configured_true(self, client, mock_weaviate_connection, monkeypatch):
-        """Test health endpoint reports okta_configured=true when Okta env vars set."""
-        # Set Okta environment variables
-        monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-        monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
-
-        # Mock healthy Weaviate
-        mock_weaviate_connection.health_check = AsyncMock(return_value={
-            "status": "healthy"
-        })
-
-        response = client.get("/weaviate/health")
-        assert response.status_code == 200
-
-        data = response.json()
-        # This will FAIL until T028 implements okta_configured detection
-        assert data["okta_configured"] == True
-
-    def test_health_with_okta_not_configured(self, client, mock_weaviate_connection, monkeypatch):
-        """Test health endpoint reports okta_configured=false when Okta env vars missing."""
-        # Remove Okta environment variables
-        monkeypatch.delenv("OKTA_DOMAIN", raising=False)
-        monkeypatch.delenv("OKTA_API_AUDIENCE", raising=False)
+    def test_health_with_cognito_configured_true(self, client, mock_weaviate_connection, monkeypatch):
+        """Test health endpoint reports cognito_configured=true when Cognito env vars set."""
+        # Set Cognito environment variables
+        monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_test123")
+        monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id-12345")
 
         # Mock healthy Weaviate
         mock_weaviate_connection.health_check = AsyncMock(return_value={
@@ -125,8 +107,26 @@ class TestAuthHealthEndpoint:
         assert response.status_code == 200
 
         data = response.json()
-        # This will FAIL until T028 implements okta_configured detection
-        assert data["okta_configured"] == False
+        # This will FAIL until T028 implements cognito_configured detection
+        assert data["cognito_configured"] == True
+
+    def test_health_with_cognito_not_configured(self, client, mock_weaviate_connection, monkeypatch):
+        """Test health endpoint reports cognito_configured=false when Cognito env vars missing."""
+        # Remove Cognito environment variables
+        monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
+        monkeypatch.delenv("COGNITO_CLIENT_ID", raising=False)
+
+        # Mock healthy Weaviate
+        mock_weaviate_connection.health_check = AsyncMock(return_value={
+            "status": "healthy"
+        })
+
+        response = client.get("/weaviate/health")
+        assert response.status_code == 200
+
+        data = response.json()
+        # This will FAIL until T028 implements cognito_configured detection
+        assert data["cognito_configured"] == False
 
     def test_health_endpoint_path_backward_compatible(self, client, mock_weaviate_connection):
         """Test /weaviate/health path maintained for backward compatibility.

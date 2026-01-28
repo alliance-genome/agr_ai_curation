@@ -4,7 +4,7 @@ Task: T010 - Contract test POST /auth/logout
 Contract: specs/007-okta-login/contracts/auth_endpoints.yaml lines 46-66
 
 This test validates that the logout endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns {"status": "logged_out", "message": "..."} on success
 3. Clears user session data (FR-009, FR-010)
 
@@ -22,11 +22,8 @@ from unittest.mock import MagicMock, patch
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -73,7 +70,7 @@ class TestLogoutEndpoint:
     def test_logout_requires_authentication(self, client):
         """Test logout endpoint requires valid authentication token.
 
-        Contract requirement: Endpoint must validate Okta JWT token.
+        Contract requirement: Endpoint must validate JWT token.
         Without token, should return 401 Unauthorized.
 
         This test will FAIL until T023 implements auth protection.
@@ -97,7 +94,7 @@ class TestLogoutEndpoint:
     def test_logout_with_invalid_token(self, client):
         """Test logout endpoint rejects invalid JWT tokens.
 
-        Contract requirement: Must validate Okta JWT signature.
+        Contract requirement: Must validate JWT signature.
         Invalid tokens should return 401.
         """
         # Send malformed token
@@ -146,7 +143,7 @@ class TestLogoutEndpoint:
         from main import app
         from src.api.auth import auth
 
-        # Mock OktaUser for successful authentication
+        # Mock authenticated user for successful authentication
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -275,7 +272,7 @@ class TestLogoutEndpointEdgeCases:
 
     def test_logout_case_sensitive_bearer(self, client):
         """Test logout endpoint accepts 'Bearer' with correct capitalization."""
-        # FastAPI/Okta typically requires 'Bearer' not 'bearer'
+        # FastAPI typically requires 'Bearer' not 'bearer'
         response = client.post(
             "/auth/logout",
             headers={"Authorization": "bearer lowercase_token"}  # wrong case

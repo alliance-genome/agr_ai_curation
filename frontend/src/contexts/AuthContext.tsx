@@ -3,11 +3,11 @@ import { logger } from '../services/logger';
 import { getEnvFlag } from '../utils/env';
 
 /**
- * User data from Cognito token (interface name kept as OktaUser for backward compatibility)
- * Maps to User schema from backend - okta_id column now stores Cognito sub
+ * User data from AWS Cognito token
+ * Maps to User schema from backend - auth_sub column stores Cognito sub claim
  */
-export interface OktaUser {
-  uid: string;           // User ID from Cognito (mapped from okta_id column which stores Cognito sub)
+export interface AuthUser {
+  uid: string;           // User ID from Cognito 'sub' claim
   email?: string;        // Email address (nullable per contract)
   name?: string;         // Display name (mapped from display_name, nullable per contract)
 }
@@ -17,7 +17,7 @@ export interface OktaUser {
  */
 interface AuthState {
   isAuthenticated: boolean;
-  user: OktaUser | null;
+  user: AuthUser | null;
   isLoading: boolean;
   login: () => void;
   logout: () => Promise<void>;
@@ -58,7 +58,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // DEV MODE BYPASS: Auto-authenticate with mock user
   const devMode = isDevMode();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(devMode);
-  const [user, setUser] = useState<OktaUser | null>(
+  const [user, setUser] = useState<AuthUser | null>(
     devMode ? { uid: 'dev-user-123', email: 'dev@localhost', name: 'Dev User' } : null
   );
   const [isLoading, setIsLoading] = useState<boolean>(!devMode); // Skip loading in dev mode
@@ -89,7 +89,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (response.ok) {
         const userData = await response.json();
         // Use auth_sub (Cognito 'sub' claim) as the unique user identifier
-        // Previously used okta_id before Cognito migration
         const newUserId = userData.auth_sub;
 
         // Check if this is a different user than the one whose data might be in localStorage
@@ -203,8 +202,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
    * - Only runs when user is authenticated
    *
    * Note: This is a simple polling approach. More sophisticated approaches
-   * (like monitoring token expiration from JWT claims) would require the
-   * OktaAuth SDK, which we're deferring per plan.md Implementation Notes.
+   * (like monitoring token expiration from JWT claims) could be implemented
+   * with a client-side JWT library, but polling is simpler and sufficient.
    */
   useEffect(() => {
     if (!isAuthenticated) {

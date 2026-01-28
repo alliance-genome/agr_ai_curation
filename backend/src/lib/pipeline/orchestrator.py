@@ -73,7 +73,7 @@ class DocumentPipelineOrchestrator:
         Args:
             file_path: Path to PDF file
             document_id: Document UUID
-            user_id: Okta user identifier for tenant scoping (FR-011, FR-014)
+            user_id: User identifier for tenant scoping (FR-011, FR-014)
             strategy: Chunking strategy to use (defaults to GENERAL)
             validate_first: Whether to validate PDF before processing
             extraction_strategy: Strategy for PDF extraction ("auto", "hi_res", "fast")
@@ -419,7 +419,7 @@ async def process_pdf_document(
         file_path: Path to PDF file
         document_id: Document UUID
         weaviate_client: Weaviate database client
-        user_id: Okta user identifier for tenant scoping (FR-011, FR-014)
+        user_id: User identifier for tenant scoping (FR-011, FR-014)
         strategy: Chunking strategy to use
 
     Returns:

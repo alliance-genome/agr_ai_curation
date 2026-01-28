@@ -45,7 +45,7 @@ async def store_to_weaviate(
         chunks: Sequence of chunks containing text and metadata
         document_id: Document UUID
         weaviate_client: WeaviateConnection instance
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Storage statistics dictionary
@@ -151,7 +151,7 @@ async def store_chunks_to_weaviate(
         chunks: Prepared chunk dictionaries ready for storage
         document_id: Document UUID
         weaviate_client: WeaviateConnection instance
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Storage result statistics
@@ -350,7 +350,7 @@ async def update_document_metadata(
         document_id: Document UUID
         stats: Processing statistics
         weaviate_client: WeaviateConnection instance
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Raises:
         ValueError: If user_id is None (required for tenant scoping)

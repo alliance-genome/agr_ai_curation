@@ -4,7 +4,7 @@ Task: T011 - Contract test GET /users/me
 Contract: specs/007-okta-login/contracts/auth_endpoints.yaml lines 68-85
 
 This test validates that the /users/me endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns User schema with user_id, user_id, email, created_at, is_active
 3. Automatically creates user account on first login if not exists (FR-005)
 4. Updates last_login timestamp on each request
@@ -24,11 +24,8 @@ from datetime import datetime
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -73,7 +70,7 @@ class TestUsersMeEndpoint:
     def test_users_me_requires_authentication(self, client):
         """Test /users/me endpoint requires valid authentication token.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
@@ -129,7 +126,7 @@ class TestUsersMeEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token
+        # Mock authenticated user from token
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -203,10 +200,10 @@ class TestUsersMeEndpoint:
         """Test /users/me automatically creates user account on first login.
 
         Contract requirement (FR-005):
-        "System MUST automatically create user accounts on first Okta login"
+        "System MUST automatically create user accounts on first login"
 
         When user doesn't exist in database, endpoint should:
-        1. Create new user record with data from Okta token
+        1. Create new user record with data from JWT token
         2. Set created_at to current timestamp
         3. Initialize is_active to true
         4. Return newly created user data
@@ -216,7 +213,7 @@ class TestUsersMeEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser from token (first-time user)
+        # Mock authenticated user from token (first-time user)
         mock_user = MagicMock()
         mock_user.uid = "00u9xyz8new7user6abc"
         mock_user.email = "newuser@alliancegenome.org"
@@ -268,12 +265,12 @@ class TestUsersMeEndpoint:
         """Test /users/me handles users with null email (service accounts).
 
         Contract schema shows email is nullable.
-        Some Okta users (service accounts) may not have email.
+        Some users (service accounts) may not have email.
         """
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser without email
+        # Mock authenticated user without email
         mock_user = MagicMock()
         mock_user.uid = "00s1service2account3def"
         mock_user.email = None  # Service account
@@ -322,7 +319,7 @@ class TestUsersMeEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -430,7 +427,7 @@ class TestUsersMeEndpointEdgeCases:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1inactive2user3ghi"
         mock_user.email = "inactive@alliancegenome.org"

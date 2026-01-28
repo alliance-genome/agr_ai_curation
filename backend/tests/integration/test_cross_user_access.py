@@ -26,10 +26,10 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
-from fastapi_okta import OktaUser
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
+from conftest import MockCognitoUser
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -95,24 +95,22 @@ def test_db():
 
 @pytest.fixture
 def curator1_user():
-    """Create mock Okta user for Curator 1."""
-    return OktaUser(**{
-        "uid": "test_curator1_00u1abc2def3",
-        "cid": "test_client_1",
-        "sub": "curator1@alliancegenome.org",
-        "Groups": []
-    })
+    """Create mock Cognito user for Curator 1."""
+    return MockCognitoUser(
+        uid="test_curator1_00u1abc2def3",
+        sub="curator1@alliancegenome.org",
+        groups=[]
+    )
 
 
 @pytest.fixture
 def curator2_user():
-    """Create mock Okta user for Curator 2."""
-    return OktaUser(**{
-        "uid": "test_curator2_00u4ghi5jkl6",
-        "cid": "test_client_2",
-        "sub": "curator2@alliancegenome.org",
-        "Groups": []
-    })
+    """Create mock Cognito user for Curator 2."""
+    return MockCognitoUser(
+        uid="test_curator2_00u4ghi5jkl6",
+        sub="curator2@alliancegenome.org",
+        groups=[]
+    )
 
 
 @pytest.fixture
@@ -163,8 +161,6 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
     """Create test client authenticated as Curator 1."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os
@@ -174,7 +170,7 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockCurator1Okta:
+    class MockCurator1Auth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -184,7 +180,7 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
 
     # Patch the auth object itself BEFORE importing app
     # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", MockCurator1Okta()):
+    with patch("src.api.auth.auth", MockCurator1Auth()):
         # Also mock provision_weaviate_tenants to prevent real tenant creation
         with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
             with patch("src.services.user_service.get_connection"):
@@ -207,8 +203,6 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
     """Create test client authenticated as Curator 2."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     import sys
     import os
@@ -218,7 +212,7 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockCurator2Okta:
+    class MockCurator2Auth:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -228,7 +222,7 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
 
     # Patch the auth object itself BEFORE importing app
     # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", MockCurator2Okta()):
+    with patch("src.api.auth.auth", MockCurator2Auth()):
         # Also mock provision_weaviate_tenants to prevent real tenant creation
         with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
             with patch("src.services.user_service.get_connection"):

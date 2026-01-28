@@ -137,7 +137,7 @@ class TestHealthEndpoint:
         assert "timestamp" in data
         assert "service" in data
         assert "version" in data
-        assert "okta_configured" in data  # T028: Auth feature field
+        assert "cognito_configured" in data  # T028: Auth feature field
         assert "checks" in data
         assert "details" in data
 
@@ -149,31 +149,14 @@ class TestHealthEndpoint:
         assert isinstance(data["checks"], dict)
         assert isinstance(data["details"], dict)
 
-        # T028: Verify okta_configured is a boolean
-        assert isinstance(data["okta_configured"], bool)
+        # T028: Verify cognito_configured is a boolean
+        assert isinstance(data["cognito_configured"], bool)
 
-    def test_health_check_okta_configured_true(self, client, mock_weaviate_connection, monkeypatch):
-        """Test health check reports okta_configured=true when Okta env vars set."""
-        # Set Okta environment variables
-        monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-        monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
-
-        # Mock healthy Weaviate
-        mock_weaviate_connection.health_check = AsyncMock(return_value={
-            "status": "healthy"
-        })
-
-        response = client.get("/weaviate/health")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["okta_configured"] == True
-
-    def test_health_check_okta_configured_false(self, client, mock_weaviate_connection, monkeypatch):
-        """Test health check reports okta_configured=false when Okta env vars missing."""
-        # Remove Okta environment variables
-        monkeypatch.delenv("OKTA_DOMAIN", raising=False)
-        monkeypatch.delenv("OKTA_API_AUDIENCE", raising=False)
+    def test_health_check_cognito_configured_true(self, client, mock_weaviate_connection, monkeypatch):
+        """Test health check reports cognito_configured=true when Cognito env vars set."""
+        # Set Cognito environment variables
+        monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_test123")
+        monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id-12345")
 
         # Mock healthy Weaviate
         mock_weaviate_connection.health_check = AsyncMock(return_value={
@@ -184,7 +167,24 @@ class TestHealthEndpoint:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["okta_configured"] == False
+        assert data["cognito_configured"] == True
+
+    def test_health_check_cognito_configured_false(self, client, mock_weaviate_connection, monkeypatch):
+        """Test health check reports cognito_configured=false when Cognito env vars missing."""
+        # Remove Cognito environment variables
+        monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
+        monkeypatch.delenv("COGNITO_CLIENT_ID", raising=False)
+
+        # Mock healthy Weaviate
+        mock_weaviate_connection.health_check = AsyncMock(return_value={
+            "status": "healthy"
+        })
+
+        response = client.get("/weaviate/health")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["cognito_configured"] == False
 
     def test_health_check_no_auth_required(self, client, mock_weaviate_connection):
         """Test health endpoint accessible WITHOUT authentication token."""

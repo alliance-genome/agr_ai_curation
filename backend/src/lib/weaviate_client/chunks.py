@@ -21,7 +21,7 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
     Args:
         document_id: Parent document UUID
         chunks: List of chunk dictionaries with content and metadata
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Operation result dictionary with stored chunk count
@@ -161,7 +161,7 @@ async def hybrid_search_chunks(
     Args:
         document_id: Document UUID to search within
         query: Search query text
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         limit: Final number of results after all processing
         initial_limit: Number of candidates for reranker
         alpha: Hybrid search weight (0-1, higher = more vector emphasis)
@@ -470,7 +470,7 @@ async def get_chunks_by_section(
     Args:
         document_id: Document UUID
         section_title: Exact or partial title of the section
-        user_id: Okta user identifier for tenant scoping
+        user_id: User identifier for tenant scoping
         max_chunks: Maximum number of chunks to retrieve (safety limit)
         
     Returns:
@@ -913,7 +913,7 @@ async def get_chunks_by_parent_section(
     Args:
         document_id: Document UUID
         parent_section: Top-level section name (e.g., "Methods", "Results", "Abstract")
-        user_id: Okta user identifier for tenant scoping
+        user_id: User identifier for tenant scoping
         max_chunks: Maximum number of chunks to retrieve
 
     Returns:
@@ -1016,7 +1016,7 @@ async def get_chunks_by_subsection(
         document_id: Document UUID
         parent_section: Top-level section name (e.g., "Methods")
         subsection: Subsection name (e.g., "Fly Strains", "Cell Culture")
-        user_id: Okta user identifier for tenant scoping
+        user_id: User identifier for tenant scoping
         max_chunks: Maximum number of chunks to retrieve
 
     Returns:
@@ -1268,7 +1268,7 @@ def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
 
     Args:
         document_id: Parent document UUID
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Operation result dictionary
@@ -1334,7 +1334,7 @@ def update_chunk_embeddings(chunk_id: str, vector: List[float], user_id: str) ->
     Args:
         chunk_id: Chunk UUID
         vector: Embedding vector
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Operation result dictionary
@@ -1392,7 +1392,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
     Args:
         document_id: Parent document UUID
         pagination: Dict with page, page_size, include_metadata
-        user_id: Okta user identifier for tenant scoping (required, FR-011, FR-014)
+        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
 
     Returns:
         Dictionary with chunks and total count

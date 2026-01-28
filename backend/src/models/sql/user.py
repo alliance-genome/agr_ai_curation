@@ -2,7 +2,6 @@
 
 This model represents user accounts created via AWS Cognito authentication.
 Users are auto-provisioned on first login (FR-005).
-Complete RIP AND REPLACE - all Okta code removed.
 """
 
 from datetime import datetime

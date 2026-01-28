@@ -1,11 +1,9 @@
 """Users API router for user profile management.
 
-Task: T023 (Migrated) - Expose GET /users/me at correct path (Cognito migration)
 Implements: FR-004, FR-005, FR-022
 
 This router is separate from auth router to satisfy contract requirement
 that /users/me is at root path, not under /auth prefix.
-Complete RIP AND REPLACE - all Okta code removed.
 """
 
 import logging

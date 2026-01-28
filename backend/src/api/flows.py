@@ -3,7 +3,7 @@
 Section 3 of the Curation Flows implementation.
 Provides endpoints to create, read, update, delete, and list user curation flows.
 
-All endpoints require Okta JWT authentication via Security(get_auth_dependency()).
+All endpoints require AWS Cognito JWT authentication via Security(get_auth_dependency()).
 Flow ownership is enforced - users can only access their own flows.
 """
 
@@ -38,14 +38,14 @@ router = APIRouter(prefix="/api/flows")
 def verify_flow_ownership(
     db: Session,
     flow_id: UUID,
-    okta_user: Dict[str, Any]
+    auth_user: Dict[str, Any]
 ) -> CurationFlow:
     """Verify flow ownership and return flow if authorized.
 
     Args:
         db: Database session
         flow_id: Flow UUID to check
-        okta_user: Authenticated Okta user from JWT
+        auth_user: Authenticated user from AWS Cognito JWT
 
     Returns:
         CurationFlow if user owns it
@@ -54,7 +54,7 @@ def verify_flow_ownership(
         HTTPException: 404 if flow not found (including soft-deleted), 403 if not owned by user
     """
     # Get database user (creates if first login)
-    db_user = set_global_user_from_cognito(db, okta_user)
+    db_user = set_global_user_from_cognito(db, auth_user)
 
     # Query flow - only active flows (is_active=True)
     flow = db.query(CurationFlow).filter(

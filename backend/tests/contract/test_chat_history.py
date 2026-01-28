@@ -1,10 +1,9 @@
 """Contract tests for GET /api/chat/history.
 
 Task: T021 [P] - Contract test GET /api/chat/history
-Contract: specs/007-okta-login/contracts/chat_endpoints.yaml lines 78-115
 
 This test validates the FUTURE contract (not current implementation):
-1. GET /api/chat/history requires Okta JWT
+1. GET /api/chat/history requires authentication
 2. Returns sessions[] array with ChatSession objects
 3. Each ChatSession has: session_id, user_id, created_at, last_message_at, messages[]
 4. Each ChatMessage has: message_id, role (user|assistant), content, timestamp, trace_id
@@ -35,10 +34,8 @@ from datetime import datetime
 
 @pytest.fixture
 def client(monkeypatch):
-    """Create test client with mocked dependencies and JWKS requests."""
+    """Create test client with mocked dependencies."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
@@ -108,7 +105,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -120,7 +117,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.get(
             "/api/chat/history",
@@ -158,7 +155,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -170,7 +167,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.get(
             "/api/chat/history",
@@ -226,7 +223,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -238,7 +235,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.get(
             "/api/chat/history",
@@ -294,7 +291,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -306,7 +303,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.get(
             "/api/chat/history?session_id=session_abc",
@@ -337,7 +334,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -349,7 +346,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Test with valid limit
         response = client.get(
@@ -376,7 +373,7 @@ class TestChatHistoryEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -388,7 +385,7 @@ class TestChatHistoryEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Test limit below minimum (0)
         response = client.get(
@@ -430,7 +427,7 @@ class TestChatHistoryDataIsolation:
         from unittest.mock import patch
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "user_a_id"
             cid: str = "client_id"
             email: str = "userA@test.com"
@@ -442,7 +439,7 @@ class TestChatHistoryDataIsolation:
                 if self.groups is None:
                     self.groups = []
 
-        mock_user = MockOktaUser()
+        mock_user = MockCognitoUser()
         app.dependency_overrides[auth.get_user] = lambda: mock_user
 
         # Mock the endpoint's response data structure (not the internal helper)

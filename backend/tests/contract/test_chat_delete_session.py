@@ -1,10 +1,9 @@
 """Contract tests for DELETE /api/chat/session/{session_id}.
 
 Task: T022 [P] - Contract test DELETE /api/chat/session/{session_id}
-Contract: specs/007-okta-login/contracts/chat_endpoints.yaml lines 117-148
 
 This test validates the FUTURE contract (not current implementation):
-1. DELETE /api/chat/session/{session_id} requires Okta JWT
+1. DELETE /api/chat/session/{session_id} requires authentication
 2. Returns 204 No Content on successful deletion (no response body)
 3. Returns 403 Forbidden when user tries to delete another user's session
 4. Returns 404 Not Found when session doesn't exist
@@ -28,10 +27,8 @@ from unittest.mock import MagicMock, patch
 
 @pytest.fixture
 def client(monkeypatch):
-    """Create test client with mocked dependencies and JWKS requests."""
+    """Create test client with mocked dependencies."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
@@ -103,7 +100,7 @@ class TestDeleteSessionEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -115,7 +112,7 @@ class TestDeleteSessionEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.delete(
             "/api/chat/session/session_abc123",
@@ -140,7 +137,7 @@ class TestDeleteSessionEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -152,7 +149,7 @@ class TestDeleteSessionEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.delete(
             "/api/chat/session/nonexistent_session",
@@ -183,7 +180,7 @@ class TestDeleteSessionEndpoint:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "user_a_id"
             cid: str = "client_id"
             email: str = "userA@test.com"
@@ -195,7 +192,7 @@ class TestDeleteSessionEndpoint:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         # Try to delete User B's session
         response = client.delete(
@@ -227,7 +224,7 @@ class TestDeleteSessionDataIsolation:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "user_a_id"
             cid: str = "client_id"
             email: str = "userA@test.com"
@@ -239,7 +236,7 @@ class TestDeleteSessionDataIsolation:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.delete(
             "/api/chat/session/user_a_own_session",
@@ -307,7 +304,7 @@ class TestDeleteSessionErrorSchema:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "test_user_id"
             cid: str = "client_id"
             email: str = "test@example.com"
@@ -327,7 +324,7 @@ class TestDeleteSessionErrorSchema:
         assert isinstance(data_401["detail"], str)
 
         # Test 404 error schema (session not found)
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
         response_404 = client.delete(
             "/api/chat/session/nonexistent",
             headers=get_valid_auth_header()
@@ -347,7 +344,7 @@ class TestDeleteSessionErrorSchema:
         from dataclasses import dataclass
 
         @dataclass
-        class MockOktaUser:
+        class MockCognitoUser:
             uid: str = "user_a_id"
             cid: str = "client_id"
             email: str = "userA@test.com"
@@ -359,7 +356,7 @@ class TestDeleteSessionErrorSchema:
                 if self.groups is None:
                     self.groups = []
 
-        app.dependency_overrides[auth.get_user] = lambda: MockOktaUser()
+        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
 
         response = client.delete(
             "/api/chat/session/other_user_session",

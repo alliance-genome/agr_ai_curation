@@ -4,7 +4,7 @@ Task: T015 - Contract test DELETE /weaviate/documents/{document_id}
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 147-174
 
 This test validates that the DELETE endpoint:
-1. Requires valid Okta JWT token (returns 401 if missing/invalid)
+1. Requires valid JWT token (returns 401 if missing/invalid)
 2. Returns 204 No Content on successful deletion
 3. Returns 404 for non-existent documents
 4. Returns 403 when trying to delete another user's document (FR-016)
@@ -13,7 +13,7 @@ This test validates that the DELETE endpoint:
 NOTE: This test will FAIL until T025 implements document deletion endpoint.
 
 IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
-mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
+mock FastAPI dependencies.
 """
 
 import pytest
@@ -32,11 +32,8 @@ from .test_uuids import (
 def client(monkeypatch):
     """Create test client with mocked dependencies and JWKS requests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OKTA_DOMAIN", "dev-test.okta.com")
-    monkeypatch.setenv("OKTA_API_AUDIENCE", "https://api.alliancegenome.org")
 
     # Mock requests.get BEFORE importing main/auth modules
-    # This prevents real JWKS fetches when Okta() is initialized
     with patch("requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"keys": []}  # Empty JWKS
@@ -81,7 +78,7 @@ class TestDeleteDocumentEndpoint:
     def test_delete_requires_authentication(self, client):
         """Test DELETE endpoint requires valid authentication token.
 
-        Contract requirement: Must validate Okta JWT token.
+        Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
@@ -121,7 +118,7 @@ class TestDeleteDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser (document owner)
+        # Mock authenticated user (document owner)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -189,7 +186,7 @@ class TestDeleteDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser
+        # Mock authenticated user
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
@@ -257,7 +254,7 @@ class TestDeleteDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser (requesting user)
+        # Mock authenticated user (requesting user)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator1@alliancegenome.org"
@@ -338,7 +335,7 @@ class TestDeleteDocumentEndpoint:
         from main import app
         from src.api.auth import auth, get_db
 
-        # Mock OktaUser (document owner)
+        # Mock authenticated user (document owner)
         mock_user = MagicMock()
         mock_user.uid = "00u1abc2def3ghi4jkl"
         mock_user.email = "curator@alliancegenome.org"
