@@ -2,6 +2,8 @@
 
 import os
 import logging
+import socket
+import urllib.request
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
@@ -343,9 +345,6 @@ def is_running_on_ec2() -> bool:
     Returns:
         True if definitely running on EC2, False otherwise
     """
-    import socket
-    import urllib.request
-
     # Check explicit environment variable first (allows forcing EC2 mode for safety)
     if os.getenv('RUNNING_ON_EC2', '').lower() == 'true':
         return True
