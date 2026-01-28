@@ -18,6 +18,7 @@ backend/extraction_venv/
 *.egg-info/
 dist/
 build/
+!frontend/public/pdfjs/build/
 .pytest_cache/
 .coverage
 htmlcov/
