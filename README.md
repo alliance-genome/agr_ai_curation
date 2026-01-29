@@ -1,5 +1,7 @@
 # AGR AI Curation System
 
+[![Unit Tests](https://github.com/alliance-genome/agr_ai_curation/actions/workflows/test.yml/badge.svg)](https://github.com/alliance-genome/agr_ai_curation/actions/workflows/test.yml)
+
 An AI-powered curation assistant for the [Alliance of Genome Resources](https://www.alliancegenome.org/), helping biocurators extract and validate biological data from research papers.
 
 ## Features
