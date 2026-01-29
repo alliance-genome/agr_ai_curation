@@ -163,6 +163,7 @@ find_*.py
 *_test.py
 SECTION_HIERARCHY_PLAN.md
 TEST_OVERHAUL_PLAN.md
+CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
 
 # Claude Code settings
 .claude/
