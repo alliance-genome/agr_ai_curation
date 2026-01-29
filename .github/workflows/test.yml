@@ -1,0 +1,77 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - 'docker-compose.test.yml'
+      - '.github/workflows/test.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - 'docker-compose.test.yml'
+      - '.github/workflows/test.yml'
+
+jobs:
+  backend-unit-tests:
+    name: Backend Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build unit test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.unit-test
+          push: false
+          load: true
+          tags: ai-curation-unit-tests:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            -e PYTHONUNBUFFERED=1 \
+            -e OPENAI_API_KEY=test-key-for-unit-tests \
+            -e LANGFUSE_PUBLIC_KEY=test-key \
+            -e LANGFUSE_SECRET_KEY=test-key \
+            -e VALID_MOD_IDS=FB,WB,MGI,RGD,SGD,HGNC,ZFIN \
+            -e DOCLING_TIMEOUT=300 \
+            ai-curation-unit-tests:latest \
+            python -m pytest tests/unit/ -v --tb=short --no-cov \
+            --ignore=tests/integration \
+            --ignore=tests/contract \
+            --ignore=tests/database \
+            --ignore=tests/unit/test_create_agent_cli.py \
+            --ignore=tests/unit/test_create_agent_validation.py \
+            --ignore=tests/unit/test_create_tool_cli.py \
+            --ignore=tests/unit/test_validate_registry.py \
+            --ignore=tests/unit/test_main_startup.py \
+            --ignore=tests/unit/api/test_files.py \
+            --ignore=tests/unit/lib/batch/test_batch_service.py \
+            --ignore=tests/unit/lib/agent_studio/test_registry_types.py
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Unit Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Backend unit tests completed. See logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Excluded Tests (Require Database or External Dependencies)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_files.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_batch_service.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_registry_types.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_create_agent_*.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_create_tool_cli.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_validate_registry.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
+          echo "- \`test_main_startup.py\` - Requires full app context" >> $GITHUB_STEP_SUMMARY

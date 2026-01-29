@@ -1,0 +1,102 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-review:
+    if: |
+      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          model: claude-sonnet-4-20250514
+          max_turns: "30"
+
+          custom_instructions: |
+            You are reviewing a pull request for the AI Curation application - a full-stack platform
+            for AI-assisted scientific literature curation built with FastAPI (Python) backend and
+            React (TypeScript) frontend.
+
+            ## Repository Structure
+            - `backend/` - FastAPI application with agents, flows, and API endpoints
+            - `frontend/` - React TypeScript application
+            - `docker-compose*.yml` - Docker orchestration files
+            - `.github/workflows/` - CI/CD workflows
+
+            ## Review Checklist
+
+            ### 1. Code Quality
+            - Python code follows PEP 8 and project conventions
+            - TypeScript code follows project ESLint rules
+            - No hardcoded secrets or credentials
+            - Proper error handling and logging
+
+            ### 2. Security
+            - No API keys, tokens, or secrets in code
+            - Input validation on API endpoints
+            - Proper authentication checks where needed
+
+            ### 3. Testing
+            - Changes include appropriate unit tests
+            - Existing tests are not broken
+            - Test coverage is maintained
+
+            ### 4. Docker
+            - Dockerfile changes maintain build efficiency
+            - docker-compose changes are backward compatible
+
+            ### 5. Dependencies
+            - New dependencies are necessary and from trusted sources
+            - requirements.txt and package.json changes are intentional
+
+            ## Output Format
+
+            Provide your review as a structured comment with:
+            - A summary of what the PR does
+            - Any issues found (categorized by severity: critical, warning, suggestion)
+            - Positive observations
+            - Overall assessment
+
+            IMPORTANT: Always end your review with:
+
+            ---
+            **Need help?** Comment `@claude` followed by your request.
+
+          direct_prompt: |
+            ${{ github.event_name == 'pull_request' && '
+            START by running: git diff origin/${{ github.base_ref }}...HEAD --name-status
+            Then examine the changed lines using: git diff origin/${{ github.base_ref }}...HEAD
+
+            Focus your review on:
+            1. Code quality and best practices
+            2. Security concerns (no secrets, proper validation)
+            3. Test coverage for changes
+            4. Docker and dependency changes
+            5. Breaking changes or backward compatibility issues
+
+            Keep feedback concise, actionable, and directly tied to the diff.
+
+            IMPORTANT: Always end your review with the capabilities section from your custom instructions.
+            ' || '' }}
+
+          allowed_tools: |
+            Bash,Edit,Read,Write,Glob,Grep,LS

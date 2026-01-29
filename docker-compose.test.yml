@@ -42,17 +42,35 @@ services:
     networks:
       - test-network
 
-  # Run specific test files
+  # Unit tests - lightweight image without ML dependencies (fast build)
   backend-unit-tests:
-    image: ai-curation-backend-tests:latest
+    image: ai-curation-unit-tests:latest
     build:
       context: ./backend
-      dockerfile: Dockerfile.test
+      dockerfile: Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
     environment:
       - PYTHONUNBUFFERED=1
-    command: python -m pytest tests/unit/ -v --tb=short
+      - OPENAI_API_KEY=test-key-for-unit-tests
+      - LANGFUSE_PUBLIC_KEY=test-key
+      - LANGFUSE_SECRET_KEY=test-key
+      - VALID_MOD_IDS=FB,WB,MGI,RGD,SGD,HGNC,ZFIN
+      - DOCLING_TIMEOUT=300
+    # Note: These ignores match .github/workflows/test.yml for CI consistency
+    command: >
+      python -m pytest tests/unit/ -v --tb=short --no-cov
+      --ignore=tests/integration
+      --ignore=tests/contract
+      --ignore=tests/database
+      --ignore=tests/unit/test_create_agent_cli.py
+      --ignore=tests/unit/test_create_agent_validation.py
+      --ignore=tests/unit/test_create_tool_cli.py
+      --ignore=tests/unit/test_validate_registry.py
+      --ignore=tests/unit/test_main_startup.py
+      --ignore=tests/unit/api/test_files.py
+      --ignore=tests/unit/lib/batch/test_batch_service.py
+      --ignore=tests/unit/lib/agent_studio/test_registry_types.py
     networks:
       - test-network
 

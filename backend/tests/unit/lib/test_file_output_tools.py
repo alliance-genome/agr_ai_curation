@@ -117,9 +117,20 @@ class TestSaveCsvImpl:
             [],
         )
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-001"
+
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             result = await _save_csv_impl(
                 data_json=json.dumps([{"gene": "FBgn0001", "symbol": "Notch"}]),
@@ -150,9 +161,20 @@ class TestSaveCsvImpl:
             [],
         )
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-002"
+
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             result = await _save_csv_impl(
                 data_json=json.dumps([{"gene": "FBgn0001"}]),
@@ -194,9 +216,20 @@ class TestSaveTsvImpl:
             [],
         )
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-tsv"
+
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             result = await _save_tsv_impl(
                 data_json=json.dumps([{"allele": "FBal0001"}]),
@@ -234,9 +267,20 @@ class TestSaveJsonImpl:
             [],
         )
 
+        # Mock database session and FileOutput model
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-json"
+
         with patch(
             "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
             return_value=mock_storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            return_value=mock_file_output,
         ):
             result = await _save_json_impl(
                 data_json=json.dumps({"genes": ["FBgn0001", "FBgn0002"]}),

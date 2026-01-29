@@ -162,6 +162,7 @@ find_*.py
 *_debug.py
 *_test.py
 SECTION_HIERARCHY_PLAN.md
+TEST_OVERHAUL_PLAN.md
 
 # Claude Code settings
 .claude/

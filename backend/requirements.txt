@@ -52,6 +52,7 @@ click
 pytest
 pytest-asyncio
 pytest-cov
+pytest-mock
 httpx
 
 # Development
