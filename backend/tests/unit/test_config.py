@@ -1,4 +1,7 @@
-"""Unit tests for configuration and environment variable handling."""
+"""Unit tests for configuration and environment variable handling.
+
+This module tests the configuration loading and validation logic.
+"""
 
 import os
 import pytest
