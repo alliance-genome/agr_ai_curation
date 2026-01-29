@@ -58,8 +58,8 @@ async def test_async_list_documents_normalises_results():
     # Mock PostgreSQL database access (T030 requirement)
     from datetime import datetime
     mock_db_user = MagicMock()
-    mock_db_user.user_id = 123
-    mock_db_user.user_id = "test_user_user_id"
+    mock_db_user.id = 123  # User's DB id
+    mock_db_user.user_id = "test_user_user_id"  # User's string identifier
 
     mock_db_doc = MagicMock()
     mock_db_doc.id = mock_uuid
@@ -91,7 +91,7 @@ async def test_async_list_documents_normalises_results():
     assert result["limit"] == 10
     assert result["offset"] == 0
     assert result["documents"][0]["document_id"] == str(mock_uuid)
-    assert result["documents"][0]["user_id"] == 123
+    assert result["documents"][0]["user_id"] == "test_user_user_id"  # user_id is the auth_sub string, not db id
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
 
 

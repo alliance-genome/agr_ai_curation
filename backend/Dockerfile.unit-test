@@ -1,0 +1,42 @@
+# Lightweight Docker image for unit tests only
+# Skips heavy ML dependencies (torch, CUDA, unstructured-inference)
+# Builds in ~1-2 minutes instead of 10+ minutes
+
+FROM python:3.11-slim
+
+WORKDIR /app/backend
+
+# Install build dependencies (git needed for pip git+ requirements)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only requirements first for better caching
+COPY requirements.txt .
+
+# Upgrade pip first
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install Python dependencies (no heavy ML packages)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install test dependencies
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    pytest-cov \
+    pytest-mock \
+    httpx
+
+# Copy source code and tests
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY main.py ./
+COPY pytest.ini ./
+
+# Set Python path
+ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH
+
+# Default command runs unit tests
+CMD ["python", "-m", "pytest", "tests/unit/", "-v", "--tb=short", "--no-cov", "-o", "testpaths=tests/unit"]

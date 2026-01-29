@@ -5,6 +5,7 @@ WORKDIR /app/backend
 # Install build dependencies first (rarely changes)
 RUN apt-get update && apt-get install -y \
     gcc \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only requirements first for better caching

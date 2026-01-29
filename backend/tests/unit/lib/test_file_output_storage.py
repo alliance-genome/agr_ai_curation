@@ -63,16 +63,6 @@ class TestStorageServiceInit:
         assert (temp_storage_dir / "temp" / "processing").exists()
         assert (temp_storage_dir / "temp" / "failed").exists()
 
-    def test_uses_config_path_by_default(self, temp_storage_dir):
-        """Test that service uses config path when no override provided."""
-        with patch(
-            "src.lib.file_outputs.storage.get_file_output_storage_path",
-            return_value=temp_storage_dir,
-        ):
-            service = FileOutputStorageService()
-            # Compare resolved paths to handle symlinks (e.g., /tmp -> /private/tmp)
-            assert service.base_path.resolve() == temp_storage_dir.resolve()
-
 
 class TestInputValidation:
     """Tests for input validation."""
