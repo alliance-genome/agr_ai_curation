@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: ZFIN
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the allele agent's prompt when users
+# belong to the ZFIN group.
+# =============================================================================
+
+content: '
+
+  ## ZFIN-SPECIFIC RULES (Danio rerio)
+
+
+  ## ZFIN Allele Search Strategy (Danio rerio)
+
+
+  ### General Guidelines
+
+
+  - Zebrafish gene symbols are typically lowercase (e.g., tp53, brca2)
+
+  - Mutant allele names include lab designation codes
+
+  - Search using the symbol as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add zebrafish-specific allele search strategies here.
+
+
+
+  ### Interpreting ZFIN Results:
+
+  ### Interpreting ZFIN Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the allele type matches what''s described in the paper
+
+
+  This is a placeholder. Add zebrafish-specific interpretation guidelines as needed.
+
+
+  '
+group_id: ZFIN

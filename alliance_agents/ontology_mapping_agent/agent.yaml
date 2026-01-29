@@ -1,0 +1,72 @@
+# =============================================================================
+# AGENT DEFINITION: ontology_mapping_agent
+# =============================================================================
+# Exported from AGENT_REGISTRY on 2026-01-29
+# This agent maps free-text labels to ontology term identifiers.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: ontology_mapping
+
+name: "Ontology Mapping Agent"
+
+description: >
+  Maps free-text labels to standardized ontology term identifiers.
+  Searches across multiple ontologies including phenotype, anatomy, and life stage.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+supervisor_routing:
+  enabled: true
+  tool_name: "ask_ontology_mapping_specialist"
+  tool_description: "Ask the ontology mapping specialist to map free-text labels to ontology terms"
+
+# Batching guidance for the supervisor
+batching:
+  entity: "terms"
+  example: 'ask_ontology_mapping_specialist("Map these labels: pharynx, L3 larval stage, nucleus, ...")'
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - agr_curation_query
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: OntologyMappingEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_ONTOLOGY_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🗺️"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: false

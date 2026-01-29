@@ -1,0 +1,72 @@
+# =============================================================================
+# AGENT DEFINITION: go_annotations_agent
+# =============================================================================
+# Exported from AGENT_REGISTRY on 2026-01-29
+# This agent retrieves existing GO annotations for specific genes.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: go_annotations
+
+name: "Gene GO Annotations Agent"
+
+description: >
+  Retrieves existing GO annotations for specific genes from QuickGO.
+  Returns annotations with evidence codes and references.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+supervisor_routing:
+  enabled: true
+  tool_name: "ask_go_annotations_specialist"
+  tool_description: "Ask the GO annotations specialist to get existing GO annotations for genes"
+
+# Batching guidance for the supervisor
+batching:
+  entity: "genes"
+  example: 'ask_go_annotations_specialist("Get GO annotations for these genes: WB:WBGene00000912, WB:WBGene00001234, ...")'
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - go_api_call
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: GOAnnotationsEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "📎"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: false

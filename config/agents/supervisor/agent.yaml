@@ -7,8 +7,6 @@
 #
 # This is CORE infrastructure - ships with the base product.
 # Customization happens through the agents it routes to, not the supervisor itself.
-#
-# TODO: Migrate supervisor configuration from existing codebase
 # =============================================================================
 
 agent_id: supervisor
@@ -53,5 +51,3 @@ routing:
 
   # Whether to allow multi-agent responses
   allow_multi_agent: true
-
-# TODO: Complete supervisor implementation in KANBAN-989

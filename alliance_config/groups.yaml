@@ -28,6 +28,12 @@ groups:
     display_name: "WormBase"
     description: "C. elegans and related nematodes genome database"
 
+  # HUGO Gene Nomenclature Committee
+  HGNC:
+    group_id: HGNC
+    display_name: "HGNC"
+    description: "HUGO Gene Nomenclature Committee (human)"
+
   # Mouse Genome Informatics
   MGI:
     group_id: MGI
