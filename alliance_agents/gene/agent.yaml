@@ -1,0 +1,74 @@
+# =============================================================================
+# AGENT DEFINITION: gene
+# =============================================================================
+# Validates gene identifiers against the Alliance Curation Database.
+# Tool name generated at runtime: ask_gene_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: gene_validation
+
+name: "Gene Validation Agent"
+
+description: >
+  Validates gene identifiers against the Alliance Curation Database.
+  Supports lookup by symbol, name, ID, or cross-reference.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating genes against the database, looking up gene symbols,
+    finding gene IDs, or any gene-related queries. Supports batch lookups.
+
+# Batching guidance for the supervisor
+batching:
+  entity: "genes"
+  example: 'ask_gene_specialist("Look up these genes: daf-16, lin-3, unc-54, ...")'
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - agr_curation_query
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: GeneValidationEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_GENE_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🧬"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: true

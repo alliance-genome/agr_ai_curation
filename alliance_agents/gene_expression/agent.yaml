@@ -1,0 +1,76 @@
+# =============================================================================
+# AGENT DEFINITION: gene_expression
+# =============================================================================
+# Extracts gene expression patterns and experimental data from PDFs.
+# Tool name generated at runtime: ask_gene_expression_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: gene_expression_extraction
+
+name: "Gene Expression Extractor"
+
+description: >
+  Extracts gene expression patterns and experimental data from PDFs,
+  including organism, genes, annotations (anatomy, life stage, reagent, evidence).
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Extract gene expression data from the paper. Returns formatted text with
+    organism, genes, annotations (anatomy, life stage, reagent, evidence).
+    Use export_to_file to save results as CSV, TSV, or JSON.
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - search_document
+  - read_section
+  - read_subsection
+  - agr_curation_query
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: GeneExpressionEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_GENE_EXPRESSION_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "medium"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "📊"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: true

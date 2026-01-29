@@ -1,0 +1,69 @@
+# =============================================================================
+# AGENT DEFINITION: orthologs
+# =============================================================================
+# Queries orthology relationships across species.
+# Tool name generated at runtime: ask_orthologs_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: orthologs_lookup
+
+name: "Ortholog Lookup Agent"
+
+description: >
+  Finds orthologs (equivalent genes) across species using the
+  Alliance Orthology Database with DIOPT-based orthology calls.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for finding orthologs (equivalent genes) across species, querying
+    orthology relationships, or DIOPT-based orthology calls. Supports batch lookups.
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - alliance_api_call
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: OrthologsEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_ORTHOLOGS_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🔄"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: false

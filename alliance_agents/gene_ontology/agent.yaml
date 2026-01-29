@@ -1,0 +1,74 @@
+# =============================================================================
+# AGENT DEFINITION: gene_ontology
+# =============================================================================
+# Looks up Gene Ontology term definitions and hierarchy.
+# Tool name generated at runtime: ask_gene_ontology_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: gene_ontology_lookup
+
+name: "GO Term Lookup Agent"
+
+description: >
+  Looks up Gene Ontology term definitions and hierarchy.
+  Supports lookup by GO ID, name keyword, or term description.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for looking up Gene Ontology term definitions, finding GO IDs,
+    exploring GO hierarchy, or term description queries. Supports batch lookups.
+
+# Batching guidance for the supervisor
+batching:
+  entity: "GO terms"
+  example: 'ask_gene_ontology_specialist("Look up these GO terms: apoptotic process, kinase activity, ...")'
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - quickgo_api_call
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: GOTermEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_GO_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🔗"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: false
