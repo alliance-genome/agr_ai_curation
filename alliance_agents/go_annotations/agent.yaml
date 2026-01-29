@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for retrieving existing GO annotations for specific genes, finding
-    evidence codes, or looking up annotation references. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "genes"
-  example: 'ask_go_annotations_specialist("Get GO annotations for these genes: WB:WBGene00000912, WB:WBGene00001234, ...")'
+    evidence codes, or looking up annotation references.
+  batchable: true
+  batching_instructions: >
+    When getting annotations for multiple genes, combine them into a single request.
+    Example: "Get GO annotations for: WB:WBGene00000912, WB:WBGene00001234"
 
 # -----------------------------------------------------------------------------
 # TOOLS

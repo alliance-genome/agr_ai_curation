@@ -29,6 +29,7 @@ supervisor_routing:
     Extract gene expression data from the paper. Returns formatted text with
     organism, genes, annotations (anatomy, life stage, reagent, evidence).
     Use export_to_file to save results as CSV, TSV, or JSON.
+  batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
 # TOOLS

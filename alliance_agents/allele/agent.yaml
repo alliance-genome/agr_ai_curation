@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for validating alleles/variants against the database, looking up allele
-    symbols, finding allele IDs, or gene-allele associations. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "alleles"
-  example: 'ask_allele_specialist("Look up these alleles: e1370, n765, tm1234, ...")'
+    symbols, finding allele IDs, or gene-allele associations.
+  batchable: true
+  batching_instructions: >
+    When looking up multiple alleles, combine them into a single request.
+    Example: "Look up these alleles: e1370, n765, tm1234"
 
 # -----------------------------------------------------------------------------
 # TOOLS

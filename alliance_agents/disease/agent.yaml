@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for mapping disease terms to DOID identifiers, looking up disease names,
-    finding disease synonyms, or disease ontology queries. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "diseases"
-  example: 'ask_disease_specialist("Look up these diseases: Alzheimer disease, diabetes mellitus, ...")'
+    finding disease synonyms, or disease ontology queries.
+  batchable: true
+  batching_instructions: >
+    When mapping multiple diseases, combine them into a single request.
+    Example: "Map these diseases: Alzheimer disease, diabetes mellitus, cancer"
 
 # -----------------------------------------------------------------------------
 # TOOLS

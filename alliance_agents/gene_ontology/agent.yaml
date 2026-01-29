@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for looking up Gene Ontology term definitions, finding GO IDs,
-    exploring GO hierarchy, or term description queries. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "GO terms"
-  example: 'ask_gene_ontology_specialist("Look up these GO terms: apoptotic process, kinase activity, ...")'
+    exploring GO hierarchy, or term description queries.
+  batchable: true
+  batching_instructions: >
+    When looking up multiple GO terms, combine them into a single request.
+    Example: "Look up these GO terms: apoptotic process, kinase activity, cell division"
 
 # -----------------------------------------------------------------------------
 # TOOLS

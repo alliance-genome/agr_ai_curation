@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for mapping free-text labels to standardized ontology term identifiers,
-    searching phenotype, anatomy, or life stage ontologies. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "terms"
-  example: 'ask_ontology_mapping_specialist("Map these labels: pharynx, L3 larval stage, nucleus, ...")'
+    searching phenotype, anatomy, or life stage ontologies.
+  batchable: true
+  batching_instructions: >
+    When mapping multiple terms, combine them into a single request.
+    Example: "Map these labels: pharynx, L3 larval stage, nucleus"
 
 # -----------------------------------------------------------------------------
 # TOOLS

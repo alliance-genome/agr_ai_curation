@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for validating genes against the database, looking up gene symbols,
-    finding gene IDs, or any gene-related queries. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "genes"
-  example: 'ask_gene_specialist("Look up these genes: daf-16, lin-3, unc-54, ...")'
+    finding gene IDs, or any gene-related queries.
+  batchable: true
+  batching_instructions: >
+    When looking up multiple genes, combine them into a single request.
+    Example: "Look up these genes: daf-16, lin-3, unc-54, act-1"
 
 # -----------------------------------------------------------------------------
 # TOOLS

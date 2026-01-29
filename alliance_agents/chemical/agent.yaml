@@ -27,12 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for mapping chemical compound names to ChEBI identifiers, looking up
-    compound synonyms, or chemical ontology queries. Supports batch lookups.
-
-# Batching guidance for the supervisor
-batching:
-  entity: "chemicals"
-  example: 'ask_chemical_specialist("Look up these chemicals: glucose, ATP, ethanol, ...")'
+    compound synonyms, or chemical ontology queries.
+  batchable: true
+  batching_instructions: >
+    When looking up multiple chemicals, combine them into a single request.
+    Example: "Look up these chemicals: glucose, ATP, ethanol"
 
 # -----------------------------------------------------------------------------
 # TOOLS

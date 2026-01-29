@@ -27,7 +27,11 @@ supervisor_routing:
   enabled: true
   description: >
     Use for finding orthologs (equivalent genes) across species, querying
-    orthology relationships, or DIOPT-based orthology calls. Supports batch lookups.
+    orthology relationships, or DIOPT-based orthology calls.
+  batchable: true
+  batching_instructions: >
+    When finding orthologs for multiple genes, combine them into a single request.
+    Example: "Find orthologs for: daf-16, unc-54, lin-3"
 
 # -----------------------------------------------------------------------------
 # TOOLS

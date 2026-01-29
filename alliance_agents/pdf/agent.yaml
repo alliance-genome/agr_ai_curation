@@ -29,6 +29,7 @@ supervisor_routing:
     Ask the PDF Specialist about the loaded document. Use for questions about
     paper content, methods, results, figures. The specialist will search and
     read the document autonomously.
+  batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
 # TOOLS
