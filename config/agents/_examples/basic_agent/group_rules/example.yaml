@@ -1,0 +1,41 @@
+# =============================================================================
+# GROUP RULES: Example Group
+# =============================================================================
+# Group rules are organization-specific instructions that get injected into
+# the agent's prompt at runtime when users belong to this group.
+#
+# To create rules for your organization:
+#   1. Copy this file and rename it (e.g., my_org.yaml)
+#   2. Update the group_id to match your config/groups.yaml
+#   3. Write rules specific to how your organization handles queries
+#
+# The group_id must match a key in config/groups.yaml for these rules to load.
+# =============================================================================
+
+# group_id: Must match a key in config/groups.yaml
+# For Alliance, this would be: FB, WB, MGI, RGD, SGD, ZFIN, XB
+# For other organizations, use your own group identifiers
+group_id: EXAMPLE
+
+# content: The rules to inject into the agent's prompt
+# Use YAML multiline string (|) for formatting
+content: |
+  ## Example Organization Rules
+
+  When handling queries for Example Organization users:
+
+  ### Naming Conventions
+  - [Describe how identifiers are formatted]
+  - [Describe naming conventions specific to this group]
+
+  ### Data Sources
+  - Prefer data from [primary source]
+  - Cross-reference with [secondary source] when needed
+
+  ### Special Handling
+  - [Describe any special cases]
+  - [Describe group-specific behaviors]
+
+  ### Output Preferences
+  - Include [specific fields] in results
+  - Format [field] as [specific format]

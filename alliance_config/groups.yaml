@@ -1,0 +1,66 @@
+# =============================================================================
+# ALLIANCE GENOME GROUP MAPPINGS
+# =============================================================================
+# This file maps AWS Cognito groups to Alliance MOD identifiers.
+#
+# During deployment, this file is copied to config/groups.yaml
+#
+# TODO: Migrate group mappings from existing codebase
+# =============================================================================
+
+identity_provider:
+  type: cognito
+  group_claim: "cognito:groups"
+
+# -----------------------------------------------------------------------------
+# Alliance MOD Group Mappings
+# -----------------------------------------------------------------------------
+groups:
+  # FlyBase - Drosophila melanogaster
+  FlyBase:
+    group_id: FB
+    display_name: "FlyBase"
+    description: "Drosophila genome database"
+
+  # WormBase - Caenorhabditis elegans
+  WormBase:
+    group_id: WB
+    display_name: "WormBase"
+    description: "C. elegans and related nematodes genome database"
+
+  # Mouse Genome Informatics
+  MGI:
+    group_id: MGI
+    display_name: "MGI"
+    description: "Mouse Genome Informatics"
+
+  # Rat Genome Database
+  RGD:
+    group_id: RGD
+    display_name: "RGD"
+    description: "Rat Genome Database"
+
+  # Saccharomyces Genome Database
+  SGD:
+    group_id: SGD
+    display_name: "SGD"
+    description: "Saccharomyces Genome Database (yeast)"
+
+  # Zebrafish Information Network
+  ZFIN:
+    group_id: ZFIN
+    display_name: "ZFIN"
+    description: "Zebrafish Information Network"
+
+  # Xenbase - Xenopus
+  Xenbase:
+    group_id: XB
+    display_name: "Xenbase"
+    description: "Xenopus genome database"
+
+# Default for users not in a MOD group
+default_group: null
+
+# Alliance admin group
+admin_groups:
+  - Alliance_Admins

@@ -1,0 +1,81 @@
+# =============================================================================
+# GROUPS CONFIGURATION
+# =============================================================================
+# This file maps authentication provider groups (e.g., Cognito groups) to
+# internal group IDs used throughout the system.
+#
+# Copy this file to groups.yaml and customize for your organization.
+#
+# How it works:
+#   1. User authenticates via your identity provider (Cognito, Okta, etc.)
+#   2. Their group membership is extracted from the JWT token
+#   3. This mapping translates external group names to internal group IDs
+#   4. Internal group IDs are used to load group-specific rules in agents
+#
+# For Alliance Genome:
+#   - Alliance uses AWS Cognito for authentication
+#   - Users belong to MOD groups (FB, WB, MGI, etc.)
+#   - These map to group-specific rules in agent configurations
+#
+# For other organizations:
+#   - Replace the mappings below with your own group structure
+#   - Group IDs should match the group_id values in your agent group_rules/
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Identity Provider Configuration
+# -----------------------------------------------------------------------------
+identity_provider:
+  # Type of identity provider (cognito, okta, auth0, custom)
+  type: cognito
+
+  # The JWT claim containing group membership
+  # Common values: "cognito:groups", "groups", "roles"
+  group_claim: "cognito:groups"
+
+# -----------------------------------------------------------------------------
+# Group Mappings
+# -----------------------------------------------------------------------------
+# Maps external group names (from identity provider) to internal group IDs
+#
+# Format:
+#   external_group_name:
+#     group_id: internal_id        # Used in agent group_rules/
+#     display_name: "Human Name"   # Shown in UI
+#     description: "Description"   # Optional description
+#
+# Example for Alliance (MOD groups):
+# -----------------------------------------------------------------------------
+groups:
+  # Example: FlyBase MOD
+  FlyBase:
+    group_id: FB
+    display_name: "FlyBase"
+    description: "Drosophila genome database"
+
+  # Example: WormBase MOD
+  WormBase:
+    group_id: WB
+    display_name: "WormBase"
+    description: "C. elegans genome database"
+
+  # Example: Generic organization group
+  # MyOrganization:
+  #   group_id: MYORG
+  #   display_name: "My Organization"
+  #   description: "Custom organization group"
+
+# -----------------------------------------------------------------------------
+# Default Group (Optional)
+# -----------------------------------------------------------------------------
+# If a user doesn't belong to any mapped group, use this as fallback
+# Set to null to require explicit group membership
+default_group: null
+
+# -----------------------------------------------------------------------------
+# Admin Groups (Optional)
+# -----------------------------------------------------------------------------
+# Groups with administrative privileges
+admin_groups:
+  - Alliance_Admins
+  # - MyOrg_Admins

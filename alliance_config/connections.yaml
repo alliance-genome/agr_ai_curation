@@ -1,0 +1,109 @@
+# =============================================================================
+# ALLIANCE GENOME EXTERNAL CONNECTIONS
+# =============================================================================
+# Alliance-specific connection configuration for external services.
+#
+# During deployment, this file is copied to config/connections.yaml
+#
+# All sensitive values use environment variable substitution.
+# See .env.example for required environment variables.
+#
+# TODO: Migrate connection settings from existing codebase
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Database Connections
+# -----------------------------------------------------------------------------
+databases:
+  primary:
+    type: postgresql
+    host: "${DB_HOST:-localhost}"
+    port: ${DB_PORT:-5432}
+    database: "${DB_NAME:-ai_curation}"
+    username: "${DB_USER:-postgres}"
+    password: "${DB_PASSWORD}"
+
+    pool:
+      min_size: 5
+      max_size: 20
+      max_overflow: 10
+      pool_timeout: 30
+
+    health_check:
+      enabled: true
+      query: "SELECT 1"
+      interval_seconds: 30
+      timeout_seconds: 5
+
+# -----------------------------------------------------------------------------
+# Vector Database - Weaviate
+# -----------------------------------------------------------------------------
+vector_databases:
+  weaviate:
+    type: weaviate
+    host: "${WEAVIATE_HOST:-localhost}"
+    port: ${WEAVIATE_PORT:-8080}
+    grpc_port: ${WEAVIATE_GRPC_PORT:-50051}
+    scheme: "${WEAVIATE_SCHEME:-http}"
+
+    auth:
+      enabled: ${WEAVIATE_AUTH_ENABLED:-false}
+      api_key: "${WEAVIATE_API_KEY:-}"
+
+    health_check:
+      enabled: true
+      endpoint: "/v1/.well-known/ready"
+      interval_seconds: 30
+      timeout_seconds: 5
+
+# -----------------------------------------------------------------------------
+# AI Provider APIs
+# -----------------------------------------------------------------------------
+apis:
+  openai:
+    type: openai
+    base_url: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+    api_key: "${OPENAI_API_KEY}"
+    organization: "${OPENAI_ORG_ID:-}"
+
+    rate_limit:
+      requests_per_minute: 60
+      tokens_per_minute: 90000
+
+    health_check:
+      enabled: true
+      endpoint: "/models"
+      interval_seconds: 60
+      timeout_seconds: 10
+
+# -----------------------------------------------------------------------------
+# Cache (Optional)
+# -----------------------------------------------------------------------------
+caches:
+  redis:
+    enabled: ${REDIS_ENABLED:-false}
+    host: "${REDIS_HOST:-localhost}"
+    port: ${REDIS_PORT:-6379}
+    password: "${REDIS_PASSWORD:-}"
+    database: ${REDIS_DB:-0}
+
+    pool:
+      max_connections: 10
+
+    health_check:
+      enabled: true
+      command: "PING"
+      interval_seconds: 30
+
+# -----------------------------------------------------------------------------
+# Health Check Aggregation
+# -----------------------------------------------------------------------------
+health_check:
+  aggregate:
+    required_services:
+      - databases.primary
+      - vector_databases.weaviate
+      - apis.openai
+
+    optional_services:
+      - caches.redis
