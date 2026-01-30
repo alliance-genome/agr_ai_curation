@@ -30,28 +30,31 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Validate DOCLING_TIMEOUT at startup
-_docling_timeout = os.getenv('DOCLING_TIMEOUT', '30')
-try:
-    _docling_timeout_int = int(_docling_timeout)
-    _min_timeout = 300  # 5 minutes minimum
-    if _docling_timeout_int < _min_timeout:
-        error_msg = (
-            f"❌ CRITICAL: DOCLING_TIMEOUT is set to {_docling_timeout_int} seconds, "
-            f"but must be at least {_min_timeout} seconds (5 minutes).\n"
-            f"   PDF processing can take several minutes, especially for complex documents.\n"
-            f"   Please update .env file: DOCLING_TIMEOUT=300"
-        )
-        print(error_msg, flush=True)
-        logger.error(error_msg)
-        sys.exit(1)  # Prevent startup with insufficient timeout
-    else:
-        logger.info(f"✅ DOCLING_TIMEOUT validated: {_docling_timeout_int} seconds")
-except ValueError:
-    error_msg = f"❌ CRITICAL: DOCLING_TIMEOUT must be an integer, got: {_docling_timeout}"
-    print(error_msg, flush=True)
-    logger.error(error_msg)
-    sys.exit(1)
+
+def _validate_docling_timeout():
+    """Validate DOCLING_TIMEOUT environment variable.
+
+    PDF processing can take several minutes, so we require a minimum timeout
+    of 300 seconds (5 minutes) to prevent premature failures.
+
+    Raises:
+        RuntimeError: If DOCLING_TIMEOUT is too low or invalid.
+    """
+    docling_timeout = os.getenv('DOCLING_TIMEOUT', '30')
+    try:
+        timeout_int = int(docling_timeout)
+        min_timeout = 300  # 5 minutes minimum
+        if timeout_int < min_timeout:
+            error_msg = (
+                f"DOCLING_TIMEOUT is set to {timeout_int} seconds, "
+                f"but must be at least {min_timeout} seconds (5 minutes). "
+                f"PDF processing can take several minutes, especially for complex documents. "
+                f"Please update .env file: DOCLING_TIMEOUT=300"
+            )
+            raise RuntimeError(error_msg)
+        logger.info(f"✅ DOCLING_TIMEOUT validated: {timeout_int} seconds")
+    except ValueError:
+        raise RuntimeError(f"DOCLING_TIMEOUT must be an integer, got: {docling_timeout}")
 
 
 async def initialize_weaviate_collections(connection: WeaviateConnection):
@@ -146,6 +149,13 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     logger.info("Starting up Weaviate Control Panel API...")
+
+    # Validate critical environment variables
+    try:
+        _validate_docling_timeout()
+    except RuntimeError as e:
+        logger.error(f"❌ FATAL: {e}")
+        raise
 
     try:
         # Get Weaviate connection details from environment

@@ -10,6 +10,12 @@ from fastapi import FastAPI
 import main
 
 
+@pytest.fixture(autouse=True)
+def set_docling_timeout(monkeypatch):
+    """Set DOCLING_TIMEOUT to valid value for all tests in this module."""
+    monkeypatch.setenv("DOCLING_TIMEOUT", "300")
+
+
 def make_connection(list_all_return=None):
     connection = MagicMock()
     connection.connect_to_weaviate = AsyncMock()
@@ -54,6 +60,28 @@ class TestInitializeWeaviateCollections:
 
 
 class TestLifespan:
+    """Tests for the application lifespan context manager.
+
+    These tests mock the various initialization subsystems to focus on
+    the Weaviate connection lifecycle.
+    """
+
+    @pytest.fixture(autouse=True)
+    def mock_subsystems(self):
+        """Mock all initialization subsystems for lifespan tests."""
+        with patch("main.SessionLocal") as mock_session, \
+             patch("src.lib.config.prompt_loader.load_prompts", return_value={"base_prompts": 0, "group_rules": 0}), \
+             patch("src.lib.prompts.cache.initialize"), \
+             patch("src.lib.config.groups_loader.load_groups", return_value={}), \
+             patch("src.lib.config.connections_loader.load_connections", return_value=[]), \
+             patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
+             patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
+             patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+            # Mock the database session context manager
+            mock_db = MagicMock()
+            mock_session.return_value = mock_db
+            yield
+
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
     @patch("main.initialize_weaviate_collections")
