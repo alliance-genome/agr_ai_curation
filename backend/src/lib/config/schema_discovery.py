@@ -101,7 +101,7 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
         sys.modules.pop(module_name, None)
         raise
 
-    # Find all envelope classes in the module
+    # Find all envelope classes DEFINED in the module (not imported)
     envelope_classes: Dict[str, Type[BaseModel]] = {}
     for name in dir(module):
         if name.startswith("_"):
@@ -109,8 +109,13 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
 
         obj = getattr(module, name)
         if _is_envelope_class(obj):
-            envelope_classes[name] = obj
-            logger.debug(f"Found envelope class: {name} in {folder_name}/schema.py")
+            # Only include classes defined in this module, not imported ones
+            # This prevents StructuredMessageEnvelope (imported base class) from being registered
+            if getattr(obj, "__module__", None) == module_name:
+                envelope_classes[name] = obj
+                logger.debug(f"Found envelope class: {name} in {folder_name}/schema.py")
+            else:
+                logger.debug(f"Skipping imported class: {name} (from {getattr(obj, '__module__', 'unknown')})")
 
     return envelope_classes
 

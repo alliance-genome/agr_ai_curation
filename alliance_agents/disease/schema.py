@@ -10,7 +10,7 @@ from typing import List, Optional
 from pydantic import Field, ConfigDict
 
 # Import base class from shared schemas location
-from backend.src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.models.base import StructuredMessageEnvelope
 
 
 class DiseaseValidationEnvelope(StructuredMessageEnvelope):

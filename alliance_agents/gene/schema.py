@@ -11,7 +11,7 @@ from pydantic import Field, ConfigDict
 
 # Import base class from shared schemas location
 # TODO: After full migration, this import path will change to a shared base
-from backend.src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.models.base import StructuredMessageEnvelope
 
 
 class GeneValidationEnvelope(StructuredMessageEnvelope):
