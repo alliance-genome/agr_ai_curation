@@ -5,12 +5,16 @@ on:
     branches: [main, develop]
     paths:
       - 'backend/**'
+      - 'config/**'
+      - 'alliance_agents/**'
       - 'docker-compose.test.yml'
       - '.github/workflows/test.yml'
   push:
     branches: [main, develop]
     paths:
       - 'backend/**'
+      - 'config/**'
+      - 'alliance_agents/**'
       - 'docker-compose.test.yml'
       - '.github/workflows/test.yml'
 
@@ -29,7 +33,7 @@ jobs:
       - name: Build unit test image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
+          context: .
           file: ./backend/Dockerfile.unit-test
           push: false
           load: true
