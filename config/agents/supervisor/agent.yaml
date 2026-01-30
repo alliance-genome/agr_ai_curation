@@ -51,3 +51,10 @@ routing:
 
   # Whether to allow multi-agent responses
   allow_multi_agent: true
+
+# -----------------------------------------------------------------------------
+# Frontend Display
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🎯"
+  show_in_palette: false  # System routing agent, not shown in agent palette

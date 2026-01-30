@@ -51,16 +51,23 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 # =============================================================================
 # AGENT FACTORY REGISTRY
 # =============================================================================
-# Maps agent_id to factory function for dynamic agent creation.
-# Factory functions are imported lazily to avoid circular imports.
-# Each factory is called with appropriate kwargs based on agent requirements.
+# Factory functions are discovered dynamically using convention-based discovery.
+# No hardcoded mappings required - add a new agent folder and it's automatically
+# available if it follows the naming convention:
+#   - Module: {folder_name}_agent.py
+#   - Factory: create_{folder_name}_agent
+#
+# See src/lib/config/agent_factory.py for the discovery implementation.
 # =============================================================================
 
 def _get_agent_factory(agent_id: str) -> Optional[Callable]:
     """
     Get the factory function for an agent by its agent_id.
 
-    Uses lazy imports to avoid circular import issues at module load time.
+    Uses convention-based discovery from agent_factory module.
+    Factory functions follow the naming pattern:
+    - Module: src.lib.openai_agents.agents.{folder_name}_agent
+    - Function: create_{folder_name}_agent
 
     Args:
         agent_id: The agent identifier (e.g., "gene_validation", "pdf_extraction")
@@ -68,36 +75,12 @@ def _get_agent_factory(agent_id: str) -> Optional[Callable]:
     Returns:
         Factory function or None if not found
     """
-    # Lazy import mapping to avoid circular imports
-    # Keys MUST match agent_id values in alliance_agents/*/agent.yaml
-    factory_mapping = {
-        # Validation agents
-        "gene_validation": ("src.lib.openai_agents.agents.gene_agent", "create_gene_agent"),
-        "allele_validation": ("src.lib.openai_agents.agents.allele_agent", "create_allele_agent"),
-        "disease_validation": ("src.lib.openai_agents.agents.disease_agent", "create_disease_agent"),
-        "chemical_validation": ("src.lib.openai_agents.agents.chemical_agent", "create_chemical_agent"),
-        # Lookup agents (query external APIs/databases)
-        "gene_ontology_lookup": ("src.lib.openai_agents.agents.gene_ontology_agent", "create_gene_ontology_agent"),
-        "go_annotations_lookup": ("src.lib.openai_agents.agents.go_annotations_agent", "create_go_annotations_agent"),
-        "orthologs_lookup": ("src.lib.openai_agents.agents.orthologs_agent", "create_orthologs_agent"),
-        "ontology_mapping_lookup": ("src.lib.openai_agents.agents.ontology_mapping_agent", "create_ontology_mapping_agent"),
-        # Extraction agents (require document)
-        "pdf_extraction": ("src.lib.openai_agents.pdf_agent", "create_pdf_agent"),
-        "gene_expression_extraction": ("src.lib.openai_agents.agents.gene_expression_agent", "create_gene_expression_agent"),
-    }
+    from src.lib.config.agent_factory import get_factory_by_agent_id
 
-    if agent_id not in factory_mapping:
-        return None
-
-    module_path, factory_name = factory_mapping[agent_id]
-
-    try:
-        import importlib
-        module = importlib.import_module(module_path)
-        return getattr(module, factory_name)
-    except (ImportError, AttributeError) as e:
-        logger.warning(f"[OpenAI Agents] Failed to import factory for {agent_id}: {e}")
-        return None
+    factory = get_factory_by_agent_id(agent_id)
+    if factory is None:
+        logger.warning(f"[OpenAI Agents] No factory found for agent: {agent_id}")
+    return factory
 
 
 def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[str, Any]]:

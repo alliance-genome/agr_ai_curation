@@ -91,6 +91,7 @@ class SupervisorRouting:
     description: str = ""
     batchable: bool = False
     batching_instructions: str = ""
+    batching_entity: str = ""  # e.g., "genes", "alleles" - for batching nudge prompts
 
 
 @dataclass
@@ -169,11 +170,15 @@ class AgentDefinition:
         """
         # Parse supervisor_routing
         routing_data = data.get("supervisor_routing", {})
+        is_batchable = routing_data.get("batchable", False)
+        # Default entity to folder_name + "s" (simple pluralization) if batchable
+        default_entity = f"{folder_name}s" if is_batchable else ""
         supervisor_routing = SupervisorRouting(
             enabled=routing_data.get("enabled", True),
             description=routing_data.get("description", "").strip(),
-            batchable=routing_data.get("batchable", False),
+            batchable=is_batchable,
             batching_instructions=routing_data.get("batching_instructions", "").strip(),
+            batching_entity=routing_data.get("batching_entity", default_entity).strip(),
         )
 
         # Parse model_config with environment variable substitution

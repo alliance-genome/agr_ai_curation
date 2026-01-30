@@ -63,6 +63,15 @@ from .connections_loader import (
     reset_cache as reset_connections_cache,
 )
 
+from .agent_factory import (
+    get_agent_factory,
+    get_factory_by_agent_id,
+    create_agent,
+    create_agent_by_id,
+    list_available_factories,
+    clear_factory_cache,
+)
+
 __all__ = [
     # Agent loader
     "AgentDefinition",
@@ -108,4 +117,11 @@ __all__ = [
     "update_health_status",
     "is_connections_initialized",
     "reset_connections_cache",
+    # Agent factory
+    "get_agent_factory",
+    "get_factory_by_agent_id",
+    "create_agent",
+    "create_agent_by_id",
+    "list_available_factories",
+    "clear_factory_cache",
 ]

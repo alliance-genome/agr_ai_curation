@@ -15,6 +15,7 @@ os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
 from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, logs, flows, files, maintenance, batch
+from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_pdf_storage_path
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
@@ -207,6 +208,33 @@ async def lifespan(app: FastAPI):
         finally:
             db.close()
 
+        # Load connection definitions from config/connections.yaml
+        # This enables health checking and connection status tracking
+        try:
+            from src.lib.config.connections_loader import (
+                load_connections,
+                check_required_services_healthy,
+                get_required_connections,
+                get_optional_connections,
+            )
+            connections = load_connections()
+            logger.info(f"✅ Connection definitions loaded: {len(connections)} services")
+
+            # Check health of required services (non-blocking warnings for optional)
+            required_services = get_required_connections()
+            optional_services = get_optional_connections()
+            logger.info(f"   Required services: {[s.service_id for s in required_services]}")
+            logger.info(f"   Optional services: {[s.service_id for s in optional_services]}")
+
+            # Note: We don't block startup on health checks here because
+            # some services (like Weaviate) have their own startup checks.
+            # The /admin/health/connections endpoint provides runtime status.
+
+        except FileNotFoundError as e:
+            logger.warning(f"⚠️ Connections config not found (optional): {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
+
         # Initialize Langfuse observability
         try:
             from src.lib.openai_agents.langfuse_client import initialize_langfuse, is_langfuse_configured
@@ -349,6 +377,7 @@ app.include_router(logs.router, prefix="/api", tags=["Logs"])
 
 # Admin endpoints (privileged operations - requires ADMIN_EMAILS allowlist)
 app.include_router(admin_prompts_router, tags=["Admin - Prompts"])
+app.include_router(admin_connections_router, tags=["Admin - Health"])
 
 # Static mount for original PDF storage
 pdf_storage_path = get_pdf_storage_path()

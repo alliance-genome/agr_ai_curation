@@ -360,3 +360,218 @@ def reset_cache() -> None:
     global _connection_registry, _initialized
     _connection_registry = {}
     _initialized = False
+
+
+async def check_service_health(service_id: str) -> bool:
+    """
+    Check health of a specific service by its service ID.
+
+    Performs the appropriate health check based on the service's health_check configuration:
+    - HTTP endpoints: Makes HTTP request and checks response
+    - Redis (PING method): Sends PING command
+    - Postgres (CONNECT method): Tests database connection
+
+    Args:
+        service_id: The service identifier (e.g., "weaviate", "redis")
+
+    Returns:
+        True if service is healthy, False otherwise
+
+    Side effects:
+        Updates the connection's is_healthy and last_error fields
+    """
+    import httpx
+
+    if not _initialized:
+        load_connections()
+
+    conn = _connection_registry.get(service_id)
+    if not conn:
+        logger.warning(f"Unknown service: {service_id}")
+        return False
+
+    health = conn.health_check
+    is_healthy = False
+    error_message = None
+
+    try:
+        # Handle different health check methods
+        if health.method == "PING":
+            # Redis PING check
+            is_healthy, error_message = await _check_redis_health(conn)
+        elif health.method == "CONNECT":
+            # Database connection check
+            is_healthy, error_message = await _check_postgres_health(conn)
+        elif health.endpoint:
+            # HTTP endpoint check
+            is_healthy, error_message = await _check_http_health(conn)
+        else:
+            # No health check configured - assume healthy if URL is set
+            is_healthy = bool(conn.url)
+            if not is_healthy:
+                error_message = "No URL configured"
+
+    except Exception as e:
+        is_healthy = False
+        error_message = str(e)
+        logger.error(f"Health check failed for {service_id}: {e}")
+
+    # Update cached status
+    update_health_status(service_id, is_healthy, error_message)
+
+    return is_healthy
+
+
+async def _check_http_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
+    """Check HTTP endpoint health."""
+    import httpx
+
+    health = conn.health_check
+    url = f"{conn.url.rstrip('/')}{health.endpoint}"
+
+    try:
+        async with httpx.AsyncClient(timeout=conn.timeout_seconds) as client:
+            response = await client.request(
+                method=health.method,
+                url=url,
+                headers=health.headers
+            )
+
+            if response.status_code == health.expected_status:
+                return True, None
+            else:
+                return False, f"Expected status {health.expected_status}, got {response.status_code}"
+
+    except httpx.TimeoutException:
+        return False, f"Connection timeout after {conn.timeout_seconds}s"
+    except httpx.ConnectError as e:
+        return False, f"Connection failed: {e}"
+    except Exception as e:
+        return False, str(e)
+
+
+async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
+    """Check Redis health via PING command."""
+    try:
+        import redis.asyncio as aioredis
+        from urllib.parse import urlparse
+
+        parsed = urlparse(conn.url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 6379
+
+        client = aioredis.Redis(
+            host=host,
+            port=port,
+            socket_timeout=conn.timeout_seconds,
+            socket_connect_timeout=conn.timeout_seconds,
+        )
+
+        try:
+            result = await client.ping()
+            if result:
+                return True, None
+            return False, "PING returned False"
+        finally:
+            await client.aclose()
+
+    except ImportError:
+        return False, "redis package not installed"
+    except Exception as e:
+        return False, str(e)
+
+
+async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
+    """Check Postgres health via connection test."""
+    try:
+        import asyncpg
+
+        # Parse connection string or use URL directly
+        # asyncpg can handle postgres:// URLs
+        url = conn.url.replace("postgresql://", "postgres://")
+
+        try:
+            conn_pg = await asyncpg.connect(url, timeout=conn.timeout_seconds)
+            await conn_pg.execute("SELECT 1")
+            await conn_pg.close()
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+    except ImportError:
+        # Fall back to psycopg2 sync check if asyncpg not available
+        try:
+            import psycopg2
+            from urllib.parse import urlparse
+
+            parsed = urlparse(conn.url)
+            pg_conn = psycopg2.connect(
+                host=parsed.hostname,
+                port=parsed.port or 5432,
+                user=parsed.username,
+                password=parsed.password,
+                dbname=parsed.path.lstrip('/'),
+                connect_timeout=conn.timeout_seconds,
+            )
+            pg_conn.close()
+            return True, None
+        except ImportError:
+            return False, "Neither asyncpg nor psycopg2 installed"
+        except Exception as e:
+            return False, str(e)
+
+
+async def check_all_health() -> Dict[str, Dict[str, Any]]:
+    """
+    Check health of all configured services.
+
+    Returns:
+        Dictionary with service_id keys and health status info:
+        {
+            "weaviate": {
+                "service_id": "weaviate",
+                "description": "Vector database",
+                "required": True,
+                "is_healthy": True,
+                "last_error": None,
+                "url": "http://..."  # URL is included
+            },
+            ...
+        }
+    """
+    if not _initialized:
+        load_connections()
+
+    # Check all services concurrently
+    import asyncio
+    service_ids = list(_connection_registry.keys())
+
+    await asyncio.gather(*[check_service_health(sid) for sid in service_ids])
+
+    return get_connection_status()
+
+
+async def check_required_services_healthy() -> tuple[bool, List[str]]:
+    """
+    Check if all required services are healthy.
+
+    This is intended for startup gating - if required services are unhealthy,
+    the application should not start.
+
+    Returns:
+        Tuple of (all_healthy, list_of_failed_service_ids)
+    """
+    if not _initialized:
+        load_connections()
+
+    required = get_required_connections()
+    failed = []
+
+    import asyncio
+    await asyncio.gather(*[check_service_health(c.service_id) for c in required])
+
+    for conn in required:
+        if not conn.is_healthy:
+            failed.append(conn.service_id)
+
+    return len(failed) == 0, failed

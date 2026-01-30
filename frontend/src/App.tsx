@@ -25,6 +25,7 @@ import AgentStudioPage from './pages/AgentStudioPage'
 import BatchPage from './pages/BatchPage'
 import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
+import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import theme from './theme'
 import './App.css'
 
@@ -275,6 +276,7 @@ function App() {
       <ForceScrollFix />
       <MaintenanceBanner />
       <QueryClientProvider client={queryClient}>
+        <ConnectionsHealthBanner />
         <Router>
           <AuthProvider>
             <ProtectedRoutes>
