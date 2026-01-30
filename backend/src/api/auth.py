@@ -403,23 +403,24 @@ async def _get_user_from_cookie_impl(
     if is_dev_mode():
         logger.debug("DEV_MODE enabled - returning mock user (bypassing Cognito authentication)")
 
-        # Support DEV_USER_MODS env var for testing MOD-specific behavior
-        # Format: comma-separated MOD IDs (e.g., "MGI,FB" or "MGI")
-        dev_user_mods = os.getenv("DEV_USER_MODS", "")
+        # Support DEV_USER_GROUPS env var for testing group-specific behavior
+        # Format: comma-separated group IDs (e.g., "MGI,FB" or "MGI")
+        # Dual-read: support both DEV_USER_GROUPS (new) and DEV_USER_MODS (legacy)
+        dev_user_groups = os.getenv("DEV_USER_GROUPS") or os.getenv("DEV_USER_MODS", "")
         cognito_groups: List[str] = ["developers"]  # Always include developers group
 
-        if dev_user_mods:
-            # Map MOD IDs to Cognito group names using groups_loader
-            parsed_mods = [m.strip().upper() for m in dev_user_mods.split(",") if m.strip()]
-            for mod in parsed_mods:
-                group_def = get_group(mod)
+        if dev_user_groups:
+            # Map group IDs to Cognito group names using groups_loader
+            parsed_groups = [g.strip().upper() for g in dev_user_groups.split(",") if g.strip()]
+            for group_id in parsed_groups:
+                group_def = get_group(group_id)
                 if group_def and group_def.cognito_groups:
-                    # Use the first cognito group for this MOD
+                    # Use the first cognito group for this group
                     cognito_groups.append(group_def.cognito_groups[0])
                 else:
-                    # Unknown MOD, create a generic group name
-                    cognito_groups.append(f"{mod.lower()}-curators")
-            logger.info(f"DEV_USER_MODS={dev_user_mods} -> cognito:groups={cognito_groups}")
+                    # Unknown group, create a generic group name
+                    cognito_groups.append(f"{group_id.lower()}-curators")
+            logger.info(f"DEV_USER_GROUPS={dev_user_groups} -> cognito:groups={cognito_groups}")
 
         # Use SimpleNamespace to support both dict-like .get() and attribute access .uid
         mock_user_dict = {

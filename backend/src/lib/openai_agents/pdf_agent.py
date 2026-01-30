@@ -40,7 +40,8 @@ def create_pdf_agent(
     document_name: Optional[str] = None,
     sections: Optional[List[Dict[str, Any]]] = None,
     hierarchy: Optional[Dict[str, Any]] = None,
-    abstract: Optional[str] = None
+    abstract: Optional[str] = None,
+    active_groups: Optional[List[str]] = None,
 ) -> Agent:
     """
     Create a PDF Q&A agent configured for a specific document.
@@ -58,6 +59,9 @@ def create_pdf_agent(
         sections: Optional flat list of sections (fallback if hierarchy not available)
         hierarchy: Optional hierarchical structure from get_document_sections_hierarchical
         abstract: Optional abstract text from the paper
+        active_groups: Optional list of group IDs to inject rules for (e.g., ["WB", "FB"]).
+                       If provided, group-specific rules will be appended to the base prompt.
+                       These rules come from config/agents/pdf/group_rules/<group>.yaml
 
     Returns:
         An Agent instance configured for PDF Q&A
@@ -89,6 +93,24 @@ def create_pdf_agent(
 
     # Build instructions from cached prompt
     instructions = base_prompt.content
+
+    # Inject group-specific rules if provided
+    if active_groups:
+        try:
+            from config.mod_rules.mod_config import inject_group_rules
+
+            instructions = inject_group_rules(
+                base_prompt=instructions,
+                group_ids=active_groups,
+                component_type="agents",
+                component_name="pdf",
+                prompts_out=prompts_used,  # Collect group prompts for tracking
+            )
+            logger.info(f"PDF agent configured with group-specific rules: {active_groups}")
+        except ImportError as e:
+            logger.warning(f"Could not import mod_config, skipping group injection: {e}")
+        except Exception as e:
+            logger.error(f"Failed to inject group rules: {e}")
 
     # Inject document context (hierarchy + abstract) using shared utility
     context_text, structure_info = format_document_context_for_prompt(
@@ -144,6 +166,7 @@ def create_pdf_agent(
             "has_abstract": bool(abstract),
             "abstract_length": len(abstract) if abstract else 0,
             "prompt_version": base_prompt.version,
+            "active_groups": active_groups,  # Log which groups are active
         }
     )
 

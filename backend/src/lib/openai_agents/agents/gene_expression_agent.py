@@ -40,7 +40,7 @@ def create_gene_expression_agent(
     sections: Optional[List[Dict[str, Any]]] = None,
     hierarchy: Optional[Dict[str, Any]] = None,
     abstract: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
 ) -> Agent:
     """
     Create a Gene Expression specialist agent with full PDF extraction capabilities.
@@ -57,9 +57,9 @@ def create_gene_expression_agent(
         sections: Optional flat list of sections (fallback if hierarchy not available)
         hierarchy: Optional hierarchical structure from get_document_sections_hierarchical
         abstract: Optional abstract text from the paper
-        active_mods: Optional list of MOD IDs to inject rules for (e.g., ["WB", "FB"]).
-                     If provided, MOD-specific rules will be appended to the base prompt.
-                     These rules come from config/mod_rules/agents/gene_expression/<mod>.yaml
+        active_groups: Optional list of group IDs to inject rules for (e.g., ["WB", "FB"]).
+                       If provided, group-specific rules will be appended to the base prompt.
+                       These rules come from config/agents/gene_expression/group_rules/<group>.yaml
 
     Returns:
         An Agent instance configured for Gene Expression extraction
@@ -101,23 +101,23 @@ def create_gene_expression_agent(
     # NOTE: No structured output injection - this agent returns plain text
     # The Formatter Agent handles text-to-JSON conversion separately
 
-    # Inject MOD-specific rules if provided
-    if active_mods:
+    # Inject group-specific rules if provided
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
+            from config.mod_rules.mod_config import inject_group_rules
 
-            instructions = inject_mod_rules(
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="gene_expression",
-                prompts_out=prompts_used,  # Collect MOD prompts for tracking
+                prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Gene Expression agent configured with MOD-specific rules: {active_mods}")
+            logger.info(f"Gene Expression agent configured with group-specific rules: {active_groups}")
         except ImportError as e:
-            logger.warning(f"Could not import mod_config, skipping MOD injection: {e}")
+            logger.warning(f"Could not import mod_config, skipping group injection: {e}")
         except Exception as e:
-            logger.error(f"Failed to inject MOD rules: {e}")
+            logger.error(f"Failed to inject group rules: {e}")
 
     # Inject document context (hierarchy + abstract) using shared utility
     context_text, structure_info = format_document_context_for_prompt(
@@ -166,7 +166,7 @@ def create_gene_expression_agent(
             "reasoning": config.reasoning,
             "tool_choice": config.tool_choice,
             "prompt_version": base_prompt.version,
-            "active_mods": active_mods,  # Log which MODs are active
+            "active_groups": active_groups,  # Log which groups are active
         },
         metadata={
             "document_id": document_id,

@@ -138,7 +138,7 @@ curl -X POST http://localhost:8001/api/traces/analyze \
     "trace_summary",
     "document_hierarchy",
     "agent_configs",
-    "mod_context"
+    "group_context"
   ]
 }
 ```
@@ -259,11 +259,11 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
       "models_used": ["gpt-4o-mini"],
       "tools_available": ["search_document", "read_section"]
     },
-    "mod_context": {
-      "active_mods": ["FB"],
+    "group_context": {
+      "active_groups": ["FB"],
       "injection_active": true,
-      "mod_count": 1,
-      "mod_details": [ { "mod_id": "FB", "description": "FlyBase" } ]
+      "group_count": 1,
+      "group_details": [ { "group_id": "FB", "description": "FlyBase (Drosophila melanogaster)" } ]
     }
   }
 }
@@ -299,7 +299,7 @@ Retrieve a single analysis view for a previously analyzed trace.
 | `trace_summary` | Comprehensive overview: query, response preview, errors, timing, cost |
 | `document_hierarchy` | Document section structure extracted from PDF specialist |
 | `agent_configs` | Detailed agent configuration events (models, tools, system prompts) |
-| `mod_context` | Model organism database context (active MODs for injection) |
+| `group_context` | Organization group context (active groups for rule injection) |
 
 #### Request Examples
 
@@ -331,8 +331,8 @@ curl http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/views/doc
 # Get agent configs view (detailed agent configurations)
 curl http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/views/agent_configs | jq
 
-# Get MOD context view (model organism database context)
-curl http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/views/mod_context | jq
+# Get group context view (organization group context)
+curl http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/views/group_context | jq
 ```
 
 #### Response (200 OK)

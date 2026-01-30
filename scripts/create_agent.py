@@ -178,9 +178,9 @@ def generate_agent_skeleton(config: NewAgentInput) -> str:
     if config.requires_document:
         factory_params = """document_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,"""
+    active_groups: Optional[List[str]] = None,"""
     else:
-        factory_params = "active_mods: Optional[List[str]] = None,"
+        factory_params = "active_groups: Optional[List[str]] = None,"
 
     return f'''"""
 {config.name}.
@@ -215,7 +215,7 @@ def create_{config.agent_id}_agent(
     {config.description}
 
     Args:
-        active_mods: Optional list of MOD IDs for MOD-specific rules.
+        active_groups: Optional list of group IDs for group-specific rules.
 
     Returns:
         An Agent instance configured for {config.agent_id} tasks
@@ -231,23 +231,23 @@ def create_{config.agent_id}_agent(
     # Build instructions from cached prompt
     instructions = base_prompt.content
 
-    # Inject MOD-specific rules if provided
-    if active_mods:
+    # Inject group-specific rules if provided
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
+            from config.mod_rules.mod_config import inject_group_rules
 
-            instructions = inject_mod_rules(
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="{config.agent_id}",
                 prompts_out=prompts_used,
             )
-            logger.info(f"{config.name} configured with MOD rules: {{active_mods}}")
+            logger.info(f"{config.name} configured with group rules: {{active_groups}}")
         except ImportError as e:
             logger.warning(f"Could not import mod_config, skipping: {{e}}")
         except Exception as e:
-            logger.error(f"Failed to inject MOD rules: {{e}}")
+            logger.error(f"Failed to inject group rules: {{e}}")
 
     # Get model (returns LitellmModel for Gemini, string for OpenAI)
     model = get_model_for_agent(agent_config.model)
@@ -277,7 +277,7 @@ def create_{config.agent_id}_agent(
             "temperature": agent_config.temperature,
             "reasoning": agent_config.reasoning,
             "prompt_version": base_prompt.version,
-            "active_mods": active_mods,
+            "active_groups": active_groups,
         }},
     )
 
@@ -384,7 +384,7 @@ This tool will create a new agent with the following configuration:
   1. CREATE: {agent_file}
      - Agent factory function: create_{config.agent_id}_agent()
      - Uses database-backed prompts via get_prompt()
-     - Supports MOD-specific rules injection
+     - Supports group-specific rules injection
      - Logs to Langfuse for tracing
 
   2. MODIFY: {init_file}

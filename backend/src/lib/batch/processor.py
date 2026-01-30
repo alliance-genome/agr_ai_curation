@@ -296,7 +296,7 @@ async def _execute_flow_for_document(
             document_id=document_id,
             document_name=None,  # Will be fetched by DocumentContext
             user_query=None,  # Use task_instructions from flow
-            active_mods=None,  # Default MODs
+            active_groups=None,  # Default groups
         ):
             event_type = event.get("type", "")
 

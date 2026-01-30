@@ -125,12 +125,13 @@ async def _ensure_trace_analyzed(
             "system_domain": system_domain
         }
 
-        # MOD context
-        active_mods = metadata.get("active_mods", [])
-        mod_context = {
-            "active_mods": active_mods,
-            "injection_active": len(active_mods) > 0,
-            "mod_count": len(active_mods),
+        # Group context
+        # Dual-read: support both active_groups (new) and active_mods (historical)
+        active_groups = metadata.get("active_groups") or metadata.get("active_mods", [])
+        group_context = {
+            "active_groups": active_groups,
+            "injection_active": len(active_groups) > 0,
+            "group_count": len(active_groups),
         }
 
         # Cache the data
@@ -148,7 +149,7 @@ async def _ensure_trace_analyzed(
                 "trace_summary": trace_summary,
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
-                "mod_context": mod_context
+                "group_context": group_context
             }
         }
 

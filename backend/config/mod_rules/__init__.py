@@ -1,11 +1,11 @@
 """
-MOD-specific rules package.
+Group-specific rules package.
 
-This package contains YAML configuration files for Model Organism Database
-(MOD) specific rules that are injected into agents and tools at runtime.
+This package contains YAML configuration files for group-specific rules
+(MODs, institutions, teams, etc.) that are injected into agents and tools at runtime.
 
 Usage:
-    from config.mod_rules.mod_config import inject_mod_rules, get_mods_from_cognito_groups
+    from config.mod_rules import inject_group_rules, get_groups_from_cognito
 
 Structure:
     agents/
@@ -23,17 +23,17 @@ Structure:
 """
 
 from .mod_config import (
-    inject_mod_rules,
-    get_mods_from_cognito_groups,
-    normalize_mod_id,
-    get_available_mods,
-    validate_mod_rules,
+    inject_group_rules,
+    get_groups_from_cognito,
+    normalize_group_id,
+    get_available_groups,
+    validate_group_rules,
 )
 
 __all__ = [
-    "inject_mod_rules",
-    "get_mods_from_cognito_groups",
-    "normalize_mod_id",
-    "get_available_mods",
-    "validate_mod_rules",
+    "inject_group_rules",
+    "get_groups_from_cognito",
+    "normalize_group_id",
+    "get_available_groups",
+    "validate_group_rules",
 ]

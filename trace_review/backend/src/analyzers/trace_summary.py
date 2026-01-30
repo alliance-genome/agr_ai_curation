@@ -172,12 +172,13 @@ class TraceSummaryAnalyzer:
             "sdk_info": trace_metadata.get("resourceAttributes", {})
         }
 
-        # MOD-specific context (which Model Organism Database rules were active)
-        active_mods = trace_metadata.get("active_mods", [])
-        mod_context = {
-            "active_mods": active_mods,
-            "injection_active": len(active_mods) > 0,
-            "mod_count": len(active_mods)
+        # Group-specific context (which group rules were active)
+        # Dual-read: support both active_groups (new) and active_mods (historical)
+        active_groups = trace_metadata.get("active_groups") or trace_metadata.get("active_mods", [])
+        group_context = {
+            "active_groups": active_groups,
+            "injection_active": len(active_groups) > 0,
+            "group_count": len(active_groups)
         }
 
         # Extract clean response using ConversationAnalyzer
@@ -206,7 +207,7 @@ class TraceSummaryAnalyzer:
             "has_errors": len(errors) > 0,
             "context_overflow_detected": context_overflow,
             "agent_info": agent_info,
-            "mod_context": mod_context,
+            "group_context": group_context,
             "links": links
         }
 

@@ -30,7 +30,7 @@ from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
-from config.mod_rules import get_mods_from_cognito_groups
+from config.mod_rules import get_groups_from_cognito
 from ..lib.redis_client import (
     set_cancel_signal,
     check_cancel_signal,
@@ -294,12 +294,12 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
     document_id = active_doc.get("id") if active_doc else None
     document_name = active_doc.get("filename") if active_doc else None
 
-    # Extract active MODs from user's Cognito groups for prompt injection
+    # Extract active groups from user's Cognito groups for prompt injection
     # Note: Cognito uses "cognito:groups" as the claim key
     cognito_groups = user.get("cognito:groups", [])
-    active_mods = get_mods_from_cognito_groups(cognito_groups)
-    if active_mods:
-        logger.info(f"[chat] User has active MODs: {active_mods} (from groups: {cognito_groups})")
+    active_groups = get_groups_from_cognito(cognito_groups)
+    if active_groups:
+        logger.info(f"[chat] User has active groups: {active_groups} (from Cognito groups: {cognito_groups})")
 
     try:
         # Retrieve conversation history for multi-turn context
@@ -318,7 +318,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             document_id=document_id,
             document_name=document_name,
             conversation_history=conversation_history,
-            active_mods=active_mods,
+            active_groups=active_groups,
         ):
             event_type = event.get("type")
 
@@ -368,12 +368,12 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
     doc_info = f"document={document_id[:8]}..." if document_id else "no document"
     logger.info(f"[chat/stream] Request from user {user_id[:8]}..., {doc_info}")
 
-    # Extract active MODs from user's Cognito groups for prompt injection
+    # Extract active groups from user's Cognito groups for prompt injection
     # Note: Cognito uses "cognito:groups" as the claim key
     cognito_groups = user.get("cognito:groups", [])
-    active_mods = get_mods_from_cognito_groups(cognito_groups)
-    if active_mods:
-        logger.info(f"[chat/stream] User has active MODs: {active_mods} (from groups: {cognito_groups})")
+    active_groups = get_groups_from_cognito(cognito_groups)
+    if active_groups:
+        logger.info(f"[chat/stream] User has active groups: {active_groups} (from Cognito groups: {cognito_groups})")
 
     # Retrieve conversation history for multi-turn context
     conversation_history = _get_conversation_history_for_session(user_id, session_id)
@@ -401,7 +401,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 document_id=document_id,
                 document_name=document_name,
                 conversation_history=conversation_history,
-                active_mods=active_mods,
+                active_groups=active_groups,
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
@@ -538,11 +538,11 @@ async def execute_flow_endpoint(
     flow.last_executed_at = datetime.now(timezone.utc)
     db.commit()
 
-    # Extract active MODs from user's Cognito groups for prompt injection
+    # Extract active groups from user's Cognito groups for prompt injection
     cognito_groups = user.get("cognito:groups", [])
-    active_mods = get_mods_from_cognito_groups(cognito_groups)
-    if active_mods:
-        logger.info(f"[execute-flow] User has active MODs: {active_mods}")
+    active_groups = get_groups_from_cognito(cognito_groups)
+    if active_groups:
+        logger.info(f"[execute-flow] User has active groups: {active_groups}")
 
     # Use Cognito sub (not db_user.id) for Weaviate tenant isolation
     # This matches how chat endpoints work - Weaviate tenants use the Cognito subject ID
@@ -586,7 +586,7 @@ async def execute_flow_endpoint(
                 document_id=str(request.document_id) if request.document_id else None,
                 document_name=document_name,
                 user_query=request.user_query,
-                active_mods=active_mods,
+                active_groups=active_groups,
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):

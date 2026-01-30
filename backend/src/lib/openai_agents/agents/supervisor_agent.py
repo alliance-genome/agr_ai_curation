@@ -294,7 +294,7 @@ def _create_dynamic_specialist_tools(
     sections: Optional[List[str]] = None,
     hierarchy: Optional[Dict[str, Any]] = None,
     abstract: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
 ) -> List[Callable]:
     """
     Dynamically create specialist tools based on discovered agent configs.
@@ -309,7 +309,7 @@ def _create_dynamic_specialist_tools(
         sections: Flat list of section names from document
         hierarchy: Hierarchical document structure
         abstract: Paper abstract for context injection
-        active_mods: MOD IDs for rule injection (e.g., ["MGI", "FB"])
+        active_groups: Group IDs for rule injection (e.g., ["MGI", "FB"])
 
     Returns:
         List of function_tool decorated callables
@@ -352,9 +352,9 @@ def _create_dynamic_specialist_tools(
                 "abstract": abstract,
             })
 
-        # MOD-aware agents
-        if group_rules_enabled and active_mods:
-            factory_kwargs["active_mods"] = active_mods
+        # Group-aware agents (MODs, institutions, teams, etc.)
+        if group_rules_enabled and active_groups:
+            factory_kwargs["active_groups"] = active_groups
 
         try:
             # Create the agent instance
@@ -396,7 +396,7 @@ def create_supervisor_agent(
     hierarchy: Optional[Dict[str, Any]] = None,
     abstract: Optional[str] = None,
     enable_guardrails: bool = False,  # Enable input guardrails (PII detection, topic check)
-    active_mods: Optional[List[str]] = None,  # MOD-specific rules to inject (e.g., ["MGI", "FB"])
+    active_groups: Optional[List[str]] = None,  # Group-specific rules to inject (e.g., ["MGI", "FB"])
 ) -> Agent:
     """
     Create a Supervisor agent with dynamically discovered specialist tools.
@@ -423,8 +423,8 @@ def create_supervisor_agent(
         hierarchy: Optional pre-fetched document hierarchy (avoids duplicate fetch)
         abstract: Optional pre-fetched paper abstract (injected into specialist prompts)
         enable_guardrails: Enable input guardrails for safety (default: False)
-        active_mods: Optional list of MOD IDs to inject rules for (e.g., ["MGI", "FB"]).
-                     Passed to agents with group_rules_enabled=True for MOD-specific behavior.
+        active_groups: Optional list of group IDs to inject rules for (e.g., ["MGI", "FB"]).
+                       Passed to agents with group_rules_enabled=True for group-specific behavior.
 
     Returns:
         An Agent instance configured as a supervisor with specialist tools
@@ -480,7 +480,7 @@ def create_supervisor_agent(
         sections=sections,
         hierarchy=hierarchy,
         abstract=abstract,
-        active_mods=active_mods,
+        active_groups=active_groups,
     )
 
     logger.info(f"[OpenAI Agents] Dynamic discovery created {len(specialist_tools)} specialist tools")
@@ -563,28 +563,28 @@ The tool returns file information including a download URL that will render as a
         # No document - inform supervisor that PDF tools are unavailable
         instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist and ask_gene_expression_specialist tools are not available."
 
-    # Inject MOD-specific rules for supervisor dispatch behavior
-    if active_mods:
+    # Inject group-specific rules for supervisor dispatch behavior
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
+            from config.mod_rules.mod_config import inject_group_rules
 
-            instructions = inject_mod_rules(
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="supervisor",
-                prompts_out=prompts_used,  # Collect MOD prompts for tracking
+                prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Supervisor configured with MOD-specific dispatch rules: {active_mods}")
+            logger.info(f"Supervisor configured with group-specific dispatch rules: {active_groups}")
         except ImportError as e:
             logger.warning(f"Could not import mod_config for supervisor, skipping injection: {e}")
         except Exception as e:
             # Don't fail if supervisor rules don't exist - they're optional
-            logger.debug(f"No supervisor MOD rules found or error: {e}")
+            logger.debug(f"No supervisor group rules found or error: {e}")
 
     logger.info(
         f"[OpenAI Agents] Creating Supervisor agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}, mods={active_mods}"
+        f"prompt_v={base_prompt.version}, groups={active_groups}"
     )
 
     # Create the supervisor with specialist tools

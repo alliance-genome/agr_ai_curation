@@ -20,8 +20,8 @@ from .auth import get_auth_dependency
 
 router = APIRouter()
 
-# MOD descriptions for display
-MOD_DESCRIPTIONS = {
+# Group descriptions for display (Alliance MODs as default groups)
+GROUP_DESCRIPTIONS = {
     "MGI": "Mouse Genome Informatics (Mus musculus)",
     "FB": "FlyBase (Drosophila melanogaster)",
     "WB": "WormBase (Caenorhabditis elegans)",
@@ -57,7 +57,7 @@ async def analyze_trace(
     ALL_VIEWS = [
         "summary", "conversation", "tool_calls",
         "pdf_citations", "token_analysis", "agent_context", "trace_summary",
-        "document_hierarchy", "agent_configs", "mod_context"
+        "document_hierarchy", "agent_configs", "group_context"
     ]
 
     # Check cache first
@@ -115,15 +115,16 @@ async def analyze_trace(
             "system_domain": system_domain
         }
 
-        # Extract MOD context from trace metadata
-        active_mods = metadata.get("active_mods", [])
-        mod_context = {
-            "active_mods": active_mods,
-            "injection_active": len(active_mods) > 0,
-            "mod_count": len(active_mods),
-            "mod_details": [
-                {"mod_id": mod, "description": MOD_DESCRIPTIONS.get(mod, "Unknown MOD")}
-                for mod in active_mods
+        # Extract group context from trace metadata
+        # Dual-read: support both active_groups (new) and active_mods (historical)
+        active_groups = metadata.get("active_groups") or metadata.get("active_mods", [])
+        group_context = {
+            "active_groups": active_groups,
+            "injection_active": len(active_groups) > 0,
+            "group_count": len(active_groups),
+            "group_details": [
+                {"group_id": grp, "description": GROUP_DESCRIPTIONS.get(grp, "Unknown group")}
+                for grp in active_groups
             ]
         }
 
@@ -142,7 +143,7 @@ async def analyze_trace(
                 "trace_summary": trace_summary,
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
-                "mod_context": mod_context
+                "group_context": group_context
             }
         }
 
@@ -253,15 +254,16 @@ async def export_trace(
             "system_domain": system_domain
         }
 
-        # Extract MOD context from trace metadata
-        active_mods = metadata.get("active_mods", [])
-        mod_context = {
-            "active_mods": active_mods,
-            "injection_active": len(active_mods) > 0,
-            "mod_count": len(active_mods),
-            "mod_details": [
-                {"mod_id": mod, "description": MOD_DESCRIPTIONS.get(mod, "Unknown MOD")}
-                for mod in active_mods
+        # Extract group context from trace metadata
+        # Dual-read: support both active_groups (new) and active_mods (historical)
+        active_groups = metadata.get("active_groups") or metadata.get("active_mods", [])
+        group_context = {
+            "active_groups": active_groups,
+            "injection_active": len(active_groups) > 0,
+            "group_count": len(active_groups),
+            "group_details": [
+                {"group_id": grp, "description": GROUP_DESCRIPTIONS.get(grp, "Unknown group")}
+                for grp in active_groups
             ]
         }
 
@@ -280,7 +282,7 @@ async def export_trace(
                 "trace_summary": trace_summary,
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
-                "mod_context": mod_context
+                "group_context": group_context
             }
         }
 

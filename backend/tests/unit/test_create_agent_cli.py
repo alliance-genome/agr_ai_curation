@@ -110,8 +110,8 @@ class TestGenerateAgentSkeleton:
         # Should use agent_config, not config, for the config variable
         assert "agent_config = get_agent_config" in code
 
-    def test_includes_mod_rules_injection(self):
-        """Should include MOD rules injection code."""
+    def test_includes_group_rules_injection(self):
+        """Should include group rules injection code."""
         config = NewAgentInput(
             agent_id="test_agent",
             name="Test Agent",
@@ -120,8 +120,8 @@ class TestGenerateAgentSkeleton:
             tools=["test_tool"],
         )
         code = generate_agent_skeleton(config)
-        assert "inject_mod_rules" in code
-        assert "active_mods" in code
+        assert "inject_group_rules" in code
+        assert "active_groups" in code
 
     def test_includes_output_type_comment(self):
         """Should include output_type placeholder comment."""

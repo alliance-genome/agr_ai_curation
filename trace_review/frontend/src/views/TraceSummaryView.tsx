@@ -277,27 +277,27 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
         </Paper>
       )}
 
-      {/* MOD Context */}
-      {data.mod_context && data.mod_context.injection_active && (
+      {/* Group Context */}
+      {data.group_context && data.group_context.injection_active && (
         <Paper sx={{ p: 2, mb: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             <BiotechIcon color="primary" />
-            <Typography variant="h6">MOD Context</Typography>
+            <Typography variant="h6">Group Context</Typography>
             <Chip
-              label={`${data.mod_context.mod_count} MOD${data.mod_context.mod_count > 1 ? 's' : ''} Active`}
+              label={`${data.group_context.group_count} Group${data.group_context.group_count > 1 ? 's' : ''} Active`}
               size="small"
               color="success"
             />
           </Box>
           <Typography color="text.secondary" variant="body2" gutterBottom>
-            Model Organism Database-specific rules applied to this session
+            Group-specific rules applied to this session
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-            {data.mod_context.mod_details ? (
-              data.mod_context.mod_details.map((mod) => (
-                <Tooltip key={mod.mod_id} title={mod.description} arrow>
+            {data.group_context.group_details ? (
+              data.group_context.group_details.map((grp) => (
+                <Tooltip key={grp.group_id} title={grp.description} arrow>
                   <Chip
-                    label={mod.mod_id}
+                    label={grp.group_id}
                     color="primary"
                     variant="outlined"
                     icon={<BiotechIcon />}
@@ -305,10 +305,10 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
                 </Tooltip>
               ))
             ) : (
-              data.mod_context.active_mods.map((mod) => (
+              data.group_context.active_groups.map((grp) => (
                 <Chip
-                  key={mod}
-                  label={mod}
+                  key={grp}
+                  label={grp}
                   color="primary"
                   variant="outlined"
                   icon={<BiotechIcon />}

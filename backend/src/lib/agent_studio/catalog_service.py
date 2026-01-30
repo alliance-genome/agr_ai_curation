@@ -501,12 +501,12 @@ AGENT_REGISTRY = {
         "description": "Validates gene identifiers against the Alliance Curation Database",
         "category": "Validation",
         "subcategory": "Data Validation",
-        "has_mod_rules": True,  # gene has MOD-specific lookup rules
+        "has_mod_rules": True,  # gene has group-specific lookup rules
         "tools": ["agr_curation_query"],
         # Flow execution fields
         "factory": create_gene_agent,
         "requires_document": False,
-        "required_params": [],  # active_mods is optional
+        "required_params": [],  # active_groups is optional
         "batch_capabilities": [],  # Validation - no special capabilities
         "frontend": {
             "icon": "🧬",
@@ -570,12 +570,12 @@ AGENT_REGISTRY = {
         "description": "Validates allele/variant identifiers against the Alliance Curation Database",
         "category": "Validation",
         "subcategory": "Data Validation",
-        "has_mod_rules": True,  # allele has MOD-specific lookup rules
+        "has_mod_rules": True,  # allele has group-specific lookup rules
         "tools": ["agr_curation_query"],
         # Flow execution fields
         "factory": create_allele_agent,
         "requires_document": False,
-        "required_params": [],  # active_mods is optional
+        "required_params": [],  # active_groups is optional
         "batch_capabilities": [],  # Validation - no special capabilities
         "frontend": {
             "icon": "🔬",
@@ -2086,7 +2086,7 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
             - document_id: For document-aware agents (pdf, gene_expression)
             - user_id: For Weaviate tenant isolation
             - document_name, sections, hierarchy, abstract: PDF context
-            - active_mods: List of active MOD IDs (e.g., ['SGD', 'MGI'])
+            - active_groups: List of active group IDs (e.g., ['SGD', 'MGI'])
             - format_type: For formatter agent
 
     Returns:
@@ -2101,12 +2101,12 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
         context = {
             "document_id": "doc123",
             "user_id": "user456",
-            "active_mods": ["SGD", "MGI"],
+            "active_groups": ["SGD", "MGI"],
         }
 
         # Registry filters to only what each factory needs:
         gene_agent = get_agent_by_id("gene", **context)
-        # -> create_gene_agent(active_mods=["SGD", "MGI"])
+        # -> create_gene_agent(active_groups=["SGD", "MGI"])
 
         disease_agent = get_agent_by_id("disease", **context)
         # -> create_disease_agent()  # No params needed

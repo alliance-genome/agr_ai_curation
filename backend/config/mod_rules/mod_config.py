@@ -1,25 +1,25 @@
 """
-MOD-specific rule loading and prompt injection.
+Group-specific rule loading and prompt injection.
 
 This module handles:
-1. Loading MOD rules from the prompt cache (pre-rendered from database)
+1. Loading group rules from the prompt cache (pre-rendered from database)
 2. Formatting rules for prompt injection
-3. Mapping Cognito groups to default MODs
+3. Mapping Cognito groups to default organization groups
 4. Injecting formatted rules into agent/tool prompts
 
 Usage:
-    from config.mod_rules.mod_config import inject_mod_rules, get_mods_from_cognito_groups
+    from config.mod_rules import inject_group_rules, get_groups_from_cognito
 
     # Inject MGI-specific rules into allele agent
-    instructions = inject_mod_rules(
+    instructions = inject_group_rules(
         base_prompt=ALLELE_AGENT_INSTRUCTIONS,
-        mod_ids=["MGI"],
+        group_ids=["MGI"],
         component_type="agents",
         component_name="allele"
     )
 
-    # Get user's default MODs from their Cognito groups
-    mods = get_mods_from_cognito_groups(["mgi-curators", "developers"])
+    # Get user's default groups from their Cognito groups
+    groups = get_groups_from_cognito(["mgi-curators", "developers"])
     # Returns: ["MGI"]
 """
 
@@ -34,14 +34,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Base path for mod rules (same directory as this module)
-MOD_RULES_PATH = Path(__file__).parent
+# Base path for group rules (same directory as this module)
+GROUP_RULES_PATH = Path(__file__).parent
 
 
-# Cognito group → MOD mapping
-# This maps Cognito group names to their associated MOD IDs
+# Cognito group → organization group mapping
+# This maps Cognito group names to their associated group IDs
 # Alliance-wide groups get empty list (user chooses per session)
-COGNITO_GROUP_TO_MOD: Dict[str, List[str]] = {
+COGNITO_GROUP_TO_GROUP: Dict[str, List[str]] = {
     # MOD-specific curator groups
     "mgi-curators": ["MGI"],
     "flybase-curators": ["FB"],
@@ -50,15 +50,15 @@ COGNITO_GROUP_TO_MOD: Dict[str, List[str]] = {
     "rgd-curators": ["RGD"],
     "sgd-curators": ["SGD"],
     "hgnc-curators": ["HGNC"],
-    # Alliance-wide groups (no default MOD, user chooses)
+    # Alliance-wide groups (no default group, user chooses)
     "alliance-admins": [],
-    "developers": [],  # Dev users can set via DEV_USER_MODS env var
+    "developers": [],  # Dev users can set via DEV_USER_GROUPS env var
 }
 
 
-# Canonical MOD ID normalization
-# Handles various ways users might specify MOD IDs
-MOD_ID_ALIASES: Dict[str, str] = {
+# Canonical group ID normalization
+# Handles various ways users might specify group IDs
+GROUP_ID_ALIASES: Dict[str, str] = {
     # MGI variants
     "mgi": "MGI",
     "mouse": "MGI",
@@ -90,74 +90,74 @@ MOD_ID_ALIASES: Dict[str, str] = {
 }
 
 
-def normalize_mod_id(mod_id: str) -> str:
+def normalize_group_id(group_id: str) -> str:
     """
-    Normalize a MOD ID to its canonical form.
+    Normalize a group ID to its canonical form.
 
     Args:
-        mod_id: MOD identifier (case-insensitive, supports aliases)
+        group_id: Group identifier (case-insensitive, supports aliases)
 
     Returns:
-        Canonical MOD ID (e.g., "MGI", "FB", "WB")
+        Canonical group ID (e.g., "MGI", "FB", "WB")
 
     Examples:
-        >>> normalize_mod_id("mgi")
+        >>> normalize_group_id("mgi")
         "MGI"
-        >>> normalize_mod_id("flybase")
+        >>> normalize_group_id("flybase")
         "FB"
-        >>> normalize_mod_id("mouse")
+        >>> normalize_group_id("mouse")
         "MGI"
     """
-    normalized = mod_id.strip().lower()
-    return MOD_ID_ALIASES.get(normalized, mod_id.upper())
+    normalized = group_id.strip().lower()
+    return GROUP_ID_ALIASES.get(normalized, group_id.upper())
 
 
-def get_mods_from_cognito_groups(groups: List[str]) -> List[str]:
+def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
     """
-    Map Cognito group memberships to default MOD(s).
+    Map Cognito group memberships to default organization group(s).
 
     Args:
-        groups: List of Cognito group names user belongs to
+        cognito_groups: List of Cognito group names user belongs to
 
     Returns:
-        List of canonical MOD IDs to use as defaults
+        List of canonical group IDs to use as defaults
 
     Example:
-        >>> get_mods_from_cognito_groups(["mgi-curators", "developers"])
+        >>> get_groups_from_cognito(["mgi-curators", "developers"])
         ["MGI"]
-        >>> get_mods_from_cognito_groups(["alliance-admins"])
+        >>> get_groups_from_cognito(["alliance-admins"])
         []  # No default, user must choose
     """
-    mods: Set[str] = set()
+    groups: Set[str] = set()
 
-    for group in groups:
+    for group in cognito_groups:
         group_lower = group.lower()
-        if group_lower in COGNITO_GROUP_TO_MOD:
-            mods.update(COGNITO_GROUP_TO_MOD[group_lower])
+        if group_lower in COGNITO_GROUP_TO_GROUP:
+            groups.update(COGNITO_GROUP_TO_GROUP[group_lower])
 
-    return list(mods)
+    return list(groups)
 
 
-def inject_mod_rules(
+def inject_group_rules(
     base_prompt: str,
-    mod_ids: List[str],
+    group_ids: List[str],
     component_type: str,
     component_name: str,
-    injection_marker: str = "## MOD-SPECIFIC RULES",
+    injection_marker: str = "## GROUP-SPECIFIC RULES",
     prompts_out: Optional[List["PromptTemplate"]] = None,
 ) -> str:
     """
-    Inject MOD-specific rules into an agent/tool prompt.
+    Inject group-specific rules into an agent/tool prompt.
 
-    This function uses the prompt cache to get pre-rendered MOD rules.
-    MOD rules are stored in the database with prompt_type="mod_rules".
+    This function uses the prompt cache to get pre-rendered group rules.
+    Group rules are stored in the database with prompt_type="group_rules".
 
     The prompt cache MUST be initialized before calling this function.
     There is no fallback - if the cache is not initialized, a RuntimeError is raised.
 
     Args:
         base_prompt: The base prompt to inject into
-        mod_ids: List of MOD identifiers (e.g., ["MGI", "FB"])
+        group_ids: List of group identifiers (e.g., ["MGI", "FB"])
         component_type: Unused, kept for backwards compatibility
         component_name: Name of the agent or tool (maps to agent_name in cache)
         injection_marker: Where to inject (if present) or append
@@ -165,16 +165,16 @@ def inject_mod_rules(
                      (for execution logging via context tracking)
 
     Returns:
-        Prompt with MOD rules injected
+        Prompt with group rules injected
 
     Raises:
         RuntimeError: If prompt cache is not initialized
 
     Example:
         >>> prompts_used = []
-        >>> instructions = inject_mod_rules(
+        >>> instructions = inject_group_rules(
         ...     base_prompt=ALLELE_AGENT_INSTRUCTIONS,
-        ...     mod_ids=["MGI"],
+        ...     group_ids=["MGI"],
         ...     component_type="agents",
         ...     component_name="allele",
         ...     prompts_out=prompts_used
@@ -184,13 +184,13 @@ def inject_mod_rules(
         >>> len(prompts_used)
         1
     """
-    if not mod_ids:
-        logger.debug("No MOD IDs provided, returning base prompt unchanged")
+    if not group_ids:
+        logger.debug("No group IDs provided, returning base prompt unchanged")
         return base_prompt
 
-    # Normalize all MOD IDs
-    normalized_mods = [normalize_mod_id(m) for m in mod_ids]
-    logger.info(f"Injecting rules for MODs: {normalized_mods}")
+    # Normalize all group IDs
+    normalized_groups = [normalize_group_id(g) for g in group_ids]
+    logger.info(f"Injecting rules for groups: {normalized_groups}")
 
     # Load from cache (no fallback - cache must be initialized)
     from src.lib.prompts.cache import get_prompt_optional, is_initialized
@@ -202,7 +202,7 @@ def inject_mod_rules(
 
     return _inject_from_cache(
         base_prompt=base_prompt,
-        normalized_mods=normalized_mods,
+        normalized_groups=normalized_groups,
         component_name=component_name,
         injection_marker=injection_marker,
         prompts_out=prompts_out,
@@ -211,53 +211,56 @@ def inject_mod_rules(
 
 def _inject_from_cache(
     base_prompt: str,
-    normalized_mods: List[str],
+    normalized_groups: List[str],
     component_name: str,
     injection_marker: str,
     prompts_out: Optional[List["PromptTemplate"]] = None,
 ) -> str:
     """
-    Inject MOD rules from the prompt cache.
+    Inject group rules from the prompt cache.
 
-    MOD rules are stored with:
+    Group rules are stored with:
     - agent_name: component_name (e.g., "gene", "allele")
-    - prompt_type: "mod_rules"
-    - mod_id: normalized MOD ID (e.g., "MGI", "FB")
+    - prompt_type: "group_rules" (or "mod_rules" for backwards compatibility)
+    - group_id: normalized group ID (e.g., "MGI", "FB")
     """
     from src.lib.prompts.cache import get_prompt_optional
 
     collected_content = []
-    collected_mods = []
+    collected_groups = []
 
-    for mod_id in normalized_mods:
-        prompt = get_prompt_optional(component_name, "mod_rules", mod_id=mod_id)
+    for group_id in normalized_groups:
+        # Try group_rules first, fall back to mod_rules for backwards compatibility
+        prompt = get_prompt_optional(component_name, "group_rules", mod_id=group_id)
+        if not prompt:
+            prompt = get_prompt_optional(component_name, "mod_rules", mod_id=group_id)
         if prompt:
             collected_content.append(prompt.content)
-            collected_mods.append(mod_id)
+            collected_groups.append(group_id)
             if prompts_out is not None:
                 prompts_out.append(prompt)
-            logger.debug(f"Loaded {mod_id} rules for {component_name} from cache (v{prompt.version})")
+            logger.debug(f"Loaded {group_id} rules for {component_name} from cache (v{prompt.version})")
         else:
-            logger.debug(f"No cached MOD rules found for {component_name}/{mod_id}")
+            logger.debug(f"No cached group rules found for {component_name}/{group_id}")
 
     if not collected_content:
-        logger.warning(f"No MOD rules found in cache for {normalized_mods}/{component_name}")
+        logger.warning(f"No group rules found in cache for {normalized_groups}/{component_name}")
         return base_prompt
 
-    # MOD rules are pre-rendered in the database, just concatenate them
+    # Group rules are pre-rendered in the database, just concatenate them
     formatted_rules = "\n".join(collected_content)
 
     # Wrap in clear section markers
-    mod_list = ", ".join(collected_mods)
+    group_list = ", ".join(collected_groups)
     injection_block = f"""
 {injection_marker}
 
-The following rules are specific to the Model Organism Database(s) you are working with: {mod_list}
+The following rules are specific to the organization group(s) you are working with: {group_list}
 Apply these rules when searching for and interpreting results.
 
 {formatted_rules}
 
-## END MOD-SPECIFIC RULES
+## END GROUP-SPECIFIC RULES
 """
 
     # If marker exists in prompt, replace that section
@@ -270,55 +273,55 @@ Apply these rules when searching for and interpreting results.
         return base_prompt + "\n" + injection_block
 
 
-def get_available_mods() -> List[str]:
+def get_available_groups() -> List[str]:
     """
-    Get list of all MODs that have rules defined.
+    Get list of all groups that have rules defined.
 
     Returns:
-        List of MOD IDs with at least one rule file
+        List of group IDs with at least one rule file
 
     Example:
-        >>> get_available_mods()
+        >>> get_available_groups()
         ["MGI", "FB", "WB", ...]
     """
     available = set()
 
     # Check agents directory
-    agents_path = MOD_RULES_PATH / "agents"
+    agents_path = GROUP_RULES_PATH / "agents"
     if agents_path.exists():
         for component_dir in agents_path.iterdir():
             if component_dir.is_dir():
                 for yaml_file in component_dir.glob("*.yaml"):
-                    mod_id = yaml_file.stem.upper()
-                    available.add(mod_id)
+                    group_id = yaml_file.stem.upper()
+                    available.add(group_id)
 
     # Check tools directory
-    tools_path = MOD_RULES_PATH / "tools"
+    tools_path = GROUP_RULES_PATH / "tools"
     if tools_path.exists():
         for component_dir in tools_path.iterdir():
             if component_dir.is_dir():
                 for yaml_file in component_dir.glob("*.yaml"):
-                    mod_id = yaml_file.stem.upper()
-                    available.add(mod_id)
+                    group_id = yaml_file.stem.upper()
+                    available.add(group_id)
 
     return sorted(available)
 
 
-def validate_mod_rules(mod_id: str, component_type: str, component_name: str) -> bool:
+def validate_group_rules(group_id: str, component_type: str, component_name: str) -> bool:
     """
-    Validate that rules exist for a specific MOD/component combination.
+    Validate that rules exist for a specific group/component combination.
 
     Args:
-        mod_id: MOD identifier
+        group_id: Group identifier
         component_type: "agents" or "tools"
         component_name: Name of the agent or tool
 
     Returns:
         True if rules file exists and is valid YAML
     """
-    canonical_id = normalize_mod_id(mod_id)
+    canonical_id = normalize_group_id(group_id)
     filename = f"{canonical_id.lower()}.yaml"
-    filepath = MOD_RULES_PATH / component_type / component_name / filename
+    filepath = GROUP_RULES_PATH / component_type / component_name / filename
 
     if not filepath.exists():
         return False
@@ -326,6 +329,6 @@ def validate_mod_rules(mod_id: str, component_type: str, component_name: str) ->
     try:
         with open(filepath, "r") as f:
             data = yaml.safe_load(f)
-            return isinstance(data, dict) and "mod_id" in data
+            return isinstance(data, dict) and ("group_id" in data or "mod_id" in data)
     except Exception:
         return False
