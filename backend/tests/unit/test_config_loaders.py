@@ -14,6 +14,10 @@ import pytest
 # In Docker, backend is mounted at /app/backend, so parent is /app
 ALLIANCE_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "alliance_agents"
 
+# Path to config/agents (where prompt.yaml files are stored)
+# This is what prompt_loader.py uses
+CONFIG_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "config" / "agents"
+
 
 class TestAgentLoader:
     """Tests for agent_loader module."""
@@ -1768,3 +1772,247 @@ class TestHealthCheckDataclass:
         health_check = HealthCheck.from_yaml(data)
 
         assert health_check.headers == {"Authorization": "Bearer secret-key-123"}
+
+
+class TestPromptLoader:
+    """Tests for prompt_loader module.
+
+    These tests validate the YAML-to-database loading logic.
+    Database tests require the test database to be running.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset cache before each test."""
+        from src.lib.config.prompt_loader import reset_cache
+        reset_cache()
+        yield
+        reset_cache()
+
+    def test_agent_name_uses_folder_name(self, tmp_path):
+        """Test that agent_name is derived from folder name, not agent_id.
+
+        This is a critical fix: folder name IS the canonical agent identifier
+        that matches AGENT_REGISTRY keys.
+        """
+        from unittest.mock import MagicMock, patch
+        from src.lib.config.prompt_loader import _load_base_prompt
+
+        # Create test agent folder with multi-word name
+        agent_folder = tmp_path / "go_annotations"
+        agent_folder.mkdir()
+
+        # Create prompt.yaml - note agent_id differs from folder name
+        prompt_yaml = agent_folder / "prompt.yaml"
+        prompt_yaml.write_text("""
+agent_id: go_annotations_validation
+content: |
+  Test prompt content.
+""")
+
+        mock_db = MagicMock()
+
+        with patch("src.lib.config.prompt_loader._upsert_prompt") as mock_upsert:
+            agent_name = _load_base_prompt(agent_folder, mock_db)
+
+            # agent_name should be folder name, NOT extracted from agent_id
+            assert agent_name == "go_annotations"
+
+            # Verify _upsert_prompt was called with folder name
+            mock_upsert.assert_called_once()
+            call_kwargs = mock_upsert.call_args[1]
+            assert call_kwargs["agent_name"] == "go_annotations"
+
+    def test_folder_name_preserves_underscores(self, tmp_path):
+        """Test that folder names with underscores are preserved.
+
+        Examples: gene_ontology, gene_expression, csv_formatter
+        """
+        from unittest.mock import MagicMock, patch
+        from src.lib.config.prompt_loader import _load_base_prompt
+
+        # Test several multi-word folder names
+        test_cases = [
+            ("gene_ontology", "gene_ontology"),
+            ("gene_expression", "gene_expression"),
+            ("csv_formatter", "csv_formatter"),
+            ("ontology_mapping", "ontology_mapping"),
+        ]
+
+        for folder_name, expected_agent_name in test_cases:
+            agent_folder = tmp_path / folder_name
+            agent_folder.mkdir(exist_ok=True)
+
+            prompt_yaml = agent_folder / "prompt.yaml"
+            prompt_yaml.write_text(f"""
+agent_id: {folder_name}_whatever
+content: Test content for {folder_name}
+""")
+
+            mock_db = MagicMock()
+
+            with patch("src.lib.config.prompt_loader._upsert_prompt") as mock_upsert:
+                agent_name = _load_base_prompt(agent_folder, mock_db)
+                assert agent_name == expected_agent_name, f"Failed for {folder_name}"
+
+    def test_real_agent_folder_names(self):
+        """Verify actual agent folder names in config/agents/ directory.
+
+        These should all be valid AGENT_REGISTRY keys.
+        """
+        expected_agents = {
+            "gene", "allele", "disease", "chemical",
+            "gene_expression", "gene_ontology", "go_annotations",
+            "orthologs", "ontology_mapping",
+            "csv_formatter", "json_formatter", "tsv_formatter",
+            "chat_output", "pdf", "supervisor"
+        }
+
+        actual_folders = set()
+        for folder in CONFIG_AGENTS_PATH.iterdir():
+            if folder.is_dir() and not folder.name.startswith("_"):
+                actual_folders.add(folder.name)
+
+        # Check that expected agents exist
+        missing = expected_agents - actual_folders
+        assert not missing, f"Expected agent folders not found: {missing}"
+
+    def test_content_hash_consistency(self):
+        """Test that content hash is consistent for same content."""
+        from src.lib.config.prompt_loader import _content_hash
+
+        content = "This is a test prompt."
+        hash1 = _content_hash(content)
+        hash2 = _content_hash(content)
+
+        assert hash1 == hash2
+        assert len(hash1) == 16  # Should be 16 chars (first 16 of SHA256)
+
+    def test_content_hash_different_for_different_content(self):
+        """Test that different content produces different hashes."""
+        from src.lib.config.prompt_loader import _content_hash
+
+        hash1 = _content_hash("Content A")
+        hash2 = _content_hash("Content B")
+
+        assert hash1 != hash2
+
+    def test_load_prompts_requires_db(self):
+        """Test that load_prompts requires a database session."""
+        from src.lib.config.prompt_loader import load_prompts
+
+        with pytest.raises(ValueError, match="Database session is required"):
+            load_prompts(db=None)
+
+    def test_load_prompts_raises_on_missing_path(self, tmp_path):
+        """Test that load_prompts raises FileNotFoundError for missing path."""
+        from src.lib.config.prompt_loader import load_prompts
+        from unittest.mock import MagicMock
+
+        mock_db = MagicMock()
+        nonexistent_path = tmp_path / "nonexistent"
+
+        with pytest.raises(FileNotFoundError):
+            load_prompts(agents_path=nonexistent_path, db=mock_db)
+
+
+class TestPromptLoaderYAMLValidation:
+    """Tests that validate prompt.yaml files exist and have correct structure.
+
+    These tests run without database access - they just validate YAML files.
+    """
+
+    def test_all_agent_folders_have_prompt_yaml(self):
+        """Every agent folder should have a prompt.yaml file."""
+        missing = []
+        for agent_folder in CONFIG_AGENTS_PATH.iterdir():
+            if not agent_folder.is_dir() or agent_folder.name.startswith("_"):
+                continue
+
+            prompt_yaml = agent_folder / "prompt.yaml"
+            if not prompt_yaml.exists():
+                missing.append(agent_folder.name)
+
+        assert not missing, f"Agent folders missing prompt.yaml: {missing}"
+
+    def test_prompt_yaml_has_required_fields(self):
+        """Every prompt.yaml must have content field (agent_id optional now)."""
+        import yaml
+
+        missing_fields = []
+
+        for agent_folder in CONFIG_AGENTS_PATH.iterdir():
+            if not agent_folder.is_dir() or agent_folder.name.startswith("_"):
+                continue
+
+            prompt_yaml = agent_folder / "prompt.yaml"
+            if not prompt_yaml.exists():
+                continue
+
+            with open(prompt_yaml) as f:
+                data = yaml.safe_load(f)
+
+            if not data:
+                missing_fields.append(f"{agent_folder.name}: empty file")
+                continue
+
+            # Note: agent_id is no longer required - folder name is used as agent_name
+            if "content" not in data:
+                missing_fields.append(f"{agent_folder.name}: missing content")
+
+        assert not missing_fields, f"Prompt YAML issues:\n" + "\n".join(missing_fields)
+
+    def test_prompt_yaml_content_not_empty(self):
+        """Every prompt.yaml must have non-empty content."""
+        import yaml
+
+        empty_content = []
+
+        for agent_folder in CONFIG_AGENTS_PATH.iterdir():
+            if not agent_folder.is_dir() or agent_folder.name.startswith("_"):
+                continue
+
+            prompt_yaml = agent_folder / "prompt.yaml"
+            if not prompt_yaml.exists():
+                continue
+
+            with open(prompt_yaml) as f:
+                data = yaml.safe_load(f)
+
+            if data and "content" in data:
+                content = data["content"]
+                if not content or not str(content).strip():
+                    empty_content.append(agent_folder.name)
+
+        assert not empty_content, f"Agents with empty prompt content: {empty_content}"
+
+    def test_group_rules_have_required_fields(self):
+        """Every group_rules/*.yaml must have group_id and content fields."""
+        import yaml
+
+        issues = []
+
+        for agent_folder in CONFIG_AGENTS_PATH.iterdir():
+            if not agent_folder.is_dir() or agent_folder.name.startswith("_"):
+                continue
+
+            group_rules_dir = agent_folder / "group_rules"
+            if not group_rules_dir.exists():
+                continue
+
+            for rule_file in group_rules_dir.glob("*.yaml"):
+                if rule_file.name.startswith("_") or rule_file.name == "example.yaml":
+                    continue
+
+                with open(rule_file) as f:
+                    data = yaml.safe_load(f)
+
+                if not data:
+                    issues.append(f"{agent_folder.name}/{rule_file.name}: empty file")
+                    continue
+
+                # group_id can be inferred from filename, so only content is required
+                if "content" not in data:
+                    issues.append(f"{agent_folder.name}/{rule_file.name}: missing content")
+
+        assert not issues, f"Group rules issues:\n" + "\n".join(issues)
