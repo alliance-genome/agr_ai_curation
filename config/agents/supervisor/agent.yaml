@@ -18,6 +18,14 @@ description: >
   appropriate specialized agents based on the nature of the request.
 
 # -----------------------------------------------------------------------------
+# Supervisor Routing (Self-routing disabled)
+# -----------------------------------------------------------------------------
+# The supervisor is the router itself, so it should not be routable.
+supervisor_routing:
+  enabled: false
+  description: ""  # Not used since disabled
+
+# -----------------------------------------------------------------------------
 # Agent Discovery
 # -----------------------------------------------------------------------------
 # The supervisor dynamically discovers available agents at startup by scanning

@@ -10,13 +10,15 @@ from pathlib import Path
 import pytest
 
 
-# Path to alliance_agents (source of truth for Alliance agents)
+# Path to config/agents (runtime location for all agents)
+# This is what agent_loader.py uses in production.
 # In Docker, backend is mounted at /app/backend, so parent is /app
-ALLIANCE_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "alliance_agents"
-
-# Path to config/agents (where prompt.yaml files are stored)
-# This is what prompt_loader.py uses
 CONFIG_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "config" / "agents"
+
+# Legacy path for Alliance-specific agents (kept for reference)
+# Note: alliance_agents/ is the source directory that gets deployed to config/agents/
+# Tests should use CONFIG_AGENTS_PATH since that's what runtime actually uses.
+ALLIANCE_AGENTS_PATH = CONFIG_AGENTS_PATH  # Alias for backwards compatibility
 
 
 class TestAgentLoader:
