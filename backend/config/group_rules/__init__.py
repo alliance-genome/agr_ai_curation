@@ -5,7 +5,7 @@ This package contains YAML configuration files for group-specific rules
 (MODs, institutions, teams, etc.) that are injected into agents and tools at runtime.
 
 Usage:
-    from config.mod_rules import inject_group_rules, get_groups_from_cognito
+    from config.group_rules import inject_group_rules, get_groups_from_cognito
 
 Structure:
     agents/
@@ -19,10 +19,10 @@ Structure:
     tools/
         agr_curation/
             ...
-    mod_config.py   # Loader and injection logic
+    group_config.py   # Loader and injection logic
 """
 
-from .mod_config import (
+from .group_config import (
     inject_group_rules,
     get_groups_from_cognito,
     normalize_group_id,

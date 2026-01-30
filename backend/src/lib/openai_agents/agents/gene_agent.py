@@ -62,7 +62,7 @@ def create_gene_agent(active_groups: Optional[List[str]] = None) -> Agent:
     # Inject group-specific rules if provided
     if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_group_rules
+            from config.group_rules import inject_group_rules
 
             instructions = inject_group_rules(
                 base_prompt=instructions,

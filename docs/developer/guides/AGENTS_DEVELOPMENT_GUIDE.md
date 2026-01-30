@@ -218,7 +218,7 @@ def create_my_agent(active_groups: Optional[List[str]] = None) -> Agent:
 
     if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_group_rules
+            from config.group_rules import inject_group_rules
             instructions = inject_group_rules(
                 base_prompt=instructions,
                 group_ids=active_groups,
@@ -514,7 +514,7 @@ AGENT_MY_AGENT_REASONING=low
 - **PromptService** – Located in `backend/src/lib/prompts/service.py`. Handles creating versions, activating them, logging usage, and refreshing the cache.
 - **Admin API** – `backend/src/api/admin/prompts.py` exposes `GET /api/admin/prompts`, `POST` to create versions, `POST /cache/refresh`, etc. Authorization uses `ADMIN_EMAILS` + Cognito unless `DEV_MODE=true` and no admins are set.
 - **Prompt Catalog** – `PromptCatalogService` (singleton) merges the database prompts with `AGENT_REGISTRY` metadata so Agent Studio displays categories, documentation, and MOD rules.
-- **Group rules** – Stored in the same table with `prompt_type="group_rules"`. `inject_group_rules()` fetches them via the cache. Legacy YAML files under `backend/config/mod_rules/agents/*` document the intended rules but the live source of truth is the database entry.
+- **Group rules** – Stored in the same table with `prompt_type="group_rules"`. `inject_group_rules()` fetches them via the cache. Legacy YAML files under `backend/config/group_rules/agents/*` document the intended rules but the live source of truth is the database entry.
 - **Manual inspection** – `docker compose exec postgres psql -U postgres ai_curation -c "select agent_name, prompt_type, mod_id, version, is_active from prompt_templates where agent_name='my_agent' order by version;"`
 
 ---

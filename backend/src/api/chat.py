@@ -30,7 +30,7 @@ from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
-from config.mod_rules import get_groups_from_cognito
+from config.group_rules import get_groups_from_cognito
 from ..lib.redis_client import (
     set_cancel_signal,
     check_cancel_signal,

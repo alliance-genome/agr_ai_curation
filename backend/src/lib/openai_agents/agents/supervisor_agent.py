@@ -566,7 +566,7 @@ The tool returns file information including a download URL that will render as a
     # Inject group-specific rules for supervisor dispatch behavior
     if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_group_rules
+            from config.group_rules import inject_group_rules
 
             instructions = inject_group_rules(
                 base_prompt=instructions,

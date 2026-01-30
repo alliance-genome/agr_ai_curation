@@ -8,7 +8,7 @@ This module handles:
 4. Injecting formatted rules into agent/tool prompts
 
 Usage:
-    from config.mod_rules import inject_group_rules, get_groups_from_cognito
+    from config.group_rules import inject_group_rules, get_groups_from_cognito
 
     # Inject MGI-specific rules into allele agent
     instructions = inject_group_rules(
