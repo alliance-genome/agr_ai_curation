@@ -233,15 +233,21 @@ async def lifespan(app: FastAPI):
 
             if strict_mode and required_services:
                 logger.info("🔍 Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
-                all_healthy, failed_services = await check_required_services_healthy()
+                try:
+                    all_healthy, failed_services = await check_required_services_healthy()
 
-                if not all_healthy:
-                    error_msg = f"Required services are unhealthy: {failed_services}"
-                    logger.error(f"❌ FATAL: {error_msg}")
-                    logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
-                    raise RuntimeError(error_msg)
+                    if not all_healthy:
+                        error_msg = f"Required services are unhealthy: {failed_services}"
+                        logger.error(f"❌ FATAL: {error_msg}")
+                        logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
+                        raise RuntimeError(error_msg)
 
-                logger.info("✅ All required services are healthy")
+                    logger.info("✅ All required services are healthy")
+                except RuntimeError:
+                    raise  # Re-raise health check failures
+                except Exception as e:
+                    # Unexpected errors during health check should also block startup
+                    raise RuntimeError(f"Health check failed unexpectedly: {e}") from e
             elif required_services:
                 logger.warning("⚠️ HEALTH_CHECK_STRICT_MODE=false - skipping required service health enforcement")
                 logger.warning("   This is not recommended for production deployments")
