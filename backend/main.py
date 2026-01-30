@@ -220,18 +220,36 @@ async def lifespan(app: FastAPI):
             connections = load_connections()
             logger.info(f"✅ Connection definitions loaded: {len(connections)} services")
 
-            # Check health of required services (non-blocking warnings for optional)
+            # Check health of required services
             required_services = get_required_connections()
             optional_services = get_optional_connections()
             logger.info(f"   Required services: {[s.service_id for s in required_services]}")
             logger.info(f"   Optional services: {[s.service_id for s in optional_services]}")
 
-            # Note: We don't block startup on health checks here because
-            # some services (like Weaviate) have their own startup checks.
-            # The /admin/health/connections endpoint provides runtime status.
+            # HEALTH_CHECK_STRICT_MODE controls whether startup blocks on required service failures
+            # Default: True (enforce required services are healthy)
+            # Set to "false" for development/testing with partial infrastructure
+            strict_mode = os.environ.get("HEALTH_CHECK_STRICT_MODE", "true").lower() != "false"
+
+            if strict_mode and required_services:
+                logger.info("🔍 Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
+                all_healthy, failed_services = await check_required_services_healthy()
+
+                if not all_healthy:
+                    error_msg = f"Required services are unhealthy: {failed_services}"
+                    logger.error(f"❌ FATAL: {error_msg}")
+                    logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
+                    raise RuntimeError(error_msg)
+
+                logger.info("✅ All required services are healthy")
+            elif required_services:
+                logger.warning("⚠️ HEALTH_CHECK_STRICT_MODE=false - skipping required service health enforcement")
+                logger.warning("   This is not recommended for production deployments")
 
         except FileNotFoundError as e:
             logger.warning(f"⚠️ Connections config not found (optional): {e}")
+        except RuntimeError:
+            raise  # Re-raise startup failures
         except Exception as e:
             logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
 
