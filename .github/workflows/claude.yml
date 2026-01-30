@@ -33,6 +33,11 @@ jobs:
           # PR-specific prompt (only for automated PR reviews)
           prompt: |
             ${{ github.event_name == 'pull_request' && format('
+            REPO: {1}
+            PR NUMBER: {2}
+
+            Review this pull request.
+
             START by running: git diff origin/{0}...HEAD --name-status
             Then examine the changed lines using: git diff origin/{0}...HEAD
 
@@ -44,7 +49,12 @@ jobs:
             5. Breaking changes or backward compatibility issues
 
             Keep feedback concise, actionable, and directly tied to the diff.
-            ', github.base_ref) || '' }}
+
+            IMPORTANT: You MUST post your review as a GitHub PR comment using:
+            gh pr comment {2} --body "YOUR_REVIEW_HERE"
+
+            Do NOT just output text - you must use the gh command to post your review to the PR.
+            ', github.base_ref, github.repository, github.event.pull_request.number) || '' }}
 
           # CLI arguments (v1 format)
           claude_args: |
@@ -98,4 +108,6 @@ jobs:
             IMPORTANT: Always end your review with:
 
             ---
-            **Need help?** Comment `@claude` followed by your request."
+            **Need help?** Comment `@claude` followed by your request.
+
+            CRITICAL: You MUST post your review to the PR using gh pr comment. Do not just output text."
