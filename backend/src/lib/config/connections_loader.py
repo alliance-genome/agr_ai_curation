@@ -129,17 +129,17 @@ class HealthCheck:
 def _redact_url_credentials(url: str) -> str:
     """Redact credentials from a URL for safe display/logging.
 
-    Replaces password in URL with '***' to prevent credential exposure.
+    Replaces username and password in URL with '***' to prevent credential exposure.
 
     Examples:
-        scheme://user:PASS@host:port/db -> scheme://user:***@host:port/db
+        scheme://user:PASS@host:port/db -> scheme://***:***@host:port/db
         http://host:8080/path -> http://host:8080/path (unchanged, no auth)
 
     Args:
         url: URL that may contain credentials
 
     Returns:
-        URL with password redacted (or original URL if no credentials present)
+        URL with credentials redacted (or original URL if no credentials present)
     """
     from urllib.parse import urlparse, urlunparse
 
@@ -149,13 +149,10 @@ def _redact_url_credentials(url: str) -> str:
     try:
         parsed = urlparse(url)
 
-        # If there's a password in the URL, redact it
+        # If there's a password in the URL, redact both username and password
         if parsed.password:
-            # Reconstruct netloc with redacted password
-            if parsed.username:
-                redacted_netloc = f"{parsed.username}:***@{parsed.hostname}"
-            else:
-                redacted_netloc = f":***@{parsed.hostname}"
+            # Reconstruct netloc with redacted credentials
+            redacted_netloc = f"***:***@{parsed.hostname}"
 
             # Add port if present
             if parsed.port:

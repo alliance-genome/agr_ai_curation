@@ -7,6 +7,7 @@ Note: These endpoints are public (no auth required) for monitoring purposes.
 """
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from unittest.mock import patch, AsyncMock
 
@@ -71,7 +72,7 @@ def mock_connections_loaded():
         yield test_connections
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_client():
     """Create async test client for the FastAPI app."""
     from main import app

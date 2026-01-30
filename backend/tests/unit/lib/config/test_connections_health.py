@@ -337,24 +337,26 @@ class TestRedactUrlCredentials:
     """Tests for _redact_url_credentials function (KANBAN-1017 security fix)."""
 
     def test_redacts_password_from_database_url(self):
-        """Should redact password from database-style URLs."""
+        """Should redact both username and password from database-style URLs."""
         # Using testdb:// scheme to avoid TruffleHog false positives
         url = "testdb://myuser:supersecretpass@localhost:5432/mydb"
         result = _redact_url_credentials(url)
 
         assert "supersecretpass" not in result
-        assert "myuser:***@" in result
+        assert "myuser" not in result
+        assert "***:***@" in result
         assert "localhost:5432" in result
         assert "/mydb" in result
 
     def test_redacts_password_from_cache_url(self):
-        """Should redact password from cache-style URLs."""
+        """Should redact both username and password from cache-style URLs."""
         # Using testcache:// scheme to avoid TruffleHog false positives
         url = "testcache://default:myprivatepw@localhost:6379"
         result = _redact_url_credentials(url)
 
         assert "myprivatepw" not in result
-        assert "default:***@" in result
+        assert "default" not in result
+        assert "***:***@" in result
         assert "localhost:6379" in result
 
     def test_preserves_url_without_credentials(self):
@@ -412,7 +414,7 @@ class TestConnectionDefinitionDisplayUrl:
     """Tests for ConnectionDefinition.display_url property."""
 
     def test_display_url_redacts_credentials(self):
-        """display_url property should return redacted URL."""
+        """display_url property should return redacted URL with both username and password hidden."""
         # Using testdb:// scheme to avoid TruffleHog false positives
         conn = ConnectionDefinition(
             service_id="test",
@@ -420,7 +422,8 @@ class TestConnectionDefinitionDisplayUrl:
         )
 
         assert "dbpassval" not in conn.display_url
-        assert "dbuser:***@" in conn.display_url
+        assert "dbuser" not in conn.display_url
+        assert "***:***@" in conn.display_url
 
     def test_display_url_preserves_url_without_credentials(self):
         """display_url should preserve URLs without credentials."""
