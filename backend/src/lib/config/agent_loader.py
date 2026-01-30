@@ -20,6 +20,7 @@ Usage:
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -29,8 +30,53 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _find_project_root() -> Optional[Path]:
+    """Find project root by looking for pyproject.toml or docker-compose.yml.
+
+    This is more robust than counting parent directories, which breaks if
+    the module is moved.
+
+    Returns:
+        Path to project root directory, or None if not found
+    """
+    current = Path(__file__).resolve()
+    for parent in [current] + list(current.parents):
+        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
+            return parent
+    return None
+
+
+def _get_default_agents_path() -> Path:
+    """Get the default agents path, trying multiple strategies.
+
+    Order of precedence:
+    1. AGENTS_CONFIG_PATH environment variable
+    2. Project root detection (pyproject.toml or docker-compose.yml)
+    3. Relative path from this module (fallback for Docker)
+
+    Returns:
+        Path to agents directory
+    """
+    # Strategy 1: Environment variable
+    env_path = os.environ.get("AGENTS_CONFIG_PATH")
+    if env_path:
+        return Path(env_path)
+
+    # Strategy 2: Project root detection
+    project_root = _find_project_root()
+    if project_root:
+        return project_root / "config" / "agents"
+
+    # Strategy 3: Relative path fallback (for Docker where backend is at /app/backend)
+    # backend/src/lib/config/agent_loader.py -> /app/backend -> /app/config/agents
+    return Path(__file__).parent.parent.parent.parent.parent / "config" / "agents"
+
+
 # Default path for agent configurations (can be overridden)
-DEFAULT_AGENTS_PATH = Path(__file__).parent.parent.parent.parent.parent / "config" / "agents"
+DEFAULT_AGENTS_PATH = _get_default_agents_path()
+
+# Thread safety lock for initialization
+_init_lock = threading.Lock()
 
 
 @dataclass
@@ -188,6 +234,9 @@ def load_agent_definitions(
     Scans the agents directory for folders containing agent.yaml files.
     Folders starting with underscore (_) are skipped (e.g., _examples/).
 
+    This function is thread-safe; concurrent calls will block until
+    initialization is complete.
+
     Args:
         agents_path: Path to agents directory (default: config/agents/)
         force_reload: Force reload even if already initialized
@@ -201,59 +250,61 @@ def load_agent_definitions(
     """
     global _agent_registry, _agents_by_folder, _initialized
 
-    if _initialized and not force_reload:
-        return _agent_registry
+    # Thread-safe initialization
+    with _init_lock:
+        if _initialized and not force_reload:
+            return _agent_registry
 
-    if agents_path is None:
-        agents_path = DEFAULT_AGENTS_PATH
+        if agents_path is None:
+            agents_path = DEFAULT_AGENTS_PATH
 
-    if not agents_path.exists():
-        raise FileNotFoundError(f"Agents directory not found: {agents_path}")
+        if not agents_path.exists():
+            raise FileNotFoundError(f"Agents directory not found: {agents_path}")
 
-    logger.info(f"Loading agent definitions from: {agents_path}")
+        logger.info(f"Loading agent definitions from: {agents_path}")
 
-    _agent_registry = {}
-    _agents_by_folder = {}
+        _agent_registry = {}
+        _agents_by_folder = {}
 
-    # Scan for agent folders
-    for folder in sorted(agents_path.iterdir()):
-        # Skip non-directories and underscore-prefixed folders
-        if not folder.is_dir() or folder.name.startswith("_"):
-            continue
-
-        agent_yaml = folder / "agent.yaml"
-        if not agent_yaml.exists():
-            logger.debug(f"Skipping {folder.name}: no agent.yaml found")
-            continue
-
-        try:
-            with open(agent_yaml, "r") as f:
-                data = yaml.safe_load(f)
-
-            if not data:
-                logger.warning(f"Empty agent.yaml in {folder.name}")
+        # Scan for agent folders
+        for folder in sorted(agents_path.iterdir()):
+            # Skip non-directories and underscore-prefixed folders
+            if not folder.is_dir() or folder.name.startswith("_"):
                 continue
 
-            agent = AgentDefinition.from_yaml(folder.name, data)
-            _agent_registry[agent.agent_id] = agent
-            _agents_by_folder[folder.name] = agent
+            agent_yaml = folder / "agent.yaml"
+            if not agent_yaml.exists():
+                logger.debug(f"Skipping {folder.name}: no agent.yaml found")
+                continue
 
-            logger.info(
-                f"Loaded agent: {agent.agent_id} "
-                f"(folder={folder.name}, tool={agent.tool_name})"
-            )
+            try:
+                with open(agent_yaml, "r") as f:
+                    data = yaml.safe_load(f)
 
-        except yaml.YAMLError as e:
-            logger.error(f"Failed to parse {agent_yaml}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to load agent from {folder.name}: {e}")
-            raise
+                if not data:
+                    logger.warning(f"Empty agent.yaml in {folder.name}")
+                    continue
 
-    _initialized = True
-    logger.info(f"Loaded {len(_agent_registry)} agent definitions")
+                agent = AgentDefinition.from_yaml(folder.name, data)
+                _agent_registry[agent.agent_id] = agent
+                _agents_by_folder[folder.name] = agent
 
-    return _agent_registry
+                logger.info(
+                    f"Loaded agent: {agent.agent_id} "
+                    f"(folder={folder.name}, tool={agent.tool_name})"
+                )
+
+            except yaml.YAMLError as e:
+                logger.error(f"Failed to parse {agent_yaml}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Failed to load agent from {folder.name}: {e}")
+                raise
+
+        _initialized = True
+        logger.info(f"Loaded {len(_agent_registry)} agent definitions")
+
+        return _agent_registry
 
 
 def get_agent_definition(agent_id: str) -> Optional[AgentDefinition]:

@@ -237,3 +237,95 @@ class TestSchemaDiscovery:
             has_marker = getattr(cls, "__envelope_class__", False)
             ends_with_envelope = name.endswith("Envelope")
             assert has_marker or ends_with_envelope, f"Unexpected schema registered: {name}"
+
+
+class TestErrorHandling:
+    """Tests for error handling in config loaders."""
+
+    @pytest.fixture(autouse=True)
+    def reset_caches(self):
+        """Reset all caches before each test."""
+        from src.lib.config.agent_loader import reset_cache as reset_agent_cache
+        from src.lib.config.schema_discovery import reset_cache as reset_schema_cache
+        reset_agent_cache()
+        reset_schema_cache()
+        yield
+        reset_agent_cache()
+        reset_schema_cache()
+
+    def test_missing_agents_path_raises_error(self):
+        """Test that non-existent path raises FileNotFoundError."""
+        from src.lib.config.agent_loader import load_agent_definitions
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            load_agent_definitions(Path("/nonexistent/path/to/agents"))
+
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_missing_schemas_path_raises_error(self):
+        """Test that non-existent path raises FileNotFoundError for schemas."""
+        from src.lib.config.schema_discovery import discover_agent_schemas
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            discover_agent_schemas(Path("/nonexistent/path/to/agents"))
+
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_malformed_yaml_raises_error(self, tmp_path):
+        """Test that malformed YAML raises appropriate error."""
+        import yaml
+        from src.lib.config.agent_loader import load_agent_definitions
+
+        # Create a temp directory with malformed YAML
+        bad_agent = tmp_path / "bad_agent"
+        bad_agent.mkdir()
+        (bad_agent / "agent.yaml").write_text("invalid: yaml: content: [unmatched")
+
+        with pytest.raises(yaml.YAMLError):
+            load_agent_definitions(tmp_path)
+
+    def test_env_var_substitution(self, monkeypatch):
+        """Test environment variable substitution in model_config."""
+        from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
+
+        # Set environment variable that gene agent uses
+        monkeypatch.setenv("AGENT_GENE_MODEL", "gpt-4-turbo-test")
+
+        # Force reload to pick up the env var
+        load_agent_definitions(ALLIANCE_AGENTS_PATH, force_reload=True)
+        gene = get_agent_definition("gene_validation")
+
+        assert gene is not None
+        assert gene.model_config.model == "gpt-4-turbo-test"
+
+    def test_env_var_default_when_not_set(self):
+        """Test that default value is used when env var is not set."""
+        import os
+        from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
+
+        # Ensure the env var is NOT set
+        os.environ.pop("AGENT_GENE_MODEL", None)
+
+        load_agent_definitions(ALLIANCE_AGENTS_PATH, force_reload=True)
+        gene = get_agent_definition("gene_validation")
+
+        assert gene is not None
+        # Should use the default from YAML (gpt-4o)
+        assert gene.model_config.model == "gpt-4o"
+
+    def test_force_reload_actually_reloads(self):
+        """Test that force_reload=True actually reloads the definitions."""
+        from src.lib.config.agent_loader import load_agent_definitions, is_initialized
+
+        # First load
+        agents1 = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        assert is_initialized()
+
+        # Second load without force - should return cached
+        agents2 = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        assert agents1 is agents2  # Same dict object
+
+        # Third load with force - should be new dict
+        agents3 = load_agent_definitions(ALLIANCE_AGENTS_PATH, force_reload=True)
+        # Content should be equal but it's a fresh dict
+        assert set(agents3.keys()) == set(agents1.keys())
