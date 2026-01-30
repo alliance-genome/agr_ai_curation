@@ -126,6 +126,57 @@ class HealthCheck:
         )
 
 
+def _redact_url_credentials(url: str) -> str:
+    """Redact credentials from a URL for safe display/logging.
+
+    Replaces password in URL with '***' to prevent credential exposure.
+
+    Examples:
+        scheme://user:PASS@host:port/db -> scheme://user:***@host:port/db
+        http://host:8080/path -> http://host:8080/path (unchanged, no auth)
+
+    Args:
+        url: URL that may contain credentials
+
+    Returns:
+        URL with password redacted (or original URL if no credentials present)
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    if not url:
+        return url
+
+    try:
+        parsed = urlparse(url)
+
+        # If there's a password in the URL, redact it
+        if parsed.password:
+            # Reconstruct netloc with redacted password
+            if parsed.username:
+                redacted_netloc = f"{parsed.username}:***@{parsed.hostname}"
+            else:
+                redacted_netloc = f":***@{parsed.hostname}"
+
+            # Add port if present
+            if parsed.port:
+                redacted_netloc += f":{parsed.port}"
+
+            # Rebuild URL with redacted netloc
+            return urlunparse((
+                parsed.scheme,
+                redacted_netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            ))
+
+        return url
+    except Exception:
+        # If parsing fails, return a safe generic message
+        return "[URL parsing failed - redacted for safety]"
+
+
 @dataclass
 class ConnectionDefinition:
     """
@@ -134,12 +185,16 @@ class ConnectionDefinition:
     Attributes:
         service_id: Unique identifier (e.g., "weaviate", "openai")
         description: Human-readable description
-        url: Service URL (env vars already substituted)
+        url: Service URL (env vars already substituted) - INTERNAL USE ONLY
         health_check: Health check configuration
         required: Whether this service is required for startup
         timeout_seconds: Timeout for health check requests
         is_healthy: Current health status (set after health check)
         last_error: Last error message if health check failed
+
+    Security Note:
+        Always use display_url for logging and API responses to prevent
+        credential exposure. The url field may contain credentials.
     """
 
     service_id: str
@@ -150,6 +205,11 @@ class ConnectionDefinition:
     timeout_seconds: int = 10
     is_healthy: Optional[bool] = None
     last_error: Optional[str] = None
+
+    @property
+    def display_url(self) -> str:
+        """Return URL with credentials redacted for safe display/logging."""
+        return _redact_url_credentials(self.url)
 
     @classmethod
     def from_yaml(cls, service_id: str, data: Dict[str, Any]) -> "ConnectionDefinition":
@@ -236,7 +296,7 @@ def load_connections(
 
                 logger.info(
                     f"Loaded connection: {service_id} "
-                    f"(url={connection.url[:50]}..., required={connection.required})"
+                    f"(url={connection.display_url[:50]}..., required={connection.required})"
                 )
 
             except Exception as e:
@@ -309,7 +369,8 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
     Get health status of all connections.
 
     Returns:
-        Dictionary with service_id keys and status info values
+        Dictionary with service_id keys and status info values.
+        Note: URL is redacted to prevent credential exposure.
     """
     if not _initialized:
         load_connections()
@@ -319,7 +380,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
         status[service_id] = {
             "service_id": service_id,
             "description": conn.description,
-            "url": conn.url,
+            "url": conn.display_url,  # Use display_url to prevent credential exposure
             "required": conn.required,
             "is_healthy": conn.is_healthy,
             "last_error": conn.last_error,
@@ -543,10 +604,14 @@ async def check_all_health() -> Dict[str, Dict[str, Any]]:
                 "required": True,
                 "is_healthy": True,
                 "last_error": None,
-                "url": "http://..."  # URL is included
+                "url": "http://***@..."  # URL is redacted for security
             },
             ...
         }
+
+    Note:
+        The URL in the response is redacted (credentials replaced with ***)
+        to prevent credential exposure in API responses and logs.
     """
     if not _initialized:
         load_connections()
