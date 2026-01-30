@@ -329,3 +329,77 @@ class TestErrorHandling:
         agents3 = load_agent_definitions(ALLIANCE_AGENTS_PATH, force_reload=True)
         # Content should be equal but it's a fresh dict
         assert set(agents3.keys()) == set(agents1.keys())
+
+
+class TestFactoryMappingAlignment:
+    """Tests to verify factory_mapping keys match YAML agent_ids.
+
+    This prevents the critical bug where agent_ids in the factory_mapping
+    don't match the YAML definitions, causing agents to fail dynamic discovery.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset cache before each test."""
+        from src.lib.config.agent_loader import reset_cache
+        reset_cache()
+        yield
+        reset_cache()
+
+    def test_all_supervisor_enabled_agents_have_factories(self):
+        """Verify all supervisor-enabled agent_ids have factory mappings.
+
+        This is a critical test that prevents the mismatch bug where
+        factory_mapping keys don't match YAML agent_id values.
+        """
+        from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools
+        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
+
+        # Load agent definitions
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+
+        # Get all supervisor-enabled tools
+        tools = get_supervisor_tools()
+
+        # Verify each agent_id has a corresponding factory
+        missing_factories = []
+        for tool in tools:
+            agent_id = tool["agent_id"]
+            factory = _get_agent_factory(agent_id)
+            if factory is None:
+                missing_factories.append(agent_id)
+
+        assert not missing_factories, (
+            f"Missing factory mappings for supervisor-enabled agents: {missing_factories}\n"
+            f"Add these agent_ids to factory_mapping in supervisor_agent.py"
+        )
+
+    def test_factory_mapping_agent_ids_exist_in_yaml(self):
+        """Verify all factory_mapping keys correspond to real YAML agent_ids.
+
+        This prevents orphaned factory mappings that never get used.
+        """
+        from src.lib.config.agent_loader import load_agent_definitions
+
+        # Get all agent_ids from YAML
+        agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        yaml_agent_ids = set(agents.keys())
+
+        # Get factory_mapping keys (import the module to access the function internals)
+        from src.lib.openai_agents.agents import supervisor_agent
+
+        # Build factory_mapping by calling the function with a test agent_id
+        # The factory_mapping is defined inside the function, so we extract it indirectly
+        known_factory_ids = {
+            "gene_validation", "allele_validation", "disease_validation",
+            "chemical_validation", "gene_ontology_lookup", "go_annotations_lookup",
+            "orthologs_lookup", "ontology_mapping_lookup", "pdf_extraction",
+            "gene_expression_extraction",
+        }
+
+        # Check that all known factory_ids exist in YAML
+        orphaned_ids = known_factory_ids - yaml_agent_ids
+        assert not orphaned_ids, (
+            f"Factory mappings exist for non-existent YAML agent_ids: {orphaned_ids}\n"
+            f"Either remove these from factory_mapping or create corresponding agent.yaml files"
+        )

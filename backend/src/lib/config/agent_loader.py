@@ -397,10 +397,13 @@ def get_supervisor_tools() -> List[Dict[str, Any]]:
     Returns:
         List of tool metadata dicts with keys:
         - tool_name: e.g., "ask_gene_specialist"
+        - folder_name: The agent folder name (e.g., "gene")
         - description: From supervisor_routing.description
         - batchable: Whether agent handles batch requests
         - batching_instructions: How to format batch requests
         - agent_id: The agent's identifier
+        - requires_document: Whether agent needs a loaded document
+        - group_rules_enabled: Whether agent uses MOD-specific rules
     """
     if not _initialized:
         load_agent_definitions()
@@ -412,10 +415,13 @@ def get_supervisor_tools() -> List[Dict[str, Any]]:
 
         tools.append({
             "tool_name": agent.tool_name,
+            "folder_name": agent.folder_name,
             "description": agent.supervisor_routing.description,
             "batchable": agent.supervisor_routing.batchable,
             "batching_instructions": agent.supervisor_routing.batching_instructions,
             "agent_id": agent.agent_id,
+            "requires_document": agent.requires_document,
+            "group_rules_enabled": agent.group_rules_enabled,
         })
 
     return tools
