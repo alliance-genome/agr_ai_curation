@@ -1,0 +1,115 @@
+# =============================================================================
+# EXTERNAL SERVICE CONNECTIONS
+# =============================================================================
+# Define all external services the application connects to.
+# Health checks run at startup to verify connectivity.
+#
+# IMPORTANT: This file is the source of truth for service connections.
+#
+# Fields for each service:
+#   - description: Human-readable description
+#   - url: Service URL (supports ${ENV_VAR:-default} syntax)
+#   - health_check: How to verify the service is available
+#       - endpoint: Path to health check endpoint
+#       - method: HTTP method (GET, POST, etc.)
+#       - expected_status: Expected HTTP status code
+#       - headers: Optional headers for the request
+#   - required: If true, app fails to start if health check fails
+#   - timeout_seconds: Timeout for health check requests
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Weaviate (Vector Database)
+  # ---------------------------------------------------------------------------
+  weaviate:
+    description: "Vector database for document search and RAG"
+    url: "${WEAVIATE_SCHEME:-http}://${WEAVIATE_HOST:-weaviate}:${WEAVIATE_PORT:-8080}"
+    health_check:
+      endpoint: "/v1/.well-known/ready"
+      method: GET
+      expected_status: 200
+    required: true
+    timeout_seconds: 30
+
+  # ---------------------------------------------------------------------------
+  # AGR Curation API (Alliance-specific)
+  # ---------------------------------------------------------------------------
+  agr_curation_api:
+    description: "Alliance Genome Resources curation database"
+    url: "${AGR_CURATION_API_URL:-https://curation.alliancegenome.org}"
+    health_check:
+      endpoint: "/api/health"
+      method: GET
+      expected_status: 200
+    required: false  # Optional - tools fail gracefully if unavailable
+    timeout_seconds: 10
+
+  # ---------------------------------------------------------------------------
+  # OpenAI API
+  # ---------------------------------------------------------------------------
+  openai:
+    description: "OpenAI API for LLM inference"
+    url: "https://api.openai.com"
+    health_check:
+      endpoint: "/v1/models"
+      method: GET
+      headers:
+        Authorization: "Bearer ${OPENAI_API_KEY}"
+      expected_status: 200
+    required: true
+    timeout_seconds: 15
+
+  # ---------------------------------------------------------------------------
+  # Redis (Session/Cache Store)
+  # ---------------------------------------------------------------------------
+  redis:
+    description: "Redis for session storage and caching"
+    url: "${REDIS_URL:-redis://redis:6379}"
+    health_check:
+      endpoint: null  # Redis uses PING command, not HTTP
+      method: PING
+      expected_status: "PONG"
+    required: false
+    timeout_seconds: 5
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL (Application Database)
+  # ---------------------------------------------------------------------------
+  # Note: Use DATABASE_URL for full connection string, or set individual components.
+  # POSTGRES_PASSWORD has no default for security - must be set in environment.
+  postgres:
+    description: "PostgreSQL database for application data"
+    url: "${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-ai_curation}}"
+    health_check:
+      endpoint: null  # PostgreSQL uses connection test, not HTTP
+      method: CONNECT
+      expected_status: null
+    required: true
+    timeout_seconds: 10
+
+  # ---------------------------------------------------------------------------
+  # Langfuse (Observability - Optional)
+  # ---------------------------------------------------------------------------
+  langfuse:
+    description: "LLM observability and tracing"
+    url: "${LANGFUSE_HOST:-http://langfuse:3000}"
+    health_check:
+      endpoint: "/api/public/health"
+      method: GET
+      expected_status: 200
+    required: false
+    timeout_seconds: 5
+
+  # ---------------------------------------------------------------------------
+  # Reranker Service (Optional ML Service)
+  # ---------------------------------------------------------------------------
+  reranker:
+    description: "Cross-encoder reranking service for improved search"
+    url: "${RERANKER_URL:-http://reranker-transformers:80}"
+    health_check:
+      endpoint: "/health"
+      method: GET
+      expected_status: 200
+    required: false
+    timeout_seconds: 10

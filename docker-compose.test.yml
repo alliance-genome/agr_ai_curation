@@ -51,6 +51,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./alliance_agents:/app/alliance_agents
+      - ./config:/app/config
     environment:
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=test-key-for-unit-tests

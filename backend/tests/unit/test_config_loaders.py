@@ -1098,3 +1098,673 @@ class TestAgentLoaderEdgeCases:
 
         assert config.icon == "🤖"
         assert config.show_in_palette is True
+
+
+# =============================================================================
+# KANBAN-994: Groups Loader Tests
+# =============================================================================
+
+# Path to config directory (for groups.yaml)
+CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config"
+
+
+class TestGroupsLoader:
+    """Tests for groups_loader module."""
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset cache before each test."""
+        from src.lib.config.groups_loader import reset_cache
+        reset_cache()
+        yield
+        reset_cache()
+
+    def test_load_groups(self):
+        """Test loading all group definitions."""
+        from src.lib.config.groups_loader import load_groups
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        groups = load_groups(groups_yaml)
+
+        # Should have loaded all 7 Alliance MODs
+        assert len(groups) == 7, f"Expected 7 groups, got {len(groups)}"
+
+        # Check expected groups exist
+        expected_groups = ["FB", "WB", "MGI", "ZFIN", "RGD", "SGD", "HGNC"]
+        for group_id in expected_groups:
+            assert group_id in groups, f"Expected group {group_id} not found"
+
+    def test_group_structure(self):
+        """Test that FB group has expected structure."""
+        from src.lib.config.groups_loader import load_groups, get_group
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        load_groups(groups_yaml)
+        fb = get_group("FB")
+
+        assert fb is not None, "FB group not found"
+
+        # Check basic structure
+        assert fb.group_id == "FB"
+        assert fb.name == "FlyBase"
+        assert "Drosophila" in fb.description
+        assert fb.species == "Drosophila melanogaster"
+        assert fb.taxon == "NCBITaxon:7227"
+
+        # Check Cognito groups
+        assert "flybase-curators" in fb.cognito_groups
+        assert "flybase-admins" in fb.cognito_groups
+
+    def test_cognito_to_group_mapping(self):
+        """Test mapping Cognito groups to internal group IDs."""
+        from src.lib.config.groups_loader import (
+            load_groups,
+            get_group_for_cognito_group,
+        )
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        load_groups(groups_yaml)
+
+        # Test known mappings
+        assert get_group_for_cognito_group("flybase-curators") == "FB"
+        assert get_group_for_cognito_group("wormbase-curators") == "WB"
+        assert get_group_for_cognito_group("mgi-curators") == "MGI"
+
+        # Test unknown mapping
+        assert get_group_for_cognito_group("unknown-group") is None
+
+    def test_get_groups_for_cognito_groups(self):
+        """Test mapping multiple Cognito groups."""
+        from src.lib.config.groups_loader import (
+            load_groups,
+            get_groups_for_cognito_groups,
+        )
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        load_groups(groups_yaml)
+
+        # User in multiple Cognito groups
+        cognito_groups = ["flybase-curators", "developers", "wormbase-admins"]
+        group_ids = get_groups_for_cognito_groups(cognito_groups)
+
+        assert "FB" in group_ids
+        assert "WB" in group_ids
+        # "developers" doesn't map to any group
+        assert len(group_ids) == 2
+
+    def test_get_valid_group_ids(self):
+        """Test getting list of valid group IDs."""
+        from src.lib.config.groups_loader import load_groups, get_valid_group_ids
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        load_groups(groups_yaml)
+
+        valid_ids = get_valid_group_ids()
+
+        assert len(valid_ids) == 7
+        assert "FB" in valid_ids
+        assert "WB" in valid_ids
+        assert "MGI" in valid_ids
+
+    def test_list_groups(self):
+        """Test listing all groups."""
+        from src.lib.config.groups_loader import load_groups, list_groups
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        load_groups(groups_yaml)
+
+        groups_list = list_groups()
+
+        assert len(groups_list) == 7
+        # All items should be GroupDefinition instances
+        for group in groups_list:
+            assert hasattr(group, "group_id")
+            assert hasattr(group, "name")
+            assert hasattr(group, "cognito_groups")
+
+    def test_missing_groups_yaml_raises_error(self, tmp_path):
+        """Missing groups.yaml should raise FileNotFoundError."""
+        from src.lib.config.groups_loader import load_groups
+
+        with pytest.raises(FileNotFoundError):
+            load_groups(tmp_path / "nonexistent.yaml")
+
+    def test_empty_groups_yaml(self, tmp_path):
+        """Empty groups.yaml should return empty dict."""
+        from src.lib.config.groups_loader import load_groups
+
+        # Create empty YAML file
+        empty_yaml = tmp_path / "groups.yaml"
+        empty_yaml.write_text("")
+
+        groups = load_groups(empty_yaml)
+
+        assert groups == {}
+
+    def test_groups_yaml_without_groups_key(self, tmp_path):
+        """YAML without 'groups' key should return empty dict."""
+        from src.lib.config.groups_loader import load_groups
+
+        # Create YAML without groups key
+        yaml_file = tmp_path / "groups.yaml"
+        yaml_file.write_text("some_other_key: value")
+
+        groups = load_groups(yaml_file)
+
+        assert groups == {}
+
+    def test_force_reload(self):
+        """force_reload should reload even if already initialized."""
+        from src.lib.config.groups_loader import load_groups, is_initialized
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+
+        # First load
+        load_groups(groups_yaml)
+        assert is_initialized()
+
+        # Force reload
+        groups = load_groups(groups_yaml, force_reload=True)
+
+        assert len(groups) == 7
+
+    def test_concurrent_groups_loading(self):
+        """Concurrent load_groups calls should not corrupt state."""
+        import threading
+        from src.lib.config.groups_loader import load_groups, reset_cache
+
+        groups_yaml = CONFIG_PATH / "groups.yaml"
+        reset_cache()
+        results = []
+        errors = []
+
+        def load():
+            try:
+                result = load_groups(groups_yaml)
+                results.append(result)
+            except Exception as e:
+                errors.append(e)
+
+        # Launch 10 threads simultaneously
+        threads = [threading.Thread(target=load) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Errors during concurrent loading: {errors}"
+        assert len(results) == 10, "All threads should complete"
+
+        # All results should have the same groups
+        first_keys = set(results[0].keys())
+        for i, result in enumerate(results[1:], 2):
+            assert set(result.keys()) == first_keys, (
+                f"Thread {i} got different groups than thread 1"
+            )
+
+
+class TestGroupDefinitionDataclass:
+    """Tests for GroupDefinition dataclass."""
+
+    def test_from_yaml_with_all_fields(self):
+        """GroupDefinition.from_yaml should handle all fields."""
+        from src.lib.config.groups_loader import GroupDefinition
+
+        data = {
+            "name": "Test Group",
+            "description": "Test description",
+            "species": "Test species",
+            "taxon": "NCBITaxon:12345",
+            "cognito_groups": ["test-curators", "test-admins"],
+        }
+
+        group = GroupDefinition.from_yaml("TEST", data)
+
+        assert group.group_id == "TEST"
+        assert group.name == "Test Group"
+        assert group.description == "Test description"
+        assert group.species == "Test species"
+        assert group.taxon == "NCBITaxon:12345"
+        assert group.cognito_groups == ["test-curators", "test-admins"]
+
+    def test_from_yaml_with_minimal_fields(self):
+        """GroupDefinition.from_yaml should handle minimal fields."""
+        from src.lib.config.groups_loader import GroupDefinition
+
+        data = {"name": "Minimal Group"}
+
+        group = GroupDefinition.from_yaml("MIN", data)
+
+        assert group.group_id == "MIN"
+        assert group.name == "Minimal Group"
+        assert group.description == ""
+        assert group.species is None
+        assert group.taxon is None
+        assert group.cognito_groups == []
+
+    def test_from_yaml_uses_group_id_as_default_name(self):
+        """GroupDefinition.from_yaml should use group_id as default name."""
+        from src.lib.config.groups_loader import GroupDefinition
+
+        data = {}  # No name provided
+
+        group = GroupDefinition.from_yaml("XYZ", data)
+
+        assert group.name == "XYZ"
+
+
+# =============================================================================
+# KANBAN-995: Connections Loader Tests
+# =============================================================================
+
+
+class TestConnectionsLoader:
+    """Tests for connections_loader module."""
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset cache before each test."""
+        from src.lib.config.connections_loader import reset_cache
+        reset_cache()
+        yield
+        reset_cache()
+
+    def test_load_connections(self):
+        """Test loading all connection definitions."""
+        from src.lib.config.connections_loader import load_connections
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        connections = load_connections(connections_yaml)
+
+        # Should have loaded multiple services
+        assert len(connections) >= 6, f"Expected at least 6 connections, got {len(connections)}"
+
+        # Check expected services exist
+        expected_services = ["weaviate", "openai", "redis", "postgres"]
+        for service_id in expected_services:
+            assert service_id in connections, f"Expected service {service_id} not found"
+
+    def test_connection_structure(self):
+        """Test that weaviate connection has expected structure."""
+        from src.lib.config.connections_loader import load_connections, get_connection
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+        weaviate = get_connection("weaviate")
+
+        assert weaviate is not None, "weaviate connection not found"
+
+        # Check basic structure
+        assert weaviate.service_id == "weaviate"
+        assert "Vector database" in weaviate.description
+        assert weaviate.required is True
+        assert weaviate.timeout_seconds == 30
+
+        # Check health check
+        assert weaviate.health_check.endpoint == "/v1/.well-known/ready"
+        assert weaviate.health_check.method == "GET"
+        assert weaviate.health_check.expected_status == 200
+
+    def test_list_connections(self):
+        """Test listing all connections."""
+        from src.lib.config.connections_loader import load_connections, list_connections
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+
+        connections_list = list_connections()
+
+        assert len(connections_list) >= 6
+        # All items should be ConnectionDefinition instances
+        for conn in connections_list:
+            assert hasattr(conn, "service_id")
+            assert hasattr(conn, "url")
+            assert hasattr(conn, "health_check")
+
+    def test_get_required_connections(self):
+        """Test getting only required connections."""
+        from src.lib.config.connections_loader import (
+            load_connections,
+            get_required_connections,
+        )
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+
+        required = get_required_connections()
+
+        # All returned should be required
+        for conn in required:
+            assert conn.required is True
+
+        # Check known required services
+        required_ids = [c.service_id for c in required]
+        assert "weaviate" in required_ids
+        assert "openai" in required_ids
+        assert "postgres" in required_ids
+
+    def test_get_optional_connections(self):
+        """Test getting only optional connections."""
+        from src.lib.config.connections_loader import (
+            load_connections,
+            get_optional_connections,
+        )
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+
+        optional = get_optional_connections()
+
+        # All returned should be optional
+        for conn in optional:
+            assert conn.required is False
+
+        # Check known optional services
+        optional_ids = [c.service_id for c in optional]
+        assert "redis" in optional_ids
+        assert "langfuse" in optional_ids
+
+    def test_get_connection_status(self):
+        """Test getting status of all connections."""
+        from src.lib.config.connections_loader import (
+            load_connections,
+            get_connection_status,
+        )
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+
+        status = get_connection_status()
+
+        assert "weaviate" in status
+        assert "service_id" in status["weaviate"]
+        assert "url" in status["weaviate"]
+        assert "is_healthy" in status["weaviate"]
+
+    def test_update_health_status(self):
+        """Test updating health status of a connection."""
+        from src.lib.config.connections_loader import (
+            load_connections,
+            get_connection,
+            update_health_status,
+        )
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml)
+
+        # Initially health status should be None
+        weaviate = get_connection("weaviate")
+        assert weaviate.is_healthy is None
+
+        # Update to healthy
+        update_health_status("weaviate", True)
+        weaviate = get_connection("weaviate")
+        assert weaviate.is_healthy is True
+        assert weaviate.last_error is None
+
+        # Update to unhealthy with error
+        update_health_status("weaviate", False, "Connection timeout")
+        weaviate = get_connection("weaviate")
+        assert weaviate.is_healthy is False
+        assert weaviate.last_error == "Connection timeout"
+
+    def test_env_var_substitution_in_url(self, monkeypatch):
+        """Test environment variable substitution in connection URLs."""
+        from src.lib.config.connections_loader import load_connections, get_connection
+
+        # Set environment variables
+        monkeypatch.setenv("WEAVIATE_SCHEME", "https")
+        monkeypatch.setenv("WEAVIATE_HOST", "custom-weaviate")
+        monkeypatch.setenv("WEAVIATE_PORT", "9090")
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml, force_reload=True)
+
+        weaviate = get_connection("weaviate")
+        assert "https://custom-weaviate:9090" == weaviate.url
+
+    def test_env_var_default_values(self):
+        """Test that default values are used when env vars are not set."""
+        import os
+        from src.lib.config.connections_loader import load_connections, get_connection
+
+        # Ensure env vars are NOT set
+        os.environ.pop("WEAVIATE_SCHEME", None)
+        os.environ.pop("WEAVIATE_HOST", None)
+        os.environ.pop("WEAVIATE_PORT", None)
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml, force_reload=True)
+
+        weaviate = get_connection("weaviate")
+        # Should use defaults from YAML
+        assert "http://weaviate:8080" == weaviate.url
+
+    def test_missing_connections_yaml_raises_error(self, tmp_path):
+        """Missing connections.yaml should raise FileNotFoundError."""
+        from src.lib.config.connections_loader import load_connections
+
+        with pytest.raises(FileNotFoundError):
+            load_connections(tmp_path / "nonexistent.yaml")
+
+    def test_empty_connections_yaml(self, tmp_path):
+        """Empty connections.yaml should return empty dict."""
+        from src.lib.config.connections_loader import load_connections
+
+        # Create empty YAML file
+        empty_yaml = tmp_path / "connections.yaml"
+        empty_yaml.write_text("")
+
+        connections = load_connections(empty_yaml)
+
+        assert connections == {}
+
+    def test_connections_yaml_without_services_key(self, tmp_path):
+        """YAML without 'services' key should return empty dict."""
+        from src.lib.config.connections_loader import load_connections
+
+        yaml_file = tmp_path / "connections.yaml"
+        yaml_file.write_text("some_other_key: value")
+
+        connections = load_connections(yaml_file)
+
+        assert connections == {}
+
+    def test_force_reload(self):
+        """force_reload should reload even if already initialized."""
+        from src.lib.config.connections_loader import load_connections, is_initialized
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+
+        # First load
+        load_connections(connections_yaml)
+        assert is_initialized()
+
+        # Force reload
+        connections = load_connections(connections_yaml, force_reload=True)
+
+        assert len(connections) >= 6
+
+    def test_concurrent_connections_loading(self):
+        """Concurrent load_connections calls should not corrupt state."""
+        import threading
+        from src.lib.config.connections_loader import load_connections, reset_cache
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        reset_cache()
+        results = []
+        errors = []
+
+        def load():
+            try:
+                result = load_connections(connections_yaml)
+                results.append(result)
+            except Exception as e:
+                errors.append(e)
+
+        # Launch 10 threads simultaneously
+        threads = [threading.Thread(target=load) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Errors during concurrent loading: {errors}"
+        assert len(results) == 10, "All threads should complete"
+
+        # All results should have the same services
+        first_keys = set(results[0].keys())
+        for i, result in enumerate(results[1:], 2):
+            assert set(result.keys()) == first_keys, (
+                f"Thread {i} got different connections than thread 1"
+            )
+
+
+class TestConnectionDefinitionDataclass:
+    """Tests for ConnectionDefinition dataclass."""
+
+    def test_from_yaml_with_all_fields(self):
+        """ConnectionDefinition.from_yaml should handle all fields."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        data = {
+            "description": "Test service",
+            "url": "http://localhost:8080",
+            "health_check": {
+                "endpoint": "/health",
+                "method": "GET",
+                "expected_status": 200,
+            },
+            "required": True,
+            "timeout_seconds": 15,
+        }
+
+        conn = ConnectionDefinition.from_yaml("test_service", data)
+
+        assert conn.service_id == "test_service"
+        assert conn.description == "Test service"
+        assert conn.url == "http://localhost:8080"
+        assert conn.required is True
+        assert conn.timeout_seconds == 15
+        assert conn.health_check.endpoint == "/health"
+        assert conn.health_check.method == "GET"
+        assert conn.health_check.expected_status == 200
+
+    def test_from_yaml_with_minimal_fields(self):
+        """ConnectionDefinition.from_yaml should handle minimal fields."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        data = {}
+
+        conn = ConnectionDefinition.from_yaml("minimal", data)
+
+        assert conn.service_id == "minimal"
+        assert conn.description == ""
+        assert conn.url == ""
+        assert conn.required is False
+        assert conn.timeout_seconds == 10
+        assert conn.health_check.endpoint is None
+        assert conn.health_check.method == "GET"
+        assert conn.health_check.expected_status == 200
+
+    def test_from_yaml_with_env_var_in_url(self, monkeypatch):
+        """ConnectionDefinition.from_yaml should substitute env vars in URL."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        monkeypatch.setenv("MY_HOST", "myserver")
+        monkeypatch.setenv("MY_PORT", "3000")
+
+        data = {
+            "url": "http://${MY_HOST}:${MY_PORT}",
+        }
+
+        conn = ConnectionDefinition.from_yaml("test", data)
+
+        assert conn.url == "http://myserver:3000"
+
+    def test_from_yaml_with_env_var_defaults(self):
+        """ConnectionDefinition.from_yaml should use default when env var not set."""
+        import os
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        # Ensure env var is NOT set
+        os.environ.pop("UNKNOWN_VAR", None)
+
+        data = {
+            "url": "http://${UNKNOWN_VAR:-default-host}:${UNKNOWN_PORT:-9999}",
+        }
+
+        conn = ConnectionDefinition.from_yaml("test", data)
+
+        assert conn.url == "http://default-host:9999"
+
+
+class TestHealthCheckDataclass:
+    """Tests for HealthCheck dataclass."""
+
+    def test_from_yaml_with_all_fields(self):
+        """HealthCheck.from_yaml should handle all fields."""
+        from src.lib.config.connections_loader import HealthCheck
+
+        data = {
+            "endpoint": "/api/health",
+            "method": "POST",
+            "expected_status": 201,
+            "headers": {"Authorization": "Bearer token"},
+        }
+
+        health_check = HealthCheck.from_yaml(data)
+
+        assert health_check.endpoint == "/api/health"
+        assert health_check.method == "POST"
+        assert health_check.expected_status == 201
+        assert health_check.headers == {"Authorization": "Bearer token"}
+
+    def test_from_yaml_with_none(self):
+        """HealthCheck.from_yaml should handle None input."""
+        from src.lib.config.connections_loader import HealthCheck
+
+        health_check = HealthCheck.from_yaml(None)
+
+        assert health_check.endpoint is None
+        assert health_check.method == "GET"
+        assert health_check.expected_status == 200
+        assert health_check.headers == {}
+
+    def test_from_yaml_with_empty_dict(self):
+        """HealthCheck.from_yaml should handle empty dict."""
+        from src.lib.config.connections_loader import HealthCheck
+
+        health_check = HealthCheck.from_yaml({})
+
+        assert health_check.endpoint is None
+        assert health_check.method == "GET"
+        assert health_check.expected_status == 200
+        assert health_check.headers == {}
+
+    def test_from_yaml_with_string_expected_status(self):
+        """HealthCheck.from_yaml should handle string expected_status (e.g., PONG)."""
+        from src.lib.config.connections_loader import HealthCheck
+
+        data = {
+            "method": "PING",
+            "expected_status": "PONG",
+        }
+
+        health_check = HealthCheck.from_yaml(data)
+
+        assert health_check.expected_status == "PONG"
+
+    def test_from_yaml_substitutes_env_vars_in_headers(self, monkeypatch):
+        """HealthCheck.from_yaml should substitute env vars in headers."""
+        from src.lib.config.connections_loader import HealthCheck
+
+        monkeypatch.setenv("API_KEY", "secret-key-123")
+
+        data = {
+            "headers": {"Authorization": "Bearer ${API_KEY}"},
+        }
+
+        health_check = HealthCheck.from_yaml(data)
+
+        assert health_check.headers == {"Authorization": "Bearer secret-key-123"}
