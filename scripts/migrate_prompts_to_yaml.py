@@ -32,12 +32,13 @@ import yaml
 # Configuration
 # =============================================================================
 
-# Database connection (from environment or defaults)
+# Database connection (from environment)
+# Note: This was a one-time migration script. All values should come from environment.
 DB_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
 DB_PORT = os.getenv("POSTGRES_PORT", "5434")
 DB_NAME = os.getenv("POSTGRES_DB", "ai_curation")
 DB_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 
 # Output directory
 OUTPUT_DIR = Path(__file__).parent.parent / "alliance_agents"
