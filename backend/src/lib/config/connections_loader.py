@@ -452,14 +452,21 @@ async def _check_http_health(conn: ConnectionDefinition) -> tuple[bool, Optional
 
 async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
     """Check Redis health via PING command."""
+    # Step 1: Check if redis package is available (separate from connection logic)
     try:
         import redis.asyncio as aioredis
-        from urllib.parse import urlparse
+    except ImportError:
+        return False, "redis package not installed"
 
-        parsed = urlparse(conn.url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 6379
+    # Step 2: Attempt connection and health check
+    from urllib.parse import urlparse
 
+    parsed = urlparse(conn.url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+
+    client = None
+    try:
         client = aioredis.Redis(
             host=host,
             port=port,
@@ -467,18 +474,20 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
             socket_connect_timeout=conn.timeout_seconds,
         )
 
-        try:
-            result = await client.ping()
-            if result:
-                return True, None
-            return False, "PING returned False"
-        finally:
-            await client.aclose()
+        result = await client.ping()
+        if result:
+            return True, None
+        return False, "PING returned False"
 
-    except ImportError:
-        return False, "redis package not installed"
+    except ConnectionError as e:
+        return False, f"Connection failed: {e}"
+    except TimeoutError as e:
+        return False, f"Connection timeout: {e}"
     except Exception as e:
         return False, str(e)
+    finally:
+        if client:
+            await client.aclose()
 
 
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:

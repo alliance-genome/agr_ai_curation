@@ -22,7 +22,17 @@ from src.lib.config.agent_factory import get_agent_factory
 logger = logging.getLogger(__name__)
 
 # Static documentation for agents (help text for frontend)
-# This is separate from YAML since it's verbose UI content
+#
+# NOTE: This is intentionally separate from agent.yaml files because:
+# 1. It's verbose UI content (examples, capabilities, limitations) that would
+#    bloat the YAML files and make them harder to maintain
+# 2. Not all agents need extensive documentation - many just need the brief
+#    description from YAML
+# 3. Documentation is presentation-layer concern, not agent configuration
+# 4. Allows documentation to be updated without touching agent configs
+#
+# If YAML-based documentation is desired in the future, consider a separate
+# docs.yaml file per agent or a dedicated documentation directory.
 AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
     "task_input": {
         "summary": "The starting point for curation workflows - defines what task the AI should perform.",

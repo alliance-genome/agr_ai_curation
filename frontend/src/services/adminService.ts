@@ -8,6 +8,32 @@
 import { useQuery, UseQueryOptions } from '@tanstack/react-query';
 
 // =============================================================================
+// Configuration
+// =============================================================================
+
+/**
+ * Health check polling configuration.
+ *
+ * To customize polling interval, set VITE_HEALTH_POLL_INTERVAL_MS environment
+ * variable during build (e.g., VITE_HEALTH_POLL_INTERVAL_MS=30000 for 30 seconds).
+ *
+ * Default: 60000ms (1 minute)
+ */
+const HEALTH_POLL_INTERVAL_MS = parseInt(
+  import.meta.env.VITE_HEALTH_POLL_INTERVAL_MS || '60000',
+  10
+);
+
+/**
+ * How long data is considered fresh before refetching in background.
+ * Default: 30 seconds
+ */
+const HEALTH_STALE_TIME_MS = parseInt(
+  import.meta.env.VITE_HEALTH_STALE_TIME_MS || '30000',
+  10
+);
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -71,9 +97,9 @@ export const useConnectionsHealth = (
   useQuery<ConnectionsHealthResponse>({
     queryKey: ['connections-health'],
     queryFn: fetchConnectionsHealth,
-    refetchInterval: 60_000, // Check every minute
+    refetchInterval: HEALTH_POLL_INTERVAL_MS,
     retry: 1, // Retry once on failure
-    staleTime: 30_000, // Consider data stale after 30 seconds
+    staleTime: HEALTH_STALE_TIME_MS,
     ...options,
   });
 

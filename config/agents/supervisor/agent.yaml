@@ -23,11 +23,16 @@ description: >
 # The supervisor dynamically discovers available agents at startup by scanning
 # the config/agents/ directory. Each agent's supervisor_routing.description
 # field helps the supervisor decide when to route to that agent.
+#
+# NOTE: This section documents the discovery behavior but is not currently read
+# by Python code. The actual discovery logic is in agent_loader.py which scans
+# config/agents/ and filters by supervisor_routing.enabled=True. If you need to
+# change discovery behavior, modify agent_loader.py rather than these values.
 agent_discovery:
-  # Directory to scan for agent definitions
+  # Directory to scan for agent definitions (documentation only - see note above)
   scan_directory: "config/agents"
 
-  # Patterns to exclude from discovery
+  # Patterns to exclude from discovery (documentation only - see note above)
   exclude_patterns:
     - "_examples/*"     # Template agents
     - "supervisor/*"    # Don't route to self

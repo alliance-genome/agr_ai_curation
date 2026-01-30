@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   useConnectionsHealth,
   getUnhealthyServices,
   ServiceHealthStatus,
 } from '../services/adminService';
+
+type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
 
 /**
  * ConnectionsHealthBanner Component
@@ -16,19 +18,43 @@ import {
  * - Shows warning for degraded status (optional services down)
  * - Shows error for unhealthy status (required services down)
  * - Dismissible with X button
+ * - Reappears if status worsens after being dismissed
  * - Lists affected services with error messages
  */
 const ConnectionsHealthBanner: React.FC = () => {
-  const [dismissed, setDismissed] = useState(false);
+  // Track which status level was dismissed (null = not dismissed)
+  const [dismissedLevel, setDismissedLevel] = useState<HealthStatusLevel | null>(null);
   const { data: health, isLoading, error } = useConnectionsHealth();
 
-  // Don't show if loading, dismissed, or healthy
-  if (isLoading || dismissed || !health) {
+  const currentStatus = health?.status as HealthStatusLevel | undefined;
+
+  // Reset dismissed state if status worsens (degraded -> unhealthy)
+  useEffect(() => {
+    if (dismissedLevel && currentStatus) {
+      // Status severity: healthy < degraded < unhealthy
+      const severityOrder: HealthStatusLevel[] = ['healthy', 'degraded', 'unhealthy'];
+      const dismissedSeverity = severityOrder.indexOf(dismissedLevel);
+      const currentSeverity = severityOrder.indexOf(currentStatus);
+
+      // If current status is worse than what was dismissed, show banner again
+      if (currentSeverity > dismissedSeverity) {
+        setDismissedLevel(null);
+      }
+    }
+  }, [currentStatus, dismissedLevel]);
+
+  // Don't show if loading or no health data
+  if (isLoading || !health) {
     return null;
   }
 
   // Only show when there are issues
   if (health.status === 'healthy') {
+    return null;
+  }
+
+  // Don't show if this status level (or worse) was dismissed
+  if (dismissedLevel === currentStatus) {
     return null;
   }
 
@@ -63,7 +89,7 @@ const ConnectionsHealthBanner: React.FC = () => {
     >
       {/* Close button */}
       <button
-        onClick={() => setDismissed(true)}
+        onClick={() => setDismissedLevel(currentStatus || null)}
         style={{
           position: 'absolute',
           top: 8,
