@@ -183,7 +183,7 @@ def _log_used_prompts_to_db(
                 {
                     "agent": p.agent_name,
                     "type": p.prompt_type,
-                    "mod": p.mod_id,
+                    "group": p.group_id,
                     "version": p.version,
                     "id": str(p.id),
                 }

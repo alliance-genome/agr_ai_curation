@@ -137,9 +137,9 @@ def _upsert_prompt(
     )
 
     if group_id is not None:
-        query = query.filter(PromptTemplate.mod_id == group_id)
+        query = query.filter(PromptTemplate.group_id == group_id)
     else:
-        query = query.filter(PromptTemplate.mod_id.is_(None))
+        query = query.filter(PromptTemplate.group_id.is_(None))
 
     existing = query.first()
 
@@ -177,7 +177,7 @@ def _upsert_prompt(
     new_prompt = PromptTemplate(
         agent_name=agent_name,
         prompt_type=prompt_type,
-        mod_id=group_id,
+        group_id=group_id,
         content=content,
         version=new_version,
         is_active=True,
@@ -336,7 +336,7 @@ def _load_group_rules(
                 agent_name=agent_name,
                 prompt_type="group_rules",
                 content=content,
-                mod_id=group_id,
+                group_id=group_id,
                 source_file=source_file,
             )
 

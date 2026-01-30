@@ -113,7 +113,7 @@ class PromptResponse(BaseModel):
     id: UUID
     agent_name: str
     prompt_type: str
-    mod_id: Optional[str]
+    group_id: Optional[str]
     content: str
     version: int
     is_active: bool
@@ -137,8 +137,8 @@ class CreatePromptRequest(BaseModel):
     """Request model for creating a new prompt version."""
 
     agent_name: str = Field(..., min_length=1, max_length=100, description="Agent ID from catalog (e.g., 'pdf', 'gene')")
-    prompt_type: str = Field(..., min_length=1, max_length=50, description="Prompt type (e.g., 'system', 'mod_rules')")
-    mod_id: Optional[str] = Field(None, max_length=20, description="MOD ID for MOD-specific rules (e.g., 'FB', 'WB')")
+    prompt_type: str = Field(..., min_length=1, max_length=50, description="Prompt type (e.g., 'system', 'group_rules')")
+    group_id: Optional[str] = Field(None, max_length=20, description="Group ID for group-specific rules (e.g., 'FB', 'WB')")
     content: str = Field(..., min_length=1, description="The prompt content text")
     change_notes: Optional[str] = Field(None, description="Notes about why this version was created")
     description: Optional[str] = Field(None, description="Optional description of the prompt")
@@ -151,7 +151,7 @@ class CreatePromptResponse(BaseModel):
     id: UUID
     agent_name: str
     prompt_type: str
-    mod_id: Optional[str]
+    group_id: Optional[str]
     version: int
     is_active: bool
     message: str
@@ -163,7 +163,7 @@ class ActivatePromptResponse(BaseModel):
     id: UUID
     agent_name: str
     prompt_type: str
-    mod_id: Optional[str]
+    group_id: Optional[str]
     version: int
     is_active: bool
     message: str
@@ -197,7 +197,7 @@ class CacheStatusResponse(BaseModel):
 async def list_prompts(
     agent_name: Optional[str] = Query(None, description="Filter by agent name"),
     prompt_type: Optional[str] = Query(None, description="Filter by prompt type"),
-    mod_id: Optional[str] = Query(None, description="Filter by MOD ID (use 'base' for NULL)"),
+    group_id: Optional[str] = Query(None, description="Filter by group ID (use 'base' for NULL)"),
     active_only: bool = Query(False, description="Only return active prompts"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
@@ -208,8 +208,8 @@ async def list_prompts(
 
     Args:
         agent_name: Filter by agent name (e.g., 'pdf', 'gene')
-        prompt_type: Filter by type (e.g., 'system', 'mod_rules')
-        mod_id: Filter by MOD ID ('base' for NULL mod_id)
+        prompt_type: Filter by type (e.g., 'system', 'group_rules')
+        group_id: Filter by group ID ('base' for NULL group_id)
         active_only: Only return active versions
         page: Page number for pagination
         page_size: Number of items per page (max 100)
@@ -226,11 +226,11 @@ async def list_prompts(
         query = query.filter(PromptTemplate.agent_name == agent_name)
     if prompt_type:
         query = query.filter(PromptTemplate.prompt_type == prompt_type)
-    if mod_id:
-        if mod_id.lower() == "base":
-            query = query.filter(PromptTemplate.mod_id.is_(None))
+    if group_id:
+        if group_id.lower() == "base":
+            query = query.filter(PromptTemplate.group_id.is_(None))
         else:
-            query = query.filter(PromptTemplate.mod_id == mod_id)
+            query = query.filter(PromptTemplate.group_id == group_id)
     if active_only:
         query = query.filter(PromptTemplate.is_active.is_(True))
 
@@ -242,7 +242,7 @@ async def list_prompts(
         query.order_by(
             PromptTemplate.agent_name,
             PromptTemplate.prompt_type,
-            PromptTemplate.mod_id,
+            PromptTemplate.group_id,
             PromptTemplate.version.desc(),
         )
         .offset((page - 1) * page_size)
@@ -291,7 +291,7 @@ async def create_prompt(
 ) -> CreatePromptResponse:
     """Create a new version of a prompt.
 
-    Automatically increments the version number for the agent/type/mod combination.
+    Automatically increments the version number for the agent/type/group combination.
     If activate=True, this version becomes active and the previous active version
     is deactivated.
 
@@ -321,10 +321,10 @@ async def create_prompt(
                     and_(
                         PromptTemplate.agent_name == request.agent_name,
                         PromptTemplate.prompt_type == request.prompt_type,
-                        # Handle NULL mod_id comparison
-                        PromptTemplate.mod_id == request.mod_id
-                        if request.mod_id
-                        else PromptTemplate.mod_id.is_(None),
+                        # Handle NULL group_id comparison
+                        PromptTemplate.group_id == request.group_id
+                        if request.group_id
+                        else PromptTemplate.group_id.is_(None),
                     )
                 )
                 .order_by(PromptTemplate.version.desc())
@@ -337,14 +337,14 @@ async def create_prompt(
             if request.activate and existing and existing.is_active:
                 existing.is_active = False
                 logger.info(
-                    f"Deactivated prompt {request.agent_name}:{request.prompt_type}:{request.mod_id or 'base'} v{existing.version}"
+                    f"Deactivated prompt {request.agent_name}:{request.prompt_type}:{request.group_id or 'base'} v{existing.version}"
                 )
 
             # Create the new prompt version
             new_prompt = PromptTemplate(
                 agent_name=request.agent_name,
                 prompt_type=request.prompt_type,
-                mod_id=request.mod_id,
+                group_id=request.group_id,
                 content=request.content,
                 version=next_version,
                 is_active=request.activate,
@@ -357,9 +357,9 @@ async def create_prompt(
             db.commit()
             db.refresh(new_prompt)
 
-            mod_str = request.mod_id or "base"
+            group_str = request.group_id or "base"
             logger.info(
-                f"Created prompt {request.agent_name}:{request.prompt_type}:{mod_str} v{next_version} "
+                f"Created prompt {request.agent_name}:{request.prompt_type}:{group_str} v{next_version} "
                 f"(active={request.activate}) by {admin.get('email')}"
             )
 
@@ -372,7 +372,7 @@ async def create_prompt(
                 id=new_prompt.id,
                 agent_name=new_prompt.agent_name,
                 prompt_type=new_prompt.prompt_type,
-                mod_id=new_prompt.mod_id,
+                group_id=new_prompt.group_id,
                 version=new_prompt.version,
                 is_active=new_prompt.is_active,
                 message=f"Created version {next_version}" + (" and activated" if request.activate else ""),
@@ -381,24 +381,24 @@ async def create_prompt(
         except IntegrityError as e:
             db.rollback()
 
-            # Check if this is a CHECK constraint violation (invalid mod_id)
+            # Check if this is a CHECK constraint violation (invalid group_id)
             if isinstance(e.orig, CheckViolation):
                 valid_ids = get_valid_group_ids()
                 logger.error(
-                    f"Invalid mod_id '{request.mod_id}' for "
+                    f"Invalid group_id '{request.group_id}' for "
                     f"{request.agent_name}:{request.prompt_type}. "
                     f"Valid values: {valid_ids} or null"
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid mod_id '{request.mod_id}'. Must be one of: {', '.join(valid_ids)} (or null for base prompts)",
+                    detail=f"Invalid group_id '{request.group_id}'. Must be one of: {', '.join(valid_ids)} (or null for base prompts)",
                 )
 
             # Version collision (UniqueViolation) - retry
             if attempt < max_retries - 1:
                 logger.warning(
                     f"Version collision on attempt {attempt + 1} for "
-                    f"{request.agent_name}:{request.prompt_type}:{request.mod_id or 'base'}, retrying..."
+                    f"{request.agent_name}:{request.prompt_type}:{request.group_id or 'base'}, retrying..."
                 )
                 continue
             else:
@@ -458,10 +458,10 @@ async def activate_prompt(
             and_(
                 PromptTemplate.agent_name == prompt.agent_name,
                 PromptTemplate.prompt_type == prompt.prompt_type,
-                # Handle NULL mod_id comparison
-                PromptTemplate.mod_id == prompt.mod_id
-                if prompt.mod_id
-                else PromptTemplate.mod_id.is_(None),
+                # Handle NULL group_id comparison
+                PromptTemplate.group_id == prompt.group_id
+                if prompt.group_id
+                else PromptTemplate.group_id.is_(None),
                 PromptTemplate.is_active.is_(True),
             )
         )
@@ -473,16 +473,16 @@ async def activate_prompt(
         previous_version = current_active.version
         current_active.is_active = False
         logger.info(
-            f"Deactivated prompt {prompt.agent_name}:{prompt.prompt_type}:{prompt.mod_id or 'base'} v{previous_version}"
+            f"Deactivated prompt {prompt.agent_name}:{prompt.prompt_type}:{prompt.group_id or 'base'} v{previous_version}"
         )
 
     # Activate the new version
     prompt.is_active = True
     db.commit()
 
-    mod_str = prompt.mod_id or "base"
+    group_str = prompt.group_id or "base"
     logger.info(
-        f"Activated prompt {prompt.agent_name}:{prompt.prompt_type}:{mod_str} v{prompt.version} "
+        f"Activated prompt {prompt.agent_name}:{prompt.prompt_type}:{group_str} v{prompt.version} "
         f"by {admin.get('email')}"
     )
 
@@ -494,7 +494,7 @@ async def activate_prompt(
         id=prompt.id,
         agent_name=prompt.agent_name,
         prompt_type=prompt.prompt_type,
-        mod_id=prompt.mod_id,
+        group_id=prompt.group_id,
         version=prompt.version,
         is_active=True,
         message=f"Activated version {prompt.version}",
@@ -560,7 +560,7 @@ class PromptHistoryResponse(BaseModel):
 
     agent_name: str
     prompt_type: str
-    mod_id: Optional[str]
+    group_id: Optional[str]
     versions: List[PromptResponse]
     total_versions: int
     active_version: Optional[int]
@@ -570,36 +570,36 @@ class PromptHistoryResponse(BaseModel):
 async def get_prompt_history(
     agent_name: str,
     prompt_type: str = Query("system", description="Prompt type (default: system)"),
-    mod_id: Optional[str] = Query(None, description="MOD ID (use 'base' or omit for base prompts)"),
+    group_id: Optional[str] = Query(None, description="Group ID (use 'base' or omit for base prompts)"),
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin),
 ) -> PromptHistoryResponse:
     """Get version history for a specific agent's prompt.
 
-    Returns all versions of a prompt for the given agent/type/mod combination,
+    Returns all versions of a prompt for the given agent/type/group combination,
     ordered by version descending (newest first).
 
     Args:
         agent_name: Agent ID from catalog (e.g., 'pdf', 'gene')
-        prompt_type: Prompt type (e.g., 'system', 'mod_rules')
-        mod_id: MOD ID for MOD-specific rules ('base' or None for base prompts)
+        prompt_type: Prompt type (e.g., 'system', 'group_rules')
+        group_id: Group ID for group-specific rules ('base' or None for base prompts)
         db: Database session
         _admin: Admin user (for authorization)
 
     Returns:
         Version history with active version highlighted
     """
-    # Normalize mod_id
-    effective_mod_id = None if not mod_id or mod_id.lower() == "base" else mod_id
+    # Normalize group_id
+    effective_group_id = None if not group_id or group_id.lower() == "base" else group_id
 
-    # Query all versions for this agent/type/mod
+    # Query all versions for this agent/type/group
     query = db.query(PromptTemplate).filter(
         and_(
             PromptTemplate.agent_name == agent_name,
             PromptTemplate.prompt_type == prompt_type,
-            PromptTemplate.mod_id == effective_mod_id
-            if effective_mod_id
-            else PromptTemplate.mod_id.is_(None),
+            PromptTemplate.group_id == effective_group_id
+            if effective_group_id
+            else PromptTemplate.group_id.is_(None),
         )
     ).order_by(PromptTemplate.version.desc())
 
@@ -608,7 +608,7 @@ async def get_prompt_history(
     if not prompts:
         raise HTTPException(
             status_code=404,
-            detail=f"No prompts found for {agent_name}:{prompt_type}:{mod_id or 'base'}",
+            detail=f"No prompts found for {agent_name}:{prompt_type}:{group_id or 'base'}",
         )
 
     # Find active version
@@ -617,7 +617,7 @@ async def get_prompt_history(
     return PromptHistoryResponse(
         agent_name=agent_name,
         prompt_type=prompt_type,
-        mod_id=effective_mod_id,
+        group_id=effective_group_id,
         versions=[PromptResponse.model_validate(p) for p in prompts],
         total_versions=len(prompts),
         active_version=active_version,
@@ -629,7 +629,7 @@ async def get_prompt_by_version(
     agent_name: str,
     version: int,
     prompt_type: str = Query("system", description="Prompt type (default: system)"),
-    mod_id: Optional[str] = Query(None, description="MOD ID (use 'base' or omit for base prompts)"),
+    group_id: Optional[str] = Query(None, description="Group ID (use 'base' or omit for base prompts)"),
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin),
 ) -> PromptResponse:
@@ -638,8 +638,8 @@ async def get_prompt_by_version(
     Args:
         agent_name: Agent ID from catalog (e.g., 'pdf', 'gene')
         version: Version number to retrieve
-        prompt_type: Prompt type (e.g., 'system', 'mod_rules')
-        mod_id: MOD ID for MOD-specific rules ('base' or None for base prompts)
+        prompt_type: Prompt type (e.g., 'system', 'group_rules')
+        group_id: Group ID for group-specific rules ('base' or None for base prompts)
         db: Database session
         _admin: Admin user (for authorization)
 
@@ -649,16 +649,16 @@ async def get_prompt_by_version(
     Raises:
         HTTPException 404: If prompt version not found
     """
-    # Normalize mod_id
-    effective_mod_id = None if not mod_id or mod_id.lower() == "base" else mod_id
+    # Normalize group_id
+    effective_group_id = None if not group_id or group_id.lower() == "base" else group_id
 
     prompt = db.query(PromptTemplate).filter(
         and_(
             PromptTemplate.agent_name == agent_name,
             PromptTemplate.prompt_type == prompt_type,
-            PromptTemplate.mod_id == effective_mod_id
-            if effective_mod_id
-            else PromptTemplate.mod_id.is_(None),
+            PromptTemplate.group_id == effective_group_id
+            if effective_group_id
+            else PromptTemplate.group_id.is_(None),
             PromptTemplate.version == version,
         )
     ).first()
@@ -666,7 +666,7 @@ async def get_prompt_by_version(
     if not prompt:
         raise HTTPException(
             status_code=404,
-            detail=f"Prompt {agent_name}:{prompt_type}:{mod_id or 'base'} v{version} not found",
+            detail=f"Prompt {agent_name}:{prompt_type}:{group_id or 'base'} v{version} not found",
         )
 
     return PromptResponse.model_validate(prompt)

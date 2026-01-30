@@ -1,12 +1,12 @@
 """Prompt template and execution log models for versioned prompt management.
 
 This module defines the database models for:
-- PromptTemplate: Versioned prompt storage with agent/type/mod_id keys
+- PromptTemplate: Versioned prompt storage with agent/type/group_id keys
 - PromptExecutionLog: Audit trail of which prompts were used per execution
 
-Key structure for PromptTemplate: agent_name + prompt_type + mod_id
+Key structure for PromptTemplate: agent_name + prompt_type + group_id
 - Base prompts: gene:system:NULL
-- MOD rules: gene:mod_rules:FB
+- Group rules: gene:group_rules:FB
 
 Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf', 'gene').
 """
@@ -21,9 +21,9 @@ from .database import Base
 class PromptTemplate(Base):
     """Versioned prompt template storage.
 
-    Key structure: agent_name + prompt_type + mod_id
+    Key structure: agent_name + prompt_type + group_id
     - Base prompts: gene:system:NULL
-    - MOD rules: gene:mod_rules:FB
+    - Group rules: gene:group_rules:FB
 
     Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf', 'gene').
     """
@@ -34,35 +34,35 @@ class PromptTemplate(Base):
 
     # Identity (uses catalog_service.py AGENT_REGISTRY IDs)
     agent_name = Column(String(100), nullable=False)  # e.g., 'pdf', 'gene', 'supervisor'
-    prompt_type = Column(String(50), nullable=False)  # e.g., 'system', 'format_gene_expression', 'mod_rules'
-    mod_id = Column(String(20), nullable=True)  # NULL for base prompts, e.g., 'FB', 'WB', 'MGI' for MOD rules
+    prompt_type = Column(String(50), nullable=False)  # e.g., 'system', 'format_gene_expression', 'group_rules'
+    group_id = Column(String(20), nullable=True)  # NULL for base prompts, e.g., 'FB', 'WB', 'MGI' for group rules
 
     # Content
     content = Column(Text, nullable=False)  # The actual prompt text
 
     # Versioning
-    version = Column(Integer, nullable=False)  # Auto-incremented per agent_name+prompt_type+mod_id
-    is_active = Column(Boolean, nullable=False, default=False)  # Only one active per agent_name+prompt_type+mod_id
+    version = Column(Integer, nullable=False)  # Auto-incremented per agent_name+prompt_type+group_id
+    is_active = Column(Boolean, nullable=False, default=False)  # Only one active per agent_name+prompt_type+group_id
 
     # Metadata
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_by = Column(String(255), nullable=True)  # Who created this version
     change_notes = Column(Text, nullable=True)  # Why this version was created
     source_file = Column(Text, nullable=True)  # Preserve UI contract + provenance
-    description = Column(Text, nullable=True)  # Optional prompt/MOD description
+    description = Column(Text, nullable=True)  # Optional prompt/group description
 
     __table_args__ = (
-        # Unique constraint for non-NULL mod_id
+        # Unique constraint for non-NULL group_id
         Index(
-            "uq_prompt_templates_with_mod",
+            "uq_prompt_templates_with_group",
             "agent_name",
             "prompt_type",
-            "mod_id",
+            "group_id",
             "version",
             unique=True,
-            postgresql_where=(mod_id.isnot(None)),
+            postgresql_where=(group_id.isnot(None)),
         ),
-        # Partial unique index for base prompts (mod_id IS NULL)
+        # Partial unique index for base prompts (group_id IS NULL)
         # Required because PostgreSQL doesn't consider NULLs equal in unique constraints
         Index(
             "idx_prompt_templates_base_unique",
@@ -70,14 +70,14 @@ class PromptTemplate(Base):
             "prompt_type",
             "version",
             unique=True,
-            postgresql_where=(mod_id.is_(None)),
+            postgresql_where=(group_id.is_(None)),
         ),
-        # Index for fast lookups of active prompts (includes mod_id)
+        # Index for fast lookups of active prompts (includes group_id)
         Index(
             "idx_prompt_templates_active",
             "agent_name",
             "prompt_type",
-            "mod_id",
+            "group_id",
             postgresql_where=(is_active == True),
         ),
         # Index for version lookups
@@ -85,21 +85,21 @@ class PromptTemplate(Base):
             "idx_prompt_templates_version",
             "agent_name",
             "prompt_type",
-            "mod_id",
+            "group_id",
             "version",
         ),
     )
 
     def __repr__(self) -> str:
-        mod_str = f"/{self.mod_id}" if self.mod_id else ""
+        group_str = f"/{self.group_id}" if self.group_id else ""
         active_str = " [ACTIVE]" if self.is_active else ""
-        return f"<PromptTemplate {self.agent_name}:{self.prompt_type}{mod_str} v{self.version}{active_str}>"
+        return f"<PromptTemplate {self.agent_name}:{self.prompt_type}{group_str} v{self.version}{active_str}>"
 
 
 class PromptExecutionLog(Base):
     """Audit trail of prompt usage per execution.
 
-    One row per prompt used (agent run may log multiple: base + MOD rule).
+    One row per prompt used (agent run may log multiple: base + group rule).
     Strict audit trail: logs every invocation (no de-dupe).
     """
 
@@ -119,8 +119,8 @@ class PromptExecutionLog(Base):
         UUID(as_uuid=True), ForeignKey("prompt_templates.id"), nullable=False
     )
     agent_name = Column(String(100), nullable=False)  # Denormalized for easy querying
-    prompt_type = Column(String(50), nullable=False)  # 'system' or 'mod_rules'
-    mod_id = Column(String(20), nullable=True)  # NULL for base prompts
+    prompt_type = Column(String(50), nullable=False)  # 'system' or 'group_rules'
+    group_id = Column(String(20), nullable=True)  # NULL for base prompts
     prompt_version = Column(Integer, nullable=False)  # Denormalized for easy querying
 
     # Timing
@@ -132,5 +132,5 @@ class PromptExecutionLog(Base):
     )
 
     def __repr__(self) -> str:
-        mod_str = f"/{self.mod_id}" if self.mod_id else ""
-        return f"<PromptExecutionLog {self.agent_name}:{self.prompt_type}{mod_str} v{self.prompt_version}>"
+        group_str = f"/{self.group_id}" if self.group_id else ""
+        return f"<PromptExecutionLog {self.agent_name}:{self.prompt_type}{group_str} v{self.prompt_version}>"

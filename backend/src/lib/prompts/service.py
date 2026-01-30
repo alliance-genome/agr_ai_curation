@@ -65,8 +65,8 @@ class PromptService:
     ) -> PromptExecutionLog:
         """Record that a prompt was used in an execution.
 
-        Called once per prompt used. For agents with MOD rules,
-        call twice: once for base prompt, once for MOD rule.
+        Called once per prompt used. For agents with group rules,
+        call twice: once for base prompt, once for group rule.
 
         Args:
             prompt: The PromptTemplate that was used
@@ -84,7 +84,7 @@ class PromptService:
             prompt_template_id=prompt.id,
             agent_name=prompt.agent_name,
             prompt_type=prompt.prompt_type,
-            mod_id=prompt.mod_id,
+            group_id=prompt.group_id,
             prompt_version=prompt.version,
         )
         self.db.add(log_entry)
@@ -126,7 +126,7 @@ class PromptService:
         agent_name: str,
         content: str,
         prompt_type: str = "system",
-        mod_id: Optional[str] = None,
+        group_id: Optional[str] = None,
         created_by: Optional[str] = None,
         change_notes: Optional[str] = None,
         source_file: Optional[str] = None,
@@ -140,8 +140,8 @@ class PromptService:
         Args:
             agent_name: Catalog ID (e.g., 'pdf', 'gene', 'supervisor')
             content: The prompt text
-            prompt_type: e.g., 'system', 'mod_rules' (default: 'system')
-            mod_id: NULL for base prompts, e.g., 'FB' for MOD rules
+            prompt_type: e.g., 'system', 'group_rules' (default: 'system')
+            group_id: NULL for base prompts, e.g., 'FB' for group rules
             created_by: Email or ID of creator (optional)
             change_notes: Why this version was created (optional)
             source_file: Original file path for provenance (optional)
@@ -151,27 +151,27 @@ class PromptService:
         Returns:
             The created PromptTemplate
         """
-        # Get next version number (scoped to agent_name + prompt_type + mod_id)
+        # Get next version number (scoped to agent_name + prompt_type + group_id)
         query = self.db.query(func.max(PromptTemplate.version)).filter(
             PromptTemplate.agent_name == agent_name,
             PromptTemplate.prompt_type == prompt_type,
         )
-        if mod_id is None:
-            query = query.filter(PromptTemplate.mod_id.is_(None))
+        if group_id is None:
+            query = query.filter(PromptTemplate.group_id.is_(None))
         else:
-            query = query.filter(PromptTemplate.mod_id == mod_id)
+            query = query.filter(PromptTemplate.group_id == group_id)
 
         max_version = query.scalar() or 0
         new_version = max_version + 1
 
         # If activating, deactivate current active version (same scope)
         if activate:
-            self._deactivate_current(agent_name, prompt_type, mod_id)
+            self._deactivate_current(agent_name, prompt_type, group_id)
 
         prompt = PromptTemplate(
             agent_name=agent_name,
             prompt_type=prompt_type,
-            mod_id=mod_id,
+            group_id=group_id,
             content=content,
             version=new_version,
             is_active=activate,
@@ -183,7 +183,7 @@ class PromptService:
         self.db.add(prompt)
 
         logger.info(
-            f"Created prompt version: {agent_name}:{prompt_type}:{mod_id or 'base'} "
+            f"Created prompt version: {agent_name}:{prompt_type}:{group_id or 'base'} "
             f"v{new_version} (active={activate})"
         )
 
@@ -194,15 +194,15 @@ class PromptService:
         agent_name: str,
         version: int,
         prompt_type: str = "system",
-        mod_id: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> PromptTemplate:
         """Activate a specific version and refresh cache.
 
         Args:
             agent_name: Catalog ID (e.g., 'pdf', 'gene', 'supervisor')
             version: Specific version number to activate
-            prompt_type: e.g., 'system', 'mod_rules' (default: 'system')
-            mod_id: NULL for base prompts, e.g., 'FB' for MOD rules
+            prompt_type: e.g., 'system', 'group_rules' (default: 'system')
+            group_id: NULL for base prompts, e.g., 'FB' for group rules
 
         Returns:
             The activated PromptTemplate
@@ -211,7 +211,7 @@ class PromptService:
             ValueError: If the specified version doesn't exist
         """
         # Deactivate current active version (scoped)
-        self._deactivate_current(agent_name, prompt_type, mod_id)
+        self._deactivate_current(agent_name, prompt_type, group_id)
 
         # Find and activate specified version
         query = self.db.query(PromptTemplate).filter(
@@ -219,17 +219,17 @@ class PromptService:
             PromptTemplate.prompt_type == prompt_type,
             PromptTemplate.version == version,
         )
-        if mod_id is None:
-            query = query.filter(PromptTemplate.mod_id.is_(None))
+        if group_id is None:
+            query = query.filter(PromptTemplate.group_id.is_(None))
         else:
-            query = query.filter(PromptTemplate.mod_id == mod_id)
+            query = query.filter(PromptTemplate.group_id == group_id)
 
         prompt = query.first()
 
         if not prompt:
             raise ValueError(
                 f"Version {version} not found for "
-                f"{agent_name}/{prompt_type}/{mod_id or 'base'}"
+                f"{agent_name}/{prompt_type}/{group_id or 'base'}"
             )
 
         prompt.is_active = True
@@ -239,7 +239,7 @@ class PromptService:
         refresh_cache(self.db)
 
         logger.info(
-            f"Activated prompt version: {agent_name}:{prompt_type}:{mod_id or 'base'} v{version}"
+            f"Activated prompt version: {agent_name}:{prompt_type}:{group_id or 'base'} v{version}"
         )
 
         return prompt
@@ -248,14 +248,14 @@ class PromptService:
         self,
         agent_name: str,
         prompt_type: str = "system",
-        mod_id: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> List[PromptTemplate]:
         """Get all versions of a prompt, ordered by version descending.
 
         Args:
             agent_name: Catalog ID
-            prompt_type: e.g., 'system', 'mod_rules'
-            mod_id: NULL for base prompts, MOD ID for MOD rules
+            prompt_type: e.g., 'system', 'group_rules'
+            group_id: NULL for base prompts, group ID for group rules
 
         Returns:
             List of PromptTemplate objects, newest first
@@ -264,10 +264,10 @@ class PromptService:
             PromptTemplate.agent_name == agent_name,
             PromptTemplate.prompt_type == prompt_type,
         )
-        if mod_id is None:
-            query = query.filter(PromptTemplate.mod_id.is_(None))
+        if group_id is None:
+            query = query.filter(PromptTemplate.group_id.is_(None))
         else:
-            query = query.filter(PromptTemplate.mod_id == mod_id)
+            query = query.filter(PromptTemplate.group_id == group_id)
 
         return query.order_by(PromptTemplate.version.desc()).all()
 
@@ -275,7 +275,7 @@ class PromptService:
         self,
         agent_name: str,
         prompt_type: str,
-        mod_id: Optional[str],
+        group_id: Optional[str],
     ) -> None:
         """Deactivate the current active version for a prompt scope."""
         query = self.db.query(PromptTemplate).filter(
@@ -283,9 +283,9 @@ class PromptService:
             PromptTemplate.prompt_type == prompt_type,
             PromptTemplate.is_active == True,  # noqa: E712
         )
-        if mod_id is None:
-            query = query.filter(PromptTemplate.mod_id.is_(None))
+        if group_id is None:
+            query = query.filter(PromptTemplate.group_id.is_(None))
         else:
-            query = query.filter(PromptTemplate.mod_id == mod_id)
+            query = query.filter(PromptTemplate.group_id == group_id)
 
         query.update({"is_active": False})

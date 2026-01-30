@@ -51,16 +51,16 @@ def initialize(db: Session) -> None:
     new_version_cache: Dict[str, PromptTemplate] = {}
 
     for prompt in all_prompts:
-        # Cache key includes mod_id (or 'base' for NULL)
-        mod_key = prompt.mod_id or "base"
+        # Cache key includes group_id (or 'base' for NULL)
+        group_key = prompt.group_id or "base"
 
         # Always add to version cache (for pinned flows)
-        version_key = f"{prompt.agent_name}:{prompt.prompt_type}:{mod_key}:v{prompt.version}"
+        version_key = f"{prompt.agent_name}:{prompt.prompt_type}:{group_key}:v{prompt.version}"
         new_version_cache[version_key] = prompt
 
         # Add to active cache if it's the active version
         if prompt.is_active:
-            active_key = f"{prompt.agent_name}:{prompt.prompt_type}:{mod_key}"
+            active_key = f"{prompt.agent_name}:{prompt.prompt_type}:{group_key}"
             new_active_cache[active_key] = prompt
 
     with _lock:
