@@ -50,12 +50,13 @@ services:
       dockerfile: Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
+      - ./alliance_agents:/app/alliance_agents
+      - ./config:/app/config
     environment:
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=test-key-for-unit-tests
       - LANGFUSE_PUBLIC_KEY=test-key
       - LANGFUSE_SECRET_KEY=test-key
-      - VALID_MOD_IDS=FB,WB,MGI,RGD,SGD,HGNC,ZFIN
       - DOCLING_TIMEOUT=300
     # Note: These ignores match .github/workflows/test.yml for CI consistency
     command: >

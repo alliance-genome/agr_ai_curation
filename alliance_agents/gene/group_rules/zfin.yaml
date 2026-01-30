@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: ZFIN
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the ZFIN group.
+# =============================================================================
+
+content: '
+
+  ## ZFIN-SPECIFIC RULES (Danio rerio)
+
+
+  ## ZFIN Gene Search Strategy (Danio rerio)
+
+
+  ### General Guidelines
+
+
+  - Zebrafish gene symbols are lowercase (e.g., tp53, brca2)
+
+  - Human orthologs use lowercase version of human symbol
+
+  - Search using the gene symbol as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add zebrafish gene-specific search strategies here.
+
+
+
+  ### Interpreting ZFIN Results:
+
+  ### Interpreting ZFIN Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add zebrafish gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: ZFIN

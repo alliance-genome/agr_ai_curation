@@ -23,16 +23,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from psycopg2.errors import CheckViolation, UniqueViolation
 
-import os
-
 from src.api.auth import get_auth_dependency
+from src.lib.config import get_valid_group_ids
 
-# Valid MOD identifiers - must be set in environment, no fallback
-# This ensures consistency with the database CHECK constraint
-_valid_mod_ids_str = os.environ.get("VALID_MOD_IDS")
-if not _valid_mod_ids_str:
-    raise RuntimeError("VALID_MOD_IDS environment variable must be set (e.g., 'FB,WB,MGI,RGD,SGD,HGNC,ZFIN')")
-VALID_MOD_IDS = [mod.strip() for mod in _valid_mod_ids_str.split(",")]
 from src.lib.prompts import cache as prompt_cache
 from src.models.sql.database import get_db
 from src.models.sql.prompts import PromptTemplate
@@ -390,14 +383,15 @@ async def create_prompt(
 
             # Check if this is a CHECK constraint violation (invalid mod_id)
             if isinstance(e.orig, CheckViolation):
+                valid_ids = get_valid_group_ids()
                 logger.error(
                     f"Invalid mod_id '{request.mod_id}' for "
                     f"{request.agent_name}:{request.prompt_type}. "
-                    f"Valid values: {VALID_MOD_IDS} or null"
+                    f"Valid values: {valid_ids} or null"
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid mod_id '{request.mod_id}'. Must be one of: {', '.join(VALID_MOD_IDS)} (or null for base prompts)",
+                    detail=f"Invalid mod_id '{request.mod_id}'. Must be one of: {', '.join(valid_ids)} (or null for base prompts)",
                 )
 
             # Version collision (UniqueViolation) - retry

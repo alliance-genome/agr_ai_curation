@@ -1,0 +1,73 @@
+# =============================================================================
+# SUPERVISOR AGENT CONFIGURATION
+# =============================================================================
+# The supervisor is the central orchestrator that routes user queries to
+# specialized agents. It analyzes the user's request and determines which
+# agent(s) should handle it.
+#
+# This is CORE infrastructure - ships with the base product.
+# Customization happens through the agents it routes to, not the supervisor itself.
+# =============================================================================
+
+agent_id: supervisor
+
+name: "Supervisor Agent"
+
+description: >
+  Central orchestrator that analyzes user queries and routes them to the
+  appropriate specialized agents based on the nature of the request.
+
+# -----------------------------------------------------------------------------
+# Supervisor Routing (Self-routing disabled)
+# -----------------------------------------------------------------------------
+# The supervisor is the router itself, so it should not be routable.
+supervisor_routing:
+  enabled: false
+  description: ""  # Not used since disabled
+
+# -----------------------------------------------------------------------------
+# Agent Discovery
+# -----------------------------------------------------------------------------
+# The supervisor dynamically discovers available agents at startup by scanning
+# the config/agents/ directory. Each agent's supervisor_routing.description
+# field helps the supervisor decide when to route to that agent.
+#
+# NOTE: This section documents the discovery behavior but is not currently read
+# by Python code. The actual discovery logic is in agent_loader.py which scans
+# config/agents/ and filters by supervisor_routing.enabled=True. If you need to
+# change discovery behavior, modify agent_loader.py rather than these values.
+agent_discovery:
+  # Directory to scan for agent definitions (documentation only - see note above)
+  scan_directory: "config/agents"
+
+  # Patterns to exclude from discovery (documentation only - see note above)
+  exclude_patterns:
+    - "_examples/*"     # Template agents
+    - "supervisor/*"    # Don't route to self
+
+# -----------------------------------------------------------------------------
+# Model Configuration
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${SUPERVISOR_MODEL:-gpt-4o}"
+  temperature: 0.1
+
+# -----------------------------------------------------------------------------
+# Routing Behavior
+# -----------------------------------------------------------------------------
+routing:
+  # How to handle ambiguous requests
+  ambiguous_handling: "ask_clarification"
+
+  # Maximum agents to invoke for a single request
+  max_parallel_agents: 3
+
+  # Whether to allow multi-agent responses
+  allow_multi_agent: true
+
+# -----------------------------------------------------------------------------
+# Frontend Display
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🎯"
+  show_in_palette: false  # System routing agent, not shown in agent palette

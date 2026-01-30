@@ -15,6 +15,7 @@ os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
 from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, logs, flows, files, maintenance, batch
+from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_pdf_storage_path
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
@@ -29,28 +30,31 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Validate DOCLING_TIMEOUT at startup
-_docling_timeout = os.getenv('DOCLING_TIMEOUT', '30')
-try:
-    _docling_timeout_int = int(_docling_timeout)
-    _min_timeout = 300  # 5 minutes minimum
-    if _docling_timeout_int < _min_timeout:
-        error_msg = (
-            f"❌ CRITICAL: DOCLING_TIMEOUT is set to {_docling_timeout_int} seconds, "
-            f"but must be at least {_min_timeout} seconds (5 minutes).\n"
-            f"   PDF processing can take several minutes, especially for complex documents.\n"
-            f"   Please update .env file: DOCLING_TIMEOUT=300"
-        )
-        print(error_msg, flush=True)
-        logger.error(error_msg)
-        sys.exit(1)  # Prevent startup with insufficient timeout
-    else:
-        logger.info(f"✅ DOCLING_TIMEOUT validated: {_docling_timeout_int} seconds")
-except ValueError:
-    error_msg = f"❌ CRITICAL: DOCLING_TIMEOUT must be an integer, got: {_docling_timeout}"
-    print(error_msg, flush=True)
-    logger.error(error_msg)
-    sys.exit(1)
+
+def _validate_docling_timeout():
+    """Validate DOCLING_TIMEOUT environment variable.
+
+    PDF processing can take several minutes, so we require a minimum timeout
+    of 300 seconds (5 minutes) to prevent premature failures.
+
+    Raises:
+        RuntimeError: If DOCLING_TIMEOUT is too low or invalid.
+    """
+    docling_timeout = os.getenv('DOCLING_TIMEOUT', '30')
+    try:
+        timeout_int = int(docling_timeout)
+        min_timeout = 300  # 5 minutes minimum
+        if timeout_int < min_timeout:
+            error_msg = (
+                f"DOCLING_TIMEOUT is set to {timeout_int} seconds, "
+                f"but must be at least {min_timeout} seconds (5 minutes). "
+                f"PDF processing can take several minutes, especially for complex documents. "
+                f"Please update .env file: DOCLING_TIMEOUT=300"
+            )
+            raise RuntimeError(error_msg)
+        logger.info(f"✅ DOCLING_TIMEOUT validated: {timeout_int} seconds")
+    except ValueError:
+        raise RuntimeError(f"DOCLING_TIMEOUT must be an integer, got: {docling_timeout}")
 
 
 async def initialize_weaviate_collections(connection: WeaviateConnection):
@@ -146,6 +150,13 @@ async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     logger.info("Starting up Weaviate Control Panel API...")
 
+    # Validate critical environment variables
+    try:
+        _validate_docling_timeout()
+    except RuntimeError as e:
+        logger.error(f"❌ FATAL: {e}")
+        raise
+
     try:
         # Get Weaviate connection details from environment
         weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
@@ -175,17 +186,96 @@ async def lifespan(app: FastAPI):
         await initialize_weaviate_collections(connection)
         logger.info("✅ Successfully initialized Weaviate collections")
 
-        # Initialize prompt cache from database (REQUIRED - fail fast if unavailable)
+        # Sync prompts from YAML to database (YAML is source of truth)
+        # This must run BEFORE cache initialization
+        from src.lib.config.prompt_loader import load_prompts
         from src.lib.prompts.cache import initialize as init_prompt_cache
         db = SessionLocal()
         try:
+            # Load prompts from YAML files into database
+            counts = load_prompts(db=db)
+            if counts.get("skipped"):
+                logger.debug("Prompt loader already initialized")
+            else:
+                logger.info(
+                    f"✅ Prompts synced from YAML: {counts['base_prompts']} base, "
+                    f"{counts['group_rules']} group rules"
+                )
+
+            # Initialize prompt cache from database
             init_prompt_cache(db)
             logger.info("✅ Prompt cache initialized")
+
+            # Load group definitions from config/groups.yaml
+            # This must run after prompts so group rules can be resolved
+            from src.lib.config.groups_loader import load_groups
+            groups = load_groups()
+            logger.info(f"✅ Group definitions loaded: {len(groups)} groups")
         except Exception as e:
-            logger.error(f"❌ FATAL: Failed to initialize prompt cache: {e}")
+            logger.error(f"❌ FATAL: Failed to initialize prompts/groups: {e}")
+            db.rollback()  # Rollback any partial changes on failure
             raise  # Re-raise to prevent app startup
         finally:
             db.close()
+
+        # Load connection definitions from config/connections.yaml
+        # This enables health checking and connection status tracking
+        #
+        # HEALTH_CHECK_STRICT_MODE controls behavior:
+        # - true (default): Config parse errors and unhealthy required services are fatal
+        # - false: Config errors are warnings, health checks are advisory
+        strict_mode = os.environ.get("HEALTH_CHECK_STRICT_MODE", "true").lower() != "false"
+
+        try:
+            from src.lib.config.connections_loader import (
+                load_connections,
+                check_required_services_healthy,
+                get_required_connections,
+                get_optional_connections,
+            )
+            connections = load_connections()
+            logger.info(f"✅ Connection definitions loaded: {len(connections)} services")
+
+            # Check health of required services
+            required_services = get_required_connections()
+            optional_services = get_optional_connections()
+            logger.info(f"   Required services: {[s.service_id for s in required_services]}")
+            logger.info(f"   Optional services: {[s.service_id for s in optional_services]}")
+
+            if strict_mode and required_services:
+                logger.info("🔍 Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
+                try:
+                    all_healthy, failed_services = await check_required_services_healthy()
+
+                    if not all_healthy:
+                        error_msg = f"Required services are unhealthy: {failed_services}"
+                        logger.error(f"❌ FATAL: {error_msg}")
+                        logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
+                        raise RuntimeError(error_msg)
+
+                    logger.info("✅ All required services are healthy")
+                except RuntimeError:
+                    raise  # Re-raise health check failures
+                except Exception as e:
+                    # Unexpected errors during health check should also block startup
+                    raise RuntimeError(f"Health check failed unexpectedly: {e}") from e
+            elif required_services:
+                logger.warning("⚠️ HEALTH_CHECK_STRICT_MODE=false - skipping required service health enforcement")
+                logger.warning("   This is not recommended for production deployments")
+
+        except FileNotFoundError as e:
+            # Config file not found - this is optional, always continue
+            logger.warning(f"⚠️ Connections config not found (optional): {e}")
+        except RuntimeError:
+            raise  # Re-raise startup failures (health check failures, etc.)
+        except Exception as e:
+            # Config file exists but failed to load (parse error, etc.)
+            if strict_mode:
+                logger.error(f"❌ FATAL: Failed to load connections config: {e}")
+                logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
+                raise RuntimeError(f"Connections config load failed: {e}") from e
+            else:
+                logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
 
         # Initialize Langfuse observability
         try:
@@ -329,6 +419,7 @@ app.include_router(logs.router, prefix="/api", tags=["Logs"])
 
 # Admin endpoints (privileged operations - requires ADMIN_EMAILS allowlist)
 app.include_router(admin_prompts_router, tags=["Admin - Prompts"])
+app.include_router(admin_connections_router, tags=["Admin - Health"])
 
 # Static mount for original PDF storage
 pdf_storage_path = get_pdf_storage_path()

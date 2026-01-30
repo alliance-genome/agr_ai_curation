@@ -37,7 +37,7 @@ This guide explains how to add and maintain specialist agents inside the AGR AI 
   - Trace Review API (optional): `http://localhost:8001`
 - **Data services** – `docker compose` brings up Postgres (AI curation DB + prompt tables) on `localhost:5434`, Redis, Weaviate, ClickHouse, MinIO, and Langfuse worker. Use `docker compose logs -f backend` to watch agent telemetry.
 - **Prompts live in Postgres** – Inspect with `docker compose exec postgres psql -U postgres ai_curation -c "select agent_name, prompt_type, version, is_active from prompt_templates order by updated_at desc limit 20;"`.
-- **Agent Studio entry points** – Prompt Explorer (catalog, prompt history, MOD rules), Flows tab (visual builder), Trace context panel (pulls Langfuse + prompt execution logs) all read from the backend’s catalog and prompt cache.
+- **Agent Studio entry points** – Prompt Explorer (catalog, prompt history, group rules), Flows tab (visual builder), Trace context panel (pulls Langfuse + prompt execution logs) all read from the backend's catalog and prompt cache.
 
 ### CLI scaffolding tool
 
@@ -204,7 +204,7 @@ from ..prompt_utils import inject_structured_output_instruction
 logger = logging.getLogger(__name__)
 
 
-def create_my_agent(active_mods: Optional[List[str]] = None) -> Agent:
+def create_my_agent(active_groups: Optional[List[str]] = None) -> Agent:
     from ..tools.agr_curation import agr_curation_query
 
     config = get_agent_config("my_agent")
@@ -216,18 +216,18 @@ def create_my_agent(active_mods: Optional[List[str]] = None) -> Agent:
         output_type=MyAgentResultEnvelope,
     )
 
-    if active_mods:
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
-            instructions = inject_mod_rules(
+            from config.group_rules import inject_group_rules
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="my_agent",
                 prompts_out=prompts_used,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("MOD rule injection failed: %s", exc)
+            logger.warning("Group rule injection failed: %s", exc)
 
     model = get_model_for_agent(config.model)
     model_settings = build_model_settings(
@@ -248,7 +248,7 @@ def create_my_agent(active_mods: Optional[List[str]] = None) -> Agent:
             "reasoning": config.reasoning,
             "tool_choice": config.tool_choice,
             "prompt_version": base_prompt.version,
-            "active_mods": active_mods,
+            "active_groups": active_groups,
         },
     )
 
@@ -316,7 +316,7 @@ curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
 
 3. **Alembic migration** – still an option for one-off seeding, but favor the API so prompt revisions stay out of code deployments.
 
-The prompt history (all versions + MOD rules) shows up automatically inside Agent Studio → Prompt Explorer once the cache refresh completes.
+The prompt history (all versions + group rules) shows up automatically inside Agent Studio → Prompt Explorer once the cache refresh completes.
 
 ### Step 5: Wire exports & registry entries
 
@@ -331,7 +331,7 @@ The prompt history (all versions + MOD rules) shows up automatically inside Agen
     "description": "Validates ...",
     "category": "Validation",
     "subcategory": "Data Validation",
-    "has_mod_rules": True,
+    "has_group_rules": True,
     "tools": ["agr_curation_query"],
     "factory": create_my_agent,
     "requires_document": False,
@@ -388,7 +388,7 @@ File: `backend/src/lib/openai_agents/agents/supervisor_agent.py`
 3. Wrap it with `_create_streaming_tool(...)`:
 
 ```python
-my_agent = create_my_agent(active_mods=active_mods)
+my_agent = create_my_agent(active_groups=active_groups)
 specialist_tools.append(_create_streaming_tool(
     agent=my_agent,
     tool_name="ask_my_agent_specialist",
@@ -406,7 +406,7 @@ No hard-coded icon map anymore. Agent Studio fetches metadata via `GET /api/agen
 
 To verify:
 1. Start the stack (`make dev`), log into Agent Studio, and open the Agents tab. Use the search box to locate your agent; confirm the description, icon, and category look correct.
-2. Use the Prompt Explorer to ensure the base prompt and any MOD rules show up (and include version metadata from the DB).
+2. Use the Prompt Explorer to ensure the base prompt and any group rules show up (and include version metadata from the DB).
 
 ### Step 8: Configuration & environment variables
 
@@ -453,7 +453,7 @@ AGENT_MY_AGENT_REASONING=low
 
 ### Factory
 - [ ] Uses `get_agent_config`, `get_prompt`, `set_pending_prompts`, `build_model_settings`, and `log_agent_config`.
-- [ ] Supports optional `active_mods` with `inject_mod_rules`.
+- [ ] Supports optional `active_groups` with `inject_group_rules`.
 - [ ] Registers the correct `output_type` (envelope) and any output guardrails if needed.
 
 ### Registry + supervisor + frontend
@@ -514,7 +514,7 @@ AGENT_MY_AGENT_REASONING=low
 - **PromptService** – Located in `backend/src/lib/prompts/service.py`. Handles creating versions, activating them, logging usage, and refreshing the cache.
 - **Admin API** – `backend/src/api/admin/prompts.py` exposes `GET /api/admin/prompts`, `POST` to create versions, `POST /cache/refresh`, etc. Authorization uses `ADMIN_EMAILS` + Cognito unless `DEV_MODE=true` and no admins are set.
 - **Prompt Catalog** – `PromptCatalogService` (singleton) merges the database prompts with `AGENT_REGISTRY` metadata so Agent Studio displays categories, documentation, and MOD rules.
-- **MOD rules** – Stored in the same table with `prompt_type="mod_rules"`. `inject_mod_rules()` fetches them via the cache. Legacy YAML files under `backend/config/mod_rules/agents/*` document the intended rules but the live source of truth is the database entry.
+- **Group rules** – Stored in the same table with `prompt_type="group_rules"`. `inject_group_rules()` fetches them via the cache. Legacy YAML files under `backend/config/group_rules/agents/*` document the intended rules but the live source of truth is the database entry.
 - **Manual inspection** – `docker compose exec postgres psql -U postgres ai_curation -c "select agent_name, prompt_type, mod_id, version, is_active from prompt_templates where agent_name='my_agent' order by version;"`
 
 ---

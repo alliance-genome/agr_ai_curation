@@ -249,18 +249,22 @@ export interface AgentContextData {
   };
 }
 
-// MOD Context Types (Model Organism Database)
-export interface ModDetail {
-  mod_id: string;
+// Group Context Types (Organization groups - MODs, institutions, teams, etc.)
+export interface GroupDetail {
+  group_id: string;
   description: string;
 }
 
-export interface ModContextData {
-  active_mods: string[];
+export interface GroupContextData {
+  active_groups: string[];
   injection_active: boolean;
-  mod_count: number;
-  mod_details?: ModDetail[];
+  group_count: number;
+  group_details?: GroupDetail[];
 }
+
+// Legacy alias for backward compatibility with historical traces
+export type ModContextData = GroupContextData;
+export type ModDetail = GroupDetail;
 
 // Trace Summary Types
 export interface TraceSummaryData {
@@ -317,7 +321,7 @@ export interface TraceSummaryData {
     has_document?: boolean;
     sdk_info?: any;
   };
-  mod_context?: ModContextData;
+  group_context?: GroupContextData;
   links: {
     langfuse_trace?: string;
   };

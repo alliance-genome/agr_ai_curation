@@ -1,0 +1,73 @@
+# =============================================================================
+# AGENT DEFINITION: disease
+# =============================================================================
+# Maps disease terms to Disease Ontology (DOID) identifiers.
+# Tool name generated at runtime: ask_disease_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: disease_validation
+
+name: "Disease Ontology Agent"
+
+description: >
+  Maps disease terms to Disease Ontology (DOID) identifiers.
+  Supports lookup by disease name, synonym, or DOID.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for mapping disease terms to DOID identifiers, looking up disease names,
+    finding disease synonyms, or disease ontology queries.
+  batchable: true
+  batching_instructions: >
+    When mapping multiple diseases, combine them into a single request.
+    Example: "Map these diseases: Alzheimer disease, diabetes mellitus, cancer"
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - curation_db_sql
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: DiseaseValidationEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_DISEASE_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🏥"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: false

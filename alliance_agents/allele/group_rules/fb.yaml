@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: FB
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the allele agent's prompt when users
+# belong to the FB group.
+# =============================================================================
+
+content: '
+
+  ## FB-SPECIFIC RULES (Drosophila melanogaster)
+
+
+  ## FlyBase Allele Search Strategy (Drosophila melanogaster)
+
+
+  ### General Guidelines
+
+
+  - FlyBase allele symbols typically use superscript notation: gene<sup>allele</sup>
+
+  - Search using the symbol as written in the paper
+
+  - Common allele types include: null, hypomorphic, gain-of-function
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add fly-specific allele search strategies here.
+
+
+
+  ### Interpreting FB Results:
+
+  ### Interpreting FlyBase Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the allele type matches what''s described in the paper
+
+
+  This is a placeholder. Add fly-specific interpretation guidelines as needed.
+
+
+  '
+group_id: FB

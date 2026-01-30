@@ -130,7 +130,7 @@ def get_all_agent_tools(
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
     document_name: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
 ) -> List:
     """Get streaming-wrapped tools for agents in the flow.
@@ -151,7 +151,7 @@ def get_all_agent_tools(
         document_id: For document-aware agents
         user_id: For tenant isolation (Cognito subject ID)
         document_name: Optional filename for prompt context
-        active_mods: Active MOD IDs for database agents
+        active_groups: Active group IDs for database agents
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
 
     Returns:
@@ -182,7 +182,7 @@ def get_all_agent_tools(
         # Fallback for non-document flows
         context["document_id"] = document_id
         context["user_id"] = user_id
-    context["active_mods"] = active_mods or []
+    context["active_groups"] = active_groups or []
 
     # Only create tools for agents IN the flow
     for agent_id in flow_agent_ids:
@@ -371,7 +371,7 @@ def create_flow_supervisor(
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
     document_name: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
 ) -> Agent:
     """Create a supervisor agent configured for flow execution.
@@ -384,7 +384,7 @@ def create_flow_supervisor(
         document_id: Optional document for PDF-aware agents
         user_id: Cognito subject ID for Weaviate tenant isolation
         document_name: Optional filename for prompt context
-        active_mods: Active MOD IDs for database queries
+        active_groups: Active group IDs for database queries
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
 
     Returns:
@@ -408,7 +408,7 @@ def create_flow_supervisor(
         document_id=document_id,
         user_id=user_id,
         document_name=document_name,
-        active_mods=active_mods,
+        active_groups=active_groups,
         doc_context=doc_context,
     )
 
@@ -448,7 +448,7 @@ async def execute_flow(
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
     user_query: Optional[str] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -464,7 +464,7 @@ async def execute_flow(
         document_id: Optional document for PDF-aware agents
         document_name: Optional name of the document for Langfuse metadata
         user_query: Optional user-provided query/context
-        active_mods: Active MOD IDs for database queries
+        active_groups: Active group IDs for database queries
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -493,7 +493,7 @@ async def execute_flow(
         document_id=document_id,
         user_id=user_id,
         document_name=document_name,
-        active_mods=active_mods,
+        active_groups=active_groups,
         doc_context=doc_context,
     )
 
@@ -533,7 +533,7 @@ async def execute_flow(
         document_id=document_id,
         document_name=document_name,
         conversation_history=None,  # Flows don't use conversation history
-        active_mods=active_mods,
+        active_groups=active_groups,
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
     ):

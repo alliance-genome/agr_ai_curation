@@ -163,9 +163,14 @@ find_*.py
 *_test.py
 SECTION_HIERARCHY_PLAN.md
 TEST_OVERHAUL_PLAN.md
+CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
 
 # Claude Code settings
 .claude/
 
 # Git worktrees
 .worktrees/
+
+# Local planning docs (private - not for public repo)
+docs/plans/
+external_review_prompt.md

@@ -1,0 +1,113 @@
+# =============================================================================
+# ALLIANCE GENOME GROUP DEFINITIONS
+# =============================================================================
+# Groups allow organization-specific customization of agent behavior.
+# Each group can have its own rules injected into agent prompts.
+#
+# IMPORTANT: This file is the source of truth for group configuration.
+# During deployment, this file is copied to config/groups.yaml
+#
+# Fields:
+#   - name: Human-readable group name
+#   - description: Brief description of the group
+#   - species: Primary model organism (optional)
+#   - taxon: NCBI Taxon ID (optional)
+#   - cognito_groups: List of Cognito groups that map to this group ID
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  # FlyBase (FB)
+  # ---------------------------------------------------------------------------
+  FB:
+    name: "FlyBase"
+    description: "Drosophila melanogaster curation team"
+    species: "Drosophila melanogaster"
+    taxon: "NCBITaxon:7227"
+    cognito_groups:
+      - "flybase-curators"
+      - "flybase-admins"
+
+  # ---------------------------------------------------------------------------
+  # WormBase (WB)
+  # ---------------------------------------------------------------------------
+  WB:
+    name: "WormBase"
+    description: "C. elegans curation team"
+    species: "Caenorhabditis elegans"
+    taxon: "NCBITaxon:6239"
+    cognito_groups:
+      - "wormbase-curators"
+      - "wormbase-admins"
+
+  # ---------------------------------------------------------------------------
+  # Mouse Genome Informatics (MGI)
+  # ---------------------------------------------------------------------------
+  MGI:
+    name: "Mouse Genome Informatics"
+    description: "Mus musculus curation team"
+    species: "Mus musculus"
+    taxon: "NCBITaxon:10090"
+    cognito_groups:
+      - "mgi-curators"
+      - "mgi-admins"
+
+  # ---------------------------------------------------------------------------
+  # Zebrafish Information Network (ZFIN)
+  # ---------------------------------------------------------------------------
+  ZFIN:
+    name: "Zebrafish Information Network"
+    description: "Danio rerio curation team"
+    species: "Danio rerio"
+    taxon: "NCBITaxon:7955"
+    cognito_groups:
+      - "zfin-curators"
+      - "zfin-admins"
+
+  # ---------------------------------------------------------------------------
+  # Rat Genome Database (RGD)
+  # ---------------------------------------------------------------------------
+  RGD:
+    name: "Rat Genome Database"
+    description: "Rattus norvegicus curation team"
+    species: "Rattus norvegicus"
+    taxon: "NCBITaxon:10116"
+    cognito_groups:
+      - "rgd-curators"
+      - "rgd-admins"
+
+  # ---------------------------------------------------------------------------
+  # Saccharomyces Genome Database (SGD)
+  # ---------------------------------------------------------------------------
+  SGD:
+    name: "Saccharomyces Genome Database"
+    description: "Saccharomyces cerevisiae curation team"
+    species: "Saccharomyces cerevisiae"
+    taxon: "NCBITaxon:559292"
+    cognito_groups:
+      - "sgd-curators"
+      - "sgd-admins"
+
+  # ---------------------------------------------------------------------------
+  # HUGO Gene Nomenclature Committee (HGNC)
+  # ---------------------------------------------------------------------------
+  HGNC:
+    name: "HUGO Gene Nomenclature Committee"
+    description: "Homo sapiens gene nomenclature"
+    species: "Homo sapiens"
+    taxon: "NCBITaxon:9606"
+    cognito_groups:
+      - "hgnc-curators"
+      - "hgnc-admins"
+
+  # ---------------------------------------------------------------------------
+  # Xenbase (XB)
+  # ---------------------------------------------------------------------------
+  XB:
+    name: "Xenbase"
+    description: "Xenopus genome database"
+    species: "Xenopus laevis"
+    taxon: "NCBITaxon:8355"
+    cognito_groups:
+      - "xenbase-curators"
+      - "xenbase-admins"

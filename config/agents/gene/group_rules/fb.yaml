@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: FB
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the FB group.
+# =============================================================================
+
+content: '
+
+  ## FB-SPECIFIC RULES (Drosophila melanogaster)
+
+
+  ## FlyBase Gene Search Strategy (Drosophila melanogaster)
+
+
+  ### General Guidelines
+
+
+  - Fly gene names can be descriptive (e.g., white, notch, hedgehog)
+
+  - Gene symbols are typically lowercase and italicized
+
+  - Search using the gene name as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add fly gene-specific search strategies here.
+
+
+
+  ### Interpreting FB Results:
+
+  ### Interpreting FlyBase Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add fly gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: FB

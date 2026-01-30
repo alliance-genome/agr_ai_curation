@@ -17,6 +17,10 @@ Advanced features used:
 - Reasoning: Extended thinking time for complex routing decisions (GPT-5 models)
 - Guardrails: Optional input validation for safety (PII detection, topic relevance)
 - Streaming tool wrappers: Specialists run with event capture for audit visibility
+
+DYNAMIC AGENT DISCOVERY:
+Specialist agents are discovered from YAML config files via get_supervisor_tools().
+Factory functions are registered in AGENT_FACTORIES mapping agent_id to callable.
 """
 
 import asyncio
@@ -33,12 +37,50 @@ from ..streaming_tools import run_specialist_with_events
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
 
+# Config-driven architecture imports
+from src.lib.config import get_supervisor_tools
+
 # Note: Answer model not used here - supervisor streams plain text for better UX
 
 logger = logging.getLogger(__name__)
 
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+
+
+# =============================================================================
+# AGENT FACTORY REGISTRY
+# =============================================================================
+# Factory functions are discovered dynamically using convention-based discovery.
+# No hardcoded mappings required - add a new agent folder and it's automatically
+# available if it follows the naming convention:
+#   - Module: {folder_name}_agent.py
+#   - Factory: create_{folder_name}_agent
+#
+# See src/lib/config/agent_factory.py for the discovery implementation.
+# =============================================================================
+
+def _get_agent_factory(agent_id: str) -> Optional[Callable]:
+    """
+    Get the factory function for an agent by its agent_id.
+
+    Uses convention-based discovery from agent_factory module.
+    Factory functions follow the naming pattern:
+    - Module: src.lib.openai_agents.agents.{folder_name}_agent
+    - Function: create_{folder_name}_agent
+
+    Args:
+        agent_id: The agent identifier (e.g., "gene_validation", "pdf_extraction")
+
+    Returns:
+        Factory function or None if not found
+    """
+    from src.lib.config.agent_factory import get_factory_by_agent_id
+
+    factory = get_factory_by_agent_id(agent_id)
+    if factory is None:
+        logger.warning(f"[OpenAI Agents] No factory found for agent: {agent_id}")
+    return factory
 
 
 def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[str, Any]]:
@@ -197,59 +239,137 @@ def _build_model_settings(
 
 def get_supervisor_agent_tools() -> List[str]:
     """
-    Get list of tool names for supervisor from AGENT_REGISTRY.
+    Get list of tool names for supervisor from YAML config files.
 
-    Returns tool names for agents that have supervisor.enabled=True (default).
-    Excludes:
-    - Entries without factories (like task_input)
-    - Entries with supervisor.enabled=False (like formatters)
+    Uses the config-driven get_supervisor_tools() to discover enabled agents.
+
+    Returns tool names for agents that have supervisor_routing.enabled=True.
+    Tool names are generated as ask_{folder}_specialist.
     """
-    from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
-
-    tools = []
-    for agent_id, entry in AGENT_REGISTRY.items():
-        # Skip non-agent entries
-        if entry.get("factory") is None:
-            continue
-
-        supervisor = entry.get("supervisor", {})
-
-        # Skip disabled agents (default is enabled)
-        if not supervisor.get("enabled", True):
-            continue
-
-        tool_name = supervisor.get("tool_name")
-        if tool_name:
-            tools.append(tool_name)
-
-    return tools
+    tools = get_supervisor_tools()
+    return [t["tool_name"] for t in tools]
 
 
 def generate_routing_table() -> str:
     """
-    Build supervisor routing table from AGENT_REGISTRY.
+    Build supervisor routing table from YAML config files.
 
     Returns markdown table with tool names and descriptions.
+    Tool metadata comes from agent.yaml supervisor_routing sections.
     """
-    from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
+    tools = get_supervisor_tools()
 
     rows = ["| Tool | When to Use |", "|------|-------------|"]
 
-    for agent_id, entry in AGENT_REGISTRY.items():
-        if entry.get("factory") is None:
-            continue
-
-        supervisor = entry.get("supervisor", {})
-        if not supervisor.get("enabled", True):
-            continue
-
-        tool_name = supervisor.get("tool_name")
-        description = supervisor.get("tool_description")
-
+    for tool in tools:
+        tool_name = tool["tool_name"]
+        description = tool["description"]
         if tool_name and description:
             rows.append(f"| {tool_name} | {description} |")
 
     return "\n".join(rows)
+
+
+def _create_dynamic_specialist_tools(
+    document_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    document_name: Optional[str] = None,
+    sections: Optional[List[str]] = None,
+    hierarchy: Optional[Dict[str, Any]] = None,
+    abstract: Optional[str] = None,
+    active_groups: Optional[List[str]] = None,
+) -> List[Callable]:
+    """
+    Dynamically create specialist tools based on discovered agent configs.
+
+    Uses get_supervisor_tools() to discover enabled agents and creates
+    streaming tool wrappers for each one.
+
+    Args:
+        document_id: UUID of loaded document (for document-dependent agents)
+        user_id: User ID for tenant isolation (for document-dependent agents)
+        document_name: Name of the document for context
+        sections: Flat list of section names from document
+        hierarchy: Hierarchical document structure
+        abstract: Paper abstract for context injection
+        active_groups: Group IDs for rule injection (e.g., ["MGI", "FB"])
+
+    Returns:
+        List of function_tool decorated callables
+    """
+    from src.lib.config import get_agent_by_folder
+
+    tools_metadata = get_supervisor_tools()
+    specialist_tools = []
+
+    for tool_meta in tools_metadata:
+        tool_name = tool_meta["tool_name"]
+        agent_id = tool_meta["agent_id"]
+        folder_name = tool_meta["folder_name"]
+        description = tool_meta["description"]
+        requires_document = tool_meta.get("requires_document", False)
+        group_rules_enabled = tool_meta.get("group_rules_enabled", False)
+
+        # Skip document-dependent agents if no document is loaded
+        if requires_document and (not document_id or not user_id):
+            logger.debug(f"[OpenAI Agents] Skipping {tool_name} - requires document but none loaded")
+            continue
+
+        # Get factory function
+        factory = _get_agent_factory(agent_id)
+        if factory is None:
+            logger.warning(f"[OpenAI Agents] No factory found for agent: {agent_id}")
+            continue
+
+        # Build factory kwargs based on agent requirements
+        factory_kwargs = {}
+
+        # Document-dependent agents
+        if requires_document:
+            factory_kwargs.update({
+                "document_id": document_id,
+                "user_id": user_id,
+                "document_name": document_name,
+                "sections": sections,
+                "hierarchy": hierarchy,
+                "abstract": abstract,
+            })
+
+        # Group-aware agents (MODs, institutions, teams, etc.)
+        if group_rules_enabled and active_groups:
+            factory_kwargs["active_groups"] = active_groups
+
+        try:
+            # Create the agent instance
+            agent = factory(**factory_kwargs)
+
+            # Get agent definition for display name (optional lookup)
+            agent_def = get_agent_by_folder(folder_name)
+            if agent_def:
+                specialist_name = agent_def.name.replace(" Agent", "").replace(" Validation", "")
+            else:
+                # Fallback: derive from folder name
+                specialist_name = folder_name.replace("_", " ").title()
+
+            streaming_tool = _create_streaming_tool(
+                agent=agent,
+                tool_name=tool_name,
+                tool_description=description,
+                specialist_name=specialist_name,
+            )
+            specialist_tools.append(streaming_tool)
+
+            logger.info(f"[OpenAI Agents] Created dynamic tool: {tool_name}")
+
+        except Exception as e:
+            logger.error(f"[OpenAI Agents] Failed to create tool {tool_name}: {e}")
+            continue
+
+    # Warn if no specialist tools were created
+    if not specialist_tools:
+        logger.warning("[OpenAI Agents] No specialist tools created - supervisor may have limited functionality")
+
+    return specialist_tools
 
 
 def create_supervisor_agent(
@@ -259,10 +379,15 @@ def create_supervisor_agent(
     hierarchy: Optional[Dict[str, Any]] = None,
     abstract: Optional[str] = None,
     enable_guardrails: bool = False,  # Enable input guardrails (PII detection, topic check)
-    active_mods: Optional[List[str]] = None,  # MOD-specific rules to inject (e.g., ["MGI", "FB"])
+    active_groups: Optional[List[str]] = None,  # Group-specific rules to inject (e.g., ["MGI", "FB"])
 ) -> Agent:
     """
-    Create a Supervisor agent with specialist tools (as_tool pattern).
+    Create a Supervisor agent with dynamically discovered specialist tools.
+
+    DYNAMIC AGENT DISCOVERY:
+    Specialist tools are discovered from YAML config files (alliance_agents/*/agent.yaml)
+    via get_supervisor_tools(). Only agents with supervisor_routing.enabled=True are included.
+    Document-dependent agents are filtered out if no document is loaded.
 
     Each specialist runs in isolation with its own context window.
     Only the specialist's final output returns to the supervisor, preventing
@@ -271,40 +396,22 @@ def create_supervisor_agent(
     All agent settings (model, temperature, reasoning) are configured via environment
     variables. See config.py for available settings.
 
-    Available Specialist Tools:
-    - ask_pdf_specialist (requires document_id and user_id)
-    - ask_gene_expression_specialist (requires document_id and user_id)
-    - ask_gene_specialist
-    - ask_allele_specialist
-    - ask_disease_specialist
-    - ask_chemical_specialist
-    - ask_gene_ontology_specialist
-    - ask_go_annotations_specialist
-    - ask_orthologs_specialist
-    - ask_ontology_mapping_specialist
+    Built-in Tools (always available):
+    - export_to_file: Export data to CSV, TSV, or JSON files
 
     Args:
-        document_id: The UUID of the PDF document (for PDF/Expression specialists)
-        user_id: The user's user ID for tenant isolation (for PDF/Expression specialists)
+        document_id: The UUID of the PDF document (for document-dependent specialists)
+        user_id: The user's user ID for tenant isolation (for document-dependent specialists)
         document_name: Optional name of the document for context
         hierarchy: Optional pre-fetched document hierarchy (avoids duplicate fetch)
         abstract: Optional pre-fetched paper abstract (injected into specialist prompts)
         enable_guardrails: Enable input guardrails for safety (default: False)
-        active_mods: Optional list of MOD IDs to inject rules for (e.g., ["MGI", "FB"]).
-                     Passed to gene and allele agents for MOD-specific behavior.
+        active_groups: Optional list of group IDs to inject rules for (e.g., ["MGI", "FB"]).
+                       Passed to agents with group_rules_enabled=True for group-specific behavior.
 
     Returns:
         An Agent instance configured as a supervisor with specialist tools
     """
-    # Import agent factory functions and config
-    from .disease_agent import create_disease_agent
-    from .gene_agent import create_gene_agent
-    from .chemical_agent import create_chemical_agent
-    from .allele_agent import create_allele_agent
-    from .orthologs_agent import create_orthologs_agent
-    from .gene_ontology_agent import create_gene_ontology_agent
-    from .go_annotations_agent import create_go_annotations_agent
-    from .ontology_mapping_agent import create_ontology_mapping_agent
     from ..config import get_agent_config, log_agent_config, get_model_for_agent
 
     # Get supervisor config from registry + environment
@@ -332,66 +439,36 @@ def create_supervisor_agent(
         logger.warning("[OpenAI Agents] Guardrails requested but module not imported")
 
     logger.info(
-        f"[OpenAI Agents] Creating Supervisor agent with streaming tool wrappers, "
+        f"[OpenAI Agents] Creating Supervisor agent with dynamic tool discovery, "
         f"model={config.model}, temp={config.temperature}, reasoning={config.reasoning}"
     )
 
-    # Create specialist tools using streaming tool wrappers
-    # Each specialist runs in isolation with event capture for audit visibility
-    specialist_tools = []
+    # Extract section names from hierarchy for document-dependent agents
+    sections = []
+    if hierarchy and hierarchy.get("sections"):
+        sections = [s.get("name") for s in hierarchy.get("sections", []) if s.get("name")]
+        logger.info(f"[OpenAI Agents] Extracted {len(sections)} sections from pre-fetched hierarchy")
 
-    # PDF specialist tool (only if document is loaded)
-    if document_id and user_id:
-        from ..pdf_agent import create_pdf_agent
+    # =========================================================================
+    # DYNAMIC SPECIALIST TOOL CREATION
+    # =========================================================================
+    # Discover enabled agents from YAML configs and create streaming tool wrappers.
+    # Document-dependent agents are automatically filtered if no document is loaded.
+    # MOD-specific rules are injected for agents with group_rules_enabled=True.
+    # =========================================================================
+    specialist_tools = _create_dynamic_specialist_tools(
+        document_id=document_id,
+        user_id=user_id,
+        document_name=document_name,
+        sections=sections,
+        hierarchy=hierarchy,
+        abstract=abstract,
+        active_groups=active_groups,
+    )
 
-        # Extract flat section names from pre-fetched hierarchy (avoids duplicate Weaviate query)
-        # The hierarchy is already fetched in runner.py and passed here
-        sections = []
-        if hierarchy and hierarchy.get("sections"):
-            sections = [s.get("name") for s in hierarchy.get("sections", []) if s.get("name")]
-            logger.info(f"[OpenAI Agents] Extracted {len(sections)} sections from pre-fetched hierarchy")
+    logger.info(f"[OpenAI Agents] Dynamic discovery created {len(specialist_tools)} specialist tools")
 
-        if hierarchy and hierarchy.get("sections"):
-            logger.info(f"[OpenAI Agents] Using pre-fetched hierarchy with {len(hierarchy.get('sections', []))} sections for PDF agent prompt")
-        elif sections:
-            logger.info(f"[OpenAI Agents] Fetched {len(sections)} flat sections for PDF agent prompt (no hierarchy)")
-        else:
-            logger.warning("[OpenAI Agents] No document structure found for PDF agent (will use search-only mode)")
-
-        pdf_agent = create_pdf_agent(
-            document_id=document_id,
-            user_id=user_id,
-            document_name=document_name,
-            sections=sections,
-            hierarchy=hierarchy,
-            abstract=abstract
-        )
-        specialist_tools.append(_create_streaming_tool(
-            agent=pdf_agent,
-            tool_name="ask_pdf_specialist",
-            tool_description="Ask the PDF Specialist about the loaded document. Use for questions about paper content, methods, results, figures. The specialist will search and read the document autonomously.",
-            specialist_name="PDF Specialist"
-        ))
-
-        # Gene Expression specialist tool (also requires document)
-        from .gene_expression_agent import create_gene_expression_agent
-        expression_agent = create_gene_expression_agent(
-            document_id=document_id,
-            user_id=user_id,
-            document_name=document_name,
-            sections=sections,
-            hierarchy=hierarchy,
-            abstract=abstract,
-            active_mods=active_mods,  # Pass MOD-specific rules (e.g., WB anatomy preferences)
-        )
-        specialist_tools.append(_create_streaming_tool(
-            agent=expression_agent,
-            tool_name="ask_gene_expression_specialist",
-            tool_description="Extract gene expression data from the paper. Returns formatted text with organism, genes, annotations (anatomy, life stage, reagent, evidence). Use export_to_file to save results as CSV, TSV, or JSON.",
-            specialist_name="Gene Expression Specialist"
-        ))
-
-    # Export to File tool (always available)
+    # Export to File tool (always available - supervisor built-in, not a specialist agent)
     # Allows supervisor to export data as downloadable CSV, TSV, or JSON files
     @function_tool(
         name_override="export_to_file",
@@ -455,78 +532,6 @@ The tool returns file information including a download URL that will render as a
 
     specialist_tools.append(export_to_file_tool)
 
-    # Gene Curation specialist tool (with MOD-specific injection)
-    gene_agent = create_gene_agent(active_mods=active_mods)
-    specialist_tools.append(_create_streaming_tool(
-        agent=gene_agent,
-        tool_name="ask_gene_specialist",
-        tool_description="Ask the Gene Curation Specialist about genes. Use for gene symbols, IDs, names, genomic locations. Supports worm (WB), fly (FB), mouse (MGI), human (HGNC), zebrafish (ZFIN), rat (RGD), yeast (SGD).",
-        specialist_name="Gene Specialist"
-    ))
-
-    # Allele Curation specialist tool (with MOD-specific injection)
-    allele_agent = create_allele_agent(active_mods=active_mods)
-    specialist_tools.append(_create_streaming_tool(
-        agent=allele_agent,
-        tool_name="ask_allele_specialist",
-        tool_description="Ask the Allele Curation Specialist about alleles/variants. Use for allele symbols, names, species, obsolete/extinction status.",
-        specialist_name="Allele Specialist"
-    ))
-
-    # Disease Ontology specialist tool
-    disease_agent = create_disease_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=disease_agent,
-        tool_name="ask_disease_specialist",
-        tool_description="Ask the Disease Ontology Specialist about diseases. Use for DOID terms, disease hierarchy, definitions, synonyms.",
-        specialist_name="Disease Specialist"
-    ))
-
-    # Chemical Ontology specialist tool
-    chemical_agent = create_chemical_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=chemical_agent,
-        tool_name="ask_chemical_specialist",
-        tool_description="Ask the Chemical Ontology Specialist about chemicals/compounds. Use for ChEBI terms, chemical classifications, structures, formulas.",
-        specialist_name="Chemical Specialist"
-    ))
-
-    # Gene Ontology specialist tool (QuickGO)
-    go_agent = create_gene_ontology_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=go_agent,
-        tool_name="ask_gene_ontology_specialist",
-        tool_description="Ask the Gene Ontology Specialist about GO terms. Use for GO term search, hierarchy (children/ancestors), definitions. NOT for gene annotations.",
-        specialist_name="Gene Ontology Specialist"
-    ))
-
-    # GO Annotations specialist tool
-    go_annotations_agent = create_go_annotations_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=go_annotations_agent,
-        tool_name="ask_go_annotations_specialist",
-        tool_description="Ask the GO Annotations Specialist what GO annotations a gene has. Use for gene-to-GO-term associations, evidence codes, annotation sources.",
-        specialist_name="GO Annotations Specialist"
-    ))
-
-    # Alliance Orthologs specialist tool
-    orthologs_agent = create_orthologs_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=orthologs_agent,
-        tool_name="ask_orthologs_specialist",
-        tool_description="Ask the Alliance Orthologs Specialist about ortholog relationships. Use for finding orthologs between species, confidence scores, prediction methods.",
-        specialist_name="Orthologs Specialist"
-    ))
-
-    # Ontology Mapping specialist tool
-    mapping_agent = create_ontology_mapping_agent()
-    specialist_tools.append(_create_streaming_tool(
-        agent=mapping_agent,
-        tool_name="ask_ontology_mapping_specialist",
-        tool_description="Ask the Ontology Mapping Specialist to map labels to ontology IDs. Use for anatomy terms → WBbt/FBbt, life stages → WBls/FBdv, cellular components → GO.",
-        specialist_name="Ontology Mapping Specialist"
-    ))
-
     # Get base prompt from cache (zero DB queries at runtime)
     base_prompt = get_prompt("supervisor")
     prompts_used = [base_prompt]
@@ -541,28 +546,28 @@ The tool returns file information including a download URL that will render as a
         # No document - inform supervisor that PDF tools are unavailable
         instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist and ask_gene_expression_specialist tools are not available."
 
-    # Inject MOD-specific rules for supervisor dispatch behavior
-    if active_mods:
+    # Inject group-specific rules for supervisor dispatch behavior
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
+            from config.group_rules import inject_group_rules
 
-            instructions = inject_mod_rules(
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="supervisor",
-                prompts_out=prompts_used,  # Collect MOD prompts for tracking
+                prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Supervisor configured with MOD-specific dispatch rules: {active_mods}")
+            logger.info(f"Supervisor configured with group-specific dispatch rules: {active_groups}")
         except ImportError as e:
             logger.warning(f"Could not import mod_config for supervisor, skipping injection: {e}")
         except Exception as e:
             # Don't fail if supervisor rules don't exist - they're optional
-            logger.debug(f"No supervisor MOD rules found or error: {e}")
+            logger.debug(f"No supervisor group rules found or error: {e}")
 
     logger.info(
         f"[OpenAI Agents] Creating Supervisor agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}, mods={active_mods}"
+        f"prompt_v={base_prompt.version}, groups={active_groups}"
     )
 
     # Create the supervisor with specialist tools

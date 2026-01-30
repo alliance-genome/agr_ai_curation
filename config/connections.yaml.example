@@ -1,0 +1,164 @@
+# =============================================================================
+# EXTERNAL CONNECTIONS CONFIGURATION
+# =============================================================================
+# This file defines connections to external services (databases, APIs, etc.)
+# that the system depends on.
+#
+# Copy this file to connections.yaml and customize for your deployment.
+#
+# Features:
+#   - Centralized connection configuration
+#   - Health check definitions for each service
+#   - Environment variable substitution for secrets
+#   - Connection pooling settings
+#
+# Environment Variables:
+#   Use ${ENV_VAR} or ${ENV_VAR:-default} syntax for sensitive values
+#   Never commit actual credentials to this file
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Database Connections
+# -----------------------------------------------------------------------------
+databases:
+  # Primary PostgreSQL database
+  primary:
+    type: postgresql
+    host: "${DB_HOST:-localhost}"
+    port: ${DB_PORT:-5432}
+    database: "${DB_NAME:-ai_curation}"
+    username: "${DB_USER:-postgres}"
+    password: "${DB_PASSWORD}"
+
+    # Connection pool settings
+    pool:
+      min_size: 5
+      max_size: 20
+      max_overflow: 10
+      pool_timeout: 30
+
+    # Health check configuration
+    health_check:
+      enabled: true
+      query: "SELECT 1"
+      interval_seconds: 30
+      timeout_seconds: 5
+
+  # Example: Read replica (optional)
+  # replica:
+  #   type: postgresql
+  #   host: "${DB_REPLICA_HOST}"
+  #   port: ${DB_REPLICA_PORT:-5432}
+  #   database: "${DB_NAME:-ai_curation}"
+  #   username: "${DB_REPLICA_USER}"
+  #   password: "${DB_REPLICA_PASSWORD}"
+  #   read_only: true
+
+# -----------------------------------------------------------------------------
+# Vector Database Connections
+# -----------------------------------------------------------------------------
+vector_databases:
+  # Weaviate vector database
+  weaviate:
+    type: weaviate
+    host: "${WEAVIATE_HOST:-localhost}"
+    port: ${WEAVIATE_PORT:-8080}
+    grpc_port: ${WEAVIATE_GRPC_PORT:-50051}
+    scheme: "${WEAVIATE_SCHEME:-http}"
+
+    # Authentication (if enabled)
+    auth:
+      enabled: ${WEAVIATE_AUTH_ENABLED:-false}
+      api_key: "${WEAVIATE_API_KEY:-}"
+
+    # Health check configuration
+    health_check:
+      enabled: true
+      endpoint: "/v1/.well-known/ready"
+      interval_seconds: 30
+      timeout_seconds: 5
+
+# -----------------------------------------------------------------------------
+# External API Connections
+# -----------------------------------------------------------------------------
+apis:
+  # OpenAI API
+  openai:
+    type: openai
+    base_url: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+    api_key: "${OPENAI_API_KEY}"
+    organization: "${OPENAI_ORG_ID:-}"
+
+    # Rate limiting
+    rate_limit:
+      requests_per_minute: 60
+      tokens_per_minute: 90000
+
+    # Health check (uses models endpoint)
+    health_check:
+      enabled: true
+      endpoint: "/models"
+      interval_seconds: 60
+      timeout_seconds: 10
+
+  # Example: Custom REST API
+  # my_api:
+  #   type: rest
+  #   base_url: "${MY_API_URL}"
+  #   auth:
+  #     type: bearer
+  #     token: "${MY_API_TOKEN}"
+  #   health_check:
+  #     enabled: true
+  #     endpoint: "/health"
+  #     interval_seconds: 30
+
+# -----------------------------------------------------------------------------
+# Cache Connections (Optional)
+# -----------------------------------------------------------------------------
+caches:
+  # Redis cache
+  redis:
+    enabled: ${REDIS_ENABLED:-false}
+    host: "${REDIS_HOST:-localhost}"
+    port: ${REDIS_PORT:-6379}
+    password: "${REDIS_PASSWORD:-}"
+    database: ${REDIS_DB:-0}
+
+    # Connection pool
+    pool:
+      max_connections: 10
+
+    # Health check
+    health_check:
+      enabled: true
+      command: "PING"
+      interval_seconds: 30
+
+# -----------------------------------------------------------------------------
+# Message Queue Connections (Optional)
+# -----------------------------------------------------------------------------
+# queues:
+#   rabbitmq:
+#     type: rabbitmq
+#     host: "${RABBITMQ_HOST:-localhost}"
+#     port: ${RABBITMQ_PORT:-5672}
+#     username: "${RABBITMQ_USER:-guest}"
+#     password: "${RABBITMQ_PASSWORD:-guest}"
+#     virtual_host: "${RABBITMQ_VHOST:-/}"
+
+# -----------------------------------------------------------------------------
+# Global Health Check Settings
+# -----------------------------------------------------------------------------
+health_check:
+  # Overall system health endpoint behavior
+  aggregate:
+    # Services that must be healthy for system to be "healthy"
+    required_services:
+      - databases.primary
+      - vector_databases.weaviate
+      - apis.openai
+
+    # Services that are checked but don't affect overall health
+    optional_services:
+      - caches.redis

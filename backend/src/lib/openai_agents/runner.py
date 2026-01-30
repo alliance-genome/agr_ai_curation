@@ -688,7 +688,7 @@ async def run_agent_streamed(
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
-    active_mods: Optional[List[str]] = None,
+    active_groups: Optional[List[str]] = None,
     agent: Optional[Agent] = None,
     doc_context: Optional["DocumentContext"] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -714,8 +714,8 @@ async def run_agent_streamed(
         document_id: Optional UUID of the PDF document (enables PDF specialist)
         document_name: Optional name of the document for context
         conversation_history: Optional list of previous messages
-        active_mods: Optional list of MOD IDs (e.g., ["MGI", "FB"]) for injecting
-                     MOD-specific rules into agent prompts
+        active_groups: Optional list of group IDs (e.g., ["MGI", "FB"]) for injecting
+                       group-specific rules into agent prompts
         agent: Optional pre-built agent to use instead of creating a supervisor.
                Use this for flow execution with custom flow supervisors.
                If None, creates the standard supervisor agent.
@@ -770,7 +770,7 @@ async def run_agent_streamed(
             document_name=document_name,
             hierarchy=hierarchy,
             abstract=abstract,
-            active_mods=active_mods,
+            active_groups=active_groups,
         )
         agent_name = agent.name
     else:
@@ -813,7 +813,7 @@ async def run_agent_streamed(
                 "supervisor_agent": agent.name,
                 "supervisor_model": agent.model,
                 "has_document": document_id is not None,
-                "active_mods": active_mods or [],  # MOD-specific rules applied to this session
+                "active_groups": active_groups or [],  # Group-specific rules applied to this session
             }
             if hierarchy:
                 # Add hierarchy summary to metadata (full structure for trace analysis)
@@ -851,11 +851,11 @@ async def run_agent_streamed(
             root_span = span_context_manager.__enter__()
 
             try:
-                # Build trace tags - include MOD tags for easy filtering
+                # Build trace tags - include group tags for easy filtering
                 trace_tags = ["chat", "openai-agents"]
-                if active_mods:
-                    # Add mod:MGI, mod:FB, etc. for each active MOD
-                    trace_tags.extend([f"mod:{mod}" for mod in active_mods])
+                if active_groups:
+                    # Add group:MGI, group:FB, etc. for each active group
+                    trace_tags.extend([f"group:{grp}" for grp in active_groups])
 
                 # Update trace-level attributes including the trace NAME
                 # This ensures the trace is properly named (not just the span)

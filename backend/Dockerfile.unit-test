@@ -1,6 +1,10 @@
 # Lightweight Docker image for unit tests only
 # Skips heavy ML dependencies (torch, CUDA, unstructured-inference)
 # Builds in ~1-2 minutes instead of 10+ minutes
+#
+# NOTE: This Dockerfile expects to be built from the PROJECT ROOT context
+# (not the backend directory) to access config files.
+# Example: docker build -f backend/Dockerfile.unit-test .
 
 FROM python:3.11-slim
 
@@ -13,7 +17,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only requirements first for better caching
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Upgrade pip first
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
@@ -30,10 +34,14 @@ RUN pip install --no-cache-dir \
     httpx
 
 # Copy source code and tests
-COPY src/ ./src/
-COPY tests/ ./tests/
-COPY main.py ./
-COPY pytest.ini ./
+COPY backend/src/ ./src/
+COPY backend/tests/ ./tests/
+COPY backend/main.py ./
+COPY backend/pytest.ini ./
+
+# Copy config directories needed by config-driven architecture tests
+COPY config/ /app/config/
+COPY alliance_agents/ /app/alliance_agents/
 
 # Set Python path
 ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH

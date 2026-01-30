@@ -22,7 +22,7 @@ from src.lib.prompts.context import set_pending_prompts
 logger = logging.getLogger(__name__)
 
 
-def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
+def create_gene_agent(active_groups: Optional[List[str]] = None) -> Agent:
     """
     Create a Gene Curation specialist agent.
 
@@ -32,9 +32,9 @@ def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
     It has full autonomy to make multiple tool calls internally.
 
     Args:
-        active_mods: Optional list of MOD IDs to inject rules for (e.g., ["MGI", "FB"]).
-                     If provided, MOD-specific rules will be appended to the base prompt.
-                     These rules come from the prompt cache (database).
+        active_groups: Optional list of group IDs to inject rules for (e.g., ["MGI", "FB"]).
+                       If provided, group-specific rules will be appended to the base prompt.
+                       These rules come from the prompt cache (database).
 
     Returns:
         An Agent instance configured for Gene Curation queries
@@ -59,23 +59,23 @@ def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
         output_type=GeneResultEnvelope
     )
 
-    # Inject MOD-specific rules if provided
-    if active_mods:
+    # Inject group-specific rules if provided
+    if active_groups:
         try:
-            from config.mod_rules.mod_config import inject_mod_rules
+            from config.group_rules import inject_group_rules
 
-            instructions = inject_mod_rules(
+            instructions = inject_group_rules(
                 base_prompt=instructions,
-                mod_ids=active_mods,
+                group_ids=active_groups,
                 component_type="agents",
                 component_name="gene",
-                prompts_out=prompts_used,  # Collect MOD prompts for tracking
+                prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Gene agent configured with MOD-specific rules: {active_mods}")
+            logger.info(f"Gene agent configured with group-specific rules: {active_groups}")
         except ImportError as e:
             logger.warning(f"Could not import mod_config, skipping injection: {e}")
         except Exception as e:
-            logger.error(f"Failed to inject MOD rules: {e}")
+            logger.error(f"Failed to inject group rules: {e}")
 
     # Build model settings using shared helper (supports both OpenAI and Gemini)
     from ..config import build_model_settings, get_model_for_agent
@@ -92,7 +92,7 @@ def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
 
     logger.info(
         f"[OpenAI Agents] Creating Gene agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}, mods={active_mods}"
+        f"prompt_v={base_prompt.version}, groups={active_groups}"
     )
 
     # Log agent configuration to Langfuse for trace visibility
@@ -106,7 +106,7 @@ def create_gene_agent(active_mods: Optional[List[str]] = None) -> Agent:
             "temperature": config.temperature,
             "reasoning": config.reasoning,
             "tool_choice": config.tool_choice,
-            "active_mods": active_mods,  # Log which MODs are active
+            "active_groups": active_groups,  # Log which groups are active
             "prompt_version": base_prompt.version,
         }
     )

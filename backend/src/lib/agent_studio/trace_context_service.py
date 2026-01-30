@@ -143,7 +143,7 @@ def _extract_prompts_executed(observations: List[Any]) -> List[PromptExecution]:
                     agent_id=agent_id,
                     agent_name=_agent_id_to_name(agent_id),
                     prompt_preview=prompt_preview,
-                    mod_applied=_extract_mod_from_observation(obs),
+                    mod_applied=_extract_group_from_observation(obs),
                     model=getattr(obs, 'model', None),
                     tokens_used=obs.usage.total if hasattr(obs, 'usage') and obs.usage else None,
                 ))
@@ -345,10 +345,13 @@ def _agent_id_to_name(agent_id: str) -> str:
     return names.get(agent_id, agent_id.replace('_', ' ').title())
 
 
-def _extract_mod_from_observation(obs: Any) -> Optional[str]:
-    """Extract MOD info from observation metadata."""
+def _extract_group_from_observation(obs: Any) -> Optional[str]:
+    """Extract group info from observation metadata.
+
+    Dual-read: supports both active_groups (new) and active_mods (historical).
+    """
     if hasattr(obs, 'metadata') and obs.metadata:
-        return obs.metadata.get('active_mods', obs.metadata.get('mod'))
+        return obs.metadata.get('active_groups', obs.metadata.get('active_mods', obs.metadata.get('mod')))
     return None
 
 
