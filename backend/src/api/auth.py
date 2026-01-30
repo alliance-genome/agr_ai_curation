@@ -38,6 +38,7 @@ from src.config import (
     is_dev_mode,
     get_secure_cookies
 )
+from src.lib.config import get_group
 from src.models.sql.database import get_db
 from src.models.sql.user import User
 from src.services.user_service import set_global_user_from_cognito
@@ -408,21 +409,13 @@ async def _get_user_from_cookie_impl(
         cognito_groups: List[str] = ["developers"]  # Always include developers group
 
         if dev_user_mods:
-            # Map MOD IDs to Cognito group names
-            mod_to_group = {
-                "MGI": "mgi-curators",
-                "FB": "flybase-curators",
-                "WB": "wormbase-curators",
-                "ZFIN": "zfin-curators",
-                "RGD": "rgd-curators",
-                "SGD": "sgd-curators",
-                "HGNC": "hgnc-curators",
-            }
+            # Map MOD IDs to Cognito group names using groups_loader
             parsed_mods = [m.strip().upper() for m in dev_user_mods.split(",") if m.strip()]
             for mod in parsed_mods:
-                group = mod_to_group.get(mod)
-                if group:
-                    cognito_groups.append(group)
+                group_def = get_group(mod)
+                if group_def and group_def.cognito_groups:
+                    # Use the first cognito group for this MOD
+                    cognito_groups.append(group_def.cognito_groups[0])
                 else:
                     # Unknown MOD, create a generic group name
                     cognito_groups.append(f"{mod.lower()}-curators")

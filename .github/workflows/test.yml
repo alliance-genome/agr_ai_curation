@@ -44,7 +44,6 @@ jobs:
             -e OPENAI_API_KEY=test-key-for-unit-tests \
             -e LANGFUSE_PUBLIC_KEY=test-key \
             -e LANGFUSE_SECRET_KEY=test-key \
-            -e VALID_MOD_IDS=FB,WB,MGI,RGD,SGD,HGNC,ZFIN \
             -e DOCLING_TIMEOUT=300 \
             ai-curation-unit-tests:latest \
             python -m pytest tests/unit/ -v --tb=short --no-cov \
