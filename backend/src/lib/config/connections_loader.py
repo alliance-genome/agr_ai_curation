@@ -512,7 +512,11 @@ async def _check_http_health(conn: ConnectionDefinition) -> tuple[bool, Optional
 
 
 async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
-    """Check Redis health via PING command."""
+    """Check Redis health via PING command.
+
+    Uses from_url() to automatically handle authentication from redis:// URLs.
+    Supports URLs like: redis://username:password@host:port/db
+    """
     # Step 1: Check if redis package is available (separate from connection logic)
     try:
         import redis.asyncio as aioredis
@@ -520,17 +524,11 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
         return False, "redis package not installed"
 
     # Step 2: Attempt connection and health check
-    from urllib.parse import urlparse
-
-    parsed = urlparse(conn.url)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 6379
-
+    # Use from_url() to automatically handle auth from URL (KANBAN-1019)
     client = None
     try:
-        client = aioredis.Redis(
-            host=host,
-            port=port,
+        client = aioredis.from_url(
+            conn.url,
             socket_timeout=conn.timeout_seconds,
             socket_connect_timeout=conn.timeout_seconds,
         )
