@@ -76,11 +76,12 @@ services:
   # ---------------------------------------------------------------------------
   # PostgreSQL (Application Database)
   # ---------------------------------------------------------------------------
-  # Note: Use DATABASE_URL for full connection string, or set individual components.
-  # POSTGRES_PASSWORD has no default for security - must be set in environment.
+  # Set DATABASE_URL for the full connection string.
+  # Format: postgresql://[user]:[pass]@[host]:[port]/[dbname]
+  # If not set, falls back to docker-compose default (postgres:5432/ai_curation)
   postgres:
     description: "PostgreSQL database for application data"
-    url: "${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-ai_curation}}"
+    url: "${DATABASE_URL:-postgresql://postgres:5432/ai_curation}"
     health_check:
       endpoint: null  # PostgreSQL uses connection test, not HTTP
       method: CONNECT
