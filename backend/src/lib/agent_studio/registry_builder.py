@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional
 
 from src.lib.config.agent_loader import (
     AgentDefinition,
+    ModelConfig,
     load_agent_definitions,
     get_agent_definition,
     get_agent_by_folder,
@@ -20,6 +21,41 @@ from src.lib.config.agent_loader import (
 from src.lib.config.agent_factory import get_agent_factory
 
 logger = logging.getLogger(__name__)
+
+
+def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
+    """
+    Build config_defaults dict from YAML model_config.
+
+    Only includes non-default values to avoid overriding env var behavior.
+    These values become the fallback when no env var is set.
+
+    Priority in get_agent_config():
+    1. Environment variable (highest)
+    2. config_defaults from YAML (this)
+    3. Global fallback defaults (lowest)
+
+    Args:
+        model_config: ModelConfig from agent.yaml
+
+    Returns:
+        Dictionary with model, temperature, reasoning (only non-default values)
+    """
+    defaults = {}
+
+    # Include model if not the default
+    if model_config.model != "gpt-4o":
+        defaults["model"] = model_config.model
+
+    # Include temperature if not the default
+    if model_config.temperature != 0.1:
+        defaults["temperature"] = model_config.temperature
+
+    # Include reasoning if not the default
+    if model_config.reasoning != "medium":
+        defaults["reasoning"] = model_config.reasoning
+
+    return defaults
 
 # Static documentation for agents (help text for frontend)
 #
@@ -191,9 +227,7 @@ def _agent_definition_to_registry_entry(
         "requires_document": agent_def.requires_document,
         "required_params": agent_def.required_params,
         "batch_capabilities": agent_def.batch_capabilities,
-        "config_defaults": {
-            "reasoning": agent_def.model_config.reasoning,
-        } if agent_def.model_config.reasoning != "medium" else {},
+        "config_defaults": _build_config_defaults(agent_def.model_config),
         "supervisor": {
             "enabled": agent_def.supervisor_routing.enabled,
             "tool_name": agent_def.tool_name,
