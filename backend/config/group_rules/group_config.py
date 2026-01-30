@@ -38,9 +38,10 @@ logger = logging.getLogger(__name__)
 GROUP_RULES_PATH = Path(__file__).parent
 
 
-# Cognito group → organization group mapping
-# This maps Cognito group names to their associated group IDs
-# Alliance-wide groups get empty list (user chooses per session)
+# DEPRECATED: This hardcoded mapping is no longer used.
+# Cognito-to-group mapping is now loaded from config/groups.yaml via groups_loader.
+# This dict is kept for backwards compatibility with any code that might reference it directly.
+# TODO: Remove in future version once all references are migrated.
 COGNITO_GROUP_TO_GROUP: Dict[str, List[str]] = {
     # MOD-specific curator groups
     "mgi-curators": ["MGI"],
@@ -116,6 +117,9 @@ def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
     """
     Map Cognito group memberships to default organization group(s).
 
+    This function delegates to groups_loader which reads from config/groups.yaml.
+    The YAML file is the source of truth for Cognito-to-group mappings.
+
     Args:
         cognito_groups: List of Cognito group names user belongs to
 
@@ -128,14 +132,9 @@ def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
         >>> get_groups_from_cognito(["alliance-admins"])
         []  # No default, user must choose
     """
-    groups: Set[str] = set()
+    from src.lib.config.groups_loader import get_groups_for_cognito_groups
 
-    for group in cognito_groups:
-        group_lower = group.lower()
-        if group_lower in COGNITO_GROUP_TO_GROUP:
-            groups.update(COGNITO_GROUP_TO_GROUP[group_lower])
-
-    return list(groups)
+    return get_groups_for_cognito_groups(cognito_groups)
 
 
 def inject_group_rules(
@@ -221,7 +220,7 @@ def _inject_from_cache(
 
     Group rules are stored with:
     - agent_name: component_name (e.g., "gene", "allele")
-    - prompt_type: "group_rules" (or "mod_rules" for backwards compatibility)
+    - prompt_type: "group_rules"
     - group_id: normalized group ID (e.g., "MGI", "FB")
     """
     from src.lib.prompts.cache import get_prompt_optional
@@ -230,10 +229,7 @@ def _inject_from_cache(
     collected_groups = []
 
     for group_id in normalized_groups:
-        # Try group_rules first, fall back to mod_rules for backwards compatibility
-        prompt = get_prompt_optional(component_name, "group_rules", mod_id=group_id)
-        if not prompt:
-            prompt = get_prompt_optional(component_name, "mod_rules", mod_id=group_id)
+        prompt = get_prompt_optional(component_name, "group_rules", group_id=group_id)
         if prompt:
             collected_content.append(prompt.content)
             collected_groups.append(group_id)
@@ -275,60 +271,45 @@ Apply these rules when searching for and interpreting results.
 
 def get_available_groups() -> List[str]:
     """
-    Get list of all groups that have rules defined.
+    Get list of all valid group IDs.
+
+    This function delegates to groups_loader which reads from config/groups.yaml.
+    The YAML file is the source of truth for available groups.
 
     Returns:
-        List of group IDs with at least one rule file
+        List of group IDs defined in config/groups.yaml
 
     Example:
         >>> get_available_groups()
-        ["MGI", "FB", "WB", ...]
+        ["FB", "HGNC", "MGI", "RGD", "SGD", "WB", "ZFIN"]
     """
-    available = set()
+    from src.lib.config.groups_loader import get_valid_group_ids
 
-    # Check agents directory
-    agents_path = GROUP_RULES_PATH / "agents"
-    if agents_path.exists():
-        for component_dir in agents_path.iterdir():
-            if component_dir.is_dir():
-                for yaml_file in component_dir.glob("*.yaml"):
-                    group_id = yaml_file.stem.upper()
-                    available.add(group_id)
-
-    # Check tools directory
-    tools_path = GROUP_RULES_PATH / "tools"
-    if tools_path.exists():
-        for component_dir in tools_path.iterdir():
-            if component_dir.is_dir():
-                for yaml_file in component_dir.glob("*.yaml"):
-                    group_id = yaml_file.stem.upper()
-                    available.add(group_id)
-
-    return sorted(available)
+    return get_valid_group_ids()
 
 
 def validate_group_rules(group_id: str, component_type: str, component_name: str) -> bool:
     """
     Validate that rules exist for a specific group/component combination.
 
+    This function checks the prompt cache for group rules, which are loaded
+    from config/agents/*/group_rules/*.yaml at startup.
+
     Args:
         group_id: Group identifier
-        component_type: "agents" or "tools"
-        component_name: Name of the agent or tool
+        component_type: Unused (kept for backwards compatibility)
+        component_name: Name of the agent or tool (maps to agent_name in cache)
 
     Returns:
-        True if rules file exists and is valid YAML
+        True if group rules exist in the prompt cache
     """
+    from src.lib.prompts.cache import get_prompt_optional, is_initialized
+
+    if not is_initialized():
+        logger.warning("Prompt cache not initialized, cannot validate group rules")
+        return False
+
     canonical_id = normalize_group_id(group_id)
-    filename = f"{canonical_id.lower()}.yaml"
-    filepath = GROUP_RULES_PATH / component_type / component_name / filename
+    prompt = get_prompt_optional(component_name, "group_rules", group_id=canonical_id)
 
-    if not filepath.exists():
-        return False
-
-    try:
-        with open(filepath, "r") as f:
-            data = yaml.safe_load(f)
-            return isinstance(data, dict) and ("group_id" in data or "mod_id" in data)
-    except Exception:
-        return False
+    return prompt is not None

@@ -175,14 +175,34 @@ async def lifespan(app: FastAPI):
         await initialize_weaviate_collections(connection)
         logger.info("✅ Successfully initialized Weaviate collections")
 
-        # Initialize prompt cache from database (REQUIRED - fail fast if unavailable)
+        # Sync prompts from YAML to database (YAML is source of truth)
+        # This must run BEFORE cache initialization
+        from src.lib.config.prompt_loader import load_prompts
         from src.lib.prompts.cache import initialize as init_prompt_cache
         db = SessionLocal()
         try:
+            # Load prompts from YAML files into database
+            counts = load_prompts(db=db)
+            if counts.get("skipped"):
+                logger.debug("Prompt loader already initialized")
+            else:
+                logger.info(
+                    f"✅ Prompts synced from YAML: {counts['base_prompts']} base, "
+                    f"{counts['group_rules']} group rules"
+                )
+
+            # Initialize prompt cache from database
             init_prompt_cache(db)
             logger.info("✅ Prompt cache initialized")
+
+            # Load group definitions from config/groups.yaml
+            # This must run after prompts so group rules can be resolved
+            from src.lib.config.groups_loader import load_groups
+            groups = load_groups()
+            logger.info(f"✅ Group definitions loaded: {len(groups)} groups")
         except Exception as e:
-            logger.error(f"❌ FATAL: Failed to initialize prompt cache: {e}")
+            logger.error(f"❌ FATAL: Failed to initialize prompts/groups: {e}")
+            db.rollback()  # Rollback any partial changes on failure
             raise  # Re-raise to prevent app startup
         finally:
             db.close()

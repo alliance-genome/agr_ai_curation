@@ -12,7 +12,9 @@
 #   ./scripts/deploy_alliance.sh --dry-run # Show what would be copied
 #
 # What gets deployed:
-#   alliance_agents/*  -> config/agents/
+#   alliance_agents/*       -> config/agents/
+#   alliance_config/*.yaml  -> config/
+#   backend/tools/alliance_tools/*  -> backend/tools/custom/
 #
 # Note: This script is idempotent and safe to run multiple times.
 # =============================================================================
@@ -32,7 +34,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Source and destination directories
 ALLIANCE_AGENTS="${PROJECT_ROOT}/alliance_agents"
+ALLIANCE_CONFIG="${PROJECT_ROOT}/alliance_config"
+ALLIANCE_TOOLS="${PROJECT_ROOT}/backend/tools/alliance_tools"
+
+CONFIG_DIR="${PROJECT_ROOT}/config"
 CONFIG_AGENTS="${PROJECT_ROOT}/config/agents"
+CUSTOM_TOOLS="${PROJECT_ROOT}/backend/tools/custom"
 
 # Parse arguments
 CLEAN=false
@@ -102,10 +109,25 @@ check_prerequisites() {
         exit 1
     fi
 
+    if [ ! -d "$ALLIANCE_CONFIG" ]; then
+        log_warn "Alliance config directory not found: $ALLIANCE_CONFIG"
+    fi
+
+    if [ ! -d "$ALLIANCE_TOOLS" ]; then
+        log_warn "Alliance tools directory not found: $ALLIANCE_TOOLS"
+    fi
+
     if [ ! -d "$CONFIG_AGENTS" ]; then
         log_warn "Config agents directory not found, creating: $CONFIG_AGENTS"
         if [ "$DRY_RUN" = false ]; then
             mkdir -p "$CONFIG_AGENTS"
+        fi
+    fi
+
+    if [ ! -d "$CUSTOM_TOOLS" ]; then
+        log_warn "Custom tools directory not found, creating: $CUSTOM_TOOLS"
+        if [ "$DRY_RUN" = false ]; then
+            mkdir -p "$CUSTOM_TOOLS"
         fi
     fi
 
@@ -176,6 +198,78 @@ deploy_agents() {
     log_success "Deployed $count agents"
 }
 
+# Copy Alliance config files to config/
+deploy_config() {
+    if [ ! -d "$ALLIANCE_CONFIG" ]; then
+        log_warn "Skipping config deployment - directory not found"
+        return
+    fi
+
+    log_info "Deploying Alliance config files..."
+
+    local count=0
+
+    for config_file in "$ALLIANCE_CONFIG"/*.yaml; do
+        if [ ! -f "$config_file" ]; then
+            continue
+        fi
+
+        filename=$(basename "$config_file")
+        target_file="${CONFIG_DIR}/${filename}"
+
+        log_verbose "Copying: $filename -> $target_file"
+
+        if [ "$DRY_RUN" = false ]; then
+            cp "$config_file" "$target_file"
+        else
+            echo "  Would copy: $config_file -> $target_file"
+        fi
+
+        count=$((count + 1))
+    done
+
+    log_success "Deployed $count config files"
+}
+
+# Copy Alliance tools to backend/tools/custom/
+deploy_tools() {
+    if [ ! -d "$ALLIANCE_TOOLS" ]; then
+        log_warn "Skipping tools deployment - directory not found"
+        return
+    fi
+
+    log_info "Deploying Alliance tools..."
+
+    local count=0
+
+    for tool_file in "$ALLIANCE_TOOLS"/*; do
+        if [ ! -f "$tool_file" ]; then
+            continue
+        fi
+
+        filename=$(basename "$tool_file")
+
+        # Skip __pycache__ and other non-Python files
+        if [[ "$filename" == __* ]] || [[ "$filename" == *.pyc ]]; then
+            continue
+        fi
+
+        target_file="${CUSTOM_TOOLS}/${filename}"
+
+        log_verbose "Copying: $filename -> $target_file"
+
+        if [ "$DRY_RUN" = false ]; then
+            cp "$tool_file" "$target_file"
+        else
+            echo "  Would copy: $tool_file -> $target_file"
+        fi
+
+        count=$((count + 1))
+    done
+
+    log_success "Deployed $count tool files"
+}
+
 # Verify deployment
 verify_deployment() {
     if [ "$DRY_RUN" = true ]; then
@@ -238,13 +332,32 @@ print_summary() {
         fi
     done
 
-    echo "  Agents deployed: $agent_count"
-    echo "  Location: $CONFIG_AGENTS"
+    # Count config files
+    local config_count=0
+    for f in "$CONFIG_DIR"/*.yaml; do
+        if [ -f "$f" ]; then
+            config_count=$((config_count + 1))
+        fi
+    done
+
+    # Count tool files
+    local tool_count=0
+    for f in "$CUSTOM_TOOLS"/*.py; do
+        if [ -f "$f" ]; then
+            tool_count=$((tool_count + 1))
+        fi
+    done
+
+    echo "  Agents deployed:  $agent_count  ($CONFIG_AGENTS)"
+    echo "  Config files:     $config_count  ($CONFIG_DIR)"
+    echo "  Custom tools:     $tool_count  ($CUSTOM_TOOLS)"
     echo ""
 
     if [ "$DRY_RUN" = false ]; then
         echo "To verify, run:"
         echo "  ls -la $CONFIG_AGENTS"
+        echo "  ls -la $CONFIG_DIR/*.yaml"
+        echo "  ls -la $CUSTOM_TOOLS"
     fi
 }
 
@@ -264,6 +377,8 @@ main() {
     check_prerequisites
     clean_existing
     deploy_agents
+    deploy_config
+    deploy_tools
     verify_deployment
     print_summary
 }
