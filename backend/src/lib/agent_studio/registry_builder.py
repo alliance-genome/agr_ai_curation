@@ -41,18 +41,21 @@ def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
     Returns:
         Dictionary with model, temperature, reasoning (only non-default values)
     """
+    # Compare against ModelConfig defaults to avoid hardcoding values here.
+    # This ensures changes to ModelConfig defaults automatically propagate.
+    default_config = ModelConfig()
     defaults = {}
 
     # Include model if not the default
-    if model_config.model != "gpt-4o":
+    if model_config.model != default_config.model:
         defaults["model"] = model_config.model
 
     # Include temperature if not the default
-    if model_config.temperature != 0.1:
+    if model_config.temperature != default_config.temperature:
         defaults["temperature"] = model_config.temperature
 
     # Include reasoning if not the default
-    if model_config.reasoning != "medium":
+    if model_config.reasoning != default_config.reasoning:
         defaults["reasoning"] = model_config.reasoning
 
     return defaults
