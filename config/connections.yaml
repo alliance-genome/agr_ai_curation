@@ -78,10 +78,11 @@ services:
   # ---------------------------------------------------------------------------
   # Set DATABASE_URL for the full connection string.
   # Format: postgresql://[user]:[pass]@[host]:[port]/[dbname]
-  # If not set, falls back to docker-compose default (postgres:5432/ai_curation)
+  # If not set, falls back to docker-compose default with postgres user
+  # (relies on trust auth for local connections in docker-compose setup)
   postgres:
     description: "PostgreSQL database for application data"
-    url: "${DATABASE_URL:-postgresql://postgres:5432/ai_curation}"
+    url: "${DATABASE_URL:-postgresql://postgres@postgres:5432/ai_curation}"
     health_check:
       endpoint: null  # PostgreSQL uses connection test, not HTTP
       method: CONNECT

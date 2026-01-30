@@ -26,8 +26,10 @@ router = APIRouter(prefix="/api/admin/health", tags=["Admin - Health"])
 class ServiceHealthResponse(BaseModel):
     """Health status for a single service.
 
-    Note: url field contains redacted URL (credentials replaced with ***).
-    This is intentional to prevent credential exposure in API responses.
+    Security Notes:
+    - url field contains redacted URL (credentials replaced with ***)
+    - last_error field is sanitized (URLs redacted, truncated if too long)
+    This is intentional to prevent information exposure on public endpoints.
     """
 
     service_id: str
@@ -35,7 +37,7 @@ class ServiceHealthResponse(BaseModel):
     url: str  # This is the redacted display_url, NOT the actual URL
     required: bool
     is_healthy: Optional[bool]
-    last_error: Optional[str]
+    last_error: Optional[str]  # Sanitized - URLs redacted, length limited
 
 
 class ConnectionsHealthResponse(BaseModel):
@@ -146,6 +148,7 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
         check_service_health,
         get_connection,
         is_initialized,
+        sanitize_error_message,
     )
 
     if not is_initialized():
@@ -170,5 +173,5 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
         url=conn.display_url,  # Use display_url to prevent credential exposure
         required=conn.required,
         is_healthy=conn.is_healthy,
-        last_error=conn.last_error,
+        last_error=sanitize_error_message(conn.last_error),  # Sanitize error messages
     )

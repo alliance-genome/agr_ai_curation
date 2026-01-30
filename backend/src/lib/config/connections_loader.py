@@ -177,6 +177,41 @@ def _redact_url_credentials(url: str) -> str:
         return "[URL parsing failed - redacted for safety]"
 
 
+def sanitize_error_message(error: Optional[str], max_length: int = 500) -> Optional[str]:
+    """Sanitize error messages for safe display on public endpoints.
+
+    Applies credential redaction to any URLs found in the error message
+    and truncates overly long messages to prevent information leakage.
+
+    Args:
+        error: Error message that may contain sensitive information
+        max_length: Maximum length before truncation (default 500 chars)
+
+    Returns:
+        Sanitized error message, or None if input is None
+    """
+    if not error:
+        return error
+
+    import re
+
+    # Pattern to match URLs in error messages
+    # Matches common URL schemes that might contain credentials
+    url_pattern = r'((?:postgresql|postgres|redis|mysql|mongodb|http|https)://[^\s\'"<>]+)'
+
+    def redact_match(match):
+        return _redact_url_credentials(match.group(1))
+
+    # Redact any URLs found in the error message
+    sanitized = re.sub(url_pattern, redact_match, error, flags=re.IGNORECASE)
+
+    # Truncate if too long
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "... [truncated]"
+
+    return sanitized
+
+
 @dataclass
 class ConnectionDefinition:
     """
@@ -370,7 +405,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
 
     Returns:
         Dictionary with service_id keys and status info values.
-        Note: URL is redacted to prevent credential exposure.
+        Note: URL and last_error are sanitized to prevent information exposure.
     """
     if not _initialized:
         load_connections()
@@ -383,7 +418,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
             "url": conn.display_url,  # Use display_url to prevent credential exposure
             "required": conn.required,
             "is_healthy": conn.is_healthy,
-            "last_error": conn.last_error,
+            "last_error": sanitize_error_message(conn.last_error),  # Sanitize error messages
         }
 
     return status

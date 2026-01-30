@@ -210,6 +210,12 @@ async def lifespan(app: FastAPI):
 
         # Load connection definitions from config/connections.yaml
         # This enables health checking and connection status tracking
+        #
+        # HEALTH_CHECK_STRICT_MODE controls behavior:
+        # - true (default): Config parse errors and unhealthy required services are fatal
+        # - false: Config errors are warnings, health checks are advisory
+        strict_mode = os.environ.get("HEALTH_CHECK_STRICT_MODE", "true").lower() != "false"
+
         try:
             from src.lib.config.connections_loader import (
                 load_connections,
@@ -225,11 +231,6 @@ async def lifespan(app: FastAPI):
             optional_services = get_optional_connections()
             logger.info(f"   Required services: {[s.service_id for s in required_services]}")
             logger.info(f"   Optional services: {[s.service_id for s in optional_services]}")
-
-            # HEALTH_CHECK_STRICT_MODE controls whether startup blocks on required service failures
-            # Default: True (enforce required services are healthy)
-            # Set to "false" for development/testing with partial infrastructure
-            strict_mode = os.environ.get("HEALTH_CHECK_STRICT_MODE", "true").lower() != "false"
 
             if strict_mode and required_services:
                 logger.info("🔍 Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
@@ -253,11 +254,18 @@ async def lifespan(app: FastAPI):
                 logger.warning("   This is not recommended for production deployments")
 
         except FileNotFoundError as e:
+            # Config file not found - this is optional, always continue
             logger.warning(f"⚠️ Connections config not found (optional): {e}")
         except RuntimeError:
-            raise  # Re-raise startup failures
+            raise  # Re-raise startup failures (health check failures, etc.)
         except Exception as e:
-            logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
+            # Config file exists but failed to load (parse error, etc.)
+            if strict_mode:
+                logger.error(f"❌ FATAL: Failed to load connections config: {e}")
+                logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
+                raise RuntimeError(f"Connections config load failed: {e}") from e
+            else:
+                logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
 
         # Initialize Langfuse observability
         try:

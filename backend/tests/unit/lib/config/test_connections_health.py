@@ -14,6 +14,7 @@ from src.lib.config.connections_loader import (
     _check_redis_health,
     _check_postgres_health,
     _redact_url_credentials,
+    sanitize_error_message,
     check_service_health,
     check_all_health,
     get_connection_status,
@@ -475,3 +476,49 @@ class TestGetConnectionStatusRedaction:
                 # This might be a false positive if "password" is in a description
                 # but it's a good sanity check
                 pass  # Allow in descriptions, but the key test is display_url
+
+
+class TestSanitizeErrorMessage:
+    """Tests for sanitize_error_message function."""
+
+    def test_returns_none_for_none_input(self):
+        """Should return None when input is None."""
+        assert sanitize_error_message(None) is None
+
+    def test_returns_empty_for_empty_input(self):
+        """Should return empty string for empty input."""
+        assert sanitize_error_message("") == ""
+
+    def test_truncates_long_messages(self):
+        """Should truncate messages longer than max_length."""
+        long_error = "x" * 1000
+        result = sanitize_error_message(long_error, max_length=100)
+
+        assert len(result) <= 120  # 100 + "... [truncated]"
+        assert "... [truncated]" in result
+
+    def test_preserves_short_messages(self):
+        """Should not truncate messages under max_length."""
+        short_error = "Connection refused"
+        result = sanitize_error_message(short_error)
+
+        assert result == short_error
+        assert "[truncated]" not in result
+
+    def test_preserves_messages_without_urls(self):
+        """Should preserve error messages that don't contain URLs."""
+        error = "Connection refused: timeout after 30 seconds"
+        result = sanitize_error_message(error)
+
+        assert result == error
+
+    def test_handles_unrecognized_url_schemes(self):
+        """Should pass through URLs with unrecognized schemes unchanged."""
+        # testdb:// is not in the URL pattern, so it won't be redacted
+        # This verifies the function doesn't crash on arbitrary input
+        error = "Failed: testdb://user:secretval@host/path"
+        result = sanitize_error_message(error)
+
+        assert isinstance(result, str)
+        # Original content preserved since scheme not recognized
+        assert "testdb://" in result
