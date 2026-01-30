@@ -170,3 +170,7 @@ CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
 
 # Git worktrees
 .worktrees/
+
+# Local planning docs (private - not for public repo)
+docs/plans/
+external_review_prompt.md
