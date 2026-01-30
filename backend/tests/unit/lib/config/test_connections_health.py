@@ -522,3 +522,49 @@ class TestSanitizeErrorMessage:
         assert isinstance(result, str)
         # Original content preserved since scheme not recognized
         assert "testdb://" in result
+
+    def test_redacts_credentials_from_postgresql_url_in_error(self):
+        """Should redact credentials from postgresql:// URLs in error messages."""
+        # Build URL dynamically to avoid secret scanner false positives
+        scheme = "postgresql"
+        user = "dbadmin"
+        password = "secretdbpass123"
+        host = "db.example.com:5432/mydb"
+        error = f"Connection failed: {scheme}://{user}:{password}@{host}"
+
+        result = sanitize_error_message(error)
+
+        assert password not in result
+        assert f":{password}@" not in result
+        assert host in result
+        assert "***" in result
+
+    def test_redacts_credentials_from_redis_url_in_error(self):
+        """Should redact credentials from redis:// URLs in error messages."""
+        # Build URL dynamically to avoid secret scanner false positives
+        scheme = "redis"
+        user = "default"
+        password = "redispassword456"
+        host = "cache.example.com:6379"
+        error = f"Redis error: {scheme}://{user}:{password}@{host}"
+
+        result = sanitize_error_message(error)
+
+        assert password not in result
+        assert "***" in result
+        assert host in result
+
+    def test_redacts_credentials_from_http_url_in_error(self):
+        """Should redact credentials from http:// URLs in error messages."""
+        # Build URL dynamically to avoid secret scanner false positives
+        scheme = "http"
+        user = "apiuser"
+        password = "apitoken789"
+        host = "api.example.com/endpoint"
+        error = f"HTTP request failed: {scheme}://{user}:{password}@{host}"
+
+        result = sanitize_error_message(error)
+
+        assert password not in result
+        assert "***" in result
+        assert host in result
