@@ -1,0 +1,77 @@
+# =============================================================================
+# AGENT DEFINITION: pdf
+# =============================================================================
+# Extracts text, tables, and data from uploaded PDF documents.
+# Tool name generated at runtime: ask_pdf_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: pdf_extraction
+
+name: "PDF Extraction Agent"
+
+description: >
+  Extracts text, tables, and data from uploaded PDF documents using
+  semantic search and section-based retrieval.
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Ask the PDF Specialist about the loaded document. Use for questions about
+    paper content, methods, results, figures. The specialist will search and
+    read the document autonomously.
+  batchable: false  # Document-based agent, processes one document at a time
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - search_document
+  - read_section
+  - read_subsection
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+# No structured output schema - returns text/mentions
+output_schema: null
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_PDF_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "medium"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "📄"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: true

@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: HGNC
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the allele agent's prompt when users
+# belong to the HGNC group.
+# =============================================================================
+
+content: '
+
+  ## HGNC-SPECIFIC RULES (Homo sapiens)
+
+
+  ## HGNC Allele Search Strategy (Homo sapiens)
+
+
+  ### General Guidelines
+
+
+  - Human gene symbols are typically uppercase (e.g., TP53, BRCA1)
+
+  - Variant nomenclature follows HGVS guidelines
+
+  - Search using the gene symbol as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add human-specific allele search strategies here.
+
+
+
+  ### Interpreting HGNC Results:
+
+  ### Interpreting HGNC Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the variant/allele matches what''s described in the paper
+
+
+  This is a placeholder. Add human-specific interpretation guidelines as needed.
+
+
+  '
+group_id: HGNC

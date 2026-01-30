@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: SGD
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the SGD group.
+# =============================================================================
+
+content: '
+
+  ## SGD-SPECIFIC RULES (Saccharomyces cerevisiae)
+
+
+  ## SGD Gene Search Strategy (Saccharomyces cerevisiae)
+
+
+  ### General Guidelines
+
+
+  - Yeast gene names are typically 3-letter codes in uppercase (e.g., GAL4, TRP1)
+
+  - Standard names may differ from systematic names (YBR155W)
+
+  - Search using the gene symbol as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add yeast gene-specific search strategies here.
+
+
+
+  ### Interpreting SGD Results:
+
+  ### Interpreting SGD Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add yeast gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: SGD

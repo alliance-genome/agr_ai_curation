@@ -1,0 +1,100 @@
+# =============================================================================
+# GROUP RULES: WB
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene_expression agent's prompt when users
+# belong to the WB group.
+# =============================================================================
+
+content: '
+
+  ## WB-SPECIFIC RULES (Caenorhabditis elegans)
+
+
+  ## WormBase Gene Expression Curation Guidelines (C. elegans)
+
+
+  ### Anatomy Term Specificity (CRITICAL)
+
+
+  WormBase curators prefer the MOST SPECIFIC anatomy term available:
+
+
+  - **Always use child anatomy terms** when the paper mentions them
+
+  - If the paper says "pharyngeal muscle", use that instead of "pharynx"
+
+  - If the paper says "body wall muscle", use that instead of "muscle"
+
+  - If the paper says "intestinal cells", use that instead of "intestine"
+
+
+  **Examples of preferred specificity:**
+
+  - "pharyngeal m4" or "pharyngeal muscle" > "pharynx"
+
+  - "seam cells" > "hypodermis"
+
+  - "vulval precursor cells" > "vulva"
+
+  - "distal tip cell" > "gonad"
+
+  - "anchor cell" > "uterus"
+
+
+  **Exception:** If the paper only mentions the general term (e.g., just "pharynx"),
+
+  use what the paper says - don''t assume specificity.
+
+
+  ### C. elegans Transgenic Markers (EXCLUDE from annotation)
+
+
+  Common strain identification markers to EXCLUDE:
+
+  - `rol-6(su1006)` - roller phenotype marker
+
+  - `myo-2::GFP` or `myo-2::mCherry` - pharyngeal muscle marker for identification
+
+  - `unc-119(+)` - rescue marker
+
+  - `sur-5::GFP` - nuclear marker
+
+  - `ttx-3::GFP` - AIY neuron marker (when used as co-injection marker)
+
+
+  **Only annotate expression if it''s the SUBJECT of study**, not an identification tool.
+
+
+  ### WormBase Nomenclature
+
+
+  - Gene names: lowercase with hyphen + number (e.g., `daf-16`, `unc-54`, `lin-12`)
+
+  - Transgene syntax: `fsIs2 [dmd-3::YFP, cc::GFP]` - array name + contents
+
+  - Allele syntax: `e1370`, `tm1243` - lowercase letters + numbers
+
+  - Strain names: 2-letter lab code + number (e.g., `DF268`, `OH15732`)
+
+
+
+  ### Interpreting WB Results:
+
+  ### Interpreting WormBase Gene Expression Results
+
+
+  - Verify anatomy terms match WormBase anatomy ontology (WBbt)
+
+  - Life stages should use WormBase life stage ontology (WBls)
+
+  - Common life stages: embryo, L1-L4 larval stages, young adult, adult
+
+  - Sex-specific: hermaphrodite, male (C. elegans is hermaphrodite with rare males)
+
+
+  '
+group_id: WB
