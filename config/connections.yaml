@@ -39,10 +39,10 @@ services:
     description: "Alliance Genome Resources curation database"
     url: "${AGR_CURATION_API_URL:-https://curation.alliancegenome.org}"
     health_check:
-      endpoint: "/api/health"
+      endpoint: "/health"
       method: GET
       expected_status: 200
-    required: false  # Optional - tools fail gracefully if unavailable
+    required: true
     timeout_seconds: 10
 
   # ---------------------------------------------------------------------------
@@ -108,10 +108,10 @@ services:
   # ---------------------------------------------------------------------------
   reranker:
     description: "Cross-encoder reranking service for improved search"
-    url: "${RERANKER_URL:-http://reranker-transformers:80}"
+    url: "${RERANKER_URL:-http://reranker-transformers:8080}"
     health_check:
       endpoint: "/health"
       method: GET
       expected_status: 200
-    required: false
+    required: true
     timeout_seconds: 10
