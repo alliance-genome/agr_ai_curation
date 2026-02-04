@@ -1,0 +1,31 @@
+# Docker Compose for Maintenance Mode
+#
+# Usage:
+#   1. Stop the main services: docker compose down
+#   2. Start maintenance page: docker compose -f docker-compose.maintenance.yml up -d
+#   3. When done: docker compose -f docker-compose.maintenance.yml down
+#   4. Start main services: docker compose up -d
+#
+# The maintenance page will be served on port 3002 (same as the main frontend)
+# and will display the message from maintenance_message.txt
+
+services:
+  maintenance:
+    build:
+      context: ./maintenance_page
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3003:80"  # Same port as the main frontend
+    volumes:
+      - ./config/maintenance_message.txt:/usr/share/nginx/html/maintenance_message.txt:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  default:
+    name: ai-curation-maintenance
