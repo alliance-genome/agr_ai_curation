@@ -110,8 +110,8 @@ services:
     description: "Cross-encoder reranking service for improved search"
     url: "${RERANKER_URL:-http://reranker-transformers:8080}"
     health_check:
-      endpoint: "/health"
+      endpoint: "/.well-known/ready"
       method: GET
-      expected_status: 200
+      expected_status: 204
     required: true
     timeout_seconds: 10
