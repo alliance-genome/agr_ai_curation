@@ -22,11 +22,19 @@ The AI Curation System has three main panels:
 - Receive detailed responses with citations and evidence
 - **Provide feedback** using the triple-dot menu (⋮) on any AI response - this automatically captures your prompts, responses, and all traces for developer review
 
-### Right Panel: Audit Trail
+### Right Panel: Audit Trail & Tools
+The right panel has two tabs:
+
+**Audit Tab**
 - Tracks all AI actions and decisions
 - Shows which databases were queried
 - Displays API calls and data sources used
 - Provides transparency into how answers were generated
+
+**Tools Tab**
+- Lists your saved curation flows
+- Click **"Run"** next to any flow to execute it against the current document
+- Quick access to run workflows without switching to Agent Studio
 
 ## Uploading Documents
 
@@ -71,7 +79,7 @@ The system will automatically determine which databases to query based on your q
 - **[Agent Studio](AGENT_STUDIO.md)** - Chat with Claude Opus 4.5 about prompts, browse agent configurations, and analyze traces
 - **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain agents together and export results to CSV, TSV, or JSON files
 - **[Batch Processing](BATCH_PROCESSING.md)** - Run saved flows against multiple documents automatically with real-time progress tracking
-- **Prompt Workshop** (in Agent Studio) - Create custom versions of agent prompts, test them, and compare against the originals
+- **Prompt Workshop** (in Agent Studio) - Create custom versions of agent prompts with per-MOD overrides and use them in your curation flows
 
 ## Need Help?
 

@@ -139,7 +139,7 @@ When you request ontology mappings, the agent:
 You can create your own customized versions of any system agent using the **Prompt Workshop** in Agent Studio. Custom agents let you:
 
 - Clone a system agent's prompt and modify the instructions for your specific needs
-- Test your custom version and compare its output against the original
+- Add per-MOD prompt overrides and version history with revert support
 - Use custom agents in Curation Flows alongside system agents
 
 See **[Agent Studio](AGENT_STUDIO.md)** for details on the Prompt Workshop.

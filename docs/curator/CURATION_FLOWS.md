@@ -2,7 +2,7 @@
 
 Curation Flows are visual workflows that let you chain multiple AI agents together. You build them once, save them, and reuse them across documents.
 
-> **Note:** Flows currently support **sequential (linear) pipelines only** - each agent connects to the next in a chain. Branching workflows (one agent connecting to multiple outputs) are coming soon.
+> **Note:** Flows support **sequential (linear) pipelines** - each agent connects to the next in a chain. Each node can have only one outgoing connection.
 
 ## Why Use Curation Flows?
 
@@ -24,7 +24,7 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 - Same workflow = consistent extraction across documents
 - Great for processing batches of similar papers
 
-> **Coming Soon:** Batch PDF processing (currently you load one document at a time)
+> **Tip:** Need to process multiple documents? See **[Batch Processing](BATCH_PROCESSING.md)** to run saved flows against multiple PDFs automatically.
 
 ## Accessing the Flow Builder
 
@@ -37,8 +37,8 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 **Opus Chat (Left Panel)**
 Chat with Claude Opus 4.5 about your flow - ask for help building it, troubleshooting issues, or understanding what each agent does.
 
-**Agent Palette (Left, below chat)**
-A list of available agents organized by category. Click or drag agents onto the canvas.
+**Agent Palette (Left Panel)**
+A searchable, collapsible list of available agents organized by category. Click or drag agents onto the canvas. Use the search box to filter agents by name, description, or tools.
 
 **Canvas (Center/Right)**
 The main workspace where you build your flow by adding agents and connecting them.
@@ -53,13 +53,13 @@ When you select a node, this panel shows its configuration options where you can
 |-------|-------------|
 | **Initial Instructions** | Starting point - define the task for your flow |
 
-### PDF Extraction
+### Extraction
 | Agent | Description |
 |-------|-------------|
 | **General PDF Agent** | Extracts text, tables, and data from PDF documents |
 | **Gene Expression Extractor** | Extracts gene expression patterns from PDFs |
 
-### Data Validation
+### Validation
 | Agent | Description |
 |-------|-------------|
 | **Gene Validation Agent** | Validates gene identifiers against AGR database |
@@ -99,13 +99,39 @@ If you've created custom agents in the **Prompt Workshop**, they appear here und
 
 **You can connect agents in any direction** - top to bottom, left to right, whatever makes sense for your workflow.
 
-### Step 3: Add Custom Instructions
+### Step 3: Configure Each Step
 
-1. Click on any agent node to select it
-2. The Properties Panel shows configuration options
-3. Add custom instructions to tell that agent exactly what you want it to do
+Click on any agent node to open the **Properties Panel** on the right. This panel lets you fine-tune how each step in your flow behaves.
 
-This is one of the most powerful features - you can fine-tune each step of your workflow.
+**Custom Instructions**
+
+Add specific instructions for this step. These are prepended to the agent's system prompt with highest priority — they override the agent's default behavior for this flow step. Example: "Focus only on gene expression data from the methods section."
+
+**Input Source**
+
+Choose where this step gets its input:
+
+- **Previous Step Output** - Uses the output from the connected upstream step (default when a connection exists)
+- **Custom (with variables)** - Write a custom input template using `{{variable}}` syntax to reference outputs from any earlier step
+
+**Variable Templating**
+
+When using a custom input source, reference earlier step outputs by their variable name:
+
+```
+Validate these genes: {{pdf_output}}
+Cross-reference with: {{expression_data}}
+```
+
+Click the variable chips shown below the text field to insert available variables. Variable names must match an earlier step's output variable name exactly.
+
+**Output Variable Name**
+
+Set a name for this step's output so later steps can reference it with `{{variable_name}}`. Names can contain letters, numbers, and underscores. Example: `validated_genes`
+
+**View Base Prompt & MOD Rules**
+
+Click the **"View base prompt & MOD rules"** link to see the full prompt and any MOD-specific overrides for this agent.
 
 ### Step 4: Verify with Claude
 
@@ -123,6 +149,46 @@ This is especially valuable when building new flows.
 2. Enter a descriptive name (e.g., "C. elegans Expression to WBbt TSV")
 3. Add an optional description
 4. Click **"Save"**
+
+## Flow Builder Toolbar
+
+The Flow Builder toolbar provides quick access to common operations:
+
+**File Menu**
+- **New Flow** (Ctrl+N) - Start a new empty flow
+- **Open Flow...** (Ctrl+O) - Open a previously saved flow
+- **Manage Flows...** - Rename or delete saved flows
+- **Save** (Ctrl+S) - Save the current flow
+- **Delete Flow** - Remove the current flow
+
+**Edit Menu**
+- **Select All** (Ctrl+A) - Select all nodes on the canvas
+- **Delete Selected** (Del) - Remove selected nodes
+
+**Verify with Claude** - Appears when your flow has nodes. Sends the flow to Claude for structural review before running.
+
+## Flow Validation
+
+The Flow Builder validates your flow and shows error indicators when there are issues:
+
+- **Missing task instructions** - The Initial Instructions node requires non-empty instructions
+- **Ambiguous input source** - A validation agent has multiple upstream extractors without an explicit input configuration. Open the Properties Panel and select an input source.
+- **Parallel connections** - A node has more than one outgoing connection. Each node can connect to only one downstream step.
+- **Duplicate Initial Instructions** - Only one Initial Instructions node is allowed per flow
+
+Validation errors appear as a red banner in the Properties Panel when you select the affected node.
+
+## How Flows Execute
+
+Understanding how flows run helps you build effective workflows:
+
+1. **Initial Instructions** provide the starting task description and context
+2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
+3. Each step's output is stored under its **output variable name** and available to later steps via `{{variable}}` references
+4. When a step produces a final output (e.g., a file formatter generates a CSV, or Chat Output displays results), the flow **terminates**
+5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step
+
+**Important:** Because the flow terminates when it reaches an output agent, place your output agent at the end of the chain. Only one output agent will produce results per flow run.
 
 ## Running a Flow
 
@@ -221,21 +287,19 @@ Initial Instructions → General PDF Agent → Gene Expression Extractor → Gen
 
 ### Loading Saved Flows
 
-1. In the Flow Builder, click **"Load"**
+1. In the Flow Builder, use **File → Open Flow...** (Ctrl+O)
 2. Browse your saved flows
 3. Click to load a flow onto the canvas
 
 ### Editing Flows
 
-1. Load the flow
+1. Open the flow
 2. Make your changes
-3. Save again (overwrite or save as new)
+3. Save with **File → Save** (Ctrl+S)
 
 ### Deleting Flows
 
-1. Click **"Load"** to see saved flows
-2. Click the delete icon next to the flow
-3. Confirm deletion
+Use **File → Manage Flows...** to rename or delete saved flows, or **File → Delete Flow** to remove the currently loaded flow.
 
 ## Tips for Building Effective Flows
 
@@ -276,7 +340,7 @@ Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
 
 ### Can I run the same flow on multiple documents?
 
-Yes, but currently you load one document at a time. Load a PDF, run the flow, then load the next PDF and run again. Batch processing is coming soon.
+Yes! You can run a flow one document at a time, or use **[Batch Processing](BATCH_PROCESSING.md)** to run a saved flow against multiple documents automatically with real-time progress tracking.
 
 ### Are flow results saved?
 

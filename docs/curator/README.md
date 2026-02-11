@@ -44,7 +44,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 - **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus 4.5
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
-- **Prompt Workshop** - Create custom agent prompts, test them, and compare outputs against the original
+- **Prompt Workshop** - Create custom agent prompts with per-MOD overrides, version history, and icon customization
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -97,9 +97,9 @@ Tools for understanding, building, and improving AI behavior:
 
 **Prompt Workshop Tab**
 - Clone any system agent's prompt to create a custom version
-- Edit instructions and test with Quick Test
-- Compare custom agent output against the original side-by-side
-- Version history with revert support
+- Edit instructions, choose an icon, and add per-MOD prompt overrides
+- File menu for managing prompts (New, Open, Save, Manage, Delete)
+- Version history with revert support and save notes
 - Custom agents appear in Flow Builder for use in workflows
 
 **Discuss Responses**
@@ -120,9 +120,8 @@ The system includes 16+ specialist agents organized by function:
 | Category | Agents |
 |----------|--------|
 | **Routing** | Supervisor (routes to specialists) |
-| **PDF Extraction** | PDF Agent, Gene Expression Agent |
-| **Data Lookup** | Gene, Allele, Disease, Chemical, GO, Orthologs |
-| **Validation** | Ontology Mapping, Gene Ontology |
+| **Extraction** | General PDF Agent, Gene Expression Extractor |
+| **Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Mapping |
 | **Output** | Chat Output, CSV Formatter, TSV Formatter, JSON Formatter |
 
 For detailed agent documentation, see **[Available Agents](AVAILABLE_AGENTS.md)**.
@@ -138,7 +137,7 @@ Curation Flows can output results in multiple ways:
 | **TSV** | TSV Formatter | Tab-separated for database import |
 | **JSON** | JSON Formatter | Structured data with nested information |
 
-You can use multiple outputs in the same flow - for example, send results to chat for review AND generate a CSV file for download.
+Each flow uses one output agent. Use Chat Output to review results first, then swap to a File Formatter when ready to export.
 
 File outputs appear in the chat as downloadable cards with metadata including file size and download count.
 

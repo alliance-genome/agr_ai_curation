@@ -22,16 +22,14 @@ Browse the instructions given to each AI agent and chat with Opus about them.
 
 See all agent prompts organized by category:
 - **Routing** - Supervisor agent that routes your queries to specialists
-- **Extraction** - Gene Expression Specialist and Formatter agents
-- **Database Query** - Gene, Allele, Disease, Chemical, GO Term, and other lookup agents
-- **Validation** - Ontology mapping and term validation agents
+- **Extraction** - General PDF Agent and Gene Expression Extractor
+- **Validation** - Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, and Ontology Mapping agents
 - **Output** - Chat Output, CSV Formatter, TSV Formatter, JSON Formatter agents
 
 For each agent, you can view:
 - **Base Prompt** - The core instructions given to the agent
 - **MOD-Specific Rules** - How the prompt is customized for each Model Organism Database (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
 - **Combined View** - See the base prompt with MOD rules injected
-- **Version History** - Track changes to prompts over time
 - **Tools** - The tools available to each agent (listed in the agent card)
 
 **Clickable Tool Names**
@@ -82,36 +80,46 @@ Create and test custom versions of agent prompts without affecting the live syst
 
 **What is a Custom Agent?**
 
-A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, test the results, and compare outputs against the original — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-MOD overrides, and use it in flows — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
 
 **Getting Started**
 
 1. **Select a parent agent** - Choose which system agent you want to customize (e.g., Gene Validation Agent)
-2. **Create a new custom agent** - Click "New" to start with a copy of the parent's prompt
+2. **Create a new custom agent** - Use **File → New Prompt** to start with a copy of the parent's prompt
 3. **Edit the prompt** - Modify the instructions to suit your needs
-4. **Save** - Give it a name and save. Each save creates a version you can revert to later.
+4. **Choose an icon** - Pick an emoji icon from the icon picker to identify your agent
+5. **Save** - Use **File → Save Prompt**. Each save creates a version you can revert to later.
 
 You can also get here quickly from the Agents tab: click "Clone to Workshop" on any agent's detail panel.
 
-**Quick Test**
+**File Menu**
 
-Test your custom agent in isolation:
-1. Enter a test input (e.g., a query you'd normally send to this agent)
-2. Optionally specify a document ID and MOD
-3. Click **"Run Test"** to see the output
+The Workshop toolbar provides these operations:
 
-**Compare with Original**
+- **New Prompt** - Start a new custom agent from scratch
+- **Open Prompt...** - Search and open a previously saved custom agent
+- **Manage Prompts...** - Rename or delete saved custom agents
+- **Save Prompt** / **Save New Prompt** - Save your current work (creates a new version)
+- **Delete Prompt** - Remove the current custom agent
 
-See how your custom prompt performs against the unmodified parent agent:
-1. Enter a test input
-2. Click **"Compare with Original"** — both agents run in parallel
-3. View results in two modes:
-   - **Semantic Diff** - Sentence-by-sentence alignment with word-level highlighting of additions and removals. Use "Hide unchanged" to focus on differences.
-   - **Raw Outputs** - Side-by-side full text from each agent
+**Icon Picker**
+
+When creating or editing a custom agent, select an emoji icon to help identify your agent in the palette and flow canvas. Available icons include 🔧, 🧬, 📄, 🔍, 🧪, 📊, 🧠, ⚙️, ✨, 📝, 📚, 🧩, and more.
+
+**Per-MOD Prompt Overrides**
+
+Customize how your agent behaves for different Model Organism Databases:
+
+1. Check **"Include MOD rules at runtime"** to apply MOD-specific rules when your custom agent runs
+2. **Select a MOD** from the dropdown (e.g., WormBase, FlyBase, MGI)
+3. **Edit the override** - Write MOD-specific instructions in the text area
+4. **Reset to Parent** - Revert a MOD override back to the parent agent's version
+
+The Workshop shows which MODs have custom overrides and a total override count.
 
 **Version History**
 
-Every save creates a new version. You can revert to any previous version if an edit doesn't work out.
+Every save creates a new version. You can add optional save notes to describe your changes. Revert to any previous version if an edit doesn't work out.
 
 **Parent Prompt Staleness**
 
@@ -121,12 +129,12 @@ If the development team updates the parent agent's prompt after you created your
 
 Custom agents appear in the Flow Builder palette under "My Custom Agents". You can drag them into flows just like system agents.
 
-**Chat Integration**
+**Discuss with Claude**
 
-When the Prompt Workshop tab is active, the left-panel chat with Claude is aware of your workshop context — your selected agent, draft prompt, and MOD settings. You can ask Claude to:
+Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Prompt Workshop tab is active, the left-panel chat is aware of your workshop context — your selected agent, draft prompt, and MOD settings. You can ask Claude to:
 - "Critique this draft and suggest concrete edits"
-- "What 3 quick tests should I run next?"
 - "Help me restructure this prompt for clarity"
+- "What would happen if I changed this instruction?"
 
 ## Discussing a Chat Response
 
