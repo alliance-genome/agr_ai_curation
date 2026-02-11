@@ -574,71 +574,70 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   }
 
   return (
-    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-      <Stack spacing={2}>
-        <Typography variant="h6">Prompt Workshop</Typography>
-
-        {error && <Alert severity="error">{error}</Alert>}
-        {status && <Alert severity="success">{status}</Alert>}
-
-        {selectedCustomAgent?.parent_prompt_stale && (
-          <Alert
-            severity="warning"
-            action={
-              <Button color="inherit" size="small" onClick={handleRebase} disabled={saving}>
-                Rebase
-              </Button>
-            }
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Toolbar>
+        <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
+        <StyledMenu
+          anchorEl={fileMenuAnchor}
+          open={Boolean(fileMenuAnchor)}
+          onClose={handleFileMenuClose}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        >
+          <StyledMenuItem
+            onClick={() => {
+              handleFileMenuClose()
+              handleNew()
+            }}
           >
-            Parent prompt changed since this custom agent was created.
-          </Alert>
-        )}
+            <span>New Prompt</span>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={handleOpenDialogOpen}>
+            <span>Open Prompt...</span>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={handleManageDialogOpen}>
+            <span>Manage Prompts...</span>
+          </StyledMenuItem>
+          <Divider />
+          <StyledMenuItem onClick={handleSave} disabled={saving}>
+            <span>{selectedCustomAgentId ? 'Save Prompt' : 'Save New Prompt'}</span>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={() => requestDelete()} disabled={!selectedCustomAgentId || saving}>
+            <span>Delete Prompt</span>
+          </StyledMenuItem>
+        </StyledMenu>
 
-        {selectedCustomAgent && !selectedCustomAgent.parent_exists && (
-          <Alert severity="error">
-            Parent agent is unavailable, so this custom agent cannot be executed.
-          </Alert>
-        )}
+        <Box sx={{ ml: 'auto', pr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="caption" color="text.secondary">
+            {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
+          </Typography>
+          {(loading || saving) && <CircularProgress size={16} />}
+        </Box>
+      </Toolbar>
 
-        <Toolbar>
-          <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
-          <StyledMenu
-            anchorEl={fileMenuAnchor}
-            open={Boolean(fileMenuAnchor)}
-            onClose={handleFileMenuClose}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-          >
-            <StyledMenuItem
-              onClick={() => {
-                handleFileMenuClose()
-                handleNew()
-              }}
+      <Box sx={{ p: 2, overflow: 'auto' }}>
+        <Stack spacing={2}>
+          {error && <Alert severity="error">{error}</Alert>}
+          {status && <Alert severity="success">{status}</Alert>}
+
+          {selectedCustomAgent?.parent_prompt_stale && (
+            <Alert
+              severity="warning"
+              action={
+                <Button color="inherit" size="small" onClick={handleRebase} disabled={saving}>
+                  Rebase
+                </Button>
+              }
             >
-              <span>New Prompt</span>
-            </StyledMenuItem>
-            <StyledMenuItem onClick={handleOpenDialogOpen}>
-              <span>Open Prompt...</span>
-            </StyledMenuItem>
-            <StyledMenuItem onClick={handleManageDialogOpen}>
-              <span>Manage Prompts...</span>
-            </StyledMenuItem>
-            <Divider />
-            <StyledMenuItem onClick={handleSave} disabled={saving}>
-              <span>{selectedCustomAgentId ? 'Save Prompt' : 'Save New Prompt'}</span>
-            </StyledMenuItem>
-            <StyledMenuItem onClick={() => requestDelete()} disabled={!selectedCustomAgentId || saving}>
-              <span>Delete Prompt</span>
-            </StyledMenuItem>
-          </StyledMenu>
+              Parent prompt changed since this custom agent was created.
+            </Alert>
+          )}
 
-          <Box sx={{ ml: 'auto', pr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
-            </Typography>
-            {(loading || saving) && <CircularProgress size={16} />}
-          </Box>
-        </Toolbar>
+          {selectedCustomAgent && !selectedCustomAgent.parent_exists && (
+            <Alert severity="error">
+              Parent agent is unavailable, so this custom agent cannot be executed.
+            </Alert>
+          )}
 
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <FormControl size="small" sx={{ minWidth: 220, flex: 1 }}>
@@ -1010,7 +1009,8 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             </Button>
           </DialogActions>
         </Dialog>
-      </Stack>
+        </Stack>
+      </Box>
     </Box>
   )
 }
