@@ -5,8 +5,9 @@ import {
   Button,
   Checkbox,
   CircularProgress,
+  FormControl,
   FormControlLabel,
-  Grid,
+  InputLabel,
   MenuItem,
   Paper,
   Select,
@@ -14,6 +15,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+
 import type {
   PromptCatalog,
   PromptInfo,
@@ -456,14 +458,11 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           </Alert>
         )}
 
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={6}>
-            <Typography variant="caption" color="text.secondary">
-              Parent Agent
-            </Typography>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FormControl size="small" sx={{ minWidth: 200, flex: 1 }}>
+            <InputLabel>Parent Agent</InputLabel>
             <Select
-              fullWidth
-              size="small"
+              label="Parent Agent"
               value={parentAgentId}
               onChange={(event) => setParentAgentId(event.target.value)}
             >
@@ -473,14 +472,11 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
                 </MenuItem>
               ))}
             </Select>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <Typography variant="caption" color="text.secondary">
-              Custom Agent
-            </Typography>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 200, flex: 1 }}>
+            <InputLabel>Custom Agent</InputLabel>
             <Select
-              fullWidth
-              size="small"
+              label="Custom Agent"
               value={selectedCustomAgentId}
               onChange={(event) => setSelectedCustomAgentId(event.target.value)}
               displayEmpty
@@ -494,41 +490,35 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
                 </MenuItem>
               ))}
             </Select>
-          </Grid>
-        </Grid>
-
-        <Stack direction="row" spacing={1}>
-          <Button variant="outlined" onClick={handleNew}>
+          </FormControl>
+          <Button variant="outlined" size="small" onClick={handleNew} sx={{ whiteSpace: 'nowrap' }}>
             New
           </Button>
           <Button
             variant="outlined"
+            size="small"
             color="error"
             onClick={handleDelete}
             disabled={!selectedCustomAgentId || saving}
+            sx={{ whiteSpace: 'nowrap' }}
           >
             Delete
           </Button>
           {(loading || saving) && <CircularProgress size={20} />}
-        </Stack>
+        </Box>
 
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={8}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Custom Agent Name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Typography variant="caption" color="text.secondary">
-              Icon
-            </Typography>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <TextField
+            size="small"
+            label="Custom Agent Name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            sx={{ flex: 2, minWidth: 200 }}
+          />
+          <FormControl size="small" sx={{ flex: 0, minWidth: 100 }}>
+            <InputLabel>Icon</InputLabel>
             <Select
-              fullWidth
-              size="small"
+              label="Icon"
               value={icon}
               onChange={(event) => setIcon(event.target.value)}
             >
@@ -538,17 +528,16 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
                 </MenuItem>
               ))}
             </Select>
-          </Grid>
-          <Grid item xs={12}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </Grid>
-        </Grid>
+          </FormControl>
+        </Box>
+
+        <TextField
+          fullWidth
+          size="small"
+          label="Description"
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
 
         <FormControlLabel
           control={
