@@ -25,6 +25,7 @@ from .auth import get_auth_dependency
 from src.lib.agent_studio import (
     get_prompt_catalog,
     PromptCatalog,
+    MODRuleInfo,
     PromptInfo,
     AgentPrompts,
     ChatMessage,
@@ -165,12 +166,39 @@ def _merge_custom_agents_into_catalog(
 
     augmented = catalog.model_copy(deep=True)
     categories_by_name: Dict[str, AgentPrompts] = {c.category: c for c in augmented.categories}
+    parent_agents_by_id: Dict[str, PromptInfo] = {
+        agent.agent_id: agent
+        for category in augmented.categories
+        for agent in category.agents
+    }
 
     for custom in custom_agents:
         parent_entry = AGENT_REGISTRY.get(custom.parent_agent_key, {})
         parent_name = parent_entry.get("name", custom.parent_agent_key)
         category = parent_entry.get("category", "Custom")
         tools = expand_tools_for_agent(custom.parent_agent_key, parent_entry.get("tools", []))
+        parent_prompt_info = parent_agents_by_id.get(custom.parent_agent_key)
+        parent_mod_rules = parent_prompt_info.mod_rules if parent_prompt_info else {}
+        raw_overrides = getattr(custom, "mod_prompt_overrides", None) or {}
+        normalized_overrides = {
+            str(mod_id).strip().upper(): content
+            for mod_id, content in raw_overrides.items()
+            if str(mod_id).strip() and isinstance(content, str) and content.strip()
+        }
+        effective_mod_rules: Dict[str, MODRuleInfo] = {}
+
+        for mod_id, parent_mod_rule in parent_mod_rules.items():
+            override_content = normalized_overrides.get(mod_id.upper())
+            effective_mod_rules[mod_id] = MODRuleInfo(
+                mod_id=mod_id,
+                content=override_content if override_content else parent_mod_rule.content,
+                source_file=parent_mod_rule.source_file,
+                description=parent_mod_rule.description,
+                prompt_id=parent_mod_rule.prompt_id,
+                prompt_version=parent_mod_rule.prompt_version,
+                created_at=parent_mod_rule.created_at,
+                created_by=parent_mod_rule.created_by,
+            )
 
         prompt_info = PromptInfo(
             agent_id=make_custom_agent_id(custom.id),
@@ -178,8 +206,8 @@ def _merge_custom_agents_into_catalog(
             description=custom.description or f"Custom agent based on {parent_name}",
             base_prompt=custom.custom_prompt,
             source_file=f"custom_agent:{custom.id}",
-            has_mod_rules=False,
-            mod_rules={},
+            has_mod_rules=bool(effective_mod_rules),
+            mod_rules=effective_mod_rules,
             tools=tools,
             subcategory="My Custom Agents",
             documentation=None,

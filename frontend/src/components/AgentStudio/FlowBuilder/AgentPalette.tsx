@@ -6,7 +6,7 @@
  * Agents are grouped by subcategory with collapsible sections.
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   Box,
   Typography,
@@ -121,12 +121,13 @@ const SUBCATEGORY_STATE_KEY = 'agent-palette-subcategories'
 
 function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPaletteProps) {
   // Get agent icons from registry metadata
-  const { agents: agentMetadata } = useAgentMetadata()
+  const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
 
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const metadataRefreshKeyRef = useRef('')
 
   // Track which subcategories are expanded (default: all expanded)
   const [expandedSubcategories, setExpandedSubcategories] = useState<Record<string, boolean>>(() => {
@@ -233,6 +234,26 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
         return a.localeCompare(b)
       })
   }, [filteredAgents])
+
+  useEffect(() => {
+    const missingCustomIds = agents
+      .map((agent) => agent.agent_id)
+      .filter((agentId) => agentId.startsWith('ca_') && !agentMetadata[agentId])
+      .sort()
+
+    const refreshKey = missingCustomIds.join(',')
+    if (!refreshKey) {
+      metadataRefreshKeyRef.current = ''
+      return
+    }
+
+    if (metadataRefreshKeyRef.current === refreshKey) {
+      return
+    }
+
+    metadataRefreshKeyRef.current = refreshKey
+    void refreshAgentMetadata()
+  }, [agents, agentMetadata, refreshAgentMetadata])
 
   // Toggle subcategory expansion
   const toggleSubcategory = (subcategory: string) => {
@@ -364,7 +385,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
                             draggable
                             onDragStart={(e) => handleDragStart(e, agent)}
                           >
-                            <AgentIcon>{agentMetadata[agent.agent_id]?.icon || '✨'}</AgentIcon>
+                            <AgentIcon>{agentMetadata[agent.agent_id]?.icon || '❓'}</AgentIcon>
                             <Typography variant="body2" sx={{ fontSize: '0.75rem', flex: 1 }}>
                               {agent.agent_name}
                             </Typography>

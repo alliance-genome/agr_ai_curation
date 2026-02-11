@@ -29,6 +29,9 @@ import {
   revertCustomAgentVersion,
   updateCustomAgent,
 } from '@/services/agentStudioService'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+
+const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
@@ -37,6 +40,7 @@ interface PromptWorkshopProps {
 }
 
 function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: PromptWorkshopProps) {
+  const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
   const [parentAgentId, setParentAgentId] = useState('')
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
@@ -119,6 +123,13 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     () => Object.keys(modPromptOverrides).length > 0,
     [modPromptOverrides]
   )
+
+  const iconOptions = useMemo(() => {
+    const discovered = Object.values(agentMetadata)
+      .map((agent) => agent.icon)
+      .filter((candidate): candidate is string => Boolean(candidate && candidate.trim()))
+    return Array.from(new Set([...FALLBACK_ICON_OPTIONS, ...discovered, icon || '🔧']))
+  }, [agentMetadata, icon])
 
   useEffect(() => {
     if (!initialParentAgentId) return
@@ -291,6 +302,7 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     } else {
       setSelectedCustomAgentId('')
     }
+    await refreshAgentMetadata()
   }
 
   const handleSave = async () => {
@@ -511,14 +523,21 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             />
           </Grid>
           <Grid item xs={12} md={4}>
-            <TextField
+            <Typography variant="caption" color="text.secondary">
+              Icon
+            </Typography>
+            <Select
               fullWidth
               size="small"
-              label="Icon"
               value={icon}
               onChange={(event) => setIcon(event.target.value)}
-              inputProps={{ maxLength: 10 }}
-            />
+            >
+              {iconOptions.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option}
+                </MenuItem>
+              ))}
+            </Select>
           </Grid>
           <Grid item xs={12}>
             <TextField

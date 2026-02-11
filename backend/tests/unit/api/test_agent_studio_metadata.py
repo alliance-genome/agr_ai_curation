@@ -132,7 +132,7 @@ class TestGetRegistryMetadata:
     def test_merge_custom_agents_into_catalog(self, monkeypatch):
         """Catalog augmentation should add custom agents under a custom subcategory."""
         from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo, MODRuleInfo
 
         base_catalog = PromptCatalog(
             categories=[
@@ -145,8 +145,14 @@ class TestGetRegistryMetadata:
                             description="Curate genes",
                             base_prompt="Base prompt",
                             source_file="database",
-                            has_mod_rules=False,
-                            mod_rules={},
+                            has_mod_rules=True,
+                            mod_rules={
+                                "WB": MODRuleInfo(
+                                    mod_id="WB",
+                                    content="Parent WB Rules",
+                                    source_file="database",
+                                )
+                            },
                             tools=[],
                             subcategory="Data Validation",
                         )
@@ -163,6 +169,7 @@ class TestGetRegistryMetadata:
             name="Doug's Gene Agent",
             description="Custom prompt variant",
             custom_prompt="Custom prompt text",
+            mod_prompt_overrides={"WB": "Custom WB Rules"},
             created_at=None,
         )
 
@@ -192,6 +199,8 @@ class TestGetRegistryMetadata:
         all_agents = [a for c in catalog.categories for a in c.agents]
         custom = next(a for a in all_agents if a.agent_name == "Doug's Gene Agent")
         assert custom.subcategory == "My Custom Agents"
+        assert custom.has_mod_rules is True
+        assert custom.mod_rules["WB"].content == "Custom WB Rules"
 
     def test_get_prompt_preview_system_agent(self, monkeypatch):
         """Prompt preview should return base prompt for system agent without mod_id."""
