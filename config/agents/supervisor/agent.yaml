@@ -17,6 +17,10 @@ description: >
   Central orchestrator that analyzes user queries and routes them to the
   appropriate specialized agents based on the nature of the request.
 
+# Category/Subcategory - Routing agents are filtered out of the Flow Builder palette
+category: "Routing"
+subcategory: "System"
+
 # -----------------------------------------------------------------------------
 # Supervisor Routing (Self-routing disabled)
 # -----------------------------------------------------------------------------

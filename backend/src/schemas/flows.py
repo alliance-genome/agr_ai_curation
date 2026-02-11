@@ -212,6 +212,20 @@ class FlowDefinition(BaseModel):
                 raise ValueError("task_input node cannot have incoming edges")
         return self
 
+    # VALIDATOR 8: Reject non-executable agents (e.g., supervisor)
+    _BLOCKED_AGENT_IDS = frozenset({"supervisor"})
+
+    @model_validator(mode="after")
+    def validate_no_blocked_agents(self) -> "FlowDefinition":
+        """Ensure flows don't contain system-only agents like supervisor."""
+        for node in self.nodes:
+            if node.data.agent_id in self._BLOCKED_AGENT_IDS:
+                raise ValueError(
+                    f"Agent '{node.data.agent_id}' cannot be used in flows. "
+                    "It is an internal system agent."
+                )
+        return self
+
 
 # =============================================================================
 # Request Schemas

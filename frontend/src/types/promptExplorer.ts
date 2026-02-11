@@ -61,6 +61,7 @@ export interface PromptInfo {
   tools: string[]
   model?: string
   subcategory?: string  // Subcategory for palette grouping
+  show_in_palette?: boolean  // Whether agent appears in Flow Builder palette (default true)
 
   // Curator-friendly documentation
   documentation?: AgentDocumentation

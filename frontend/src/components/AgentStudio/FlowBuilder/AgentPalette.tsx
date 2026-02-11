@@ -165,15 +165,18 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
         const filteredAgents: AgentInfo[] = catalog.categories
           .filter((cat) => cat.category !== 'Routing')
           .flatMap((cat) =>
-            cat.agents.map((agent) => ({
-              agent_id: agent.agent_id,
-              agent_name: agent.agent_name,
-              description: agent.description,
-              category: cat.category,
-              subcategory: agent.subcategory,
-              has_mod_rules: agent.has_mod_rules,
-              tools: agent.tools,
-            }))
+            cat.agents
+              .filter((agent) => agent.show_in_palette !== false)
+              .map((agent) => ({
+                agent_id: agent.agent_id,
+                agent_name: agent.agent_name,
+                description: agent.description,
+                category: cat.category,
+                subcategory: agent.subcategory,
+                has_mod_rules: agent.has_mod_rules,
+                tools: agent.tools,
+                show_in_palette: agent.show_in_palette,
+              }))
           )
 
         setAgents(filteredAgents)

@@ -1053,6 +1053,10 @@ def _build_catalog() -> PromptCatalog:
 
         # Special case: non-agent entries (like task_input) don't need database prompts
         if config.get("factory") is None:
+            # Resolve show_in_palette from frontend config (defaults to True)
+            frontend_config = config.get("frontend", {})
+            show_in_palette = frontend_config.get("show_in_palette", True)
+
             # Create PromptInfo with no base prompt for display-only entries
             prompt_info = PromptInfo(
                 agent_id=agent_id,
@@ -1064,6 +1068,7 @@ def _build_catalog() -> PromptCatalog:
                 mod_rules={},
                 tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
                 subcategory=config.get("subcategory"),
+                show_in_palette=show_in_palette,
                 documentation=_convert_documentation(config.get("documentation")),
                 prompt_id=None,
                 prompt_version=None,
@@ -1096,6 +1101,10 @@ def _build_catalog() -> PromptCatalog:
                 created_by=prompt.created_by,
             )
 
+        # Resolve show_in_palette from frontend config (defaults to True)
+        frontend_config = config.get("frontend", {})
+        show_in_palette = frontend_config.get("show_in_palette", True)
+
         # Create PromptInfo with version metadata
         prompt_info = PromptInfo(
             agent_id=agent_id,
@@ -1107,6 +1116,7 @@ def _build_catalog() -> PromptCatalog:
             mod_rules=mod_rules,
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
+            show_in_palette=show_in_palette,
             documentation=_convert_documentation(config.get("documentation")),
             # Version metadata from database
             prompt_id=str(system_prompt.id) if system_prompt.id else None,

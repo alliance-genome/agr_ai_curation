@@ -252,8 +252,8 @@ def get_all_agent_tools(
         data = node.get("data", {})
         agent_id = data.get("agent_id")
 
-        # Skip task_input nodes — they're context, not executable agents
-        if node_type == "task_input" or agent_id == "task_input":
+        # Skip non-executable nodes (task_input = context, supervisor = system routing)
+        if node_type == "task_input" or agent_id in ("task_input", "supervisor"):
             continue
 
         step_num += 1
