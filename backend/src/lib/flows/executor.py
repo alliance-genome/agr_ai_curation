@@ -20,7 +20,7 @@ Architecture:
 """
 import logging
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from agents import Agent
 
@@ -40,6 +40,37 @@ logger = logging.getLogger(__name__)
 def _now_iso() -> str:
     """Return current UTC time in ISO format for audit events."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _tool_safe_agent_id(agent_id: str) -> str:
+    """Normalize agent_id into a valid Python identifier segment for tool names."""
+    return agent_id.replace("-", "_")
+
+
+def _resolve_flow_agent_entry(agent_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve system/custom agent_id to execution metadata."""
+    entry = AGENT_REGISTRY.get(agent_id)
+    if entry:
+        return entry
+
+    if not agent_id.startswith("ca_"):
+        return None
+
+    from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
+
+    runtime_info = get_custom_agent_runtime_info(agent_id)
+    if not runtime_info:
+        return None
+
+    parent_entry = AGENT_REGISTRY.get(runtime_info.parent_agent_key)
+    if not parent_entry:
+        return None
+
+    merged = dict(parent_entry)
+    merged["name"] = runtime_info.display_name
+    merged["parent_agent_key"] = runtime_info.parent_agent_key
+    merged["custom_agent_id"] = runtime_info.custom_agent_id
+    return merged
 
 
 def is_agent_in_flow(flow: CurationFlow, agent_id: str) -> bool:
@@ -141,7 +172,7 @@ def flow_requires_document(flow: CurationFlow) -> bool:
         True if any agent in the flow requires a document, False otherwise
     """
     for agent_id in get_flow_agent_ids(flow):
-        entry = AGENT_REGISTRY.get(agent_id)
+        entry = _resolve_flow_agent_entry(agent_id)
         if entry and entry.get("requires_document", False):
             return True
     return False
@@ -227,12 +258,14 @@ def get_all_agent_tools(
 
         step_num += 1
 
-        # Skip if not in registry
-        if not agent_id or agent_id not in AGENT_REGISTRY:
-            logger.warning(f"[Flow Executor] Agent '{agent_id}' in flow but not in registry, skipping")
+        if not agent_id:
+            logger.warning("[Flow Executor] Node is missing agent_id, skipping")
             continue
 
-        entry = AGENT_REGISTRY[agent_id]
+        entry = _resolve_flow_agent_entry(agent_id)
+        if not entry:
+            logger.warning(f"[Flow Executor] Agent '{agent_id}' in flow but not resolvable, skipping")
+            continue
 
         # Check if this agent requires document and we don't have one
         if entry.get("requires_document", False) and not document_id:
@@ -267,12 +300,13 @@ def get_all_agent_tools(
 
         # Generate tool name — unique per step when agent_id appears multiple times
         is_duplicate = agent_id_counts.get(agent_id, 0) > 1
+        tool_agent_segment = _tool_safe_agent_id(agent_id)
         if is_duplicate:
-            tool_name = f"ask_{agent_id}_step{step_num}_specialist"
+            tool_name = f"ask_{tool_agent_segment}_step{step_num}_specialist"
             specialist_name = f"{entry.get('name', agent_id)} (Step {step_num})"
             tool_description = entry.get("description", f"Ask the {entry['name']}") + f" (Step {step_num})"
         else:
-            tool_name = f"ask_{agent_id}_specialist"
+            tool_name = f"ask_{tool_agent_segment}_specialist"
             specialist_name = entry.get("name", agent_id)
             tool_description = entry.get("description", f"Ask the {entry['name']}")
 
@@ -341,15 +375,20 @@ def build_supervisor_instructions(
             continue
 
         step_num += 1
-        agent_name = data.get("agent_display_name", agent_id or "Unknown")
+        agent_name = data.get("agent_display_name")
+        if not agent_name and agent_id:
+            resolved_entry = _resolve_flow_agent_entry(agent_id)
+            agent_name = resolved_entry.get("name") if resolved_entry else None
+        agent_name = agent_name or agent_id or "Unknown"
         step_goal = data.get("step_goal", "")
 
         # Determine tool name for this step (matches get_all_agent_tools naming)
         is_duplicate = agent_id_counts.get(agent_id, 0) > 1
+        tool_agent_segment = _tool_safe_agent_id(agent_id or "")
         if is_duplicate:
-            tool_ref = f"ask_{agent_id}_step{step_num}_specialist"
+            tool_ref = f"ask_{tool_agent_segment}_step{step_num}_specialist"
         else:
-            tool_ref = f"ask_{agent_id}_specialist"
+            tool_ref = f"ask_{tool_agent_segment}_specialist"
 
         # Check if this step's tool was actually created
         # When available_tools is None (backward compat), assume all steps are available

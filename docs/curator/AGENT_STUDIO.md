@@ -8,7 +8,7 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has two main tabs: **Agents** and **Flows**. Both tabs include a chat panel where you can talk with Claude Opus 4.5.
+Agent Studio has three main tabs: **Agents**, **Flows**, and **Prompt Workshop**. All tabs include a chat panel where you can talk with Claude Opus 4.5.
 
 ### Opus Chat (Left Panel)
 
@@ -75,6 +75,58 @@ This is especially valuable when building new flows or troubleshooting ones that
 - "Does this flow make sense for extracting expression data?"
 - "What agent should I add to map anatomy terms to WBbt IDs?"
 - "Why isn't my flow generating the output I expected?"
+
+### Prompt Workshop Tab
+
+Create and test custom versions of agent prompts without affecting the live system.
+
+**What is a Custom Agent?**
+
+A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, test the results, and compare outputs against the original — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+
+**Getting Started**
+
+1. **Select a parent agent** - Choose which system agent you want to customize (e.g., Gene Validation Agent)
+2. **Create a new custom agent** - Click "New" to start with a copy of the parent's prompt
+3. **Edit the prompt** - Modify the instructions to suit your needs
+4. **Save** - Give it a name and save. Each save creates a version you can revert to later.
+
+You can also get here quickly from the Agents tab: click "Clone to Workshop" on any agent's detail panel.
+
+**Quick Test**
+
+Test your custom agent in isolation:
+1. Enter a test input (e.g., a query you'd normally send to this agent)
+2. Optionally specify a document ID and MOD
+3. Click **"Run Test"** to see the output
+
+**Compare with Original**
+
+See how your custom prompt performs against the unmodified parent agent:
+1. Enter a test input
+2. Click **"Compare with Original"** — both agents run in parallel
+3. View results in two modes:
+   - **Semantic Diff** - Sentence-by-sentence alignment with word-level highlighting of additions and removals. Use "Hide unchanged" to focus on differences.
+   - **Raw Outputs** - Side-by-side full text from each agent
+
+**Version History**
+
+Every save creates a new version. You can revert to any previous version if an edit doesn't work out.
+
+**Parent Prompt Staleness**
+
+If the development team updates the parent agent's prompt after you created your custom version, you'll see a warning banner. Click "Rebase" to acknowledge the parent change (your custom prompt text is preserved).
+
+**Using Custom Agents in Flows**
+
+Custom agents appear in the Flow Builder palette under "My Custom Agents". You can drag them into flows just like system agents.
+
+**Chat Integration**
+
+When the Prompt Workshop tab is active, the left-panel chat with Claude is aware of your workshop context — your selected agent, draft prompt, and MOD settings. You can ask Claude to:
+- "Critique this draft and suggest concrete edits"
+- "What 3 quick tests should I run next?"
+- "Help me restructure this prompt for clarity"
 
 ## Discussing a Chat Response
 

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from agents import Agent
+from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 
 # Config-driven registry builder (loads from YAML + convention-based factory discovery)
 from .registry_builder import build_agent_registry, AGENT_DOCUMENTATION
@@ -40,6 +41,30 @@ logger = logging.getLogger(__name__)
 class MissingRequiredParamError(ValueError):
     """Raised when a required parameter is missing for an agent factory."""
     pass
+
+
+def get_prompt_key_for_agent(registry_agent_id: str) -> str:
+    """Resolve a registry agent ID/alias to canonical prompt cache key (folder name)."""
+    if registry_agent_id == "task_input":
+        return "task_input"
+
+    # Canonical key is the folder name in config/agents/*.
+    by_folder = get_agent_by_folder(registry_agent_id)
+    if by_folder:
+        return by_folder.folder_name
+
+    by_agent_id = get_agent_definition(registry_agent_id)
+    if by_agent_id:
+        return by_agent_id.folder_name
+
+    entry = AGENT_REGISTRY.get(registry_agent_id)
+    if entry:
+        supervisor = entry.get("supervisor", {})
+        tool_name = supervisor.get("tool_name")
+        if isinstance(tool_name, str) and tool_name.startswith("ask_") and tool_name.endswith("_specialist"):
+            return tool_name[len("ask_"):-len("_specialist")]
+
+    raise ValueError(f"Unknown agent_id: {registry_agent_id}")
 
 
 def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[AgentDocumentation]:
@@ -1010,12 +1035,13 @@ def _build_catalog() -> PromptCatalog:
         agent_name, prompt_type, mod_key = parts[0], parts[1], parts[2]
 
         if agent_name not in prompts_by_agent:
-            prompts_by_agent[agent_name] = {"system": None, "mod_rules": {}}
+            prompts_by_agent[agent_name] = {"system": None, "group_rules": {}}
 
         if prompt_type == "system" and mod_key == "base":
             prompts_by_agent[agent_name]["system"] = prompt
-        elif prompt_type == "mod_rules" and mod_key != "base":
-            prompts_by_agent[agent_name]["mod_rules"][mod_key] = prompt
+        elif prompt_type in {"group_rules", "mod_rules"} and mod_key != "base":
+            # Support legacy mod_rules keys during migration.
+            prompts_by_agent[agent_name]["group_rules"][mod_key] = prompt
 
     # Build catalog by combining AGENT_REGISTRY metadata with database prompts
     categories_map: Dict[str, List[PromptInfo]] = {}
@@ -1056,7 +1082,7 @@ def _build_catalog() -> PromptCatalog:
 
         # Build MOD rules dict from database prompts
         mod_rules: Dict[str, MODRuleInfo] = {}
-        for mod_id, prompt in agent_prompts.get("mod_rules", {}).items():
+        for mod_id, prompt in agent_prompts.get("group_rules", {}).items():
             available_mods.add(mod_id)
             mod_rules[mod_id] = MODRuleInfo(
                 mod_id=mod_id,
@@ -1241,6 +1267,33 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
         disease_agent = get_agent_by_id("disease", **context)
         # -> create_disease_agent()  # No params needed
     """
+    if agent_id.startswith("ca_"):
+        from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
+        from src.lib.prompts.context import PromptOverride, set_prompt_override, clear_prompt_override
+
+        runtime_info = get_custom_agent_runtime_info(agent_id)
+        if not runtime_info:
+            raise ValueError(f"Unknown custom agent_id: {agent_id}")
+        if not runtime_info.parent_exists:
+            raise ValueError(
+                f"Custom agent '{agent_id}' cannot run because parent agent "
+                f"'{runtime_info.parent_agent_key}' is unavailable"
+            )
+
+        parent_kwargs = dict(kwargs)
+        if not runtime_info.include_mod_rules:
+            parent_kwargs["active_groups"] = []
+
+        set_prompt_override(PromptOverride(
+            content=runtime_info.custom_prompt,
+            agent_name=runtime_info.parent_agent_key,
+            custom_agent_id=str(runtime_info.custom_agent_uuid),
+        ))
+        try:
+            return get_agent_by_id(runtime_info.parent_agent_key, **parent_kwargs)
+        finally:
+            clear_prompt_override()
+
     entry = AGENT_REGISTRY.get(agent_id)
     if not entry:
         valid_ids = list(AGENT_REGISTRY.keys())
@@ -1286,6 +1339,19 @@ def get_agent_metadata(agent_id: str) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not in the registry
     """
+    if agent_id.startswith("ca_"):
+        from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
+
+        runtime_info = get_custom_agent_runtime_info(agent_id)
+        if not runtime_info:
+            raise ValueError(f"Unknown agent_id: {agent_id}")
+        return {
+            "agent_id": agent_id,
+            "display_name": runtime_info.display_name,
+            "requires_document": runtime_info.requires_document,
+            "required_params": ["document_id"] if runtime_info.requires_document else [],
+        }
+
     entry = AGENT_REGISTRY.get(agent_id)
     if not entry:
         raise ValueError(f"Unknown agent_id: {agent_id}")

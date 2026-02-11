@@ -39,13 +39,14 @@ import InputIcon from '@mui/icons-material/Input'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import FactCheckIcon from '@mui/icons-material/FactCheck'
 import OutputIcon from '@mui/icons-material/Output'
+import ScienceIcon from '@mui/icons-material/Science'
 
 import AgentDetailsPanel from './AgentDetailsPanel'
 import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
 
 // Define the display order for subcategories (matching Flow Builder)
 // System is added for Supervisor (not shown in Flow Builder)
-const SUBCATEGORY_ORDER = ['System', 'Input', 'PDF Extraction', 'Data Validation', 'Output']
+const SUBCATEGORY_ORDER = ['System', 'Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents']
 
 // Map subcategories to their display icons
 const SubcategoryIcon: Record<string, JSX.Element> = {
@@ -54,6 +55,7 @@ const SubcategoryIcon: Record<string, JSX.Element> = {
   'PDF Extraction': <PictureAsPdfIcon fontSize="small" />,
   'Data Validation': <FactCheckIcon fontSize="small" />,
   Output: <OutputIcon fontSize="small" />,
+  'My Custom Agents': <ScienceIcon fontSize="small" />,
 }
 
 const BrowserContainer = styled(Box)(({ theme }) => ({
@@ -113,6 +115,7 @@ interface AgentBrowserProps {
   onModSelect: (modId: string | null) => void
   onViewModeChange: (mode: 'base' | 'mod' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
+  onCloneToWorkshop?: (agentId: string) => void
 }
 
 function AgentBrowser({
@@ -124,6 +127,7 @@ function AgentBrowser({
   onModSelect,
   onViewModeChange,
   onDiscussWithClaude,
+  onCloneToWorkshop,
 }: AgentBrowserProps) {
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -335,6 +339,7 @@ function AgentBrowser({
             onModSelect={onModSelect}
             onViewModeChange={onViewModeChange}
             onDiscussWithClaude={onDiscussWithClaude}
+            onCloneToWorkshop={onCloneToWorkshop}
           />
         </DetailsContainer>
       </ContentArea>

@@ -17,12 +17,14 @@ import { styled, alpha } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import DescriptionIcon from '@mui/icons-material/Description'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import ScienceIcon from '@mui/icons-material/Science'
 
 import OpusChat from '@/components/AgentStudio/OpusChat'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
+import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
 import { fetchPromptCatalog } from '@/services/agentStudioService'
-import type { PromptCatalog, ChatContext } from '@/types/promptExplorer'
+import type { PromptCatalog, ChatContext, PromptWorkshopContext } from '@/types/promptExplorer'
 
 const Root = styled(Box)(({ theme }) => ({
   flex: 1,
@@ -105,7 +107,7 @@ const TabContent = styled(Box)(() => ({
   overflow: 'hidden',
 }))
 
-type TabValue = 'agents' | 'flows'
+type TabValue = 'agents' | 'flows' | 'prompt_workshop'
 
 // localStorage key for tab persistence
 const AGENT_STUDIO_TAB_KEY = 'agent-studio-tab'
@@ -126,7 +128,7 @@ function AgentStudioPage() {
       localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agents')
       return 'agents'
     }
-    return (stored === 'agents' || stored === 'flows') ? stored : 'agents'
+    return (stored === 'agents' || stored === 'flows' || stored === 'prompt_workshop') ? stored : 'agents'
   })
 
   // Persist tab changes
@@ -138,6 +140,8 @@ function AgentStudioPage() {
   const [selectedModId, setSelectedModId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'base' | 'mod' | 'combined'>('base')
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
+  const [promptWorkshopParentAgentId, setPromptWorkshopParentAgentId] = useState<string | null>(null)
+  const [promptWorkshopContext, setPromptWorkshopContext] = useState<PromptWorkshopContext | null>(null)
   const [flowState, setFlowState] = useState<FlowState | null>(null)
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
@@ -168,11 +172,23 @@ function AgentStudioPage() {
     loadData()
   }, [])
 
-  // Build chat context for Opus (includes active tab and flow state)
+  const workshopSelectedAgentId = promptWorkshopContext?.custom_agent_id || promptWorkshopContext?.parent_agent_id
+  const workshopSelectedModId = promptWorkshopContext?.selected_mod_id
+
+  const effectiveSelectedAgentId =
+    activeTab === 'prompt_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
+  const effectiveSelectedModId =
+    activeTab === 'prompt_workshop' ? workshopSelectedModId : (selectedModId || undefined)
+  const effectiveViewMode =
+    activeTab === 'prompt_workshop'
+      ? (effectiveSelectedModId ? 'combined' : 'base')
+      : viewMode
+
+  // Build chat context for Opus (includes active tab, flow state, and prompt workshop state)
   const chatContext: ChatContext = {
-    selected_agent_id: selectedAgentId || undefined,
-    selected_mod_id: selectedModId || undefined,
-    view_mode: viewMode,
+    selected_agent_id: effectiveSelectedAgentId,
+    selected_mod_id: effectiveSelectedModId,
+    view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
     // Flow context (when on flows tab)
     active_tab: activeTab,
@@ -181,7 +197,15 @@ function AgentStudioPage() {
       nodes: flowState.nodes,
       edges: flowState.edges,
     } : undefined,
+    prompt_workshop: activeTab === 'prompt_workshop' ? (promptWorkshopContext || undefined) : undefined,
   }
+
+  const selectedAgentForChat =
+    catalog && effectiveSelectedAgentId
+      ? catalog.categories
+          .flatMap((c) => c.agents)
+          .find((a) => a.agent_id === effectiveSelectedAgentId)
+      : undefined
 
   // Handle agent selection from browser
   const handleAgentSelect = (agentId: string) => {
@@ -249,9 +273,17 @@ OUTPUT:
     const message = `I'd like to discuss the **${agentName}** agent. Help me understand:
 1. What this agent does and when it's used
 2. Its capabilities and limitations
-3. How its prompts are structured`
+3. How its prompts are structured
+
+Agent ID: ${agentId}`
 
     setDiscussMessage(message)
+  }, [])
+
+  const handleCloneToWorkshop = useCallback((agentId: string) => {
+    setPromptWorkshopParentAgentId(agentId)
+    setActiveTab('prompt_workshop')
+    localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'prompt_workshop')
   }, [])
 
   // Clear discuss message after it's been sent
@@ -296,13 +328,7 @@ OUTPUT:
           <PanelSection sx={{ pr: 1 }}>
             <OpusChat
               context={chatContext}
-              selectedAgent={
-                catalog && selectedAgentId
-                  ? catalog.categories
-                      .flatMap((c) => c.agents)
-                      .find((a) => a.agent_id === selectedAgentId)
-                  : undefined
-              }
+              selectedAgent={selectedAgentForChat}
               verifyMessage={verifyMessage}
               onVerifyMessageSent={handleVerifyMessageSent}
               discussMessage={discussMessage}
@@ -334,6 +360,12 @@ OUTPUT:
                   icon={<AccountTreeIcon sx={{ fontSize: 18 }} />}
                   iconPosition="start"
                 />
+                <StyledTab
+                  value="prompt_workshop"
+                  label="Prompt Workshop"
+                  icon={<ScienceIcon sx={{ fontSize: 18 }} />}
+                  iconPosition="start"
+                />
               </StyledTabs>
 
               <TabContent>
@@ -347,6 +379,7 @@ OUTPUT:
                     onModSelect={handleModSelect}
                     onViewModeChange={setViewMode}
                     onDiscussWithClaude={handleDiscussWithClaude}
+                    onCloneToWorkshop={handleCloneToWorkshop}
                   />
                 )}
                 {activeTab === 'flows' && (
@@ -355,6 +388,13 @@ OUTPUT:
                     onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
                     onFlowChange={handleFlowChange}
                     onVerifyRequest={handleVerifyRequest}
+                  />
+                )}
+                {activeTab === 'prompt_workshop' && catalog && (
+                  <PromptWorkshop
+                    catalog={catalog}
+                    initialParentAgentId={promptWorkshopParentAgentId}
+                    onContextChange={setPromptWorkshopContext}
                   />
                 )}
               </TabContent>

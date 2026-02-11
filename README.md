@@ -12,6 +12,7 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 - **Batch Processing** - Process multiple documents through saved workflows
 - **Real-time Audit Trail** - Full transparency into AI decisions and database queries
 - **Agent Studio** - Browse agent prompts, understand AI behavior, and chat with Claude Opus
+- **Prompt Workshop** - Clone agent prompts, iterate on custom versions, and compare outputs side-by-side
 
 ## Quick Start
 

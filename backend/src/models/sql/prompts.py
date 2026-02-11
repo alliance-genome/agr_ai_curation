@@ -114,9 +114,12 @@ class PromptExecutionLog(Base):
         UUID(as_uuid=True), nullable=True
     )  # If part of a flow (FK added when curation_flows exists)
 
-    # Prompt reference
+    # Prompt reference (either system prompt template OR custom agent)
     prompt_template_id = Column(
-        UUID(as_uuid=True), ForeignKey("prompt_templates.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("prompt_templates.id"), nullable=True
+    )
+    custom_agent_id = Column(
+        UUID(as_uuid=True), ForeignKey("custom_agents.id"), nullable=True
     )
     agent_name = Column(String(100), nullable=False)  # Denormalized for easy querying
     prompt_type = Column(String(50), nullable=False)  # 'system' or 'group_rules'
@@ -129,6 +132,7 @@ class PromptExecutionLog(Base):
     __table_args__ = (
         Index("idx_prompt_exec_trace", "trace_id"),
         Index("idx_prompt_exec_session", "session_id"),
+        Index("idx_prompt_exec_custom_agent", "custom_agent_id"),
     )
 
     def __repr__(self) -> str:

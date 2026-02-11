@@ -82,6 +82,7 @@ import {
   findNearestExtractor,
   validatorNeedsConfiguration,
 } from './smartDefaultUtils'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 
 /**
  * Helper to create initial task_input node for new flows.
@@ -109,7 +110,9 @@ const createInitialTaskInputNode = (): AgentNode => ({
  */
 const computeValidationErrors = (
   currentNodes: AgentNode[],
-  currentEdges: { source: string; target: string }[]
+  currentEdges: { source: string; target: string }[],
+  isValidationPredicate: (agentId: string) => boolean = isValidationAgent,
+  isExtractionPredicate: (agentId: string) => boolean = isExtractionAgent
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
@@ -124,8 +127,14 @@ const computeValidationErrors = (
 
   // Check all validators for ambiguous input sources
   for (const node of currentNodes) {
-    if (isValidationAgent(node.data.agent_id)) {
-      const result = validatorNeedsConfiguration(node.id, currentNodes, currentEdges)
+    if (isValidationPredicate(node.data.agent_id)) {
+      const result = validatorNeedsConfiguration(
+        node.id,
+        currentNodes,
+        currentEdges,
+        isExtractionPredicate,
+        isValidationPredicate
+      )
       if (result.needsConfig) {
         errors.push({
           nodeId: node.id,
@@ -298,6 +307,26 @@ const edgeTypes = {
 }
 
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
+  const { agents: agentMetadata } = useAgentMetadata()
+
+  const isExtractionAgentDynamic = useCallback((agentId: string): boolean => {
+    if (isExtractionAgent(agentId)) return true
+    const metadata = agentMetadata[agentId]
+    if (!metadata) return false
+    const category = (metadata.category || '').toLowerCase()
+    const subcategory = (metadata.subcategory || '').toLowerCase()
+    return category.includes('extract') || subcategory.includes('pdf extraction')
+  }, [agentMetadata])
+
+  const isValidationAgentDynamic = useCallback((agentId: string): boolean => {
+    if (isValidationAgent(agentId)) return true
+    const metadata = agentMetadata[agentId]
+    if (!metadata) return false
+    const category = (metadata.category || '').toLowerCase()
+    const subcategory = (metadata.subcategory || '').toLowerCase()
+    return category.includes('validation') || subcategory.includes('data validation')
+  }, [agentMetadata])
+
   // React Flow state
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
@@ -487,7 +516,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const revalidateValidators = useCallback(() => {
     setNodes(currentNodes => {
       const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
-      const errors = computeValidationErrors(currentNodes as AgentNode[], edgeData)
+      const errors = computeValidationErrors(
+        currentNodes as AgentNode[],
+        edgeData,
+        isValidationAgentDynamic,
+        isExtractionAgentDynamic
+      )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
       return currentNodes.map(node => {
@@ -508,7 +542,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         return node
       })
     })
-  }, [setNodes, edges]) // Only depends on setNodes and edges
+  }, [setNodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic]) // Depends on edge topology and agent classification
 
   // Keep ref in sync for use in loadFlow (which is defined before this callback)
   useEffect(() => {
@@ -572,7 +606,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
     // Compute validation errors fresh (don't rely on stale hasError state)
     const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
-    const validationErrors = computeValidationErrors(nodes as AgentNode[], edgeData)
+    const validationErrors = computeValidationErrors(
+      nodes as AgentNode[],
+      edgeData,
+      isValidationAgentDynamic,
+      isExtractionAgentDynamic
+    )
     if (validationErrors.length > 0) {
       // Find the first error node and select it
       const firstError = validationErrors[0]
@@ -673,7 +712,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       if (params.target) {
         const targetNode = nodes.find((n) => n.id === params.target)
         if (targetNode) {
-          const isExtractor = isExtractionAgent(targetNode.data.agent_id)
+          const isExtractor = isExtractionAgentDynamic(targetNode.data.agent_id)
           const configState = inputConfigState[params.target] // undefined = 'unset'
           const shouldSkipAutoSwitch = isExtractor || configState === 'auto' || configState === 'manual'
 
@@ -689,7 +728,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         }
       }
     },
-    [setEdges, setNodes, nodes, inputConfigState]
+    [setEdges, setNodes, nodes, inputConfigState, isExtractionAgentDynamic]
   )
 
   // Handle node selection
@@ -759,9 +798,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           inputSource = 'user_query'
         } else if (agentId === 'pdf') {
           inputSource = 'previous_output'
-        } else if (isValidationAgent(agentId)) {
+        } else if (isValidationAgentDynamic(agentId)) {
           // Smart default: Validators should use extractor output, not previous validator output
-          const extractor = findNearestExtractor(newNodeId, nodes as AgentNode[], edges)
+          const extractor = findNearestExtractor(
+            newNodeId,
+            nodes as AgentNode[],
+            edges,
+            isExtractionAgentDynamic
+          )
           if (extractor) {
             inputSource = 'custom'
             customInput = `{{${extractor.data.output_key}}}`
@@ -790,7 +834,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         // Set config state based on whether smart defaults were applied
         if (shouldMarkAutoConfigured) {
           setInputConfigState(prev => ({ ...prev, [newNodeId]: 'auto' }))
-        } else if (!isTaskInput && !isExtractionAgent(agentId)) {
+        } else if (!isTaskInput && !isExtractionAgentDynamic(agentId)) {
           // Non-special agents without smart defaults start as 'unset'
           setInputConfigState(prev => ({ ...prev, [newNodeId]: 'unset' }))
         }
@@ -798,7 +842,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         logger.error('Failed to parse drag data', err as Error, { component: 'FlowBuilder' })
       }
     },
-    [reactFlowInstance, setNodes, getNodeId, nodes, edges]
+    [reactFlowInstance, setNodes, getNodeId, nodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic]
   )
 
   // Handle node data update from editor
@@ -833,8 +877,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setSelectedNode(null)
     // Clean up config state for deleted node (prevents memory leak)
     setInputConfigState(prev => {
-      const { [nodeId]: _, ...rest } = prev
-      return rest
+      const next = { ...prev }
+      delete next[nodeId]
+      return next
     })
   }, [setNodes, setEdges])
 

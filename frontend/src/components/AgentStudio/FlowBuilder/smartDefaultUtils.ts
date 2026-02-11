@@ -34,6 +34,8 @@ export const isExtractionAgent = (agentId: string): boolean =>
 export const isValidationAgent = (agentId: string): boolean =>
   VALIDATION_AGENTS.includes(agentId)
 
+type AgentPredicate = (agentId: string) => boolean
+
 // =============================================================================
 // Extractor Finding Logic
 // =============================================================================
@@ -50,7 +52,8 @@ export const isValidationAgent = (agentId: string): boolean =>
 export const findNearestExtractor = (
   targetNodeId: string,
   nodes: AgentNode[],
-  edges: { source: string; target: string }[]
+  edges: { source: string; target: string }[],
+  isExtractionPredicate: AgentPredicate = isExtractionAgent
 ): AgentNode | null => {
   // Build lookup maps
   const nodesById = new Map(nodes.map(n => [n.id, n]))
@@ -72,7 +75,7 @@ export const findNearestExtractor = (
     const node = nodesById.get(nodeId)
     if (!node) continue
 
-    if (isExtractionAgent(node.data.agent_id)) {
+    if (isExtractionPredicate(node.data.agent_id)) {
       return node
     }
 
@@ -83,7 +86,7 @@ export const findNearestExtractor = (
 
   // Fallback: find any extractor in the graph (most recent by node ID)
   const extractors = nodes
-    .filter(n => isExtractionAgent(n.data.agent_id))
+    .filter(n => isExtractionPredicate(n.data.agent_id))
     .sort((a, b) => {
       // Sort by node ID number descending (most recent first)
       const aNum = parseInt(a.id.replace('node_', '')) || 0
@@ -108,8 +111,11 @@ export const countExtractors = (nodes: AgentNode[]): number => {
 /**
  * Get all extraction agents in the flow.
  */
-export const getExtractors = (nodes: AgentNode[]): AgentNode[] => {
-  return nodes.filter(n => isExtractionAgent(n.data.agent_id))
+export const getExtractors = (
+  nodes: AgentNode[],
+  isExtractionPredicate: AgentPredicate = isExtractionAgent
+): AgentNode[] => {
+  return nodes.filter(n => isExtractionPredicate(n.data.agent_id))
 }
 
 /**
@@ -138,14 +144,16 @@ export const validatorHasExplicitExtractorInput = (
 export const validatorNeedsConfiguration = (
   validatorId: string,
   nodes: AgentNode[],
-  edges: { source: string; target: string }[]
+  edges: { source: string; target: string }[],
+  isExtractionPredicate: AgentPredicate = isExtractionAgent,
+  isValidationPredicate: AgentPredicate = isValidationAgent
 ): { needsConfig: boolean; reason?: string } => {
   const validator = nodes.find(n => n.id === validatorId)
-  if (!validator || !isValidationAgent(validator.data.agent_id)) {
+  if (!validator || !isValidationPredicate(validator.data.agent_id)) {
     return { needsConfig: false }
   }
 
-  const extractors = getExtractors(nodes)
+  const extractors = getExtractors(nodes, isExtractionPredicate)
 
   // If validator already has explicit extractor input, it's configured
   if (validatorHasExplicitExtractorInput(validator, extractors)) {
@@ -176,7 +184,7 @@ export const validatorNeedsConfiguration = (
       const node = nodesById.get(nodeId)
       if (!node) continue
 
-      if (isExtractionAgent(node.data.agent_id)) {
+      if (isExtractionPredicate(node.data.agent_id)) {
         return true // Found connected extractor
       }
 

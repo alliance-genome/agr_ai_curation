@@ -1,4 +1,5 @@
 """Tests for flow executor custom_instructions wiring."""
+import uuid
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,7 @@ from src.lib.flows.executor import (
     build_supervisor_instructions,
     create_flow_supervisor,
 )
+from src.lib.agent_studio.custom_agent_service import CustomAgentRuntimeInfo
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +551,34 @@ class TestGetAllAgentToolsCreatedNames:
         assert created_names == {"ask_gene_specialist"}
         assert "ask_pdf_step1_specialist" not in created_names
         assert "ask_pdf_step3_specialist" not in created_names
+
+    @patch("src.lib.agent_studio.custom_agent_service.get_custom_agent_runtime_info")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
+    def test_custom_agent_tool_names_are_sanitized(
+        self, mock_get_agent, mock_streaming, mock_runtime_info
+    ):
+        """Custom agent IDs with hyphens should be normalized for tool naming."""
+        custom_id = "ca_11111111-2222-3333-4444-555555555555"
+        mock_runtime_info.return_value = CustomAgentRuntimeInfo(
+            custom_agent_uuid=uuid.UUID("11111111-2222-3333-4444-555555555555"),
+            custom_agent_id=custom_id,
+            parent_agent_key="gene",
+            display_name="Doug's Gene Agent",
+            custom_prompt="Custom prompt",
+            include_mod_rules=True,
+            requires_document=False,
+            parent_exists=True,
+        )
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([_agent_node("n1", custom_id)])
+        tools, created_names = get_all_agent_tools(flow)
+
+        assert len(tools) == 1
+        assert "ask_ca_11111111_2222_3333_4444_555555555555_specialist" in created_names
 
 
 # ===========================================================================

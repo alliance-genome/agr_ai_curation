@@ -36,6 +36,7 @@ import {
 import { styled, alpha } from '@mui/material/styles'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ChatIcon from '@mui/icons-material/Chat'
+import ScienceIcon from '@mui/icons-material/Science'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -154,6 +155,7 @@ interface AgentDetailsPanelProps {
   onModSelect: (modId: string | null) => void
   onViewModeChange: (mode: 'base' | 'mod' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
+  onCloneToWorkshop?: (agentId: string) => void
 }
 
 function AgentDetailsPanel({
@@ -163,6 +165,7 @@ function AgentDetailsPanel({
   onModSelect,
   onViewModeChange,
   onDiscussWithClaude,
+  onCloneToWorkshop,
 }: AgentDetailsPanelProps) {
   const [activeTab, setActiveTab] = useState<TabValue>('overview')
   const [combinedPrompt, setCombinedPrompt] = useState<string | null>(null)
@@ -226,6 +229,12 @@ function AgentDetailsPanel({
     }
   }
 
+  const handleCloneToWorkshop = () => {
+    if (agent && onCloneToWorkshop) {
+      onCloneToWorkshop(agent.agent_id)
+    }
+  }
+
   // Empty state when no agent selected
   if (!agent) {
     return (
@@ -241,6 +250,7 @@ function AgentDetailsPanel({
   }
 
   const { documentation } = agent
+  const canCloneToWorkshop = !agent.agent_id.startsWith('ca_')
 
   return (
     <PanelContainer>
@@ -255,15 +265,28 @@ function AgentDetailsPanel({
               {documentation?.summary || agent.description}
             </Typography>
           </Box>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<ChatIcon />}
-            onClick={handleDiscuss}
-            sx={{ whiteSpace: 'nowrap' }}
-          >
-            Discuss with Claude
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            {canCloneToWorkshop && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<ScienceIcon />}
+                onClick={handleCloneToWorkshop}
+                sx={{ whiteSpace: 'nowrap' }}
+              >
+                Clone to Workshop
+              </Button>
+            )}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<ChatIcon />}
+              onClick={handleDiscuss}
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              Discuss with Claude
+            </Button>
+          </Box>
         </HeaderContent>
 
         {/* Tools chips - clickable for details */}

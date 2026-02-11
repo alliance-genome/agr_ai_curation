@@ -44,6 +44,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 - **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus 4.5
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
+- **Prompt Workshop** - Create custom agent prompts, test them, and compare outputs against the original
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -93,6 +94,13 @@ Tools for understanding, building, and improving AI behavior:
 - Output to chat, CSV, TSV, or JSON files
 - Use "Verify with Claude" to check your flow before running
 - Save and reuse flows across documents
+
+**Prompt Workshop Tab**
+- Clone any system agent's prompt to create a custom version
+- Edit instructions and test with Quick Test
+- Compare custom agent output against the original side-by-side
+- Version history with revert support
+- Custom agents appear in Flow Builder for use in workflows
 
 **Discuss Responses**
 - Use triple-dot menu on any chat response to open it in Agent Studio

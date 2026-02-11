@@ -14,7 +14,7 @@ import os
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, logs, flows, files, maintenance, batch
+from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_pdf_storage_path
@@ -394,6 +394,7 @@ app.include_router(maintenance.router, tags=["Maintenance"])
 
 # Agent Studio API endpoints (under /api/agent-studio)
 app.include_router(agent_studio.router, tags=["Agent Studio"])
+app.include_router(agent_studio_custom.router, tags=["Agent Studio"])
 
 # Flow CRUD API endpoints (under /api/flows)
 app.include_router(flows.router, tags=["Flows"])

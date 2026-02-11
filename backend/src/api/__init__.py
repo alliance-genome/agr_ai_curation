@@ -10,6 +10,7 @@ from . import health
 from . import pdf_viewer
 from . import feedback
 from . import maintenance
+from . import agent_studio_custom
 
 __all__ = [
     "documents",
@@ -22,4 +23,5 @@ __all__ = [
     "pdf_viewer",
     "feedback",
     "maintenance",
+    "agent_studio_custom",
 ]

@@ -1,6 +1,7 @@
 """SQL models module."""
 
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
+from .custom_agent import CustomAgent, CustomAgentVersion
 from .curation_flow import CurationFlow
 from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
@@ -19,6 +20,8 @@ __all__ = [
     "BatchDocument",
     "BatchStatus",
     "BatchDocumentStatus",
+    "CustomAgent",
+    "CustomAgentVersion",
     "CurationFlow",
     "FileOutput",
     "FileType",

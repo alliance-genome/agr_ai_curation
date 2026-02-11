@@ -160,10 +160,11 @@ check_*.py
 delete_*.py
 find_*.py
 *_debug.py
-*_test.py
+/*_test.py
 SECTION_HIERARCHY_PLAN.md
 TEST_OVERHAUL_PLAN.md
 CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
+prompt_workshop_plan.md
 
 # Claude Code settings
 .claude/
@@ -186,3 +187,4 @@ external_review_prompt.md
 /*.txt
 # Presentation files
 presentation/
+.collab/

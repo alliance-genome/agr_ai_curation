@@ -36,7 +36,7 @@ import { fetchPromptCatalog } from '@/services/agentStudioService'
 import logger from '@/services/logger'
 
 // Define the display order for subcategories
-const SUBCATEGORY_ORDER = ['Input', 'PDF Extraction', 'Data Validation', 'Output']
+const SUBCATEGORY_ORDER = ['Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents']
 
 const PaletteContainer = styled(Paper)(({ theme }) => ({
   backgroundColor: alpha(theme.palette.background.paper, 0.95),

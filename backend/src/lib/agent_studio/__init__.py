@@ -30,7 +30,7 @@ from .models import (
     ErrorResponse,
 )
 
-from .catalog_service import PromptCatalogService, get_prompt_catalog
+from .catalog_service import PromptCatalogService, get_prompt_catalog, get_prompt_key_for_agent
 from .trace_context_service import (
     TraceContextError,
     TraceNotFoundError,
@@ -84,6 +84,7 @@ __all__ = [
     # Services
     "PromptCatalogService",
     "get_prompt_catalog",
+    "get_prompt_key_for_agent",
     # Exceptions
     "TraceContextError",
     "TraceNotFoundError",

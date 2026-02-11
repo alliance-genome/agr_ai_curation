@@ -10,18 +10,23 @@ import json
 import logging
 import os
 import re
+import asyncio
+import uuid
 from typing import Any, Dict, List, Optional
 
 import anthropic
 import boto3
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
 from src.lib.agent_studio import (
     get_prompt_catalog,
     PromptCatalog,
+    PromptInfo,
+    AgentPrompts,
     ChatMessage,
     ChatContext,
     TraceContext,
@@ -40,6 +45,18 @@ from src.lib.agent_studio import (
     clear_current_flow_context,
 )
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
+from src.lib.agent_studio.custom_agent_service import (
+    CustomAgentAccessError,
+    CustomAgentNotFoundError,
+    get_custom_agent_for_user,
+    list_custom_agents_for_user,
+    make_custom_agent_id,
+    parse_custom_agent_id,
+)
+from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
+from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
+from src.lib.context import set_current_session_id, set_current_user_id
+from src.lib.openai_agents import run_agent_streamed
 from src.models.sql import get_db
 from src.services.user_service import set_global_user_from_cognito
 
@@ -77,6 +94,26 @@ class CombinedPromptResponse(BaseModel):
     combined_prompt: str
 
 
+class PromptPreviewResponse(BaseModel):
+    """Response with resolved prompt text for preview/testing."""
+
+    agent_id: str
+    prompt: str
+    mod_id: Optional[str] = None
+    source: str
+    parent_agent_key: Optional[str] = None
+    include_mod_rules: Optional[bool] = None
+
+
+class AgentTestRequest(BaseModel):
+    """Request for isolated agent test streaming."""
+
+    input: str
+    mod_id: Optional[str] = None
+    document_id: Optional[str] = None
+    session_id: Optional[str] = None
+
+
 class ManualSuggestionRequest(BaseModel):
     """Request to manually submit a prompt suggestion."""
     agent_id: Optional[str] = None  # Optional for trace-based/general feedback
@@ -109,6 +146,57 @@ class RegistryMetadataResponse(BaseModel):
     agents: Dict[str, AgentMetadata]
 
 
+def _merge_custom_agents_into_catalog(
+    catalog: PromptCatalog,
+    auth_user: Any,
+    db: Any,
+) -> PromptCatalog:
+    """Return catalog augmented with the current user's active custom agents."""
+    if not isinstance(auth_user, dict) or not hasattr(db, "query"):
+        return catalog
+
+    from src.lib.agent_studio.catalog_service import AGENT_REGISTRY, expand_tools_for_agent
+
+    db_user = set_global_user_from_cognito(db, auth_user)
+    custom_agents = list_custom_agents_for_user(db, db_user.id)
+    if not custom_agents:
+        return catalog
+
+    augmented = catalog.model_copy(deep=True)
+    categories_by_name: Dict[str, AgentPrompts] = {c.category: c for c in augmented.categories}
+
+    for custom in custom_agents:
+        parent_entry = AGENT_REGISTRY.get(custom.parent_agent_key, {})
+        parent_name = parent_entry.get("name", custom.parent_agent_key)
+        category = parent_entry.get("category", "Custom")
+        tools = expand_tools_for_agent(custom.parent_agent_key, parent_entry.get("tools", []))
+
+        prompt_info = PromptInfo(
+            agent_id=make_custom_agent_id(custom.id),
+            agent_name=custom.name,
+            description=custom.description or f"Custom agent based on {parent_name}",
+            base_prompt=custom.custom_prompt,
+            source_file=f"custom_agent:{custom.id}",
+            has_mod_rules=False,
+            mod_rules={},
+            tools=tools,
+            subcategory="My Custom Agents",
+            documentation=None,
+            prompt_id=str(custom.id),
+            prompt_version=None,
+            created_at=custom.created_at,
+            created_by=None,
+        )
+
+        if category not in categories_by_name:
+            categories_by_name[category] = AgentPrompts(category=category, agents=[])
+        categories_by_name[category].agents.append(prompt_info)
+
+    augmented.categories = [categories_by_name[name] for name in sorted(categories_by_name.keys())]
+    augmented.total_agents = sum(len(category.agents) for category in augmented.categories)
+    return augmented
+
+
 # ============================================================================
 # Registry Metadata Endpoints
 # ============================================================================
@@ -119,7 +207,10 @@ class RegistryMetadataResponse(BaseModel):
     summary="Get agent metadata for frontend",
     description="Returns icons, names, and categories for all agents from AGENT_REGISTRY.",
 )
-async def get_registry_metadata() -> RegistryMetadataResponse:
+async def get_registry_metadata(
+    user: Any = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> RegistryMetadataResponse:
     """
     Get agent metadata for frontend display.
 
@@ -149,6 +240,24 @@ async def get_registry_metadata() -> RegistryMetadataResponse:
             supervisor_tool=supervisor_tool,
         )
 
+    # Include current user's custom agents when authenticated.
+    # Direct unit-test calls pass dependency placeholders, so guard by type.
+    if isinstance(user, dict):
+        db_user = set_global_user_from_cognito(db, user)
+        custom_agents = list_custom_agents_for_user(db, db_user.id)
+        for custom in custom_agents:
+            parent_entry = AGENT_REGISTRY.get(custom.parent_agent_key, {})
+            category = parent_entry.get("category", "Custom")
+            custom_id = make_custom_agent_id(custom.id)
+
+            agents[custom_id] = AgentMetadata(
+                name=custom.name,
+                icon=custom.icon or "❓",
+                category=category,
+                subcategory="My Custom Agents",
+                supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
+            )
+
     return RegistryMetadataResponse(agents=agents)
 
 
@@ -162,11 +271,15 @@ async def get_registry_metadata() -> RegistryMetadataResponse:
     summary="Get prompt catalog",
     description="Returns all agent prompts organized by category, including MOD-specific rules.",
 )
-async def get_catalog(user: Dict[str, Any] = get_auth_dependency()):
+async def get_catalog(
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
     """Get the complete prompt catalog."""
     try:
         service = get_prompt_catalog()
-        return CatalogResponse(catalog=service.catalog)
+        catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
+        return CatalogResponse(catalog=catalog)
     except Exception as e:
         logger.error(f"Failed to get prompt catalog: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -178,12 +291,16 @@ async def get_catalog(user: Dict[str, Any] = get_auth_dependency()):
     summary="Refresh prompt catalog",
     description="Force rebuild of the prompt catalog from source files.",
 )
-async def refresh_catalog(user: Dict[str, Any] = get_auth_dependency()):
+async def refresh_catalog(
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
     """Force refresh of the prompt catalog."""
     try:
         service = get_prompt_catalog()
         service.refresh()
-        return CatalogResponse(catalog=service.catalog)
+        catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
+        return CatalogResponse(catalog=catalog)
     except Exception as e:
         logger.error(f"Failed to refresh prompt catalog: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -218,6 +335,215 @@ async def get_combined_prompt(
     except Exception as e:
         logger.error(f"Failed to get combined prompt: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/prompt-preview/{agent_id}",
+    response_model=PromptPreviewResponse,
+    summary="Get prompt preview",
+    description="Returns the effective prompt text for a system or custom agent.",
+)
+async def get_prompt_preview(
+    agent_id: str = Path(..., description="Agent ID (system ID or custom ca_<uuid>)"),
+    mod_id: Optional[str] = None,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> PromptPreviewResponse:
+    """Get prompt preview for system or custom agents."""
+    try:
+        # Custom agent preview with ownership check
+        if agent_id.startswith("ca_"):
+            from src.lib.agent_studio.custom_agent_service import (
+                parse_custom_agent_id,
+                get_custom_agent_for_user,
+                CustomAgentNotFoundError,
+                CustomAgentAccessError,
+            )
+            from src.lib.prompts.cache import get_prompt_optional
+
+            custom_uuid = parse_custom_agent_id(agent_id)
+            if not custom_uuid:
+                raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+
+            db_user = set_global_user_from_cognito(db, user)
+            try:
+                custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
+            except CustomAgentNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+            except CustomAgentAccessError as exc:
+                raise HTTPException(status_code=403, detail=str(exc))
+            preview = custom_agent.custom_prompt
+
+            if mod_id and custom_agent.include_mod_rules:
+                rule_prompt = get_prompt_optional(
+                    custom_agent.parent_agent_key,
+                    prompt_type="group_rules",
+                    mod_id=mod_id,
+                ) or get_prompt_optional(
+                    custom_agent.parent_agent_key,
+                    prompt_type="mod_rules",
+                    mod_id=mod_id,
+                )
+                if rule_prompt:
+                    preview = (
+                        f"{preview}\n\n## MOD-SPECIFIC RULES\n\n"
+                        f"The following rules are specific to {mod_id}:\n\n"
+                        f"{rule_prompt.content}\n\n## END MOD-SPECIFIC RULES\n"
+                    )
+
+            return PromptPreviewResponse(
+                agent_id=agent_id,
+                prompt=preview,
+                mod_id=mod_id,
+                source="custom_agent",
+                parent_agent_key=custom_agent.parent_agent_key,
+                include_mod_rules=custom_agent.include_mod_rules,
+            )
+
+        # System agent preview
+        service = get_prompt_catalog()
+        if mod_id:
+            prompt = service.get_combined_prompt(agent_id, mod_id)
+            if prompt is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Agent '{agent_id}' or MOD '{mod_id}' not found",
+                )
+        else:
+            agent = service.get_agent(agent_id)
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+            prompt = agent.base_prompt
+
+        return PromptPreviewResponse(
+            agent_id=agent_id,
+            prompt=prompt,
+            mod_id=mod_id,
+            source="system_agent",
+            parent_agent_key=None,
+            include_mod_rules=None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get prompt preview for '{agent_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/test-agent/{agent_id}",
+    summary="Test an agent in isolation",
+    description="Streams events for a single agent execution (system or custom agent).",
+)
+async def test_agent_endpoint(
+    agent_id: str,
+    request: AgentTestRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Run a one-off isolated agent test and stream execution events."""
+    db_user = set_global_user_from_cognito(db, user)
+
+    resolved_agent_id = agent_id
+    if agent_id.startswith("ca_"):
+        custom_uuid = parse_custom_agent_id(agent_id)
+        if not custom_uuid:
+            raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+        try:
+            custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
+            resolved_agent_id = make_custom_agent_id(custom_agent.id)
+        except CustomAgentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except CustomAgentAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+
+    try:
+        metadata = get_agent_metadata(resolved_agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    if metadata.get("requires_document") and not request.document_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This agent requires a document_id for testing",
+        )
+
+    user_sub = user.get("sub") or db_user.auth_sub
+    if not user_sub:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+
+    session_id = request.session_id or f"agent-test-{uuid.uuid4()}"
+    active_groups = [request.mod_id] if request.mod_id else []
+
+    set_current_session_id(session_id)
+    set_current_user_id(str(user_sub))
+
+    try:
+        test_agent = get_agent_by_id(
+            resolved_agent_id,
+            document_id=request.document_id,
+            user_id=str(user_sub),
+            active_groups=active_groups,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to initialize agent '{agent_id}': {exc}")
+
+    async def _stream_events():
+        trace_id = None
+        try:
+            async for event in run_agent_streamed(
+                user_message=request.input,
+                user_id=str(user_sub),
+                session_id=session_id,
+                document_id=request.document_id,
+                conversation_history=None,
+                active_groups=active_groups,
+                agent=test_agent,
+            ):
+                flat = _flatten_runner_event(event, session_id)
+                if flat.get("type") == "RUN_STARTED":
+                    trace_id = flat.get("trace_id")
+                yield f"data: {json.dumps(flat, default=str)}\n\n"
+
+            done_event = {
+                "type": "DONE",
+                "session_id": session_id,
+                "sessionId": session_id,
+                "trace_id": trace_id,
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
+        except asyncio.CancelledError:
+            logger.warning(f"Agent test stream cancelled: agent_id={agent_id}")
+            error_event = {
+                "type": "RUN_ERROR",
+                "message": "Agent test cancelled unexpectedly.",
+                "error_type": "StreamCancelled",
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "sessionId": session_id,
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+        except Exception as exc:
+            logger.error(f"Agent test stream error for {agent_id}: {exc}", exc_info=True)
+            error_event = {
+                "type": "RUN_ERROR",
+                "message": f"Agent test failed: {exc}",
+                "error_type": type(exc).__name__,
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "sessionId": session_id,
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(
+        _stream_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ============================================================================
@@ -1099,6 +1425,7 @@ async def _process_suggestion_background(
 async def submit_suggestion_direct(
     request: DirectSubmissionRequest,
     background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
     user: dict = get_auth_dependency(),
 ):
     """
@@ -1115,15 +1442,29 @@ async def submit_suggestion_direct(
         if not api_key:
             raise HTTPException(status_code=500, detail="Anthropic API key not configured")
 
+        db_user = set_global_user_from_cognito(db, user)
+
         # Validate selected_agent_id if provided
         if request.context and request.context.selected_agent_id:
-            service = get_prompt_catalog()
-            agent = service.get_agent(request.context.selected_agent_id)
-            if not agent:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid agent_id: {request.context.selected_agent_id}"
-                )
+            selected_agent_id = request.context.selected_agent_id
+            if selected_agent_id.startswith("ca_"):
+                custom_uuid = parse_custom_agent_id(selected_agent_id)
+                if not custom_uuid:
+                    raise HTTPException(status_code=400, detail=f"Invalid agent_id: {selected_agent_id}")
+                try:
+                    get_custom_agent_for_user(db, custom_uuid, db_user.id)
+                except CustomAgentNotFoundError:
+                    raise HTTPException(status_code=400, detail=f"Invalid agent_id: {selected_agent_id}")
+                except CustomAgentAccessError:
+                    raise HTTPException(status_code=403, detail="Access denied to custom agent")
+            else:
+                service = get_prompt_catalog()
+                agent = service.get_agent(selected_agent_id)
+                if not agent:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid agent_id: {selected_agent_id}"
+                    )
 
         # Build the system prompt
         system_prompt = _build_opus_system_prompt(request.context)
@@ -1135,6 +1476,10 @@ async def submit_suggestion_direct(
                 context_description.append(f"trace ID {request.context.trace_id}")
             if request.context.selected_agent_id:
                 context_description.append(f"the {request.context.selected_agent_id} agent prompt")
+            if request.context.prompt_workshop and request.context.prompt_workshop.custom_agent_name:
+                context_description.append(
+                    f'the Prompt Workshop draft for "{request.context.prompt_workshop.custom_agent_name}"'
+                )
 
         if context_description:
             context_str = " and ".join(context_description)
@@ -1561,6 +1906,42 @@ Include `token_info` in responses for budget management:
 
     if context:
         additions = []
+
+        if context.active_tab == "prompt_workshop" and context.prompt_workshop:
+            workshop = context.prompt_workshop
+            draft_prompt = workshop.prompt_draft or ""
+            truncated = ""
+            max_prompt_chars = 12000
+            if len(draft_prompt) > max_prompt_chars:
+                draft_prompt = draft_prompt[:max_prompt_chars]
+                truncated = f"\n\n[Truncated to first {max_prompt_chars} chars for context.]"
+
+            additions.append(f"""
+<prompt_workshop_context>
+## Current Context: Prompt Workshop
+
+The curator is actively iterating a prompt in Prompt Workshop.
+
+- Parent agent: {workshop.parent_agent_name or workshop.parent_agent_id or 'Unknown'}
+- Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
+- Include MOD rules: {"Yes" if workshop.include_mod_rules else "No"}
+- Selected MOD: {workshop.selected_mod_id or "None"}
+- Parent prompt stale: {"Yes" if workshop.parent_prompt_stale else "No"}
+- Parent exists: {"Yes" if workshop.parent_exists is not False else "No"}
+
+Use this workshop context to give concrete prompt-engineering feedback, especially:
+1. how to improve the draft prompt structure and specificity,
+2. what to test next in Quick Test / Compare with Original,
+3. how MOD rules may interact with the current draft.
+
+<workshop_prompt_draft>
+{draft_prompt}
+</workshop_prompt_draft>{truncated}
+
+Prompt injection note:
+- Structured output instructions are inserted near the first `## ` heading.
+- If the draft lacks `## ` headings, insertion happens at the top.
+</prompt_workshop_context>""")
 
         if context.selected_agent_id:
             # Get the agent info to provide context

@@ -391,8 +391,11 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
 
       // Add agents-specific context
       if (context?.active_tab !== 'flows') {
-        feedbackContext.selected_agent_id = selectedAgent?.agent_id || null
+        feedbackContext.selected_agent_id = context?.selected_agent_id || selectedAgent?.agent_id || null
         feedbackContext.selected_mod_id = context?.selected_mod_id || null
+        if (context?.active_tab === 'prompt_workshop' && context?.prompt_workshop) {
+          feedbackContext.prompt_workshop = context.prompt_workshop
+        }
       }
 
       // Add flows-specific context
@@ -493,6 +496,13 @@ OUTPUT:
     { label: 'Optimize my flow', prompt: 'Can you suggest optimizations for my current flow? I want to make sure it\'s efficient and well-designed.' },
   ]
 
+  // Prompt Workshop suggestions (shown when on prompt_workshop tab)
+  const workshopQuickActions = [
+    { label: 'Critique this draft', prompt: 'Please critique my current Prompt Workshop draft and suggest concrete edits.' },
+    { label: 'Plan quick tests', prompt: 'Given my draft, what 3 quick tests should I run next, including one compare-with-original case?' },
+    { label: 'Improve structure', prompt: 'Can you help me restructure this draft prompt so instructions and output expectations are clearer?' },
+  ]
+
   // Trace-specific suggestions - only shown if trace_id exists
   const traceQuickActions = [
     { label: 'Discuss the trace', prompt: 'Can you help me understand what happened in this trace?' },
@@ -502,7 +512,17 @@ OUTPUT:
 
   // Determine which quick actions to show based on active tab
   const activeTab = context?.active_tab || 'agents'
-  const baseQuickActions = activeTab === 'flows' ? flowQuickActions : promptQuickActions
+  const baseQuickActions =
+    activeTab === 'flows'
+      ? flowQuickActions
+      : activeTab === 'prompt_workshop'
+      ? workshopQuickActions
+      : promptQuickActions
+
+  const selectedChipLabel =
+    activeTab === 'prompt_workshop'
+      ? context?.prompt_workshop?.custom_agent_name || context?.prompt_workshop?.parent_agent_name || undefined
+      : selectedAgent?.agent_name
 
   const handleQuickAction = (prompt: string) => {
     setInput(prompt)
@@ -515,10 +535,10 @@ OUTPUT:
         <Typography variant="subtitle1" sx={{ fontWeight: 500, whiteSpace: 'nowrap' }}>
           Chat with Claude
         </Typography>
-        {selectedAgent && (
+        {selectedChipLabel && (
           <Chip
             size="small"
-            label={selectedAgent.agent_name}
+            label={selectedChipLabel}
             sx={{ ml: 0.5, maxWidth: 150 }}
           />
         )}
@@ -573,6 +593,12 @@ OUTPUT:
                   Ask Claude about curation flows, flow design,
                   <br />
                   or verify your current flow.
+                </>
+              ) : activeTab === 'prompt_workshop' ? (
+                <>
+                  Ask Claude to improve your workshop prompt draft,
+                  <br />
+                  plan quick tests, and compare against the original.
                 </>
               ) : (
                 <>
@@ -801,7 +827,13 @@ Claude is responding...
           fullWidth
           multiline
           maxRows={4}
-          placeholder={activeTab === 'flows' ? 'Ask about flows...' : 'Ask about prompts...'}
+          placeholder={
+            activeTab === 'flows'
+              ? 'Ask about flows...'
+              : activeTab === 'prompt_workshop'
+              ? 'Ask about your workshop draft...'
+              : 'Ask about prompts...'
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyPress}

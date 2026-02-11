@@ -82,10 +82,16 @@ function SuggestionDialog({
   const [proposedChange, setProposedChange] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const selectedAgentId = context.selected_agent_id || selectedAgent?.agent_id
+  const selectedAgentName =
+    selectedAgent?.agent_name
+    || context.prompt_workshop?.custom_agent_name
+    || context.prompt_workshop?.parent_agent_name
+    || context.selected_agent_id
 
   const handleSubmit = async () => {
     // Require either an agent or a trace_id for context
-    if (!selectedAgent && !context.trace_id) {
+    if (!selectedAgentId && !context.trace_id) {
       setError('No agent or trace context available')
       return
     }
@@ -105,7 +111,7 @@ function SuggestionDialog({
 
     try {
       const response = await submitSuggestion({
-        agent_id: selectedAgent?.agent_id,  // Optional - may be undefined for trace-based feedback
+        agent_id: selectedAgentId,  // Optional - may be undefined for trace-based feedback
         suggestion_type: suggestionType,
         summary: summary.trim(),
         detailed_reasoning: reasoning.trim(),
@@ -149,12 +155,12 @@ function SuggestionDialog({
       <DialogContent>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, mt: 1 }}>
           {/* Context info - show agent or trace info */}
-          {(selectedAgent || context.trace_id) && (
+          {(selectedAgentId || context.trace_id) && (
             <Alert severity="info" sx={{ py: 0.5 }}>
               <Typography variant="body2">
-                {selectedAgent ? (
+                {selectedAgentId ? (
                   <>
-                    Submitting suggestion for: <strong>{selectedAgent.agent_name}</strong>
+                    Submitting suggestion for: <strong>{selectedAgentName}</strong>
                     {context.selected_mod_id && ` (${context.selected_mod_id})`}
                   </>
                 ) : (

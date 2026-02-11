@@ -134,6 +134,16 @@ When you request ontology mappings, the agent:
 3. **Specialists retrieve data** - Each specialist queries its specific data source
 4. **Response is synthesized** - Results are combined into a comprehensive answer
 
+## Custom Agents (Prompt Workshop)
+
+You can create your own customized versions of any system agent using the **Prompt Workshop** in Agent Studio. Custom agents let you:
+
+- Clone a system agent's prompt and modify the instructions for your specific needs
+- Test your custom version and compare its output against the original
+- Use custom agents in Curation Flows alongside system agents
+
+See **[Agent Studio](AGENT_STUDIO.md)** for details on the Prompt Workshop.
+
 ## Suggestions for New Agents
 
 Have an idea for a new agent or data source? Contact the development team - we're always looking to expand the system's capabilities based on curator needs.

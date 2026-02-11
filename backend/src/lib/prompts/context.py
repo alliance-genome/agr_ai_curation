@@ -27,6 +27,7 @@ Usage:
 """
 
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import List, Dict, Optional
 
 from src.models.sql.prompts import PromptTemplate
@@ -41,6 +42,35 @@ _pending_prompts: ContextVar[Optional[Dict[str, List[PromptTemplate]]]] = Contex
 _used_prompts: ContextVar[Optional[List[PromptTemplate]]] = ContextVar(
     "used_prompts", default=None
 )
+
+
+@dataclass
+class PromptOverride:
+    """Full system-prompt replacement for a specific agent in this request context."""
+
+    content: str
+    agent_name: str
+    custom_agent_id: str
+
+
+prompt_override_var: ContextVar[Optional[PromptOverride]] = ContextVar(
+    "prompt_override", default=None
+)
+
+
+def set_prompt_override(override: PromptOverride) -> None:
+    """Set the current request's prompt override."""
+    prompt_override_var.set(override)
+
+
+def clear_prompt_override() -> None:
+    """Clear any active prompt override for this request."""
+    prompt_override_var.set(None)
+
+
+def get_prompt_override() -> Optional[PromptOverride]:
+    """Get the active prompt override if one is set."""
+    return prompt_override_var.get(None)
 
 
 def _get_pending() -> Dict[str, List[PromptTemplate]]:
@@ -106,6 +136,7 @@ def clear_prompt_context() -> None:
     """
     _pending_prompts.set({})
     _used_prompts.set([])
+    prompt_override_var.set(None)
 
 
 def get_pending_for_agent(agent_name: str) -> Optional[List[PromptTemplate]]:

@@ -1,4 +1,6 @@
 """Tests for agent metadata API endpoint."""
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -91,3 +93,171 @@ class TestGetRegistryMetadata:
         gene = result.agents.get("gene")
         assert gene is not None
         assert gene.supervisor_tool == "ask_gene_specialist"
+
+    def test_get_registry_metadata_includes_custom_agents_for_user(self, monkeypatch):
+        """Metadata endpoint should append current user's active custom agents."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            id="11111111-2222-3333-4444-555555555555",
+            parent_agent_key="gene",
+            name="Doug's Gene Agent",
+            icon="🔧",
+        )
+        monkeypatch.setattr(api_module, "list_custom_agents_for_user", lambda _db, _uid: [fake_custom])
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "make_custom_agent_id",
+            lambda custom_id: f"ca_{custom_id}",
+        )
+
+        result = asyncio.run(
+            api_module.get_registry_metadata(
+                user={"sub": "test-sub", "email": "test@example.org"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        custom_id = "ca_11111111-2222-3333-4444-555555555555"
+        assert custom_id in result.agents
+        assert result.agents[custom_id].name == "Doug's Gene Agent"
+        assert result.agents[custom_id].subcategory == "My Custom Agents"
+
+    def test_merge_custom_agents_into_catalog(self, monkeypatch):
+        """Catalog augmentation should add custom agents under a custom subcategory."""
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+
+        base_catalog = PromptCatalog(
+            categories=[
+                AgentPrompts(
+                    category="Validation",
+                    agents=[
+                        PromptInfo(
+                            agent_id="gene",
+                            agent_name="Gene Specialist",
+                            description="Curate genes",
+                            base_prompt="Base prompt",
+                            source_file="database",
+                            has_mod_rules=False,
+                            mod_rules={},
+                            tools=[],
+                            subcategory="Data Validation",
+                        )
+                    ],
+                )
+            ],
+            total_agents=1,
+            available_mods=[],
+        )
+
+        fake_custom = SimpleNamespace(
+            id="11111111-2222-3333-4444-555555555555",
+            parent_agent_key="gene",
+            name="Doug's Gene Agent",
+            description="Custom prompt variant",
+            custom_prompt="Custom prompt text",
+            created_at=None,
+        )
+
+        class _FakeDB:
+            def query(self, *args, **kwargs):  # pragma: no cover - never called due monkeypatch
+                raise AssertionError("query should not be called in this test")
+
+        # Monkeypatch dependencies used inside helper
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_for_user",
+            lambda _db, _uid: [fake_custom],
+        )
+
+        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+            base_catalog,
+            {"sub": "test-sub"},
+            _FakeDB(),
+        )
+
+        assert catalog.total_agents == 2
+        all_agents = [a for c in catalog.categories for a in c.agents]
+        custom = next(a for a in all_agents if a.agent_name == "Doug's Gene Agent")
+        assert custom.subcategory == "My Custom Agents"
+
+    def test_get_prompt_preview_system_agent(self, monkeypatch):
+        """Prompt preview should return base prompt for system agent without mod_id."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        class _FakeService:
+            def get_agent(self, agent_id):
+                assert agent_id == "gene"
+                return SimpleNamespace(base_prompt="SYSTEM BASE PROMPT")
+
+        monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _FakeService())
+
+        result = asyncio.run(
+            api_module.get_prompt_preview(
+                agent_id="gene",
+                mod_id=None,
+                user={"sub": "test-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        assert result.source == "system_agent"
+        assert result.prompt == "SYSTEM BASE PROMPT"
+
+    def test_get_prompt_preview_custom_agent_with_mod_rules(self, monkeypatch):
+        """Prompt preview should append group rules for custom agent when enabled."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            parent_agent_key="gene",
+            custom_prompt="CUSTOM BASE PROMPT",
+            include_mod_rules=True,
+        )
+        fake_rule_prompt = SimpleNamespace(content="WB ONLY RULES")
+
+        # Build a lightweight module-like object for local imports in endpoint
+        fake_custom_module = SimpleNamespace(
+            parse_custom_agent_id=lambda _aid: "uuid",
+            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
+            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
+            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
+        )
+        fake_prompts_cache = SimpleNamespace(
+            get_prompt_optional=lambda _agent, prompt_type, mod_id: (
+                fake_rule_prompt if prompt_type == "group_rules" and mod_id == "WB" else None
+            )
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
+        monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_prompts_cache)
+
+        result = asyncio.run(
+            api_module.get_prompt_preview(
+                agent_id="ca_11111111-2222-3333-4444-555555555555",
+                mod_id="WB",
+                user={"sub": "test-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert result.source == "custom_agent"
+        assert "CUSTOM BASE PROMPT" in result.prompt
+        assert "WB ONLY RULES" in result.prompt

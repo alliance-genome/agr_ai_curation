@@ -28,6 +28,10 @@ from .cache import (
     PromptNotFoundError,
 )
 from .context import (
+    PromptOverride,
+    set_prompt_override,
+    get_prompt_override,
+    clear_prompt_override,
     set_pending_prompts,
     commit_pending_prompts,
     get_used_prompts,
@@ -48,6 +52,10 @@ __all__ = [
     "is_initialized",
     "PromptNotFoundError",
     # Context tracking
+    "PromptOverride",
+    "set_prompt_override",
+    "get_prompt_override",
+    "clear_prompt_override",
     "set_pending_prompts",
     "commit_pending_prompts",
     "get_used_prompts",

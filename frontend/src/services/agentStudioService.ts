@@ -4,6 +4,9 @@
 
 import type {
   PromptCatalog,
+  PromptPreviewResponse,
+  CustomAgent,
+  CustomAgentVersion,
   TraceContext,
   ChatMessage,
   ChatContext,
@@ -100,6 +103,255 @@ export async function fetchCombinedPrompt(
   }
   const data = await response.json()
   return data.combined_prompt
+}
+
+/**
+ * Get resolved prompt preview for system/custom agents.
+ */
+export async function fetchPromptPreview(
+  agentId: string,
+  modId?: string
+): Promise<PromptPreviewResponse> {
+  const params = new URLSearchParams()
+  if (modId) {
+    params.set('mod_id', modId)
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${BASE_URL}/prompt-preview/${encodeURIComponent(agentId)}${query}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch prompt preview: ${response.status}`)
+  }
+  return response.json()
+}
+
+// =============================================================================
+// Custom Agent API (Prompt Workshop)
+// =============================================================================
+
+export interface CreateCustomAgentRequest {
+  parent_agent_id: string
+  name: string
+  custom_prompt?: string
+  description?: string
+  icon?: string
+  include_mod_rules?: boolean
+}
+
+export interface UpdateCustomAgentRequest {
+  name?: string
+  custom_prompt?: string
+  description?: string
+  icon?: string
+  include_mod_rules?: boolean
+  notes?: string
+  rebase_parent_hash?: boolean
+}
+
+export interface CustomAgentTestRequest {
+  input: string
+  mod_id?: string
+  document_id?: string
+  session_id?: string
+}
+
+export interface ActiveChatDocumentResponse {
+  active: boolean
+  document?: {
+    id: string
+    filename?: string
+  }
+  message?: string
+}
+
+export interface ListCustomAgentsResponse {
+  custom_agents: CustomAgent[]
+  total: number
+}
+
+export async function listCustomAgents(parentAgentId?: string): Promise<ListCustomAgentsResponse> {
+  const params = new URLSearchParams()
+  if (parentAgentId) {
+    params.set('parent_agent_id', parentAgentId)
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${BASE_URL}/custom-agents${query}`)
+  if (!response.ok) {
+    throw new Error(`Failed to list custom agents: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function createCustomAgent(
+  request: CreateCustomAgentRequest
+): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to create custom agent: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function getCustomAgent(customAgentId: string): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`)
+  if (!response.ok) {
+    throw new Error(`Failed to get custom agent: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function updateCustomAgent(
+  customAgentId: string,
+  request: UpdateCustomAgentRequest
+): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to update custom agent: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteCustomAgent(customAgentId: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete custom agent: ${response.status}`)
+  }
+}
+
+export async function listCustomAgentVersions(customAgentId: string): Promise<CustomAgentVersion[]> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/versions`)
+  if (!response.ok) {
+    throw new Error(`Failed to list custom agent versions: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function revertCustomAgentVersion(
+  customAgentId: string,
+  version: number,
+  notes?: string
+): Promise<CustomAgent> {
+  const response = await fetch(
+    `${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/revert/${version}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to revert custom agent version: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchActiveChatDocument(): Promise<ActiveChatDocumentResponse> {
+  const response = await fetch('/api/chat/document')
+  if (!response.ok) {
+    throw new Error(`Failed to fetch active document: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function* streamCustomAgentTest(
+  customAgentId: string,
+  request: CustomAgentTestRequest
+): AsyncGenerator<Record<string, unknown>> {
+  const response = await fetch(
+    `${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/test`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  )
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `Failed to run custom agent test: ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('No response body from custom agent test')
+  }
+
+  yield* streamSseReader(reader)
+}
+
+export async function* streamAgentTest(
+  agentId: string,
+  request: CustomAgentTestRequest
+): AsyncGenerator<Record<string, unknown>> {
+  const response = await fetch(
+    `${BASE_URL}/test-agent/${encodeURIComponent(agentId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  )
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `Failed to run agent test: ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('No response body from agent test')
+  }
+
+  yield* streamSseReader(reader)
+}
+
+async function* streamSseReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<Record<string, unknown>> {
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const event = JSON.parse(line.slice(6)) as Record<string, unknown>
+          yield event
+        } catch {
+          // Ignore malformed partial events.
+        }
+      }
+    }
+
+    if (buffer.startsWith('data: ')) {
+      try {
+        const event = JSON.parse(buffer.slice(6)) as Record<string, unknown>
+        yield event
+      } catch {
+        // Ignore incomplete final event.
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 /**

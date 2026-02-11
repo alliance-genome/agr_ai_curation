@@ -50,6 +50,8 @@ def inject_structured_output_instruction(
         output_type_name: Explicit output type name (alternative to output_type)
         insert_after_first_section: If True, insert after the first ## section.
                                     If False, prepend to the beginning.
+                                    Note: if no "## " section headers exist,
+                                    the instruction is prepended as a fallback.
 
     Returns:
         Modified instructions with structured output requirement injected.

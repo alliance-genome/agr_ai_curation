@@ -86,6 +86,56 @@ export interface PromptCatalog {
   last_updated: string
 }
 
+// ============================================================================
+// Custom Agent Types (Prompt Workshop)
+// ============================================================================
+
+export interface CustomAgent {
+  id: string
+  agent_id: string
+  user_id: number
+  parent_agent_key: string
+  name: string
+  description?: string
+  custom_prompt: string
+  icon: string
+  include_mod_rules: boolean
+  parent_prompt_hash?: string
+  current_parent_prompt_hash?: string
+  parent_prompt_stale: boolean
+  parent_exists: boolean
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CustomAgentVersion {
+  id: string
+  custom_agent_id: string
+  version: number
+  custom_prompt: string
+  notes?: string
+  created_at: string
+}
+
+export interface PromptPreviewResponse {
+  agent_id: string
+  prompt: string
+  mod_id?: string
+  source: 'system_agent' | 'custom_agent'
+  parent_agent_key?: string
+  include_mod_rules?: boolean
+}
+
+export interface CustomAgentTestEvent {
+  type: string
+  delta?: string
+  response?: string
+  message?: string
+  trace_id?: string
+  [key: string]: unknown
+}
+
 // Chat message for Opus conversation
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -113,6 +163,18 @@ export interface FlowContextDefinition {
   }>
 }
 
+export interface PromptWorkshopContext {
+  parent_agent_id?: string
+  parent_agent_name?: string
+  custom_agent_id?: string
+  custom_agent_name?: string
+  include_mod_rules?: boolean
+  selected_mod_id?: string
+  prompt_draft?: string
+  parent_prompt_stale?: boolean
+  parent_exists?: boolean
+}
+
 // Context passed to Opus chat
 export interface ChatContext {
   selected_agent_id?: string
@@ -120,9 +182,10 @@ export interface ChatContext {
   view_mode?: 'base' | 'mod' | 'combined'
   trace_id?: string
   // Flow context (when on Flows tab)
-  active_tab?: 'agents' | 'flows'  // 'agents' renamed from 'prompts'
+  active_tab?: 'agents' | 'flows' | 'prompt_workshop'  // 'agents' renamed from 'prompts'
   flow_name?: string
   flow_definition?: FlowContextDefinition
+  prompt_workshop?: PromptWorkshopContext
 }
 
 // Tool call information from trace

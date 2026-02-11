@@ -79,6 +79,10 @@ When you select a node, this panel shows its configuration options where you can
 | **TSV File Formatter** | Generates downloadable TSV files |
 | **JSON File Formatter** | Generates downloadable JSON files |
 
+### My Custom Agents
+
+If you've created custom agents in the **Prompt Workshop**, they appear here under "My Custom Agents". You can use them in flows just like system agents. See **[Agent Studio](AGENT_STUDIO.md)** for details on creating custom agents.
+
 ## Building a Flow
 
 ### Step 1: Add Agents to the Canvas

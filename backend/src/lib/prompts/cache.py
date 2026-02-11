@@ -17,6 +17,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from .models import PromptTemplate
+from .context import get_prompt_override
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def get_prompt(
 
     Args:
         agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
-        prompt_type: e.g., 'system' (default), 'mod_rules'
+        prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
@@ -111,7 +112,19 @@ def get_prompt(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
-    # Cache key includes mod_id for MOD-specific prompts
+    override = get_prompt_override()
+    if (
+        override
+        and prompt_type == "system"
+        and override.agent_name == agent_name
+    ):
+        return _build_override_prompt_template(
+            agent_name=agent_name,
+            content=override.content,
+            custom_agent_id=override.custom_agent_id,
+        )
+
+    # Cache key includes group ID for group-specific prompts
     key = f"{agent_name}:{prompt_type}:{mod_id or 'base'}"
 
     if key not in _active_cache:
@@ -135,7 +148,7 @@ def get_prompt_by_version(
     Args:
         agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
         version: Specific version number to retrieve
-        prompt_type: e.g., 'system' (default), 'mod_rules'
+        prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
@@ -173,7 +186,7 @@ def get_prompt_optional(
 
     Args:
         agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
-        prompt_type: e.g., 'system' (default), 'mod_rules'
+        prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
@@ -187,8 +200,41 @@ def get_prompt_optional(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
+    override = get_prompt_override()
+    if (
+        override
+        and prompt_type == "system"
+        and override.agent_name == agent_name
+    ):
+        return _build_override_prompt_template(
+            agent_name=agent_name,
+            content=override.content,
+            custom_agent_id=override.custom_agent_id,
+        )
+
     key = f"{agent_name}:{prompt_type}:{mod_id or 'base'}"
     return _active_cache.get(key)
+
+
+def _build_override_prompt_template(
+    agent_name: str,
+    content: str,
+    custom_agent_id: str,
+) -> PromptTemplate:
+    """Build an in-memory PromptTemplate object for custom-agent prompt overrides."""
+    return PromptTemplate(
+        id=None,
+        agent_name=agent_name,
+        prompt_type="system",
+        group_id=None,
+        content=content,
+        version=1,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        created_by="custom_agent",
+        source_file=f"custom_agent:{custom_agent_id}",
+        description="Runtime prompt override from custom agent",
+    )
 
 
 def get_cache_info() -> dict:
@@ -215,7 +261,7 @@ def get_all_active_prompts() -> Dict[str, PromptTemplate]:
 
     Returns:
         Dict mapping cache key to PromptTemplate.
-        Keys are formatted as: agent_name:prompt_type:mod_id_or_base
+        Keys are formatted as: agent_name:prompt_type:group_id_or_base
 
     Raises:
         RuntimeError: If cache not initialized

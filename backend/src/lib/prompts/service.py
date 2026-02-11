@@ -77,11 +77,13 @@ class PromptService:
         Returns:
             The created PromptExecutionLog entry
         """
+        custom_agent_uuid = self._extract_custom_agent_id(prompt)
         log_entry = PromptExecutionLog(
             trace_id=trace_id,
             session_id=session_id,
             flow_execution_id=flow_execution_id,
             prompt_template_id=prompt.id,
+            custom_agent_id=custom_agent_uuid,
             agent_name=prompt.agent_name,
             prompt_type=prompt.prompt_type,
             group_id=prompt.group_id,
@@ -89,6 +91,21 @@ class PromptService:
         )
         self.db.add(log_entry)
         return log_entry
+
+    @staticmethod
+    def _extract_custom_agent_id(prompt: PromptTemplate) -> Optional[UUID]:
+        """Extract custom agent UUID from in-memory override prompt metadata."""
+        source_file = prompt.source_file or ""
+        prefix = "custom_agent:"
+        if not source_file.startswith(prefix):
+            return None
+
+        candidate = source_file[len(prefix):].strip()
+        try:
+            return UUID(candidate)
+        except Exception:
+            logger.warning(f"Invalid custom agent ID in source_file metadata: {source_file}")
+            return None
 
     def log_all_used_prompts(
         self,
