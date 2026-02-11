@@ -24,7 +24,6 @@ import type {
 import {
   createCustomAgent,
   deleteCustomAgent,
-  fetchPromptPreview,
   listCustomAgentVersions,
   listCustomAgents,
   revertCustomAgentVersion,
@@ -44,7 +43,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   const [versions, setVersions] = useState<CustomAgentVersion[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [previewLoading, setPreviewLoading] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -58,7 +56,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   const [icon, setIcon] = useState('🔧')
   const [saveNotes, setSaveNotes] = useState('')
   const [modId, setModId] = useState('')
-  const [preview, setPreview] = useState('')
 
   const parentAgents = useMemo(() => {
     const seen = new Set<string>()
@@ -281,7 +278,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     setIncludeModRules(true)
     setIcon('🔧')
     setSaveNotes('')
-    setPreview('')
     setStatus('Creating a new custom agent draft')
   }
 
@@ -395,33 +391,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
       setError(err instanceof Error ? err.message : 'Failed to rebase custom agent')
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handlePreview = async () => {
-    if (!parentAgentId) return
-    setPreviewLoading(true)
-    setError(null)
-    try {
-      if (!selectedCustomAgent) {
-        let localPreview = customPrompt
-        if (selectedModId && includeModRules) {
-          const modPrompt = modPromptOverrides[selectedModId] || parentAgent?.mod_rules[selectedModId]?.content
-          if (modPrompt) {
-            localPreview = `${localPreview}\n\n## MOD-SPECIFIC RULES\n\nThe following rules are specific to ${selectedModId}:\n\n${modPrompt}\n\n## END MOD-SPECIFIC RULES\n`
-          }
-        }
-        setPreview(localPreview)
-        return
-      }
-
-      const targetAgentId = selectedCustomAgent.agent_id
-      const data = await fetchPromptPreview(targetAgentId, selectedModId || undefined)
-      setPreview(data.prompt)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to preview prompt')
-    } finally {
-      setPreviewLoading(false)
     }
   }
 
@@ -656,50 +625,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           </Button>
           {saving && <CircularProgress size={20} />}
         </Stack>
-
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>
-            View Merged Prompt
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-            <Select
-              size="small"
-              value={modId}
-              onChange={(event) => setModId(event.target.value)}
-              disabled={availableModIds.length === 0}
-              sx={{ minWidth: 180 }}
-            >
-              {availableModIds.length === 0 && (
-                <MenuItem value="">
-                  <em>No MOD rules available</em>
-                </MenuItem>
-              )}
-              {availableModIds.map((availableModId) => (
-                <MenuItem key={availableModId} value={availableModId}>
-                  {availableModId}
-                </MenuItem>
-              ))}
-            </Select>
-            <Button variant="outlined" onClick={handlePreview} disabled={previewLoading}>
-              View Merged
-            </Button>
-            {previewLoading && <CircularProgress size={20} />}
-          </Stack>
-          <TextField
-            fullWidth
-            multiline
-            minRows={8}
-            value={preview}
-            placeholder="Merged prompt preview appears here"
-            InputProps={{ readOnly: true }}
-            sx={{
-              '& .MuiInputBase-root': {
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                fontSize: '0.8rem',
-              },
-            }}
-          />
-        </Paper>
 
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
