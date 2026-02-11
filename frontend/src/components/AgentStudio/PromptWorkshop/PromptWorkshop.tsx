@@ -29,6 +29,7 @@ import {
   Typography,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 import SearchIcon from '@mui/icons-material/Search'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import DeleteIcon from '@mui/icons-material/Delete'
@@ -591,7 +592,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange, onVeri
     const message = `Discuss my Prompt Workshop draft for \"${targetName}\".\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n\nAgent ID: ${targetId}\n${modPart}\n\n[Request ID: ${Date.now()}]`
 
     onVerifyRequest?.(message)
-    handleFileMenuClose()
   }
 
   return (
@@ -619,9 +619,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange, onVeri
           <StyledMenuItem onClick={handleManageDialogOpen}>
             <span>Manage Prompts...</span>
           </StyledMenuItem>
-          <StyledMenuItem onClick={handleDiscussWithClaude}>
-            <span>Discuss with Claude</span>
-          </StyledMenuItem>
           <Divider />
           <StyledMenuItem onClick={handleSave} disabled={saving}>
             <span>{selectedCustomAgentId ? 'Save Prompt' : 'Save New Prompt'}</span>
@@ -630,6 +627,31 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange, onVeri
             <span>Delete Prompt</span>
           </StyledMenuItem>
         </StyledMenu>
+
+        {/* Discuss with Claude Button */}
+        {onVerifyRequest && (
+          <Button
+            onClick={handleDiscussWithClaude}
+            size="small"
+            startIcon={<AutoFixHighIcon sx={{ fontSize: 14 }} />}
+            sx={{
+              ml: 1,
+              px: 1,
+              py: 0.25,
+              minHeight: 'auto',
+              fontSize: '0.75rem',
+              fontWeight: 500,
+              textTransform: 'none',
+              color: 'primary.main',
+              backgroundColor: 'transparent',
+              '&:hover': {
+                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
+              },
+            }}
+          >
+            Discuss with Claude
+          </Button>
+        )}
 
         <ToolbarStatus>
           <Typography variant="caption" color="text.secondary">
