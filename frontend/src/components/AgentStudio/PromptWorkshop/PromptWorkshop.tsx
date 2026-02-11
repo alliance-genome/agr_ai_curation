@@ -5,16 +5,33 @@ import {
   Button,
   Checkbox,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
   FormControl,
   FormControlLabel,
+  IconButton,
+  InputAdornment,
   InputLabel,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
+  Menu,
   MenuItem,
   Paper,
   Select,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
+import { styled, alpha } from '@mui/material/styles'
+import SearchIcon from '@mui/icons-material/Search'
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
+import DeleteIcon from '@mui/icons-material/Delete'
 
 import type {
   PromptCatalog,
@@ -35,6 +52,62 @@ import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
+const Toolbar = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  height: 32,
+  padding: theme.spacing(0, 0.5),
+  borderBottom: `1px solid ${theme.palette.divider}`,
+  backgroundColor: alpha(theme.palette.background.default, 0.4),
+  gap: theme.spacing(0.25),
+}))
+
+const MenuTrigger = styled(Box)(({ theme }) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: theme.spacing(0.25, 1),
+  fontSize: '0.8rem',
+  fontWeight: 500,
+  cursor: 'pointer',
+  borderRadius: 3,
+  color: theme.palette.text.secondary,
+  transition: 'all 0.1s ease',
+  userSelect: 'none',
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.action.hover, 0.8),
+    color: theme.palette.text.primary,
+  },
+}))
+
+const StyledMenu = styled(Menu)(({ theme }) => ({
+  '& .MuiPaper-root': {
+    minWidth: 220,
+    backgroundColor: theme.palette.background.paper,
+    border: `1px solid ${theme.palette.divider}`,
+    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+    borderRadius: 6,
+    marginTop: 2,
+  },
+  '& .MuiList-root': {
+    padding: theme.spacing(0.5, 0),
+  },
+}))
+
+const StyledMenuItem = styled(MenuItem)(({ theme }) => ({
+  padding: theme.spacing(0.5, 1.5),
+  minHeight: 28,
+  fontSize: '0.8rem',
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: theme.spacing(3),
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.primary.main, 0.12),
+  },
+  '&.Mui-disabled': {
+    opacity: 0.4,
+  },
+}))
+
 interface PromptWorkshopProps {
   catalog: PromptCatalog
   initialParentAgentId?: string | null
@@ -43,6 +116,7 @@ interface PromptWorkshopProps {
 
 function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: PromptWorkshopProps) {
   const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
+
   const [parentAgentId, setParentAgentId] = useState('')
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
@@ -62,6 +136,13 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   const [icon, setIcon] = useState('🔧')
   const [saveNotes, setSaveNotes] = useState('')
   const [modId, setModId] = useState('')
+
+  const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null)
+  const [openDialogOpen, setOpenDialogOpen] = useState(false)
+  const [openSearchTerm, setOpenSearchTerm] = useState('')
+  const [manageDialogOpen, setManageDialogOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [pendingDeleteAgent, setPendingDeleteAgent] = useState<CustomAgent | null>(null)
 
   const parentAgents = useMemo(() => {
     const seen = new Set<string>()
@@ -133,6 +214,14 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     return Array.from(new Set([...FALLBACK_ICON_OPTIONS, ...discovered, icon || '🔧']))
   }, [agentMetadata, icon])
 
+  const filteredOpenAgents = useMemo(() => {
+    if (!openSearchTerm.trim()) return customAgents
+    const query = openSearchTerm.toLowerCase()
+    return customAgents.filter((agent) => {
+      return agent.name.toLowerCase().includes(query) || (agent.description || '').toLowerCase().includes(query)
+    })
+  }, [customAgents, openSearchTerm])
+
   useEffect(() => {
     if (!initialParentAgentId) return
     if (parentAgents.some((agent) => agent.agent_id === initialParentAgentId)) {
@@ -157,7 +246,10 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
         setCustomAgents(response.custom_agents)
 
         if (response.custom_agents.length > 0) {
-          setSelectedCustomAgentId(response.custom_agents[0].id)
+          setSelectedCustomAgentId((prev) => {
+            const stillExists = response.custom_agents.some((agent) => agent.id === prev)
+            return stillExists ? prev : response.custom_agents[0].id
+          })
         } else {
           const basePrompt = parentAgent?.base_prompt || ''
           setSelectedCustomAgentId('')
@@ -177,7 +269,7 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
         setLoading(false)
       }
     }
-    loadCustomAgents()
+    void loadCustomAgents()
   }, [parentAgentId, parentAgent?.base_prompt])
 
   useEffect(() => {
@@ -193,7 +285,7 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
         setVersions([])
       }
     }
-    loadVersions()
+    void loadVersions()
   }, [selectedCustomAgentId])
 
   useEffect(() => {
@@ -359,15 +451,17 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     }
   }
 
-  const handleDelete = async () => {
-    if (!selectedCustomAgentId) return
+  const handleDeleteById = async (agent: CustomAgent) => {
     setSaving(true)
     setError(null)
     try {
-      await deleteCustomAgent(selectedCustomAgentId)
+      await deleteCustomAgent(agent.id)
       await reloadAfterSave()
-      handleNew()
-      setStatus('Custom agent deleted')
+      if (selectedCustomAgentId === agent.id) {
+        const hasRemaining = customAgents.some((candidate) => candidate.id !== agent.id)
+        if (!hasRemaining) handleNew()
+      }
+      setStatus(`Deleted "${agent.name}"`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete custom agent')
     } finally {
@@ -431,6 +525,54 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     })
   }
 
+  const handleFileMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setFileMenuAnchor(event.currentTarget)
+  }
+
+  const handleFileMenuClose = () => {
+    setFileMenuAnchor(null)
+  }
+
+  const handleOpenDialogOpen = () => {
+    handleFileMenuClose()
+    setOpenDialogOpen(true)
+  }
+
+  const handleOpenDialogClose = () => {
+    setOpenDialogOpen(false)
+    setOpenSearchTerm('')
+  }
+
+  const handleManageDialogOpen = () => {
+    handleFileMenuClose()
+    setManageDialogOpen(true)
+  }
+
+  const handleManageDialogClose = () => {
+    setManageDialogOpen(false)
+  }
+
+  const requestDelete = (agent?: CustomAgent) => {
+    const target = agent || selectedCustomAgent
+    if (!target) return
+    handleFileMenuClose()
+    setPendingDeleteAgent(target)
+    setDeleteConfirmOpen(true)
+  }
+
+  const handleDeleteCancel = () => {
+    setDeleteConfirmOpen(false)
+    setPendingDeleteAgent(null)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!pendingDeleteAgent) return
+    const target = pendingDeleteAgent
+    setDeleteConfirmOpen(false)
+    setPendingDeleteAgent(null)
+    await handleDeleteById(target)
+  }
+
   return (
     <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
       <Stack spacing={2}>
@@ -458,8 +600,48 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           </Alert>
         )}
 
+        <Toolbar>
+          <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
+          <StyledMenu
+            anchorEl={fileMenuAnchor}
+            open={Boolean(fileMenuAnchor)}
+            onClose={handleFileMenuClose}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+          >
+            <StyledMenuItem
+              onClick={() => {
+                handleFileMenuClose()
+                handleNew()
+              }}
+            >
+              <span>New Prompt</span>
+            </StyledMenuItem>
+            <StyledMenuItem onClick={handleOpenDialogOpen}>
+              <span>Open Prompt...</span>
+            </StyledMenuItem>
+            <StyledMenuItem onClick={handleManageDialogOpen}>
+              <span>Manage Prompts...</span>
+            </StyledMenuItem>
+            <Divider />
+            <StyledMenuItem onClick={handleSave} disabled={saving}>
+              <span>{selectedCustomAgentId ? 'Save Prompt' : 'Save New Prompt'}</span>
+            </StyledMenuItem>
+            <StyledMenuItem onClick={() => requestDelete()} disabled={!selectedCustomAgentId || saving}>
+              <span>Delete Prompt</span>
+            </StyledMenuItem>
+          </StyledMenu>
+
+          <Box sx={{ ml: 'auto', pr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
+            </Typography>
+            {(loading || saving) && <CircularProgress size={16} />}
+          </Box>
+        </Toolbar>
+
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <FormControl size="small" sx={{ minWidth: 200, flex: 1 }}>
+          <FormControl size="small" sx={{ minWidth: 220, flex: 1 }}>
             <InputLabel>Parent Agent</InputLabel>
             <Select
               label="Parent Agent"
@@ -473,38 +655,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small" sx={{ minWidth: 200, flex: 1 }}>
-            <InputLabel>Custom Agent</InputLabel>
-            <Select
-              label="Custom Agent"
-              value={selectedCustomAgentId}
-              onChange={(event) => setSelectedCustomAgentId(event.target.value)}
-              displayEmpty
-            >
-              <MenuItem value="">
-                <em>New draft</em>
-              </MenuItem>
-              {customAgents.map((agent) => (
-                <MenuItem key={agent.id} value={agent.id}>
-                  {agent.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <Button variant="outlined" size="small" onClick={handleNew} sx={{ whiteSpace: 'nowrap' }}>
-            New
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            color="error"
-            onClick={handleDelete}
-            disabled={!selectedCustomAgentId || saving}
-            sx={{ whiteSpace: 'nowrap' }}
-          >
-            Delete
-          </Button>
-          {(loading || saving) && <CircularProgress size={20} />}
         </Box>
 
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
@@ -513,9 +663,9 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             label="Custom Agent Name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            sx={{ flex: 2, minWidth: 200 }}
+            sx={{ flex: 2, minWidth: 220 }}
           />
-          <FormControl size="small" sx={{ flex: 0, minWidth: 100 }}>
+          <FormControl size="small" sx={{ flex: 0, minWidth: 110 }}>
             <InputLabel>Icon</InputLabel>
             <Select
               label="Icon"
@@ -622,17 +772,10 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
         <TextField
           fullWidth
           size="small"
-          label="Save Notes (for version history)"
+          label="Save Notes (for version history via File > Save)"
           value={saveNotes}
           onChange={(event) => setSaveNotes(event.target.value)}
         />
-
-        <Stack direction="row" spacing={1}>
-          <Button variant="contained" onClick={handleSave} disabled={saving}>
-            Save
-          </Button>
-          {saving && <CircularProgress size={20} />}
-        </Stack>
 
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -667,6 +810,206 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             ))}
           </Stack>
         </Paper>
+
+        <Dialog
+          open={openDialogOpen}
+          onClose={handleOpenDialogClose}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
+        >
+          <DialogTitle sx={{ pb: 1 }}>
+            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
+              Open Prompt
+            </Typography>
+          </DialogTitle>
+          <DialogContent sx={{ pt: 1 }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Search prompts..."
+              value={openSearchTerm}
+              onChange={(event) => setOpenSearchTerm(event.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  </InputAdornment>
+                ),
+              }}
+              sx={{ mb: 2 }}
+            />
+            <Box sx={{ minHeight: 200, maxHeight: 320, overflow: 'auto' }}>
+              {loading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : filteredOpenAgents.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                  <Typography variant="body2">
+                    {openSearchTerm ? 'No prompts match your search' : 'No saved prompts yet'}
+                  </Typography>
+                </Box>
+              ) : (
+                <List disablePadding>
+                  {filteredOpenAgents.map((agent) => (
+                    <ListItem key={agent.id} disablePadding>
+                      <ListItemButton
+                        onClick={() => {
+                          setSelectedCustomAgentId(agent.id)
+                          handleOpenDialogClose()
+                          setStatus(`Opened "${agent.name}"`)
+                        }}
+                        selected={agent.id === selectedCustomAgentId}
+                        sx={{
+                          borderRadius: 1,
+                          mb: 0.5,
+                          '&.Mui-selected': {
+                            backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
+                          },
+                        }}
+                      >
+                        <DescriptionOutlinedIcon sx={{ fontSize: 18, mr: 1.5, color: 'text.secondary' }} />
+                        <ListItemText
+                          primary={agent.name}
+                          secondary={agent.description || 'Custom prompt'}
+                          primaryTypographyProps={{ fontSize: '0.85rem' }}
+                          secondaryTypographyProps={{ fontSize: '0.75rem' }}
+                        />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={handleOpenDialogClose} size="small">
+              Cancel
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={manageDialogOpen}
+          onClose={handleManageDialogClose}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
+        >
+          <DialogTitle sx={{ pb: 1 }}>
+            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
+              Manage Prompts
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Open or delete your saved prompts for this parent agent
+            </Typography>
+          </DialogTitle>
+          <DialogContent sx={{ pt: 1 }}>
+            <Box sx={{ minHeight: 200, maxHeight: 360, overflow: 'auto' }}>
+              {loading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : customAgents.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                  <Typography variant="body2">No saved prompts yet</Typography>
+                </Box>
+              ) : (
+                <List disablePadding>
+                  {customAgents.map((agent) => (
+                    <ListItem
+                      key={agent.id}
+                      disablePadding
+                      sx={{
+                        mb: 0.5,
+                        border: (theme) => `1px solid ${theme.palette.divider}`,
+                        borderRadius: 1,
+                        backgroundColor:
+                          agent.id === selectedCustomAgentId
+                            ? (theme) => alpha(theme.palette.primary.main, 0.08)
+                            : 'transparent',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', py: 0.5, px: 1 }}>
+                        <DescriptionOutlinedIcon sx={{ fontSize: 18, mr: 1.5, color: 'text.secondary' }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontSize: '0.85rem',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {agent.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {agent.description || 'Custom prompt'}
+                            {agent.id === selectedCustomAgentId && ' • Currently open'}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          variant="text"
+                          onClick={() => {
+                            setSelectedCustomAgentId(agent.id)
+                            setStatus(`Opened "${agent.name}"`)
+                          }}
+                        >
+                          Open
+                        </Button>
+                        <Tooltip title="Delete">
+                          <IconButton
+                            size="small"
+                            onClick={() => requestDelete(agent)}
+                            sx={{ color: 'error.main' }}
+                            disabled={saving}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={handleManageDialogClose} size="small">
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={deleteConfirmOpen}
+          onClose={handleDeleteCancel}
+          PaperProps={{ sx: { minWidth: 320, borderRadius: 2 } }}
+        >
+          <DialogTitle sx={{ fontSize: '1rem' }}>Delete Prompt?</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary">
+              Are you sure you want to delete &ldquo;{pendingDeleteAgent?.name}&rdquo;? This action cannot be undone.
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={handleDeleteCancel} disabled={saving} size="small">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDeleteConfirm}
+              color="error"
+              variant="contained"
+              disabled={saving}
+              size="small"
+            >
+              {saving ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Stack>
     </Box>
   )
