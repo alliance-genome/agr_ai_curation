@@ -81,7 +81,7 @@ const MenuTrigger = styled(Box)(({ theme }) => ({
 
 const StyledMenu = styled(Menu)(({ theme }) => ({
   '& .MuiPaper-root': {
-    minWidth: 220,
+    minWidth: 200,
     backgroundColor: theme.palette.background.paper,
     border: `1px solid ${theme.palette.divider}`,
     boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
@@ -91,6 +91,16 @@ const StyledMenu = styled(Menu)(({ theme }) => ({
   '& .MuiList-root': {
     padding: theme.spacing(0.5, 0),
   },
+}))
+
+const ToolbarStatus = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: theme.spacing(1),
+  marginLeft: 'auto',
+  paddingRight: theme.spacing(1),
+  color: theme.palette.text.secondary,
+  fontSize: '0.75rem',
 }))
 
 const StyledMenuItem = styled(MenuItem)(({ theme }) => ({
@@ -112,9 +122,10 @@ interface PromptWorkshopProps {
   catalog: PromptCatalog
   initialParentAgentId?: string | null
   onContextChange?: (context: PromptWorkshopContext) => void
+  onVerifyRequest?: (message: string) => void
 }
 
-function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: PromptWorkshopProps) {
+function PromptWorkshop({ catalog, initialParentAgentId, onContextChange, onVerifyRequest }: PromptWorkshopProps) {
   const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
 
   const [parentAgentId, setParentAgentId] = useState('')
@@ -573,6 +584,16 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     await handleDeleteById(target)
   }
 
+  const handleDiscussWithClaude = () => {
+    const targetName = selectedCustomAgent?.name || parentAgent?.agent_name || 'this prompt draft'
+    const targetId = selectedCustomAgent?.agent_id || parentAgent?.agent_id || 'unknown'
+    const modPart = selectedModId ? `Selected MOD: ${selectedModId}` : 'Selected MOD: none'
+    const message = `Discuss my Prompt Workshop draft for \"${targetName}\".\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n\nAgent ID: ${targetId}\n${modPart}\n\n[Request ID: ${Date.now()}]`
+
+    onVerifyRequest?.(message)
+    handleFileMenuClose()
+  }
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Toolbar>
@@ -598,6 +619,9 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           <StyledMenuItem onClick={handleManageDialogOpen}>
             <span>Manage Prompts...</span>
           </StyledMenuItem>
+          <StyledMenuItem onClick={handleDiscussWithClaude}>
+            <span>Discuss with Claude</span>
+          </StyledMenuItem>
           <Divider />
           <StyledMenuItem onClick={handleSave} disabled={saving}>
             <span>{selectedCustomAgentId ? 'Save Prompt' : 'Save New Prompt'}</span>
@@ -607,12 +631,12 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           </StyledMenuItem>
         </StyledMenu>
 
-        <Box sx={{ ml: 'auto', pr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <ToolbarStatus>
           <Typography variant="caption" color="text.secondary">
             {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
           </Typography>
           {(loading || saving) && <CircularProgress size={16} />}
-        </Box>
+        </ToolbarStatus>
       </Toolbar>
 
       <Box sx={{ p: 2, overflow: 'auto' }}>

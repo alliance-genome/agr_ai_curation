@@ -286,6 +286,10 @@ Agent ID: ${agentId}`
     localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'prompt_workshop')
   }, [])
 
+  const handleWorkshopVerifyRequest = useCallback((message: string) => {
+    setVerifyMessage(message)
+  }, [])
+
   // Clear discuss message after it's been sent
   const handleDiscussMessageSent = useCallback(() => {
     setDiscussMessage(null)
@@ -395,6 +399,7 @@ Agent ID: ${agentId}`
                     catalog={catalog}
                     initialParentAgentId={promptWorkshopParentAgentId}
                     onContextChange={setPromptWorkshopContext}
+                    onVerifyRequest={handleWorkshopVerifyRequest}
                   />
                 )}
               </TabContent>
