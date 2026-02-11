@@ -57,6 +57,7 @@ const Toolbar = styled(Box)(({ theme }) => ({
   display: 'flex',
   alignItems: 'center',
   height: 32,
+  minHeight: 32,
   padding: theme.spacing(0, 0.5),
   borderBottom: `1px solid ${theme.palette.divider}`,
   backgroundColor: alpha(theme.palette.background.default, 0.4),
