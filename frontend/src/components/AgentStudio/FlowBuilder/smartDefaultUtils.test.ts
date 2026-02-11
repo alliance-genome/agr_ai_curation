@@ -39,7 +39,7 @@ function createMockNode(
       agent_id: agentId,
       agent_display_name: agentId.replace(/_/g, ' ').toUpperCase(),
       input_source: 'custom',
-      output_key: outputKey || `${agentId}_output`,
+      output_key: outputKey || `${agentId.replace(/-/g, '_')}_output`,
     } as AgentNodeData,
   }
 }

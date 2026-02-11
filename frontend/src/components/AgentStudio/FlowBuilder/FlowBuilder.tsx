@@ -825,7 +825,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             custom_instructions: '',
             input_source: inputSource,
             custom_input: customInput,
-            output_key: isTaskInput ? 'task_input' : `${agentId}_output`,
+            output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
           },
         }
 
