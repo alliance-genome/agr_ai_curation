@@ -20,7 +20,7 @@ Architecture:
 """
 import logging
 from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional, Set
+from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from agents import Agent
 
@@ -105,6 +105,28 @@ def get_task_instructions(flow: CurationFlow) -> Optional[str]:
     return None
 
 
+def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
+    """Count occurrences of each agent_id in the flow (excluding task_input).
+
+    Used to detect duplicate agent usage so tools can be named uniquely
+    per step (e.g., ask_gene_step1_specialist, ask_gene_step3_specialist).
+
+    Args:
+        flow: The CurationFlow object containing flow_definition
+
+    Returns:
+        Dict mapping agent_id to occurrence count.
+    """
+    counts: Dict[str, int] = {}
+    for node in flow.flow_definition.get("nodes", []):
+        node_type = node.get("type", "agent")
+        agent_id = node.get("data", {}).get("agent_id")
+        if node_type == "task_input" or agent_id == "task_input" or not agent_id:
+            continue
+        counts[agent_id] = counts.get(agent_id, 0) + 1
+    return counts
+
+
 def flow_requires_document(flow: CurationFlow) -> bool:
     """Check if any agent in the flow requires a document.
 
@@ -132,15 +154,17 @@ def get_all_agent_tools(
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
-) -> List:
+) -> Tuple[List, Set[str]]:
     """Get streaming-wrapped tools for agents in the flow.
+
+    Creates one tool per flow node (not per unique agent_id). This means
+    if the same agent appears in multiple steps, each step gets its own
+    agent instance with its own custom_instructions. Duplicate agent_ids
+    get step-numbered tool names (e.g., ask_gene_step1_specialist).
 
     Uses _create_streaming_tool() to wrap each agent, which captures internal
     tool calls via run_specialist_with_events() and emits events for the audit
     panel and PDF highlighting. This is the same pattern used by normal chat.
-
-    Only agents that are explicitly in the flow get their tools created.
-    This gives the supervisor access only to the intended agents.
 
     Document context (hierarchy, abstract, sections) can be passed in to avoid
     redundant fetches, or will be fetched automatically using DocumentContext
@@ -155,10 +179,15 @@ def get_all_agent_tools(
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
 
     Returns:
-        List of streaming-wrapped tool functions for agents in the flow
+        Tuple of (tools, created_tool_names) where tools is the list of
+        streaming-wrapped tool functions and created_tool_names is the set
+        of tool names that were actually created (used by
+        build_supervisor_instructions to avoid referencing non-existent tools).
     """
-    flow_agent_ids = get_flow_agent_ids(flow)
+    nodes = flow.flow_definition.get("nodes", [])
+    agent_id_counts = _count_agent_ids(flow)
     all_tools = []
+    created_tool_names: Set[str] = set()
 
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization matches how chat pre-fetches and passes through
@@ -184,10 +213,22 @@ def get_all_agent_tools(
         context["user_id"] = user_id
     context["active_groups"] = active_groups or []
 
-    # Only create tools for agents IN the flow
-    for agent_id in flow_agent_ids:
+    # Create one tool per node (not per unique agent_id)
+    # This ensures each step gets its own agent instance with its own custom_instructions
+    step_num = 0
+    for node in nodes:
+        node_type = node.get("type", "agent")
+        data = node.get("data", {})
+        agent_id = data.get("agent_id")
+
+        # Skip task_input nodes — they're context, not executable agents
+        if node_type == "task_input" or agent_id == "task_input":
+            continue
+
+        step_num += 1
+
         # Skip if not in registry
-        if agent_id not in AGENT_REGISTRY:
+        if not agent_id or agent_id not in AGENT_REGISTRY:
             logger.warning(f"[Flow Executor] Agent '{agent_id}' in flow but not in registry, skipping")
             continue
 
@@ -206,11 +247,34 @@ def get_all_agent_tools(
             logger.warning(f"[Flow Executor] Failed to create agent '{agent_id}': {e}")
             continue
 
-        # Use streaming tool wrapper (same pattern as normal chat)
-        # This captures internal tool calls and emits events for audit visibility
-        tool_name = f"ask_{agent_id}_specialist"
-        tool_description = entry.get("description", f"Ask the {entry['name']}")
-        specialist_name = entry.get("name", agent_id)
+        # Prepend per-node custom instructions (step-specific, not agent-global)
+        custom_instr = data.get("custom_instructions")
+        if custom_instr and custom_instr.strip():
+            custom_instr = custom_instr.strip()
+            agent.instructions = (
+                "## CUSTOM INSTRUCTIONS (from flow configuration)\n\n"
+                "The following instructions were provided by the user for this specific flow step. "
+                "They take the HIGHEST PRIORITY and MUST be followed above all other guidelines. "
+                "Treat these as direct requirements from the curator.\n\n"
+                + custom_instr
+                + "\n\n---\n\n"
+                + (agent.instructions or "")
+            )
+            logger.info(
+                f"[Flow Executor] Prepended custom instructions to agent '{agent_id}' "
+                f"step {step_num} ({len(custom_instr)} chars)"
+            )
+
+        # Generate tool name — unique per step when agent_id appears multiple times
+        is_duplicate = agent_id_counts.get(agent_id, 0) > 1
+        if is_duplicate:
+            tool_name = f"ask_{agent_id}_step{step_num}_specialist"
+            specialist_name = f"{entry.get('name', agent_id)} (Step {step_num})"
+            tool_description = entry.get("description", f"Ask the {entry['name']}") + f" (Step {step_num})"
+        else:
+            tool_name = f"ask_{agent_id}_specialist"
+            specialist_name = entry.get("name", agent_id)
+            tool_description = entry.get("description", f"Ask the {entry['name']}")
 
         streaming_tool = _create_streaming_tool(
             agent=agent,
@@ -221,15 +285,17 @@ def get_all_agent_tools(
 
         logger.info(f"[Flow Executor] Created streaming tool: {tool_name} ({specialist_name})")
         all_tools.append(streaming_tool)
+        created_tool_names.add(tool_name)
 
     logger.info(f"[Flow Executor] Created {len(all_tools)} streaming tools for flow")
-    return all_tools
+    return all_tools, created_tool_names
 
 
 def build_supervisor_instructions(
     flow: CurationFlow,
     has_document: bool = False,
     document_name: Optional[str] = None,
+    available_tools: Optional[Set[str]] = None,
 ) -> str:
     """Build supervisor system instructions that list all flow steps.
 
@@ -240,15 +306,25 @@ def build_supervisor_instructions(
     knows to use PDF tools without asking the user for a document. This fixes
     flows that lack task_input nodes (where the prompt doesn't mention documents).
 
+    When available_tools is provided, steps whose tools were not created
+    (e.g., requires_document but no document, missing registry entry, or agent
+    factory error) are marked as [unavailable] and their tool references are
+    suppressed. This prevents the supervisor from trying to call non-existent tools.
+
     Args:
         flow: The CurationFlow containing the flow definition
         has_document: Whether a document is loaded for this flow execution
         document_name: Optional filename for context in the guidance
+        available_tools: Set of tool names actually created by get_all_agent_tools().
+            When provided, only these tools are referenced. Steps with missing
+            tools are marked unavailable. When None (backward compat), all steps
+            are assumed available.
 
     Returns:
         System instructions string for the flow supervisor
     """
     nodes = flow.flow_definition.get("nodes", [])
+    agent_id_counts = _count_agent_ids(flow)
     # entry_node_id = flow.flow_definition.get("entry_node_id")  # Reserved for future edge traversal
 
     # Build ordered step list (for V1, just use node order)
@@ -268,9 +344,32 @@ def build_supervisor_instructions(
         agent_name = data.get("agent_display_name", agent_id or "Unknown")
         step_goal = data.get("step_goal", "")
 
-        step_desc = f"Step {step_num}: {agent_name}"
+        # Determine tool name for this step (matches get_all_agent_tools naming)
+        is_duplicate = agent_id_counts.get(agent_id, 0) > 1
+        if is_duplicate:
+            tool_ref = f"ask_{agent_id}_step{step_num}_specialist"
+        else:
+            tool_ref = f"ask_{agent_id}_specialist"
+
+        # Check if this step's tool was actually created
+        # When available_tools is None (backward compat), assume all steps are available
+        step_available = available_tools is None or tool_ref in available_tools
+
+        if not step_available:
+            step_desc = f"Step {step_num}: {agent_name} [unavailable - tool not loaded, skip this step]"
+            step_descriptions.append(step_desc)
+            continue
+
+        # Include tool name reference when agent appears in multiple steps
+        if is_duplicate:
+            step_desc = f"Step {step_num}: {agent_name} (use tool: {tool_ref})"
+        else:
+            step_desc = f"Step {step_num}: {agent_name}"
         if step_goal:
             step_desc += f" - {step_goal}"
+        custom_instr = data.get("custom_instructions")
+        if custom_instr and custom_instr.strip():
+            step_desc += " [has custom instructions]"
         step_descriptions.append(step_desc)
 
     # Build document guidance if a document is loaded
@@ -403,7 +502,9 @@ def create_flow_supervisor(
 
     # Get all tools with flow-based is_enabled
     # Pass through pre-fetched doc_context to avoid redundant Weaviate queries
-    tools = get_all_agent_tools(
+    # Returns (tools, created_tool_names) so supervisor instructions only
+    # reference tools that were actually created
+    tools, created_tool_names = get_all_agent_tools(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
@@ -412,16 +513,29 @@ def create_flow_supervisor(
         doc_context=doc_context,
     )
 
+    # Fail fast if no tools could be created — the supervisor would have nothing to call
+    if not tools:
+        step_count = sum(
+            1 for n in flow.flow_definition.get("nodes", [])
+            if n.get("type") != "task_input" and n.get("data", {}).get("agent_id") != "task_input"
+        )
+        raise ValueError(
+            f"Flow '{flow.name}' has {step_count} step(s) but no agent tools could be created. "
+            f"Check that agents are in the registry and required documents are provided."
+        )
+
     # Determine if document guidance should be included in system instructions
     # Only include when: 1) a document is provided AND 2) the flow has document-requiring agents
     # This prevents confusing the supervisor by mentioning documents when no PDF tools exist
     has_document = bool(document_id) and flow_requires_document(flow)
 
     # Build supervisor instructions with document awareness if applicable
+    # Pass created_tool_names so instructions only reference tools that exist
     instructions = build_supervisor_instructions(
         flow,
         has_document=has_document,
         document_name=document_name,
+        available_tools=created_tool_names,
     )
 
     # Create flow supervisor agent

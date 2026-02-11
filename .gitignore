@@ -174,3 +174,15 @@ CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
 # Local planning docs (private - not for public repo)
 docs/plans/
 external_review_prompt.md
+
+# Sensitive local files - NEVER commit to public repo
+# PDFs (grant reviews, application docs, etc.)
+/*.pdf
+# Loose markdown in root (analysis notes, drafts, working docs)
+/*_analysis*.md
+/*_working*.md
+/*_draft*.md
+# Text files in root (response drafts, notes)
+/*.txt
+# Presentation files
+presentation/

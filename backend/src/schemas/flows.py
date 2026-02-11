@@ -57,7 +57,7 @@ class FlowNodeData(BaseModel):
     custom_instructions: Optional[str] = Field(
         None,
         max_length=2000,
-        description="Custom instructions appended to agent prompt"
+        description="Custom instructions prepended to agent prompt with highest priority"
     )
     prompt_version: Optional[int] = Field(
         None,

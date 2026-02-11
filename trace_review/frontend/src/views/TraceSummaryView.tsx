@@ -65,7 +65,7 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
             <Typography variant="body1">{data.query}</Typography>
           </Paper>
         </Box>
-        {(data.response_preview || data.response) && (
+        {(data.response_preview) && (
           <Box>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
               <Typography color="text.secondary" variant="body2">Response Preview</Typography>
@@ -88,7 +88,7 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
               }}
             >
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
-                {data.response_preview || data.response}
+                {data.response_preview}
               </Typography>
             </Paper>
           </Box>
