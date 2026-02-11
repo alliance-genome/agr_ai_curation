@@ -30,7 +30,6 @@ import {
   revertCustomAgentVersion,
   updateCustomAgent,
 } from '@/services/agentStudioService'
-import QuickTestPanel from './QuickTestPanel'
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
@@ -53,6 +52,8 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   const [description, setDescription] = useState('')
   const [customPrompt, setCustomPrompt] = useState('')
   const [debouncedPromptDraft, setDebouncedPromptDraft] = useState('')
+  const [modPromptOverrides, setModPromptOverrides] = useState<Record<string, string>>({})
+  const [debouncedModPromptOverrides, setDebouncedModPromptOverrides] = useState<Record<string, string>>({})
   const [includeModRules, setIncludeModRules] = useState(true)
   const [icon, setIcon] = useState('🔧')
   const [saveNotes, setSaveNotes] = useState('')
@@ -82,6 +83,44 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   const selectedCustomAgent = useMemo(
     () => customAgents.find((agent) => agent.id === selectedCustomAgentId),
     [customAgents, selectedCustomAgentId]
+  )
+
+  const availableModIds = useMemo(
+    () => Object.keys(parentAgent?.mod_rules || {}).sort(),
+    [parentAgent]
+  )
+
+  const selectedModId = useMemo(() => modId.trim().toUpperCase(), [modId])
+
+  const selectedModBasePrompt = useMemo(() => {
+    if (!selectedModId) return ''
+    return parentAgent?.mod_rules[selectedModId]?.content || ''
+  }, [parentAgent, selectedModId])
+
+  const selectedModPrompt = useMemo(() => {
+    if (!selectedModId) return ''
+    if (Object.prototype.hasOwnProperty.call(modPromptOverrides, selectedModId)) {
+      return modPromptOverrides[selectedModId]
+    }
+    return selectedModBasePrompt
+  }, [modPromptOverrides, selectedModId, selectedModBasePrompt])
+
+  const selectedModPromptForContext = useMemo(() => {
+    if (!selectedModId) return undefined
+    if (Object.prototype.hasOwnProperty.call(debouncedModPromptOverrides, selectedModId)) {
+      return debouncedModPromptOverrides[selectedModId]
+    }
+    return parentAgent?.mod_rules[selectedModId]?.content
+  }, [debouncedModPromptOverrides, parentAgent, selectedModId])
+
+  const hasSelectedModOverride = useMemo(
+    () => Boolean(selectedModId && Object.prototype.hasOwnProperty.call(modPromptOverrides, selectedModId)),
+    [modPromptOverrides, selectedModId]
+  )
+
+  const hasAnyModOverrides = useMemo(
+    () => Object.keys(modPromptOverrides).length > 0,
+    [modPromptOverrides]
   )
 
   useEffect(() => {
@@ -116,6 +155,8 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           setDescription('')
           setCustomPrompt(basePrompt)
           setDebouncedPromptDraft(basePrompt)
+          setModPromptOverrides({})
+          setDebouncedModPromptOverrides({})
           setIncludeModRules(true)
           setIcon('🔧')
           setVersions([])
@@ -152,6 +193,8 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
       setDescription('')
       setCustomPrompt(basePrompt)
       setDebouncedPromptDraft(basePrompt)
+      setModPromptOverrides({})
+      setDebouncedModPromptOverrides({})
       setIncludeModRules(true)
       setIcon('🔧')
       return
@@ -161,9 +204,21 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     setDescription(selectedCustomAgent.description || '')
     setCustomPrompt(selectedCustomAgent.custom_prompt)
     setDebouncedPromptDraft(selectedCustomAgent.custom_prompt)
+    setModPromptOverrides(selectedCustomAgent.mod_prompt_overrides || {})
+    setDebouncedModPromptOverrides(selectedCustomAgent.mod_prompt_overrides || {})
     setIncludeModRules(selectedCustomAgent.include_mod_rules)
     setIcon(selectedCustomAgent.icon || '🔧')
   }, [selectedCustomAgent, parentAgent?.base_prompt])
+
+  useEffect(() => {
+    if (availableModIds.length === 0) {
+      if (modId) setModId('')
+      return
+    }
+    if (!modId || !availableModIds.includes(modId)) {
+      setModId(availableModIds[0])
+    }
+  }, [availableModIds, modId])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -176,6 +231,16 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
   }, [customPrompt])
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedModPromptOverrides(modPromptOverrides)
+    }, 450)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [modPromptOverrides])
+
+  useEffect(() => {
     if (!onContextChange) return
     onContextChange({
       parent_agent_id: parentAgentId || undefined,
@@ -183,8 +248,11 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
       custom_agent_id: selectedCustomAgent?.agent_id,
       custom_agent_name: selectedCustomAgent?.name,
       include_mod_rules: includeModRules,
-      selected_mod_id: modId.trim() || undefined,
+      selected_mod_id: selectedModId || undefined,
       prompt_draft: debouncedPromptDraft,
+      selected_mod_prompt_draft: selectedModPromptForContext,
+      mod_prompt_override_count: Object.keys(debouncedModPromptOverrides).length,
+      has_mod_prompt_overrides: Object.keys(debouncedModPromptOverrides).length > 0,
       parent_prompt_stale: selectedCustomAgent?.parent_prompt_stale,
       parent_exists: selectedCustomAgent?.parent_exists,
     })
@@ -197,8 +265,10 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     selectedCustomAgent?.parent_prompt_stale,
     selectedCustomAgent?.parent_exists,
     includeModRules,
-    modId,
+    selectedModId,
     debouncedPromptDraft,
+    selectedModPromptForContext,
+    debouncedModPromptOverrides,
   ])
 
   const handleNew = () => {
@@ -206,6 +276,8 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     setName(parentAgent ? `${parentAgent.agent_name} (Custom)` : '')
     setDescription('')
     setCustomPrompt(parentAgent?.base_prompt || '')
+    setModPromptOverrides({})
+    setDebouncedModPromptOverrides({})
     setIncludeModRules(true)
     setIcon('🔧')
     setSaveNotes('')
@@ -249,6 +321,7 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           name: name.trim(),
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
+          mod_prompt_overrides: modPromptOverrides,
           include_mod_rules: includeModRules,
           icon: icon || undefined,
           notes: saveNotes.trim() || undefined,
@@ -261,6 +334,7 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           name: name.trim(),
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
+          mod_prompt_overrides: modPromptOverrides,
           include_mod_rules: includeModRules,
           icon: icon || undefined,
         })
@@ -329,14 +403,49 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
     setPreviewLoading(true)
     setError(null)
     try {
-      const targetAgentId = selectedCustomAgent ? selectedCustomAgent.agent_id : parentAgentId
-      const data = await fetchPromptPreview(targetAgentId, modId.trim() || undefined)
+      if (!selectedCustomAgent) {
+        let localPreview = customPrompt
+        if (selectedModId && includeModRules) {
+          const modPrompt = modPromptOverrides[selectedModId] || parentAgent?.mod_rules[selectedModId]?.content
+          if (modPrompt) {
+            localPreview = `${localPreview}\n\n## MOD-SPECIFIC RULES\n\nThe following rules are specific to ${selectedModId}:\n\n${modPrompt}\n\n## END MOD-SPECIFIC RULES\n`
+          }
+        }
+        setPreview(localPreview)
+        return
+      }
+
+      const targetAgentId = selectedCustomAgent.agent_id
+      const data = await fetchPromptPreview(targetAgentId, selectedModId || undefined)
       setPreview(data.prompt)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to preview prompt')
     } finally {
       setPreviewLoading(false)
     }
+  }
+
+  const handleSelectedModPromptChange = (value: string) => {
+    if (!selectedModId) return
+    setModPromptOverrides((prev) => {
+      const next = { ...prev }
+      if (value === selectedModBasePrompt || (!value.trim() && !selectedModBasePrompt.trim())) {
+        delete next[selectedModId]
+      } else {
+        next[selectedModId] = value
+      }
+      return next
+    })
+  }
+
+  const handleResetSelectedModPrompt = () => {
+    if (!selectedModId) return
+    setModPromptOverrides((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, selectedModId)) return prev
+      const next = { ...prev }
+      delete next[selectedModId]
+      return next
+    })
   }
 
   return (
@@ -463,11 +572,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
           label="Include MOD rules at runtime"
         />
 
-        <Alert severity="info">
-          Structured output note: if this parent agent enforces structured output, include at least one
-          `##` section heading in your prompt so injected schema instructions land predictably.
-        </Alert>
-
         <TextField
           label="Prompt"
           fullWidth
@@ -482,6 +586,61 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             },
           }}
         />
+
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            MOD Prompt Overrides
+          </Typography>
+          {availableModIds.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              This parent agent has no MOD-specific prompts to override.
+            </Typography>
+          ) : (
+            <Stack spacing={1.5}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Select
+                  size="small"
+                  value={modId}
+                  onChange={(event) => setModId(event.target.value)}
+                  sx={{ minWidth: 160 }}
+                >
+                  {availableModIds.map((availableModId) => (
+                    <MenuItem key={availableModId} value={availableModId}>
+                      {availableModId}
+                    </MenuItem>
+                  ))}
+                </Select>
+                <Button
+                  variant="outlined"
+                  onClick={handleResetSelectedModPrompt}
+                  disabled={!hasSelectedModOverride}
+                >
+                  Reset to Parent
+                </Button>
+              </Stack>
+              <TextField
+                fullWidth
+                multiline
+                minRows={8}
+                label={selectedModId ? `${selectedModId} Prompt` : 'MOD Prompt'}
+                value={selectedModPrompt}
+                onChange={(event) => handleSelectedModPromptChange(event.target.value)}
+                sx={{
+                  '& .MuiInputBase-root': {
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                    fontSize: '0.8rem',
+                  },
+                }}
+              />
+              <Typography variant="caption" color="text.secondary">
+                {hasSelectedModOverride
+                  ? `Custom override active for ${selectedModId}.`
+                  : `Using parent ${selectedModId} prompt content.`}
+                {hasAnyModOverrides ? ` Total overrides: ${Object.keys(modPromptOverrides).length}.` : ''}
+              </Typography>
+            </Stack>
+          )}
+        </Paper>
 
         <TextField
           fullWidth
@@ -503,12 +662,24 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             View Merged Prompt
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-            <TextField
+            <Select
               size="small"
-              label="MOD ID (optional)"
               value={modId}
               onChange={(event) => setModId(event.target.value)}
-            />
+              disabled={availableModIds.length === 0}
+              sx={{ minWidth: 180 }}
+            >
+              {availableModIds.length === 0 && (
+                <MenuItem value="">
+                  <em>No MOD rules available</em>
+                </MenuItem>
+              )}
+              {availableModIds.map((availableModId) => (
+                <MenuItem key={availableModId} value={availableModId}>
+                  {availableModId}
+                </MenuItem>
+              ))}
+            </Select>
             <Button variant="outlined" onClick={handlePreview} disabled={previewLoading}>
               View Merged
             </Button>
@@ -529,12 +700,6 @@ function PromptWorkshop({ catalog, initialParentAgentId, onContextChange }: Prom
             }}
           />
         </Paper>
-
-        <QuickTestPanel
-          customAgent={selectedCustomAgent}
-          parentAgent={parentAgent}
-          modId={modId}
-        />
 
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>

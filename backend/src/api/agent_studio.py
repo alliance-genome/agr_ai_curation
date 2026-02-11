@@ -48,6 +48,7 @@ from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
+    get_custom_agent_mod_prompt,
     get_custom_agent_for_user,
     list_custom_agents_for_user,
     make_custom_agent_id,
@@ -359,7 +360,6 @@ async def get_prompt_preview(
                 CustomAgentNotFoundError,
                 CustomAgentAccessError,
             )
-            from src.lib.prompts.cache import get_prompt_optional
 
             custom_uuid = parse_custom_agent_id(agent_id)
             if not custom_uuid:
@@ -375,20 +375,16 @@ async def get_prompt_preview(
             preview = custom_agent.custom_prompt
 
             if mod_id and custom_agent.include_mod_rules:
-                rule_prompt = get_prompt_optional(
-                    custom_agent.parent_agent_key,
-                    prompt_type="group_rules",
+                mod_prompt = get_custom_agent_mod_prompt(
+                    parent_agent_key=custom_agent.parent_agent_key,
                     mod_id=mod_id,
-                ) or get_prompt_optional(
-                    custom_agent.parent_agent_key,
-                    prompt_type="mod_rules",
-                    mod_id=mod_id,
+                    mod_prompt_overrides=custom_agent.mod_prompt_overrides,
                 )
-                if rule_prompt:
+                if mod_prompt:
                     preview = (
                         f"{preview}\n\n## MOD-SPECIFIC RULES\n\n"
                         f"The following rules are specific to {mod_id}:\n\n"
-                        f"{rule_prompt.content}\n\n## END MOD-SPECIFIC RULES\n"
+                        f"{mod_prompt}\n\n## END MOD-SPECIFIC RULES\n"
                     )
 
             return PromptPreviewResponse(
@@ -1910,11 +1906,25 @@ Include `token_info` in responses for budget management:
         if context.active_tab == "prompt_workshop" and context.prompt_workshop:
             workshop = context.prompt_workshop
             draft_prompt = workshop.prompt_draft or ""
+            selected_mod_prompt = workshop.selected_mod_prompt_draft or ""
             truncated = ""
+            mod_truncated = ""
             max_prompt_chars = 12000
+            max_mod_prompt_chars = 6000
             if len(draft_prompt) > max_prompt_chars:
                 draft_prompt = draft_prompt[:max_prompt_chars]
                 truncated = f"\n\n[Truncated to first {max_prompt_chars} chars for context.]"
+            if len(selected_mod_prompt) > max_mod_prompt_chars:
+                selected_mod_prompt = selected_mod_prompt[:max_mod_prompt_chars]
+                mod_truncated = f"\n\n[Truncated to first {max_mod_prompt_chars} chars for context.]"
+
+            selected_mod_prompt_block = ""
+            if workshop.selected_mod_id and selected_mod_prompt:
+                selected_mod_prompt_block = f"""
+
+<workshop_selected_mod_prompt mod="{workshop.selected_mod_id}">
+{selected_mod_prompt}
+</workshop_selected_mod_prompt>{mod_truncated}"""
 
             additions.append(f"""
 <prompt_workshop_context>
@@ -1926,17 +1936,20 @@ The curator is actively iterating a prompt in Prompt Workshop.
 - Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
 - Include MOD rules: {"Yes" if workshop.include_mod_rules else "No"}
 - Selected MOD: {workshop.selected_mod_id or "None"}
+- Has MOD prompt overrides: {"Yes" if workshop.has_mod_prompt_overrides else "No"}
+- MOD override count: {workshop.mod_prompt_override_count or 0}
 - Parent prompt stale: {"Yes" if workshop.parent_prompt_stale else "No"}
 - Parent exists: {"Yes" if workshop.parent_exists is not False else "No"}
 
 Use this workshop context to give concrete prompt-engineering feedback, especially:
 1. how to improve the draft prompt structure and specificity,
-2. what to test next in Quick Test / Compare with Original,
+2. what to test next in flow execution (and when to compare with the parent prompt),
 3. how MOD rules may interact with the current draft.
 
 <workshop_prompt_draft>
 {draft_prompt}
 </workshop_prompt_draft>{truncated}
+{selected_mod_prompt_block}
 
 Prompt injection note:
 - Structured output instructions are inserted near the first `## ` heading.

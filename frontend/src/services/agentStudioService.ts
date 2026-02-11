@@ -132,6 +132,7 @@ export interface CreateCustomAgentRequest {
   parent_agent_id: string
   name: string
   custom_prompt?: string
+  mod_prompt_overrides?: Record<string, string>
   description?: string
   icon?: string
   include_mod_rules?: boolean
@@ -140,6 +141,7 @@ export interface CreateCustomAgentRequest {
 export interface UpdateCustomAgentRequest {
   name?: string
   custom_prompt?: string
+  mod_prompt_overrides?: Record<string, string>
   description?: string
   icon?: string
   include_mod_rules?: boolean

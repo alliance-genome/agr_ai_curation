@@ -220,6 +220,9 @@ class TestPromptWorkshopSystemPrompt:
                 include_mod_rules=True,
                 selected_mod_id="WB",
                 prompt_draft=draft,
+                selected_mod_prompt_draft="WB MOD DRAFT CONTENT",
+                mod_prompt_override_count=2,
+                has_mod_prompt_overrides=True,
                 parent_prompt_stale=True,
                 parent_exists=True,
             ),
@@ -232,6 +235,10 @@ class TestPromptWorkshopSystemPrompt:
         assert "Parent agent: Gene Validation" in system_prompt
         assert "Custom agent: Gene Custom v3" in system_prompt
         assert "Selected MOD: WB" in system_prompt
+        assert "Has MOD prompt overrides: Yes" in system_prompt
+        assert "MOD override count: 2" in system_prompt
         assert "<workshop_prompt_draft>" in system_prompt
+        assert "<workshop_selected_mod_prompt mod=\"WB\">" in system_prompt
+        assert "WB MOD DRAFT CONTENT" in system_prompt
         assert "Truncated to first 12000 chars for context." in system_prompt
         assert "Prompt injection note:" in system_prompt

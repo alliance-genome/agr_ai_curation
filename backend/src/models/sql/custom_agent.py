@@ -2,8 +2,8 @@
 
 import uuid
 
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Index, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Index, func, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from .database import Base
 
@@ -20,6 +20,12 @@ class CustomAgent(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     custom_prompt = Column(Text, nullable=False)
+    mod_prompt_overrides = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     icon = Column(String(10), nullable=False, default="\U0001F527")
     include_mod_rules = Column(Boolean, nullable=False, default=True, server_default="true")
     parent_prompt_hash = Column(String(64), nullable=True)
@@ -61,6 +67,12 @@ class CustomAgentVersion(Base):
     )
     version = Column(Integer, nullable=False)
     custom_prompt = Column(Text, nullable=False)
+    mod_prompt_overrides = Column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

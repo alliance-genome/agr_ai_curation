@@ -113,6 +113,7 @@ def test_get_agent_by_id_resolves_custom_agent_with_mod_rules_disabled(monkeypat
         parent_agent_key="gene",
         display_name="Doug's Gene Agent",
         custom_prompt="Custom prompt",
+        mod_prompt_overrides={},
         include_mod_rules=False,
         requires_document=False,
         parent_exists=True,

@@ -51,6 +51,7 @@ class PromptOverride:
     content: str
     agent_name: str
     custom_agent_id: str
+    mod_overrides: Optional[Dict[str, str]] = None
 
 
 prompt_override_var: ContextVar[Optional[PromptOverride]] = ContextVar(

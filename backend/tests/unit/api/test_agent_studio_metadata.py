@@ -224,9 +224,10 @@ class TestGetRegistryMetadata:
         fake_custom = SimpleNamespace(
             parent_agent_key="gene",
             custom_prompt="CUSTOM BASE PROMPT",
+            mod_prompt_overrides={},
             include_mod_rules=True,
         )
-        fake_rule_prompt = SimpleNamespace(content="WB ONLY RULES")
+        fake_rule_prompt = "WB ONLY RULES"
 
         # Build a lightweight module-like object for local imports in endpoint
         fake_custom_module = SimpleNamespace(
@@ -235,19 +236,19 @@ class TestGetRegistryMetadata:
             CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
             CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
         )
-        fake_prompts_cache = SimpleNamespace(
-            get_prompt_optional=lambda _agent, prompt_type, mod_id: (
-                fake_rule_prompt if prompt_type == "group_rules" and mod_id == "WB" else None
-            )
-        )
-
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
         )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_mod_prompt",
+            lambda parent_agent_key, mod_id, mod_prompt_overrides: (
+                fake_rule_prompt if parent_agent_key == "gene" and mod_id == "WB" else None
+            ),
+        )
         monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_prompts_cache)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -261,3 +262,45 @@ class TestGetRegistryMetadata:
         assert result.source == "custom_agent"
         assert "CUSTOM BASE PROMPT" in result.prompt
         assert "WB ONLY RULES" in result.prompt
+
+    def test_get_prompt_preview_custom_agent_prefers_custom_mod_override(self, monkeypatch):
+        """Prompt preview should use custom MOD override content when present."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            parent_agent_key="gene",
+            custom_prompt="CUSTOM BASE PROMPT",
+            mod_prompt_overrides={"WB": "CUSTOM WB OVERRIDE"},
+            include_mod_rules=True,
+        )
+
+        fake_custom_module = SimpleNamespace(
+            parse_custom_agent_id=lambda _aid: "uuid",
+            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
+            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
+            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_mod_prompt",
+            lambda parent_agent_key, mod_id, mod_prompt_overrides: mod_prompt_overrides.get(mod_id),
+        )
+        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
+
+        result = asyncio.run(
+            api_module.get_prompt_preview(
+                agent_id="ca_11111111-2222-3333-4444-555555555555",
+                mod_id="WB",
+                user={"sub": "test-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert "CUSTOM WB OVERRIDE" in result.prompt

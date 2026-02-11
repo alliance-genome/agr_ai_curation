@@ -91,6 +91,7 @@ def get_prompt(
     agent_name: str,
     prompt_type: str = "system",
     mod_id: Optional[str] = None,
+    group_id: Optional[str] = None,
 ) -> PromptTemplate:
     """
     Get the active prompt for an agent. Zero DB queries.
@@ -112,6 +113,8 @@ def get_prompt(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
+    resolved_mod_id = mod_id or group_id
+
     override = get_prompt_override()
     if (
         override
@@ -123,9 +126,25 @@ def get_prompt(
             content=override.content,
             custom_agent_id=override.custom_agent_id,
         )
+    if (
+        override
+        and prompt_type in {"group_rules", "mod_rules"}
+        and override.agent_name == agent_name
+        and resolved_mod_id
+    ):
+        normalized_mod_id = resolved_mod_id.upper()
+        override_content = (override.mod_overrides or {}).get(normalized_mod_id)
+        if override_content:
+            return _build_override_prompt_template(
+                agent_name=agent_name,
+                content=override_content,
+                custom_agent_id=override.custom_agent_id,
+                prompt_type=prompt_type,
+                mod_id=normalized_mod_id,
+            )
 
     # Cache key includes group ID for group-specific prompts
-    key = f"{agent_name}:{prompt_type}:{mod_id or 'base'}"
+    key = f"{agent_name}:{prompt_type}:{resolved_mod_id or 'base'}"
 
     if key not in _active_cache:
         raise PromptNotFoundError(
@@ -141,6 +160,7 @@ def get_prompt_by_version(
     version: int,
     prompt_type: str = "system",
     mod_id: Optional[str] = None,
+    group_id: Optional[str] = None,
 ) -> PromptTemplate:
     """
     Get a specific version of a prompt (for pinned flows). Zero DB queries.
@@ -163,7 +183,7 @@ def get_prompt_by_version(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
-    key = f"{agent_name}:{prompt_type}:{mod_id or 'base'}:v{version}"
+    key = f"{agent_name}:{prompt_type}:{mod_id or group_id or 'base'}:v{version}"
 
     if key not in _version_cache:
         raise PromptNotFoundError(
@@ -178,6 +198,7 @@ def get_prompt_optional(
     agent_name: str,
     prompt_type: str = "system",
     mod_id: Optional[str] = None,
+    group_id: Optional[str] = None,
 ) -> Optional[PromptTemplate]:
     """
     Get the active prompt if it exists, None otherwise.
@@ -200,6 +221,8 @@ def get_prompt_optional(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
+    resolved_mod_id = mod_id or group_id
+
     override = get_prompt_override()
     if (
         override
@@ -211,8 +234,24 @@ def get_prompt_optional(
             content=override.content,
             custom_agent_id=override.custom_agent_id,
         )
+    if (
+        override
+        and prompt_type in {"group_rules", "mod_rules"}
+        and override.agent_name == agent_name
+        and resolved_mod_id
+    ):
+        normalized_mod_id = resolved_mod_id.upper()
+        override_content = (override.mod_overrides or {}).get(normalized_mod_id)
+        if override_content:
+            return _build_override_prompt_template(
+                agent_name=agent_name,
+                content=override_content,
+                custom_agent_id=override.custom_agent_id,
+                prompt_type=prompt_type,
+                mod_id=normalized_mod_id,
+            )
 
-    key = f"{agent_name}:{prompt_type}:{mod_id or 'base'}"
+    key = f"{agent_name}:{prompt_type}:{resolved_mod_id or 'base'}"
     return _active_cache.get(key)
 
 
@@ -220,13 +259,15 @@ def _build_override_prompt_template(
     agent_name: str,
     content: str,
     custom_agent_id: str,
+    prompt_type: str = "system",
+    mod_id: Optional[str] = None,
 ) -> PromptTemplate:
     """Build an in-memory PromptTemplate object for custom-agent prompt overrides."""
     return PromptTemplate(
         id=None,
         agent_name=agent_name,
-        prompt_type="system",
-        group_id=None,
+        prompt_type=prompt_type,
+        group_id=mod_id,
         content=content,
         version=1,
         is_active=True,

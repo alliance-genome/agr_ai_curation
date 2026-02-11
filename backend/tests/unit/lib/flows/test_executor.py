@@ -567,6 +567,7 @@ class TestGetAllAgentToolsCreatedNames:
             parent_agent_key="gene",
             display_name="Doug's Gene Agent",
             custom_prompt="Custom prompt",
+            mod_prompt_overrides={},
             include_mod_rules=True,
             requires_document=False,
             parent_exists=True,

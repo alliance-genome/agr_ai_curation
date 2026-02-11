@@ -49,6 +49,29 @@ def compute_prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
+def normalize_mod_prompt_overrides(
+    mod_prompt_overrides: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Normalize MOD override payloads to a clean MOD_ID -> prompt map."""
+    if not mod_prompt_overrides:
+        return {}
+
+    normalized: Dict[str, str] = {}
+    for raw_mod_id, raw_prompt in mod_prompt_overrides.items():
+        if raw_mod_id is None:
+            continue
+        mod_id = str(raw_mod_id).strip().upper()
+        if not mod_id:
+            continue
+        prompt = str(raw_prompt or "")
+        if not prompt.strip():
+            # Empty overrides are treated as "no override" and omitted.
+            continue
+        normalized[mod_id] = prompt
+
+    return normalized
+
+
 def _get_next_version(db: Session, custom_agent_uuid: uuid.UUID) -> int:
     max_version = db.query(func.max(CustomAgentVersion.version)).filter(
         CustomAgentVersion.custom_agent_id == custom_agent_uuid
@@ -76,6 +99,7 @@ def create_custom_agent(
     parent_agent_id: str,
     name: str,
     custom_prompt: Optional[str] = None,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
     description: Optional[str] = None,
     icon: Optional[str] = None,
     include_mod_rules: bool = True,
@@ -85,6 +109,7 @@ def create_custom_agent(
     parent_prompt = _get_parent_base_prompt(parent_agent_key)
 
     agent_prompt = custom_prompt if custom_prompt is not None else parent_prompt
+    normalized_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
     parent_hash = compute_prompt_hash(parent_prompt)
 
     custom_agent = CustomAgent(
@@ -93,6 +118,7 @@ def create_custom_agent(
         name=name,
         description=description,
         custom_prompt=agent_prompt,
+        mod_prompt_overrides=normalized_mod_overrides,
         icon=(icon or "\U0001F527"),
         include_mod_rules=include_mod_rules,
         parent_prompt_hash=parent_hash,
@@ -106,6 +132,7 @@ def create_custom_agent(
         custom_agent_id=custom_agent.id,
         version=1,
         custom_prompt=agent_prompt,
+        mod_prompt_overrides=normalized_mod_overrides,
         notes="Initial version",
     ))
 
@@ -154,21 +181,38 @@ def update_custom_agent(
     name: Optional[str] = None,
     description: Optional[str] = None,
     custom_prompt: Optional[str] = None,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
     icon: Optional[str] = None,
     include_mod_rules: Optional[bool] = None,
     notes: Optional[str] = None,
     rebase_parent_hash: bool = False,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
-    if custom_prompt is not None and custom_prompt != custom_agent.custom_prompt:
+    current_mod_overrides = normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides)
+    next_mod_overrides: Optional[Dict[str, str]] = None
+    if mod_prompt_overrides is not None:
+        next_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
+
+    prompt_changed = custom_prompt is not None and custom_prompt != custom_agent.custom_prompt
+    mod_overrides_changed = (
+        next_mod_overrides is not None
+        and next_mod_overrides != current_mod_overrides
+    )
+
+    if prompt_changed or mod_overrides_changed:
         next_version = _get_next_version(db, custom_agent.id)
         db.add(CustomAgentVersion(
             custom_agent_id=custom_agent.id,
             version=next_version,
             custom_prompt=custom_agent.custom_prompt,
+            mod_prompt_overrides=current_mod_overrides,
             notes=notes or "Auto-snapshot before prompt update",
         ))
+
+    if prompt_changed:
         custom_agent.custom_prompt = custom_prompt
+    if mod_overrides_changed and next_mod_overrides is not None:
+        custom_agent.mod_prompt_overrides = next_mod_overrides
 
     if name is not None:
         custom_agent.name = name
@@ -221,10 +265,12 @@ def revert_custom_agent_to_version(
         custom_agent_id=custom_agent.id,
         version=snapshot_version,
         custom_prompt=custom_agent.custom_prompt,
+        mod_prompt_overrides=normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
         notes=notes or f"Snapshot before revert to v{version}",
     ))
 
     custom_agent.custom_prompt = target.custom_prompt
+    custom_agent.mod_prompt_overrides = normalize_mod_prompt_overrides(target.mod_prompt_overrides)
     return custom_agent
 
 
@@ -253,6 +299,7 @@ class CustomAgentRuntimeInfo:
     parent_agent_key: str
     display_name: str
     custom_prompt: str
+    mod_prompt_overrides: Dict[str, str]
     include_mod_rules: bool
     requires_document: bool
     parent_exists: bool
@@ -291,6 +338,7 @@ def get_custom_agent_runtime_info(
             parent_agent_key=custom_agent.parent_agent_key,
             display_name=custom_agent.name,
             custom_prompt=custom_agent.custom_prompt,
+            mod_prompt_overrides=normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
             include_mod_rules=custom_agent.include_mod_rules,
             requires_document=requires_document,
             parent_exists=parent_exists,
@@ -318,6 +366,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "name": custom_agent.name,
         "description": custom_agent.description,
         "custom_prompt": custom_agent.custom_prompt,
+        "mod_prompt_overrides": normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
         "icon": custom_agent.icon,
         "include_mod_rules": custom_agent.include_mod_rules,
         "parent_prompt_hash": custom_agent.parent_prompt_hash,
@@ -328,3 +377,34 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "created_at": custom_agent.created_at,
         "updated_at": custom_agent.updated_at,
     }
+
+
+def get_custom_agent_mod_prompt(
+    parent_agent_key: str,
+    mod_id: str,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve effective MOD prompt content with custom overrides first."""
+    normalized_mod_id = (mod_id or "").strip().upper()
+    if not normalized_mod_id:
+        return None
+
+    overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
+    override = overrides.get(normalized_mod_id)
+    if override:
+        return override
+
+    from src.lib.prompts.cache import get_prompt_optional
+
+    rule_prompt = get_prompt_optional(
+        parent_agent_key,
+        prompt_type="group_rules",
+        mod_id=normalized_mod_id,
+    ) or get_prompt_optional(
+        parent_agent_key,
+        prompt_type="mod_rules",
+        mod_id=normalized_mod_id,
+    )
+    if not rule_prompt:
+        return None
+    return rule_prompt.content

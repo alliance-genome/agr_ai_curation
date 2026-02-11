@@ -1288,6 +1288,7 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
             content=runtime_info.custom_prompt,
             agent_name=runtime_info.parent_agent_key,
             custom_agent_id=str(runtime_info.custom_agent_uuid),
+            mod_overrides=runtime_info.mod_prompt_overrides,
         ))
         try:
             return get_agent_by_id(runtime_info.parent_agent_key, **parent_kwargs)

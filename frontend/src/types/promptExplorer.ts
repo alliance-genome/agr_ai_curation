@@ -98,6 +98,7 @@ export interface CustomAgent {
   name: string
   description?: string
   custom_prompt: string
+  mod_prompt_overrides: Record<string, string>
   icon: string
   include_mod_rules: boolean
   parent_prompt_hash?: string
@@ -114,6 +115,7 @@ export interface CustomAgentVersion {
   custom_agent_id: string
   version: number
   custom_prompt: string
+  mod_prompt_overrides: Record<string, string>
   notes?: string
   created_at: string
 }
@@ -171,6 +173,9 @@ export interface PromptWorkshopContext {
   include_mod_rules?: boolean
   selected_mod_id?: string
   prompt_draft?: string
+  selected_mod_prompt_draft?: string
+  mod_prompt_override_count?: number
+  has_mod_prompt_overrides?: boolean
   parent_prompt_stale?: boolean
   parent_exists?: boolean
 }

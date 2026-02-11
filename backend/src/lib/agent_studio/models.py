@@ -168,6 +168,9 @@ class PromptWorkshopContext(BaseModel):
     include_mod_rules: Optional[bool] = None
     selected_mod_id: Optional[str] = None
     prompt_draft: Optional[str] = None
+    selected_mod_prompt_draft: Optional[str] = None
+    mod_prompt_override_count: Optional[int] = None
+    has_mod_prompt_overrides: Optional[bool] = None
     parent_prompt_stale: Optional[bool] = None
     parent_exists: Optional[bool] = None
 

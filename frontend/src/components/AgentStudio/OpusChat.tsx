@@ -499,7 +499,7 @@ OUTPUT:
   // Prompt Workshop suggestions (shown when on prompt_workshop tab)
   const workshopQuickActions = [
     { label: 'Critique this draft', prompt: 'Please critique my current Prompt Workshop draft and suggest concrete edits.' },
-    { label: 'Plan quick tests', prompt: 'Given my draft, what 3 quick tests should I run next, including one compare-with-original case?' },
+    { label: 'Plan flow tests', prompt: 'Given my draft, what 3 flow-based validation tests should I run next, including one compare-with-parent case?' },
     { label: 'Improve structure', prompt: 'Can you help me restructure this draft prompt so instructions and output expectations are clearer?' },
   ]
 
@@ -598,7 +598,7 @@ OUTPUT:
                 <>
                   Ask Claude to improve your workshop prompt draft,
                   <br />
-                  plan quick tests, and compare against the original.
+                  plan flow tests, and compare against the parent prompt.
                 </>
               ) : (
                 <>

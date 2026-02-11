@@ -47,6 +47,7 @@ class CreateCustomAgentRequest(BaseModel):
     parent_agent_id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
+    mod_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
     include_mod_rules: bool = True
@@ -57,6 +58,7 @@ class UpdateCustomAgentRequest(BaseModel):
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
+    mod_prompt_overrides: Optional[Dict[str, str]] = None
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
     include_mod_rules: Optional[bool] = None
@@ -83,6 +85,7 @@ class CustomAgentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     custom_prompt: str
+    mod_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     icon: str
     include_mod_rules: bool
     parent_prompt_hash: Optional[str] = None
@@ -108,6 +111,7 @@ class CustomAgentVersionResponse(BaseModel):
     custom_agent_id: str
     version: int
     custom_prompt: str
+    mod_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     notes: Optional[str] = None
     created_at: datetime
 
@@ -128,6 +132,7 @@ def _as_version_payload(version_obj) -> CustomAgentVersionResponse:
         custom_agent_id=str(version_obj.custom_agent_id),
         version=version_obj.version,
         custom_prompt=version_obj.custom_prompt,
+        mod_prompt_overrides=version_obj.mod_prompt_overrides or {},
         notes=version_obj.notes,
         created_at=version_obj.created_at,
     )
@@ -148,6 +153,7 @@ async def create_custom_agent_endpoint(
             parent_agent_id=request.parent_agent_id,
             name=request.name,
             custom_prompt=request.custom_prompt,
+            mod_prompt_overrides=request.mod_prompt_overrides,
             description=request.description,
             icon=request.icon,
             include_mod_rules=request.include_mod_rules,
@@ -216,6 +222,7 @@ async def update_custom_agent_endpoint(
             custom_agent=custom_agent,
             name=request.name,
             custom_prompt=request.custom_prompt,
+            mod_prompt_overrides=request.mod_prompt_overrides,
             description=request.description,
             icon=request.icon,
             include_mod_rules=request.include_mod_rules,
