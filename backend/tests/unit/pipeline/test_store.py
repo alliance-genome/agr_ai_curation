@@ -18,6 +18,11 @@ from src.lib.pipeline.store import (
 from src.lib.exceptions import CollectionNotFoundError, BatchInsertError
 
 
+@pytest.fixture(autouse=True)
+def disable_store_sleep(monkeypatch):
+    monkeypatch.setattr(store_module.time, "sleep", lambda _: None)
+
+
 def test_generate_deterministic_uuid_is_stable():
     doc_id = "doc-1"
     content = "A long paragraph of text"
@@ -138,7 +143,8 @@ async def test_store_chunks_to_weaviate_success_path():
         yield MagicMock()
 
     weaviate_client.session.side_effect = fake_session
-    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.number_errors = 0
     chunk_collection.query.fetch_objects.return_value = MagicMock(objects=[MagicMock(), MagicMock()])  # For verification
     batch_ctx.failed_objects = []
 
@@ -175,7 +181,8 @@ async def test_store_chunks_to_weaviate_raises_when_batch_reports_failed_objects
     chunk_collection = MagicMock()
     pdf_collection = MagicMock()
     batch_ctx = MagicMock()
-    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.number_errors = 0
     batch_ctx.failed_objects = [{"message": "openai token overflow"}]
 
     @contextmanager
@@ -208,7 +215,8 @@ async def test_store_chunks_to_weaviate_raises_when_batch_add_object_fails():
     chunk_collection = MagicMock()
     pdf_collection = MagicMock()
     batch_ctx = MagicMock()
-    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.number_errors = 0
     batch_ctx.add_object.side_effect = Exception("single add_object failed")
     batch_ctx.failed_objects = []
 
@@ -234,7 +242,8 @@ async def test_store_chunks_to_weaviate_raises_when_token_preflight_exceeds_limi
     chunk_collection = MagicMock()
     pdf_collection = MagicMock()
     batch_ctx = MagicMock()
-    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.number_errors = 0
     batch_ctx.failed_objects = []
     chunk_collection.query.fetch_objects.return_value = MagicMock(objects=[MagicMock()])
 

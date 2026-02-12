@@ -22,6 +22,7 @@ services:
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
+      - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
     depends_on:
       weaviate-test:
         condition: service_healthy
@@ -51,8 +52,8 @@ services:
   backend-unit-tests:
     image: ai-curation-unit-tests:latest
     build:
-      context: ./backend
-      dockerfile: Dockerfile.unit-test
+      context: .
+      dockerfile: backend/Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
       - ./alliance_agents:/app/alliance_agents
@@ -68,6 +69,7 @@ services:
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
+      - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
     # Note: These ignores match .github/workflows/test.yml for CI consistency
     command: >
       python -m pytest tests/unit/ -v --tb=short --no-cov
@@ -102,10 +104,38 @@ services:
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
+      - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
     depends_on:
       weaviate-test:
         condition: service_healthy
     command: python -m pytest tests/integration/ -v --tb=short
+    networks:
+      - test-network
+
+  # Persistence tests - chunk storage verification against real Weaviate
+  # Uses lightweight unit-test image: no ML deps needed (no torch/CUDA/unstructured)
+  backend-persistence-tests:
+    image: ai-curation-unit-tests:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.unit-test
+    volumes:
+      - ./backend:/app/backend
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_PORT=8080
+      - WEAVIATE_SCHEME=http
+      - EMBEDDING_MODEL=text-embedding-3-small
+      - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=false
+      - EMBEDDING_MODEL_TOKEN_LIMIT=8191
+      - EMBEDDING_TOKEN_SAFETY_MARGIN=500
+      - CONTENT_PREVIEW_CHARS=1600
+      - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+    depends_on:
+      weaviate-test:
+        condition: service_healthy
+    command: python -m pytest tests/integration/persistence/ -v --tb=short --confcutdir=tests/integration/persistence
     networks:
       - test-network
 
@@ -128,6 +158,7 @@ services:
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
+      - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
     depends_on:
       weaviate-test:
         condition: service_healthy

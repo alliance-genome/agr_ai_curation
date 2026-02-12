@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 import asyncio
 import json
+from weaviate.classes.query import Filter
 
 from .connection import get_connection, WeaviateConnection
 from ..weaviate_helpers import get_user_collections
@@ -100,7 +101,6 @@ async def async_list_documents(
                 getattr(filter_obj, "max_vector_count", None),
             )
             if has_filters:
-                from weaviate.classes.query import Filter
                 conditions = []
 
                 if filter_obj.search_term:
@@ -386,7 +386,7 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                     pass
 
             # Get first 10 chunks for preview using v4 API
-            from weaviate.classes.query import Filter, Sort
+            from weaviate.classes.query import Sort
 
             filter_by_doc = Filter.by_property("documentId").equal(document_id)
 
@@ -580,8 +580,6 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
             chunk_collection, pdf_collection = get_user_collections(client, user_id)
 
             # Delete all chunks for this document using v4 API
-            from weaviate.classes.query import Filter
-
             delete_result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: chunk_collection.data.delete_many(
@@ -716,7 +714,7 @@ async def re_embed_document(
             # Count chunks for this document
             def count_chunks():
                 chunks_result = chunk_collection.query.fetch_objects(
-                    filters=chunk_collection.query.where("documentId").equal(document_id),
+                    filters=Filter.by_property("documentId").equal(document_id),
                     limit=10000  # Large limit to count all chunks
                 )
                 return len(chunks_result.objects)
@@ -975,16 +973,15 @@ async def search_similar(document_id: str, user_id: str, limit: int = 5) -> List
                 collection = pdf_collection
 
                 # Get the document's vector using v4 API
-                source_doc = collection.query.fetch_objects(
-                    filters=collection.query.where("id").equal(document_id),
+                source_doc = collection.query.fetch_object_by_id(
+                    document_id,
                     include_vector=True,
-                    limit=1
                 )
 
-                if not source_doc.objects:
+                if not source_doc:
                     raise ValueError(f"Document {document_id} not found")
 
-                vector = source_doc.objects[0].vector
+                vector = source_doc.vector
 
                 if not vector:
                     logger.warning("Document %s has no vector", document_id)

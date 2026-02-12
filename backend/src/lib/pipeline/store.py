@@ -3,11 +3,13 @@
 import logging
 import json
 import os
+import time
 from typing import List, Dict, Any, Optional, Sequence, Union
 from datetime import datetime, timezone
 import asyncio
 import uuid
 import hashlib
+from weaviate.classes.query import Filter
 
 from ..exceptions import StorageError, CollectionNotFoundError, BatchInsertError
 from src.models.chunk import DocumentChunk, ChunkMetadata
@@ -74,6 +76,7 @@ EMBEDDING_MODEL_TOKEN_LIMIT = _get_required_int_env("EMBEDDING_MODEL_TOKEN_LIMIT
 TOKEN_SAFETY_MARGIN = _get_required_int_env("EMBEDDING_TOKEN_SAFETY_MARGIN")
 MAX_PREVIEW_CHARS = _get_required_int_env("CONTENT_PREVIEW_CHARS")  # ~400 tokens for reranking
 TOKEN_PREFLIGHT_ENABLED = _get_required_bool_env("EMBEDDING_TOKEN_PREFLIGHT_ENABLED")
+WEAVIATE_BATCH_RPM = int(os.getenv("WEAVIATE_BATCH_REQUESTS_PER_MINUTE", "5000"))
 
 if EMBEDDING_MODEL_TOKEN_LIMIT <= 0:
     raise RuntimeError("EMBEDDING_MODEL_TOKEN_LIMIT must be > 0")
@@ -81,6 +84,8 @@ if TOKEN_SAFETY_MARGIN < 0:
     raise RuntimeError("EMBEDDING_TOKEN_SAFETY_MARGIN must be >= 0")
 if MAX_PREVIEW_CHARS <= 0:
     raise RuntimeError("CONTENT_PREVIEW_CHARS must be > 0")
+if WEAVIATE_BATCH_RPM <= 0:
+    raise RuntimeError("WEAVIATE_BATCH_REQUESTS_PER_MINUTE must be > 0")
 if TOKEN_SAFETY_MARGIN >= EMBEDDING_MODEL_TOKEN_LIMIT:
     raise RuntimeError(
         "EMBEDDING_TOKEN_SAFETY_MARGIN must be less than EMBEDDING_MODEL_TOKEN_LIMIT"
@@ -276,6 +281,7 @@ async def store_chunks_to_weaviate(
     stored_count = 0
     failed_count = 0
     stored_ids: List[str] = []
+    candidate_uuids: List[str] = []
 
     def _bool_to_str(val: Any) -> Optional[str]:
         """Convert Python bool to string for TEXT schema fields."""
@@ -355,23 +361,37 @@ async def store_chunks_to_weaviate(
         chunk_uuid = generate_deterministic_uuid(document_id, chunk_index, content)
         return chunk_index, chunk_uuid, properties
 
-    def _verify_document_chunks(collection: Any) -> None:
-        """Best-effort check that at least one inserted chunk exists."""
-        try:
-            test_query = collection.query.fetch_objects(
-                where=collection.query.where("documentId").equal(document_id),
-                limit=1
+    def _verify_document_chunks(collection: Any, expected_count: int) -> int:
+        """Strictly verify persisted chunk count for this document."""
+        # Weaviate can be eventually consistent right after batch flush.
+        time.sleep(2)
+        result = collection.query.fetch_objects(
+            filters=Filter.by_property("documentId").equal(document_id),
+            limit=10000,
+        )
+        persisted_count = len(result.objects)
+        logger.info(
+            "Chunk verification for document %s: expected=%d, persisted=%d",
+            document_id,
+            expected_count,
+            persisted_count,
+        )
+        if persisted_count != expected_count:
+            logger.error(
+                "Chunk verification mismatch for document %s: expected=%d, persisted=%d",
+                document_id,
+                expected_count,
+                persisted_count,
             )
-            if not test_query.objects:
-                error_msg = (
-                    f"Batch insert verification failed: No chunks found for document "
-                    f"{document_id} after insert"
-                )
-                logger.error(error_msg)
-                raise BatchInsertError(error_msg, failed_objects=[])
-            logger.info('Batch insert verified: Chunks successfully stored for document %s', document_id)
-        except Exception as verify_err:
-            logger.warning('Could not verify chunk insert for document %s: %s', document_id, verify_err)
+            _cleanup_chunk_uuids(collection, candidate_uuids)
+            raise BatchInsertError(
+                (
+                    "Chunk verification failed for document "
+                    f"{document_id}: expected={expected_count}, persisted={persisted_count}"
+                ),
+                failed_objects=[{"expected": expected_count, "persisted": persisted_count}],
+            )
+        return persisted_count
 
     def _cleanup_chunk_uuids(collection: Any, candidate_uuids: List[str]) -> None:
         """Best-effort cleanup to avoid partial persistence after batch failures."""
@@ -392,7 +412,7 @@ async def store_chunks_to_weaviate(
 
     def sync_store():
         """Synchronous function to store chunks in Weaviate."""
-        nonlocal stored_count, failed_count, stored_ids
+        nonlocal stored_count, failed_count, stored_ids, candidate_uuids
 
         try:
             # Connect to Weaviate
@@ -413,30 +433,63 @@ async def store_chunks_to_weaviate(
                     prepared_batch.append(_prepare_chunk_for_insert(chunk))
                 candidate_uuids = [chunk_uuid for _, chunk_uuid, _ in prepared_batch]
 
-                with collection.batch.dynamic() as batch:
+                with collection.batch.rate_limit(requests_per_minute=WEAVIATE_BATCH_RPM) as batch:
                     for chunk_index, chunk_uuid, properties in prepared_batch:
                         try:
                             batch.add_object(properties=properties, uuid=chunk_uuid)
                         except Exception as add_err:
+                            logger.error(
+                                "Failed to add chunk %d (uuid=%s) to batch for document %s: %s",
+                                chunk_index,
+                                chunk_uuid,
+                                document_id,
+                                add_err,
+                            )
                             _cleanup_chunk_uuids(collection, candidate_uuids)
                             raise BatchInsertError(
                                 f"Failed to add chunk {chunk_index} to batch",
                                 failed_objects=[{"chunk_index": chunk_index, "error": str(add_err)}],
                             ) from add_err
-                    batch_response = batch
 
-                if batch_response and hasattr(batch_response, "failed_objects") and batch_response.failed_objects:
+                batch_error_count = 0
+                if hasattr(batch, "number_errors"):
+                    try:
+                        batch_error_count = int(batch.number_errors)
+                    except Exception:
+                        batch_error_count = 0
+                if batch_error_count > 0:
+                    logger.error(
+                        "Batch reported %d errors for document %s",
+                        batch_error_count,
+                        document_id,
+                    )
+                failed_objects = getattr(batch, "failed_objects", None)
+                if isinstance(failed_objects, list) and failed_objects:
+                    failed_details = []
+                    for failed_object in failed_objects[:10]:
+                        failed_details.append(str(failed_object))
+                    logger.error(
+                        "Batch failed objects for document %s (showing first 10): %s",
+                        document_id,
+                        "; ".join(failed_details),
+                    )
                     _cleanup_chunk_uuids(collection, candidate_uuids)
                     raise BatchInsertError(
-                        f"Batch insert failed for {len(batch_response.failed_objects)} objects",
-                        failed_objects=list(batch_response.failed_objects),
+                        f"Batch insert failed for {len(failed_objects)} objects",
+                        failed_objects=list(failed_objects),
                     )
 
+                logger.info("Batch insert sent %d chunks, verifying persistence...", len(prepared_batch))
+                persisted_count = _verify_document_chunks(collection, expected_count=len(prepared_batch))
                 stored_ids = [chunk_uuid for _, chunk_uuid, _ in prepared_batch]
-                stored_count = len(stored_ids)
+                stored_count = persisted_count
                 failed_count = 0
-                logger.info("Batch insert completed successfully: %d chunks", stored_count)
-                _verify_document_chunks(collection)
+                logger.info(
+                    "Batch insert verified: %d/%d chunks persisted for document %s",
+                    persisted_count,
+                    len(prepared_batch),
+                    document_id,
+                )
 
         except Exception as e:
             logger.error('Error in sync_store: %s', e)

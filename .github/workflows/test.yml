@@ -51,6 +51,12 @@ jobs:
             -e LANGFUSE_PUBLIC_KEY=test-key \
             -e LANGFUSE_SECRET_KEY=test-key \
             -e DOCLING_TIMEOUT=300 \
+            -e EMBEDDING_MODEL=text-embedding-3-small \
+            -e EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true \
+            -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 \
+            -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 \
+            -e CONTENT_PREVIEW_CHARS=1600 \
+            -e WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000 \
             ai-curation-unit-tests:latest \
             python -m pytest tests/unit/ -v --tb=short --no-cov \
             --ignore=tests/integration \
@@ -80,6 +86,57 @@ jobs:
           echo "- \`test_create_tool_cli.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
           echo "- \`test_validate_registry.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
           echo "- \`test_main_startup.py\` - Requires full app context" >> $GITHUB_STEP_SUMMARY
+
+  backend-persistence-tests:
+    name: Backend Persistence Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image (lightweight - no ML deps needed)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./backend/Dockerfile.unit-test
+          push: false
+          load: true
+          tags: ai-curation-unit-tests:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run persistence tests
+        run: |
+          docker compose -f docker-compose.test.yml up -d weaviate-test
+          echo "Waiting for Weaviate test instance..."
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.test.yml exec -T weaviate-test \
+              wget -q -O- http://localhost:8080/v1/.well-known/ready 2>/dev/null; then
+              echo "Weaviate is ready"
+              break
+            fi
+            echo "  Attempt $i/30..."
+            sleep 2
+          done
+          docker compose -f docker-compose.test.yml run --rm backend-persistence-tests
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Persistence Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Chunk persistence integration tests completed." >> $GITHUB_STEP_SUMMARY
+          echo "These tests verify chunks actually persist in Weaviate after batch insert." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**No OpenAI API key required** - uses vectorizer: none" >> $GITHUB_STEP_SUMMARY
 
   frontend-build:
     name: Frontend Build

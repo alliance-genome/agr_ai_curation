@@ -1,0 +1,2010 @@
+[
+  {
+    "index": 1,
+    "type": "Title",
+    "text": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_1",
+      "extracted_at": "2026-02-12T19:25:06.572366",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary",
+      "section_path": [
+        "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 746.944,
+        "right": 543.697,
+        "bottom": 715.162,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            128
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 746.944,
+            "right": 543.697,
+            "bottom": 715.162,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 128,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 2,
+    "type": "NarrativeText",
+    "text": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary\n\nOscar Mendoza Andrade 1 , Zach Wright 1 , Sahel Ghasemzadeh 1 , Dan T Bergstralh  1\u00a7",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_2",
+      "extracted_at": "2026-02-12T19:25:06.572427",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary",
+      "section_path": [
+        "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary"
+      ],
+      "doc_item_label": "text",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 703.655,
+        "right": 390.967,
+        "bottom": 692.855,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            84
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 703.655,
+            "right": 390.967,
+            "bottom": 692.855,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 84,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 3,
+    "type": "NarrativeText",
+    "text": "1 Division of Biological Sciences, University of Missouri, Columbia, MO, 65201, USA.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_3",
+      "extracted_at": "2026-02-12T19:25:06.572457",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary",
+      "section_path": [
+        "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary"
+      ],
+      "doc_item_label": "text",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 689.399,
+        "right": 402.543,
+        "bottom": 678.599,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            84
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 689.399,
+            "right": 402.543,
+            "bottom": 678.599,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 84,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 4,
+    "type": "NarrativeText",
+    "text": "\u00a7 To whom correspondence should be addressed: dan.bergstralh@missouri.edu",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_4",
+      "extracted_at": "2026-02-12T19:25:06.572484",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary",
+      "section_path": [
+        "Analysis  of  Transcripts  in  the  Fly  Cell  Atlas  Reveals  Additional  Cell Populations in the Drosophila melanogaster Ovary"
+      ],
+      "doc_item_label": "text",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 675.142,
+        "right": 365.255,
+        "bottom": 664.342,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            73
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 675.142,
+            "right": 365.255,
+            "bottom": 664.342,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 73,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 5,
+    "type": "Title",
+    "text": "Abstract",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_5",
+      "extracted_at": "2026-02-12T19:25:06.572510",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Abstract",
+      "section_path": [
+        "Abstract"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 648.084,
+        "right": 95.803,
+        "bottom": 638.559,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            8
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 648.084,
+            "right": 95.803,
+            "bottom": 638.559,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 8,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 6,
+    "type": "NarrativeText",
+    "text": "Abstract\n\nThe Drosophila ovary  serves  as  a  powerful  model  system  for  epithelial  morphogenesis.  In  this  study  we  analyzed previously  unidentified  ovarian  epithelial  cells  from  the  Fly  Cell  Atlas  dataset.  We  identified  eight  transcriptionally distinct  clusters  and  annotated  six  of  them,  including  follicle  cell  developmental  stages  9,  10A,  and  10B/11.  Two additional  clusters  remain  only  weakly  identified.  This  work  facilitates  future  use  of  the  ovarian  Fly  Cell  Atlas  by providing validated developmental stage markers and filling critical gaps in follicle cell annotation.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_6",
+      "extracted_at": "2026-02-12T19:25:06.572536",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Abstract",
+      "section_path": [
+        "Abstract"
+      ],
+      "doc_item_label": "text",
+      "page_number": 1,
+      "bbox": {
+        "left": 52.261,
+        "top": 629.711,
+        "right": 543.491,
+        "bottom": 573.55,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 1,
+          "charspan": [
+            0,
+            625
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 629.711,
+            "right": 543.491,
+            "bottom": 573.55,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 625,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 8,
+    "type": "NarrativeText",
+    "text": "Figure 1. Annotation of previously unidentified cell populations in the Fly Cell Atlas of the Drosophila ovary:",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_8",
+      "extracted_at": "2026-02-12T19:25:06.572590",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Abstract",
+      "section_path": [
+        "Abstract"
+      ],
+      "doc_item_label": "caption",
+      "page_number": 2,
+      "bbox": {
+        "left": 52.261,
+        "top": 123.976,
+        "right": 516.484,
+        "bottom": 115.83699999999999,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 2,
+          "charspan": [
+            0,
+            111
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 123.976,
+            "right": 516.484,
+            "bottom": 115.83699999999999,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 111,
+      "hierarchy_level": 2,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 10,
+    "type": "NarrativeText",
+    "text": "A) Highlighted is the size and position of the 'unannotated' population in the ovarian epithelial Fly Cell Atlas UMAP. B and C) Exploratory analysis of two marker genes, Cad74A (B) and Ilp6 (C). mRNA expression is indicated by color, ranging from low (blue) to high (yellow). D) Projection of eight (coded 0-7) transcriptionally distinct cluster assignments for  unannotated  cells  onto  the  UMAP.  E)  A  dot  plot  graph  shows  expression  patterns  of  key  marker  genes  across  all annotated follicle cell clusters. The size of each dot represents the percentage of cells within a cluster expressing a given",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_10",
+      "extracted_at": "2026-02-12T19:25:06.572700",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Abstract",
+      "section_path": [
+        "Abstract"
+      ],
+      "doc_item_label": "text",
+      "page_number": 2,
+      "bbox": {
+        "left": 52.261,
+        "top": 106.71799999999996,
+        "right": 543.526,
+        "bottom": 50.557000000000016,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 2,
+          "charspan": [
+            0,
+            616
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 106.71799999999996,
+            "right": 543.526,
+            "bottom": 50.557000000000016,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 616,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 11,
+    "type": "Title",
+    "text": "7/10/2025 Open Access",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_11",
+      "extracted_at": "2026-02-12T19:25:06.572722",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "7/10/2025 Open Access",
+      "section_path": [
+        "7/10/2025 Open Access"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 3,
+      "bbox": {
+        "left": 36.503,
+        "top": 780.531,
+        "right": 136.765,
+        "bottom": 772.392,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 3,
+          "charspan": [
+            0,
+            21
+          ],
+          "bbox": {
+            "left": 36.503,
+            "top": 780.531,
+            "right": 136.765,
+            "bottom": 772.392,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 21,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 12,
+    "type": "NarrativeText",
+    "text": "7/10/2025 Open Access\n\ngene,  while  the  color  scale  indicates  average  expression  level.  F)  UMAP  visualization  displaying  annotated  cell populations, integrating new cellular identities defined by marker genes identified in this study.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_12",
+      "extracted_at": "2026-02-12T19:25:06.572746",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "7/10/2025 Open Access",
+      "section_path": [
+        "7/10/2025 Open Access"
+      ],
+      "doc_item_label": "text",
+      "page_number": 3,
+      "bbox": {
+        "left": 52.261,
+        "top": 764.774,
+        "right": 543.094,
+        "bottom": 744.629,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 3,
+          "charspan": [
+            0,
+            224
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 764.774,
+            "right": 543.094,
+            "bottom": 744.629,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 224,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 13,
+    "type": "Title",
+    "text": "Description",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_13",
+      "extracted_at": "2026-02-12T19:25:06.572768",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 3,
+      "bbox": {
+        "left": 52.261,
+        "top": 728.372,
+        "right": 110.11,
+        "bottom": 718.847,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 3,
+          "charspan": [
+            0,
+            11
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 728.372,
+            "right": 110.11,
+            "bottom": 718.847,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 11,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 14,
+    "type": "NarrativeText",
+    "text": "Description\n\nThe Drosophila ovary is a well-established model system for the study of epithelial morphogenesis (Duhart et al., 2017; Horne-Badovinac and Bilder 2005). The ovary is divided into ovarioles, which are strings of individual egg chambers at increasing  stages  of  maturity.  By  convention,  these  stages  are  numbered  1-14.  Each  egg  chamber  is  surrounded  by  an epithelial tissue, the follicular epithelium, that undergoes dramatic morphological changes over the course of egg chamber maturation.  Multiple  labs  have  used  single-cell  RNA  Sequencing  technology  to  identify  and  characterize  follicle  cell transcriptomes as these changes occur. A number of these and other Drosophila RNA-Seq studies have been collected and collated to provide a readily-navigated and publicly-available transcriptomic map, The Fly Cell Atlas (FCA) (Li et al., 2022). The FCA is a powerful resource for the cell and developmental biology communities, particularly those scientists working with Drosophila. As of June 2025, the FCA of the adult Drosophila ovary identifies 34 distinct transcriptional clusters  encompassing  both  germline  and  somatic  cell  types.  Notably  missing  from  the  current  set  of  follicle  cell annotations  are  developmental  Stages  9,  10A,  10B,  and  11,  which  represent  an  important  developmental  window  that includes patency and the development of septate junctions (Isasti-Sanchez et al., 2021; Rice et al., 2021; Row et al., 2021). Concomitantly, a large population in the epithelial cell space of the FCA UMAP (Uniform Manifold Approximation and Projection) is labelled as 'unannotated' (Figure 1A), indicating these cells could not be confidently assigned to known lineages due to absent canonical markers, poor transcriptional alignment, or technical artifacts (Li et al., 2022). On the UMAP, the 'unannotated' population is bordered by the following annotated populations: stretch follicle cells; central main  body  follicle  cells  St  6-8;  posterior  follicle  cells  ca.  St  6-8;  choriogenic  main  body  follicle  cells  St  12;  and choriogenic main body follicle cells and corpus luteum. This suggests that the unannotated population includes follicle epithelial cells at Stages 9, 10A, 10B, and 11. To investigate further, we examined two reference markers from earlier ovarian RNA-seq analysis (Jevitt et al., 2020): Cad74A (follicular cells stages 10B-12) (Zartman et al., 2009) and Ilp6 (adipocytes) (Okamoto et al., 2009; Slaidina et al., 2009). We found that they demarcated two distinct subpopulations within the unannotated population (Figures 1B and 1C).  At  resolution  0.1, Cad74A + or Ilp6 + cells  clustered  broadly  with  marker-negative  cells.  At  resolution  0.3,  these populations separated. Resolution 0.2 yielded eight distinct clusters (initially numbered 0-7), including one defined by Cad74A and another by Ilp6 (Figure  1D).  We  then  applied  a  Wilcoxon  rank-sum  test  ('one  cluster  versus  the  rest')  to identify the most discriminatory marker genes for each cluster. Extended Data Table 1 provides these gene lists for the eight new clusters. Clusters 0, 3, and 5: We identify these as mid-stage (9-11) follicle cells based on 1) the topographical position of these clusters  on  the  UMAP,  which  is  consistent  with  a  developmental  trajectory  that  extends  from  follicle  stem  cells  and prefollicle cells to the choriogenic follicle cell populations and 2) the expression of previously reported markers (Figure 1E). Fcp3C and elovl7 mark  Stages  10B/11  (Tootle  et  al.,  2011),  and Cad74A and Cad87A are  upregulated  in  these  stages (Zartman et al., 2009). We therefore identify Cluster 5 as 'follicle cells Stages 10B/11.' bond is most highly expressed in Stages 9 and 10A (Szafer-Glusman et al., 2008), as are the yolk protein genes Yp1, Yp2, and Yp3 (Tootle et al., 2011). These markers are expressed in both Clusters 0 and 3, and cannot distinguish between them. Since egg chamber rotation-driven by extracellular matrix deposition and collective epithelial migration-concludes at Stage 9 (Cetera and Horne-Badovinac 2015), we investigated whether genes involved in these processes show differential expression between Clusters 0 and 3. We generated lists of genes that were significantly more highly expressed in one cluster versus the other. Genes with higher expression in Cluster 0 showed strong association with the Gene Ontology term  'Epithelial  Cell  Migration'  (GO:0010631, p =5.717\u00d710 \u22125 ).  Additionally,  thirteen  genes  from  this  listsona , trol , LanB1 , vkg , Col4a1 , LanA , SPARC , dsx-c73A , LanB2 , Fili , dlp , CG5757 ,  and AdamTS-A -are associated  with  the  GO term 'Extracellular Matrix' (GO:0031012). In contrast, genes more highly expressed in Cluster 3 showed no significant association  with  epithelial  cell  migration.  However,  twelve  genes  from  this  list  are  found  in  GO:0031012: Vm26Aa , Vm34Ca , dally , CG14309 , psd , mfas , Vm32E , Vm26Ac , tyn , Vml , frac , and ltl . Notably, five of these genes are associated with the vitelline membrane, and the eggshell gene nudel shows high expression in Cluster 0. These findings suggest that Cluster 3 represents a later developmental stage than Cluster 0, consistent with its position on the UMAP. We therefore identify Cluster 0 as \"follicle cells Stage 9\" and Cluster 3 as \"follicle cells Stage 10.\" A complication to this identification  is  that dec-1 ,  previously  used  to  mark  Stage  9-12  follicle  cells  (Jevitt  et  al.,  2020),  is  not  expressed  in Cluster 3. However, our analysis of a subsequent transcriptomic study (Slaidina et al., 2021) did not reveal dec-1 at Stage 9 and is consistent with our other markers. Cluster  6 :  Like  the  annotated  'posterior  terminal  follicle  cell  ca.  St.  5-8'  population,  this  cluster  demonstrates  high expression of midline (Figure 1E). Midline is a T-box transcription factor expressed in posterior follicle cells, with protein",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_14",
+      "extracted_at": "2026-02-12T19:25:06.572799",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 3,
+      "bbox": {
+        "left": 52.261,
+        "top": 710.749,
+        "right": 543.747,
+        "bottom": 70.06600000000003,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 3,
+          "charspan": [
+            0,
+            5898
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 710.749,
+            "right": 543.747,
+            "bottom": 70.06600000000003,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        },
+        {
+          "page_no": 3,
+          "charspan": [
+            5899,
+            6025
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 66.19899999999996,
+            "right": 543.412,
+            "bottom": 58.059999999999945,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 6025,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 16,
+    "type": "NarrativeText",
+    "text": "7/10/2025 Open Access evident by Stage 8 (Fregoso Lomas et al., 2013). Another T-box transcription factor, H15, is also expressed in posterior follicle cells, but by Stage 10A, H15 protein is obviously restricted to a smaller posterior region than Midline (Fregoso Lomas et al., 2013). H15 expression is not evident in Cluster 6. Similar cells were identified in another transcriptomic dataset as posterior terminal follicle cells at stages 7-9 (Slaidina et al., 2021). We therefore identify Cluster 6 as 'posterior or adjacent follicle cells ca. St 7-9.'",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_16",
+      "extracted_at": "2026-02-12T19:25:06.572851",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 36.503,
+        "top": 780.531,
+        "right": 136.765,
+        "bottom": 772.392,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            21
+          ],
+          "bbox": {
+            "left": 36.503,
+            "top": 780.531,
+            "right": 136.765,
+            "bottom": 772.392,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        },
+        {
+          "page_no": 4,
+          "charspan": [
+            22,
+            555
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 764.774,
+            "right": 543.736,
+            "bottom": 708.612,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 555,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 17,
+    "type": "NarrativeText",
+    "text": "Clusters 1 and 2 :  Both of these clusters are marked by expression of Mmp2 ,  which encodes Matrix metalloprotease 2. Mmp2 is required for follicle trimming (the degradation of posterior follicle cells surrounding a mature oocyte during ovulation) and corpus luteum formation (Deady et al., 2015). Mmp2::GFP is observed in follicle cells at the posterior and a subset of anterior cells in Stage 14 egg chambers and also at the anterior and posterior of the corpus luteum (Deady et al., 2015). Unlike Cluster 1, Cluster 2 contains cells expressing Ance (Figure 1E), which is expressed in a subset of cells at the  termini  of  the  corpus  luteum  (Jevitt  et  al.,  2020)  and  in  the  dorsal  appendage  forming  cells.  Cluster  2  is  also distinguished from Cluster 1 by some expression of Atf3 and by stronger expression of diap1 . Two populations determined in  a  previous  study  share  these  profiles  (Jevitt  et  al.,  2020)  and  were  both  identified  as  'terminal  cells  of  the  corpus luteum.'",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_17",
+      "extracted_at": "2026-02-12T19:25:06.572874",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 699.493,
+        "right": 543.731,
+        "bottom": 595.31,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            1015
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 699.493,
+            "right": 543.731,
+            "bottom": 595.31,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 1015,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 18,
+    "type": "NarrativeText",
+    "text": "We are confident in the identification of Cluster 2, and have named this cluster accordingly, but we are less sure of the identity of Cluster 1. To help distinguish between them, we generated lists of genes more significantly expressed in one than the other and performed Gene Ontology analysis. Unlike Cluster 2, the list of genes more highly expressed in Cluster 1 is significantly associated with the GO Terms 'Programmed Cell Death Involved in Cell Development' (GO:0010623, p= 1.980\u00d710 -7 ) and 'Autophagy' (GO:0006914, p= 2.337\u00d710 -7 ): associated genes include dcp-1, Atg1, Atg7, Atg8A, Atg9, Atg17, and Atg18A . These findings suggest the possibility that the cells in Cluster 1 are involved in follicle trimming, but without further validation we identify Cluster 1 as 'autophagic cells associated with ovulation.'",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_18",
+      "extracted_at": "2026-02-12T19:25:06.572897",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 586.941,
+        "right": 543.688,
+        "bottom": 504.518,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            823
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 586.941,
+            "right": 543.688,
+            "bottom": 504.518,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 823,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 19,
+    "type": "NarrativeText",
+    "text": "Cluster 7: This cluster is marked by Cp1, Mmp1, Sap-R, GLaz and several uncharacterized genes CG5854, CG14764, CG5446, CG3348. We investigated other ovarian transcriptomic datasets (Jevitt et al., 2020; Miao et al., 2024; Slaidina et al., 2021) and found that a similar profile has been previously identified as 'Stretched Cells 3,' one of three stretch follicle cell populations (Jevitt et al., 2020). Cp1 and Mmp1 encode genes directly implicated in phagocytosis (Purice et al., 2017; Xu et al., 2020), and Sap-R and GLaz encode genes involved in lysosomal function (Pascua-Maestro et al., 2017; Sellin et al., 2017). Stretch follicle cells also perform phagocytosis and the similarity between 'Stretched Cells 3' and Cluster 7 makes it tempting to speculate that both represent phagocytic cells. Based on its similarity to terminal cells of the corpus luteum, Cluster 7 would likely be involved in clearing debris at/after ovulation. However, this possibility is untested and we therefore identify this population as 'CG5854 HIGH ' (Figure 1E).",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_19",
+      "extracted_at": "2026-02-12T19:25:06.572920",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 495.399,
+        "right": 543.727,
+        "bottom": 388.964,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            1047
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 495.399,
+            "right": 543.727,
+            "bottom": 388.964,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 1047,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 20,
+    "type": "NarrativeText",
+    "text": "Cluster 4 : Adipocytes were identified in another ovarian transcriptomics dataset (Jevitt et al., 2020), presumably due to technical difficulty in fully separating the ovary from the fat body during dissection. Cluster 4 has the highest expression of Ilp6 (Figure 1E) and is therefore identified as adipocytes, in agreement with that work.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_20",
+      "extracted_at": "2026-02-12T19:25:06.572942",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 379.845,
+        "right": 543.327,
+        "bottom": 347.695,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            339
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 379.845,
+            "right": 543.327,
+            "bottom": 347.695,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 339,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 21,
+    "type": "NarrativeText",
+    "text": "These annotations fill critical gaps in the Fly Cell Atlas and provide validated markers for future studies of follicle cell development and ovarian morphogenesis.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_21",
+      "extracted_at": "2026-02-12T19:25:06.572967",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Description",
+      "section_path": [
+        "Description"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 339.326,
+        "right": 543.389,
+        "bottom": 319.182,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            163
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 339.326,
+            "right": 543.389,
+            "bottom": 319.182,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 163,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 22,
+    "type": "Title",
+    "text": "Methods",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_22",
+      "extracted_at": "2026-02-12T19:25:06.572990",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 302.924,
+        "right": 95.815,
+        "bottom": 293.399,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            7
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 302.924,
+            "right": 95.815,
+            "bottom": 293.399,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 7,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 23,
+    "type": "NarrativeText",
+    "text": "Methods\n\nThe Drosophila melanogaster ovarian follicular cell population was analyzed using single cell RNA-seq sequencing data available in the Fly Cell Atlas repository at https://flycellatlas.org/. For bioinformatics processing, the Python language was used together with the specialized Scanpy library. To focus specifically on follicular cells, we manually delineated the follicle cell region based on the original UMAP projection provided by the authors and selected the corresponding subset of cells for downstream analysis. A small subpopulation of the 'unannotated' cells (119 of 8825, or ~1.4%) falls in the germline  cell  space  on  the  UMAP,  meaning  that  these  are  not  likely  to  be  somatic.  We  excluded  these  cells  from consideration. Additional somatic cell annotations - oviduct, ovarian sheath muscle, and adult trachea cells - are also not considered in this study.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_23",
+      "extracted_at": "2026-02-12T19:25:06.573012",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 284.55099999999993,
+        "right": 543.735,
+        "bottom": 192.37300000000005,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            887
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 284.55099999999993,
+            "right": 543.735,
+            "bottom": 192.37300000000005,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 887,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 24,
+    "type": "NarrativeText",
+    "text": "An unsupervised clustering analysis was performed on the previously unannotated population using the Leiden algorithm with a resolution of 0.2. This clustering approach was adopted to maintain methodological consistency with the analysis used in the Fly Cell Atlas, facilitating reproducibility and comparability of results. To characterize each cluster, specific marker  genes  were  identified  using  Scanpy's  (version  1.13.1)  sc.get_rank_genes_groups_df()  function,  employing  the Wilcoxon rank-sum test to detect significantly differentially expressed genes. Marker genes were filtered using a threshold of p-value <0.05 and a positive z-score (Scanpy's \"scores\"). Fold change was calculated as the ratio of average counts between the target cluster and the rest. Functional enrichment analyses were conducted using ShinyGO (version 0.82) (Ge et al., 2020) and g:Profiler (Kolberg et al., 2023) to identify overrepresented Gene Ontology biological processes within each cluster.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_24",
+      "extracted_at": "2026-02-12T19:25:06.573034",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 184.00400000000002,
+        "right": 543.75,
+        "bottom": 79.81999999999994,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            988
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 184.00400000000002,
+            "right": 543.75,
+            "bottom": 79.81999999999994,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 988,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 25,
+    "type": "NarrativeText",
+    "text": "Our study also made use of three single-cell RNA sequencing datasets derived from Drosophila ovaries.  Two  of  these datasets were retrieved from the NCBI Gene Expression Omnibus: GSE162192 (Slaidina et al., 2021), and GSE146040",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_25",
+      "extracted_at": "2026-02-12T19:25:06.573075",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 4,
+      "bbox": {
+        "left": 52.261,
+        "top": 70.70100000000002,
+        "right": 543.572,
+        "bottom": 50.557000000000016,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 4,
+          "charspan": [
+            0,
+            229
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 70.70100000000002,
+            "right": 543.572,
+            "bottom": 50.557000000000016,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 229,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 27,
+    "type": "NarrativeText",
+    "text": "7/10/2025 Open Access",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_27",
+      "extracted_at": "2026-02-12T19:25:06.573120",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 36.503,
+        "top": 780.531,
+        "right": 136.765,
+        "bottom": 772.392,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            21
+          ],
+          "bbox": {
+            "left": 36.503,
+            "top": 780.531,
+            "right": 136.765,
+            "bottom": 772.392,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 21,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 28,
+    "type": "NarrativeText",
+    "text": "(Jevitt et al., 2020). We obtained the third dataset (Miao et al., 2024) directly from the authors, but it is also available through  NCBI  BioProjects  (Accession:  PRJNA1108780).  All  datasets  were  processed  and  analyzed  using  the  Seurat package (version 5.2) within the RStudio environment.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_28",
+      "extracted_at": "2026-02-12T19:25:06.573143",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 764.774,
+        "right": 543.651,
+        "bottom": 732.624,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            301
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 764.774,
+            "right": 543.651,
+            "bottom": 732.624,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 301,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 29,
+    "type": "NarrativeText",
+    "text": "Generative  AI  was  used  to  help  with  language  translation  (Spanish  to  English)  and  copy-editing  in  preparing  this manuscript.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_29",
+      "extracted_at": "2026-02-12T19:25:06.573166",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Methods",
+      "section_path": [
+        "Methods"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 723.505,
+        "right": 543.626,
+        "bottom": 703.36,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            140
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 723.505,
+            "right": 543.626,
+            "bottom": 703.36,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 140,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 30,
+    "type": "Title",
+    "text": "Reagents",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_30",
+      "extracted_at": "2026-02-12T19:25:06.573187",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Reagents",
+      "section_path": [
+        "Reagents"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 687.853,
+        "right": 97.757,
+        "bottom": 678.328,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            8
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 687.853,
+            "right": 97.757,
+            "bottom": 678.328,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 8,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 31,
+    "type": "NarrativeText",
+    "text": "Reagents\n\nAcknowledgements: We are grateful to members of the Finegan-Bergstralh lab for their questions and comments.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_31",
+      "extracted_at": "2026-02-12T19:25:06.573212",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Reagents",
+      "section_path": [
+        "Reagents"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 669.48,
+        "right": 514.793,
+        "bottom": 661.341,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            108
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 669.48,
+            "right": 514.793,
+            "bottom": 661.341,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 108,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 32,
+    "type": "Title",
+    "text": "Extended Data",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_32",
+      "extracted_at": "2026-02-12T19:25:06.573233",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "Extended Data",
+      "section_path": [
+        "Extended Data"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 645.083,
+        "right": 126.695,
+        "bottom": 635.558,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            13
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 645.083,
+            "right": 126.695,
+            "bottom": 635.558,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 13,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 33,
+    "type": "NarrativeText",
+    "text": "Extended Data\n\nDescription:  Gene  lists  used  to  identify  the  eight  newly  identified  clusters  of  previously  'unannotated  follicular'  cells. Genes in  each  list  demonstrate  significantly  higher  expression  in  that  cluster  compared  to  all  other  cells  in  the  group examined in this study (p < 0.05). The genes are ranked according to their Wilcoxon z-score, which reflects the strength and consistency of differential expression across cells in the cluster. Higher values indicate stronger upregulation relative to the rest of the dataset. Also shown are the fold change in average gene expression between the cluster and all other cells,  the  p-value  from  the  Wilcoxon  rank-sum  test  (p  value),  and  the  adjusted  p-value  controlling  for  multiple comparisons  using  the  Benjamini-Hochberg  procedure  (adjusted  pval).  Mean  expression  values  are  reported  as  UMI (Unique Molecular Identifier)  counts  within  the  cluster  (mean  expression  in  cluster)  and  in  the  remaining  cells  (mean expression outside the cluster).. Resource Type: Dataset. File: Extended Data Table 1.xlsx. DOI: 10.22002/fjt12-sdx74",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_33",
+      "extracted_at": "2026-02-12T19:25:06.573257",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "Extended Data",
+      "section_path": [
+        "Extended Data"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 631.962,
+        "right": 543.62,
+        "bottom": 527.779,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            1143
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 631.962,
+            "right": 543.62,
+            "bottom": 527.779,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 1143,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 34,
+    "type": "Title",
+    "text": "References",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_34",
+      "extracted_at": "2026-02-12T19:25:06.573279",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "SectionHeaderItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "section_header",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 512.271,
+        "right": 106.618,
+        "bottom": 502.746,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            10
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 512.271,
+            "right": 106.618,
+            "bottom": 502.746,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 10,
+      "hierarchy_level": 1,
+      "content_type": "heading"
+    }
+  },
+  {
+    "index": 35,
+    "type": "NarrativeText",
+    "text": "References\n\nCetera M, Horne-Badovinac S. 2015. Round and round gets you somewhere: collective cell migration and planar polarity in elongating Drosophila egg chambers. Current Opinion in Genetics & Development 32: 10-15. DOI: 10.1016/j.gde.2015.01.003",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_35",
+      "extracted_at": "2026-02-12T19:25:06.573301",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 493.898,
+        "right": 543.253,
+        "bottom": 461.748,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            239
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 493.898,
+            "right": 543.253,
+            "bottom": 461.748,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 239,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 36,
+    "type": "NarrativeText",
+    "text": "Deady LD, Shen W, Mosure SA, Spradling AC, Sun J. 2015. Matrix Metalloproteinase 2 Is Required for Ovulation and Corpus Luteum Formation in Drosophila. PLOS Genetics 11: e1004989. DOI: 10.1371/journal.pgen.1004989",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_36",
+      "extracted_at": "2026-02-12T19:25:06.573325",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 453.379,
+        "right": 543.704,
+        "bottom": 433.235,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            213
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 453.379,
+            "right": 543.704,
+            "bottom": 433.235,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 213,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 37,
+    "type": "NarrativeText",
+    "text": "Duhart JC, Parsons TT, Raftery LA. 2017. The repertoire of epithelial morphogenesis on display: Progressive elaboration of Drosophila egg structure. Mech Dev 148: 18-39. PubMed ID: 28433748",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_37",
+      "extracted_at": "2026-02-12T19:25:06.573349",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 424.116,
+        "right": 543.082,
+        "bottom": 403.971,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            189
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 424.116,
+            "right": 543.082,
+            "bottom": 403.971,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 189,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 38,
+    "type": "NarrativeText",
+    "text": "Fregoso Lomas M, Hails F, Boisclair Lachance JFo, Nilson LA. 2013. Response to the Dorsal Anterior Gradient of EGFR Signaling in Drosophila Oogenesis Is Prepatterned by Earlier Posterior EGFR Activation. Cell Reports 4: 791-802. DOI: 10.1016/j.celrep.2013.07.038",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_38",
+      "extracted_at": "2026-02-12T19:25:06.573374",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 394.852,
+        "right": 543.595,
+        "bottom": 362.702,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            262
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 394.852,
+            "right": 543.595,
+            "bottom": 362.702,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 262,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 39,
+    "type": "NarrativeText",
+    "text": "Horne-Badovinac S, Bilder D. 2005. Mass transit:  epithelial  morphogenesis  in  the  Drosophila  egg  chamber.  Dev  Dyn 232(3): 559-74. PubMed ID: 15704134",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_39",
+      "extracted_at": "2026-02-12T19:25:06.573401",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 354.333,
+        "right": 543.685,
+        "bottom": 334.189,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            157
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 354.333,
+            "right": 543.685,
+            "bottom": 334.189,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 157,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 40,
+    "type": "NarrativeText",
+    "text": "Isasti-Sanchez  J,  M\u00fcnz-Zeise  F,  Lancino  M,  Luschnig  S.  2021.  Transient  opening  of  tricellular  vertices  controls paracellular  transport  through  the  follicle  epithelium  during  Drosophila  oogenesis.  Dev  Cell  56(8):  1083-1099.e5. PubMed ID: 33831351",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_40",
+      "extracted_at": "2026-02-12T19:25:06.573426",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 325.06999999999994,
+        "right": 543.478,
+        "bottom": 292.919,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            271
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 325.06999999999994,
+            "right": 543.478,
+            "bottom": 292.919,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 271,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 41,
+    "type": "NarrativeText",
+    "text": "Jevitt A, Chatterjee D, Xie G, Wang XF, Otwell T, Huang YC, Deng WM. 2020. A single-cell atlas of adult Drosophila ovary  identifies  transcriptional  programs  and  somatic  cell  lineage  regulating  oogenesis.  PLOS  Biology  18:  e3000538. DOI: 10.1371/journal.pbio.3000538",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_41",
+      "extracted_at": "2026-02-12T19:25:06.573449",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 283.79999999999995,
+        "right": 543.555,
+        "bottom": 251.64999999999998,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            277
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 283.79999999999995,
+            "right": 543.555,
+            "bottom": 251.64999999999998,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 277,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 42,
+    "type": "NarrativeText",
+    "text": "Lebo DPV, McCall K. 2021. Murder on the Ovarian Express: A Tale of Non-Autonomous Cell Death in the Drosophila Ovary. Cells 10: 1454. DOI: 10.3390/cells10061454",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_42",
+      "extracted_at": "2026-02-12T19:25:06.573472",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 243.28200000000004,
+        "right": 543.449,
+        "bottom": 223.13699999999994,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            160
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 243.28200000000004,
+            "right": 543.449,
+            "bottom": 223.13699999999994,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 160,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 43,
+    "type": "NarrativeText",
+    "text": "Li H, Janssens J, De Waegeneer M, Kolluru SS, Davie K, Gardeux V, et al., Zinzen. 2022. Fly Cell Atlas: A single-nucleus transcriptomic atlas of the adult fruit fly. Science 375: 10.1126/science.abk2432. DOI: 10.1126/science.abk2432",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_43",
+      "extracted_at": "2026-02-12T19:25:06.573496",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 214.01800000000003,
+        "right": 543.719,
+        "bottom": 193.87300000000005,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            232
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 214.01800000000003,
+            "right": 543.719,
+            "bottom": 193.87300000000005,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 232,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 44,
+    "type": "NarrativeText",
+    "text": "Miao Yh, Dou Wh, Liu J, Huang Dw, Xiao Jh. 2024. Single-cell transcriptome sequencing reveals that Wolbachia induces gene expression changes in Drosophila ovary cells to favor its own maternal transmission. mBio 15: 10.1128/mbio.0147324. DOI: 10.1128/mbio.01473-24",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_44",
+      "extracted_at": "2026-02-12T19:25:06.573519",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 184.75400000000002,
+        "right": 543.333,
+        "bottom": 152.60400000000004,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            264
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 184.75400000000002,
+            "right": 543.333,
+            "bottom": 152.60400000000004,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 264,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 45,
+    "type": "NarrativeText",
+    "text": "Okamoto N, Yamanaka N, Yagi Y, Nishida Y, Kataoka H, O'Connor MB, Mizoguchi A. 2009. A Fat Body-Derived IGFlike Peptide Regulates Postfeeding Growth in Drosophila. Developmental Cell 17: 885-891. DOI: 10.1016/j.devcel.2009.10.008",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_45",
+      "extracted_at": "2026-02-12T19:25:06.573542",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 144.236,
+        "right": 543.444,
+        "bottom": 112.08500000000004,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            229
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 144.236,
+            "right": 543.444,
+            "bottom": 112.08500000000004,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 229,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 46,
+    "type": "NarrativeText",
+    "text": "Pascua-Maestro R, Diez-Hermano S, Lillo Cn, Ganfornina MD, Sanchez D. 2017. Protecting cells by protecting their vulnerable lysosomes: Identification of a new mechanism for preserving lysosomal functional integrity upon oxidative stress. PLOS Genetics 13: e1006603. DOI: 10.1371/journal.pgen.1006603",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_46",
+      "extracted_at": "2026-02-12T19:25:06.573568",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 5,
+      "bbox": {
+        "left": 52.261,
+        "top": 102.96600000000001,
+        "right": 543.666,
+        "bottom": 70.81600000000003,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 5,
+          "charspan": [
+            0,
+            299
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 102.96600000000001,
+            "right": 543.666,
+            "bottom": 70.81600000000003,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 299,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 49,
+    "type": "NarrativeText",
+    "text": "Purice MD, Ray A, M\u00fcnzel EJ, Pope BJ, Park DJ, Speese SD, Logan MA. 2017. A novel Drosophila injury model reveals severed axons are cleared through a Draper/MMP-1 signaling cascade. eLife 6: 10.7554/elife.23611. DOI: 10.7554/eLife.23611 Rice C, De O, Alhadyian H, Hall S, Ward RE. 2021. Expanding the Junction: New Insights into Non-Occluding Roles for Septate Junction Proteins during Development. Journal of Developmental Biology 9: 11. DOI: 10.3390/jdb9010011 Row  S,  Huang  YC,  Deng  WM.  2021.  Developmental  regulation  of  oocyte  lipid  intake  through  'patent'  follicular epithelium in Drosophila melanogaster. iScience 24: 102275. DOI: 10.1016/j.isci.2021.102275 Sellin J, Schulze H, Paradis M, Gosejacob D, Papan C, Shevchenko A, et al., Hoch. 2017. Characterization of Drosophila saposin-related mutants  as  a  model  for  lysosomal  sphingolipid  storage  diseases.  Disease  Models  &  Mechanisms  : 10.1242/dmm.027953. DOI: 10.1242/dmm.027953 Slaidina M, Delanoue Rn, Gronke S, Partridge L, L\u00e9opold P. 2009. A Drosophila Insulin-like Peptide Promotes Growth during Nonfeeding States. Developmental Cell 17: 874-884. DOI: 10.1016/j.devcel.2009.10.009 Slaidina M, Gupta S, Banisch TU, Lehmann R. 2021. A single-cell atlas reveals unanticipated cell type complexity in Drosophila ovaries. Genome Research 31: 1938-1951. DOI: 10.1101/gr.274340.120 Szafer-Glusman E, Giansanti MG, Nishihama R, Bolival B, Pringle J, Gatti M, Fuller MT. 2008. A Role for Very-LongChain Fatty Acids in Furrow Ingression during Cytokinesis in Drosophila Spermatocytes. Current Biology 18: 1426-1431. DOI: 10.1016/j.cub.2008.08.061 Tootle TL, Williams D, Hubb A, Frederick R, Spradling A. 2011. Drosophila Eggshell Production: Identification of New Genes and Coordination by Pxt. PLoS ONE 6: e19943. DOI: 10.1371/journal.pone.0019943 Xu T,  Nicolson  S,  Sandow  JJ,  Dayan  S,  Jiang  X,  Manning  JA,  et  al.,  Denton.  2020.  Cp1/cathepsin  L  is  required  for autolysosomal clearance in Drosophila . Autophagy 17: 2734-2749. DOI: 10.1080/15548627.2020.1838105 Zartman JJ, Kanodia JS, Yakoby N, Schafer X, Watson C, Schlichting K, Dahmann C, Shvartsman SY. 2009. Expression patterns of cadherin genes in Drosophila oogenesis. Gene Expression Patterns 9: 31-36. DOI: 10.1016/j.gep.2008.09.001 Funding: This work was supported by an NSF CAREER award 2042280 (PI: Bergstralh) and NIH Grant R01GM125839 (PI: Bergstralh). Author Contributions: Oscar Mendoza Andrade: data curation, methodology, formal analysis, conceptualization, writing -  original  draft.  Zach Wright: formal  analysis,  writing  -  review  editing.  Sahel  Ghasemzadeh:  writing  -  review  editing, formal  analysis.  Dan  T  Bergstralh  :  supervision,  funding  acquisition,  project  administration,  conceptualization,  formal analysis, writing - original draft, writing - review editing. Reviewed By: Anonymous History: Received June 26, 2025 Revision Received July 10, 2025 Accepted July 10, 2025 Published Online July 10, 2025 Indexed July 24, 2025 Copyright: \u00a9 2025 by the authors. This is an open-access article distributed under the terms of the Creative Commons Attribution 4.0 International (CC BY 4.0) License, which permits unrestricted use, distribution, and reproduction in any medium, provided the original author and source are credited. Citation: Mendoza Andrade O, Wright Z, Ghasemzadeh S, Bergstralh DT. 2025. Analysis of Transcripts in the Fly Cell Atlas Reveals Additional Cell Populations in the Drosophila  melanogaster Ovary. microPublication Biology.",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_49",
+      "extracted_at": "2026-02-12T19:25:06.573633",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 6,
+      "bbox": {
+        "left": 52.261,
+        "top": 764.774,
+        "right": 543.751,
+        "bottom": 249.399,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 6,
+          "charspan": [
+            0,
+            3545
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 764.774,
+            "right": 543.751,
+            "bottom": 249.399,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 3545,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  },
+  {
+    "index": 50,
+    "type": "NarrativeText",
+    "text": "10.17912/micropub.biology.001725",
+    "metadata": {
+      "document_id": "fixture-generation",
+      "element_id": "fixture-generation_element_50",
+      "extracted_at": "2026-02-12T19:25:06.573657",
+      "parser": "docling",
+      "processing_time_seconds": 10.33581,
+      "original_type": "TextItem",
+      "section_title": "References",
+      "section_path": [
+        "References"
+      ],
+      "doc_item_label": "text",
+      "page_number": 6,
+      "bbox": {
+        "left": 52.261,
+        "top": 245.53300000000002,
+        "right": 195.783,
+        "bottom": 237.394,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "provenance": [
+        {
+          "page_no": 6,
+          "charspan": [
+            0,
+            32
+          ],
+          "bbox": {
+            "left": 52.261,
+            "top": 245.53300000000002,
+            "right": 195.783,
+            "bottom": 237.394,
+            "coord_origin": "BOTTOMLEFT"
+          }
+        }
+      ],
+      "character_count": 32,
+      "hierarchy_level": 1,
+      "content_type": "paragraph"
+    }
+  }
+]
