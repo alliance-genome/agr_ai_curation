@@ -49,17 +49,17 @@ def provision_weaviate_tenants(cognito_sub: str) -> bool:
             # Create tenant in DocumentChunk collection
             chunk_collection = client.collections.get("DocumentChunk")
             chunk_collection.tenants.create(Tenant(name=tenant_name))
-            logger.info(f"Created tenant '{tenant_name}' in DocumentChunk collection")
+            logger.info("Created tenant '%s' in DocumentChunk collection", tenant_name)
 
             # Create tenant in PDFDocument collection
             pdf_collection = client.collections.get("PDFDocument")
             pdf_collection.tenants.create(Tenant(name=tenant_name))
-            logger.info(f"Created tenant '{tenant_name}' in PDFDocument collection")
+            logger.info("Created tenant '%s' in PDFDocument collection", tenant_name)
 
         return True
 
     except Exception as e:
-        logger.error(f"Failed to provision Weaviate tenants for {cognito_sub}: {e}")
+        logger.error('Failed to provision Weaviate tenants for %s: %s', cognito_sub, e)
         # Return False to signal failure - caller will retry on next login
         return False
 
@@ -119,7 +119,7 @@ def set_global_user_from_cognito(db: Session, cognito_user: Dict[str, Any]) -> U
 
     if db_user is None:
         # First login - create new user
-        logger.info(f"First login detected for Cognito user {cognito_sub} - creating account")
+        logger.info('First login detected for Cognito user %s - creating account', cognito_sub)
 
         # Create user record
         db_user = User(
@@ -134,15 +134,15 @@ def set_global_user_from_cognito(db: Session, cognito_user: Dict[str, Any]) -> U
         db.commit()
         db.refresh(db_user)
 
-        logger.info(f"Created user account: id={db_user.id}, auth_sub={cognito_sub}, email={user_email}")
+        logger.info('Created user account: id=%s, auth_sub=%s, email=%s', db_user.id, cognito_sub, user_email)
 
         # Provision Weaviate tenants for new user (FR-006)
         # Returns False on failure - we'll retry on next login
         provisioned = provision_weaviate_tenants(cognito_sub)
         if provisioned:
-            logger.info(f"Provisioned Weaviate tenants for user {cognito_sub}")
+            logger.info('Provisioned Weaviate tenants for user %s', cognito_sub)
         else:
-            logger.warning(f"Failed to provision Weaviate tenants for {cognito_sub} - will retry on next login")
+            logger.warning('Failed to provision Weaviate tenants for %s - will retry on next login', cognito_sub)
 
         return db_user
 
@@ -151,13 +151,13 @@ def set_global_user_from_cognito(db: Session, cognito_user: Dict[str, Any]) -> U
 
     # Update email if changed in Cognito
     if db_user.email != user_email:
-        logger.info(f"Updating email for user {cognito_sub}: {db_user.email} → {user_email}")
+        logger.info('Updating email for user %s: %s → %s', cognito_sub, db_user.email, user_email)
         db_user.email = user_email
         needs_update = True
 
     # Update display name if changed
     if db_user.display_name != display_name:
-        logger.info(f"Updating display name for user {cognito_sub}: {db_user.display_name} → {display_name}")
+        logger.info('Updating display name for user %s: %s → %s', cognito_sub, db_user.display_name, display_name)
         db_user.display_name = display_name
         needs_update = True
 
@@ -174,7 +174,7 @@ def set_global_user_from_cognito(db: Session, cognito_user: Dict[str, Any]) -> U
     # This ensures we eventually provision tenants even if first attempt failed
     provision_weaviate_tenants(cognito_sub)
 
-    logger.debug(f"User {cognito_sub} authenticated (id={db_user.id})")
+    logger.debug('User %s authenticated (id=%s)', cognito_sub, db_user.id)
     return db_user
 
 

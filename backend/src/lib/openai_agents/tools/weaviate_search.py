@@ -67,8 +67,11 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         limit = min(max(1, limit), 10)
 
         logger.info(
-            f"[OpenAI Agents] Searching document {document_id[:8]}... "
-            f"query='{query[:50]}...', limit={limit}, sections={section_keywords}"
+            "Searching document %s... query='%s...', limit=%s, sections=%s",
+            document_id[:8],
+            query[:50],
+            limit,
+            section_keywords,
         )
 
         try:
@@ -83,7 +86,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             )
 
             if not chunks:
-                logger.info(f"[OpenAI Agents] No chunks found for query: {query[:50]}...")
+                logger.info("No chunks found for query: %s...", query[:50])
                 return ChunkSearchResult(summary="No relevant content found.", hits=[])
 
             hits: List[ChunkHit] = []
@@ -113,11 +116,11 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 )
 
             summary = f"Found {len(hits)} chunks"
-            logger.debug(f"[OpenAI Agents] Returning {len(hits)} structured chunks")
+            logger.debug("Returning %s structured chunks", len(hits))
             return ChunkSearchResult(summary=summary, hits=hits)
 
         except Exception as e:
-            logger.error(f"[OpenAI Agents] Search error: {e}", exc_info=True)
+            logger.error("Search error: %s", e, exc_info=True)
             return ChunkSearchResult(summary=f"Error searching document: {str(e)}", hits=[])
 
     return search_document
@@ -167,7 +170,9 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             tracker.record_call("read_section")
 
         logger.info(
-            f"[OpenAI Agents] Reading section '{section_name}' from document {document_id[:8]}..."
+            "Reading section '%s' from document %s...",
+            section_name,
+            document_id[:8],
         )
 
         try:
@@ -180,7 +185,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             )
 
             if not chunks:
-                logger.info(f"[OpenAI Agents] No content found for section: {section_name}")
+                logger.info("No content found for section: %s", section_name)
                 return SectionReadResult(
                     summary=f"No content found for section '{section_name}'.",
                     section=None
@@ -223,8 +228,11 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             sorted_pages = sorted(page_numbers) if page_numbers else []
 
             logger.info(
-                f"[OpenAI Agents] Read {len(chunks)} chunks from section '{actual_section_title}', "
-                f"pages {sorted_pages}, {len(all_doc_items)} doc_items"
+                "Read %s chunks from section '%s', pages %s, %s doc_items",
+                len(chunks),
+                actual_section_title,
+                sorted_pages,
+                len(all_doc_items),
             )
 
             return SectionReadResult(
@@ -239,7 +247,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             )
 
         except Exception as e:
-            logger.error(f"[OpenAI Agents] Read section error: {e}", exc_info=True)
+            logger.error("Read section error: %s", e, exc_info=True)
             return SectionReadResult(
                 summary=f"Error reading section: {str(e)}",
                 section=None
@@ -293,8 +301,10 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             tracker.record_call("read_subsection")
 
         logger.info(
-            f"[OpenAI Agents] Reading subsection '{subsection}' in '{parent_section}' "
-            f"from document {document_id[:8]}..."
+            "Reading subsection '%s' in '%s' from document %s...",
+            subsection,
+            parent_section,
+            document_id[:8],
         )
 
         try:
@@ -333,8 +343,10 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             sorted_pages = sorted(page_numbers) if page_numbers else []
 
             logger.info(
-                f"[OpenAI Agents] Read {len(chunks)} chunks from subsection '{subsection}', "
-                f"pages {sorted_pages}"
+                "Read %s chunks from subsection '%s', pages %s",
+                len(chunks),
+                subsection,
+                sorted_pages,
             )
 
             return SubsectionReadResult(
@@ -350,7 +362,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             )
 
         except Exception as e:
-            logger.error(f"[OpenAI Agents] Read subsection error: {e}", exc_info=True)
+            logger.error("Read subsection error: %s", e, exc_info=True)
             return SubsectionReadResult(
                 summary=f"Error reading subsection: {str(e)}",
                 subsection=None

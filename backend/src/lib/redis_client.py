@@ -32,7 +32,7 @@ async def get_redis() -> redis.Redis:
 
     if _redis_client is None:
         redis_url = get_redis_url()
-        logger.info(f"Connecting to Redis at {redis_url}")
+        logger.info('Connecting to Redis at %s', redis_url)
         _redis_client = redis.from_url(
             redis_url,
             encoding="utf-8",
@@ -70,10 +70,10 @@ async def set_cancel_signal(session_id: str) -> bool:
         client = await get_redis()
         key = f"{CANCEL_KEY_PREFIX}{session_id}"
         await client.setex(key, CANCEL_TTL_SECONDS, "1")
-        logger.info(f"Set cancel signal for session {session_id}")
+        logger.info('Set cancel signal for session %s', session_id)
         return True
     except Exception as e:
-        logger.error(f"Failed to set cancel signal: {e}")
+        logger.error('Failed to set cancel signal: %s', e)
         return False
 
 
@@ -92,7 +92,7 @@ async def check_cancel_signal(session_id: str) -> bool:
         result = await client.get(key)
         return result is not None
     except Exception as e:
-        logger.error(f"Failed to check cancel signal: {e}")
+        logger.error('Failed to check cancel signal: %s', e)
         return False
 
 
@@ -107,7 +107,7 @@ async def clear_cancel_signal(session_id: str) -> None:
         key = f"{CANCEL_KEY_PREFIX}{session_id}"
         await client.delete(key)
     except Exception as e:
-        logger.error(f"Failed to clear cancel signal: {e}")
+        logger.error('Failed to clear cancel signal: %s', e)
 
 
 async def register_active_stream(session_id: str) -> None:
@@ -123,7 +123,7 @@ async def register_active_stream(session_id: str) -> None:
         key = f"chat:active:{session_id}"
         await client.setex(key, CANCEL_TTL_SECONDS, "1")
     except Exception as e:
-        logger.error(f"Failed to register active stream: {e}")
+        logger.error('Failed to register active stream: %s', e)
 
 
 async def unregister_active_stream(session_id: str) -> None:
@@ -137,7 +137,7 @@ async def unregister_active_stream(session_id: str) -> None:
         key = f"chat:active:{session_id}"
         await client.delete(key)
     except Exception as e:
-        logger.error(f"Failed to unregister active stream: {e}")
+        logger.error('Failed to unregister active stream: %s', e)
 
 
 async def is_stream_active(session_id: str) -> bool:
@@ -155,5 +155,5 @@ async def is_stream_active(session_id: str) -> bool:
         result = await client.get(key)
         return result is not None
     except Exception as e:
-        logger.error(f"Failed to check active stream: {e}")
+        logger.error('Failed to check active stream: %s', e)
         return False

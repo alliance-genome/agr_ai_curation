@@ -64,14 +64,14 @@ async def get_trace_context_for_explorer(trace_id: str) -> TraceContext:
         # Get Langfuse instance
         client = Langfuse()
     except Exception as e:
-        logger.error(f"Failed to initialize Langfuse client: {e}", exc_info=True)
+        logger.error('Failed to initialize Langfuse client: %s', e, exc_info=True)
         raise LangfuseUnavailableError(f"Failed to initialize Langfuse client: {e}") from e
 
     try:
         # Fetch the trace using the API client
         trace = client.api.trace.get(trace_id)
         if not trace:
-            logger.warning(f"Trace not found: {trace_id}")
+            logger.warning('Trace not found: %s', trace_id)
             raise TraceNotFoundError(f"Trace not found: {trace_id}")
 
         # Fetch observations separately using the API
@@ -114,7 +114,7 @@ async def get_trace_context_for_explorer(trace_id: str) -> TraceContext:
         # Re-raise our custom exceptions
         raise
     except Exception as e:
-        logger.error(f"Failed to get trace context: {e}", exc_info=True)
+        logger.error('Failed to get trace context: %s', e, exc_info=True)
         raise TraceContextError(f"Failed to extract trace context: {e}") from e
 
 

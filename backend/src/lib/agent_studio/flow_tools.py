@@ -52,7 +52,7 @@ def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) ->
     """
     _current_user_id.set(user_id)
     _current_user_email.set(user_email)
-    logger.debug(f"Set workflow user context: user_id={user_id}, email={user_email}")
+    logger.debug('Set workflow user context: user_id=%s, email=%s', user_id, user_email)
 
 
 def clear_workflow_user_context() -> None:
@@ -87,7 +87,7 @@ def set_current_flow_context(flow_context: Optional[Dict[str, Any]]) -> None:
     """
     _current_flow_context.set(flow_context)
     if flow_context:
-        logger.debug(f"Set flow context: {flow_context.get('flow_name', 'Unnamed')}")
+        logger.debug('Set flow context: %s', flow_context.get('flow_name', 'Unnamed'))
 
 
 def get_current_flow_context() -> Optional[Dict[str, Any]]:
@@ -299,7 +299,7 @@ def _create_flow_handler():
                 db.commit()
                 db.refresh(flow)
 
-                logger.info(f"Created flow '{name}' (id={flow.id}) for user {user_id}")
+                logger.info("Created flow '%s' (id=%s) for user %s", name, flow.id, user_id)
 
                 return {
                     "success": True,
@@ -314,7 +314,7 @@ def _create_flow_handler():
                 db.close()
 
         except Exception as e:
-            logger.error(f"Failed to create flow: {e}", exc_info=True)
+            logger.error('Failed to create flow: %s', e, exc_info=True)
             # Check for unique constraint violation
             error_str = str(e).lower()
             if "uq_user_flow_name_active" in error_str or "unique constraint" in error_str:
@@ -1026,7 +1026,7 @@ so you can check if the flow ends with an appropriate output agent.""",
     )
     logger.debug("Registered: get_available_agents")
 
-    logger.info(f"Registered 5 flow tools (category: flows)")
+    logger.info('Registered 5 flow tools (category: flows)')
 
 
 # Export public API

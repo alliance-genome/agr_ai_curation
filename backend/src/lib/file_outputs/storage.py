@@ -293,7 +293,7 @@ class FileOutputStorageService:
 
         try:
             temp_file.write_bytes(content_bytes)
-            logger.debug(f"Wrote temp file: {temp_file}")
+            logger.debug('Wrote temp file: %s', temp_file)
 
             # Compute hash and size
             file_hash = self._compute_file_hash(content_bytes)
@@ -320,9 +320,9 @@ class FileOutputStorageService:
                 failed_file = self.temp_failed_path / filename
                 try:
                     shutil.move(str(temp_file), str(failed_file))
-                    logger.error(f"Moved failed file to: {failed_file}")
+                    logger.error('Moved failed file to: %s', failed_file)
                 except Exception as cleanup_err:
-                    logger.warning(f"Failed to move temp file to failed dir: {cleanup_err}")
+                    logger.warning('Failed to move temp file to failed dir: %s', cleanup_err)
                     temp_file.unlink(missing_ok=True)
             raise
 
@@ -349,12 +349,12 @@ class FileOutputStorageService:
         try:
             self._verify_path_within_base(full_path)
         except PathSecurityError as e:
-            logger.warning(f"Path security violation: {e}")
+            logger.warning('Path security violation: %s', e)
             return None
 
         # Check file exists
         if not full_path.exists() or not full_path.is_file():
-            logger.warning(f"File not found: {full_path}")
+            logger.warning('File not found: %s', full_path)
             return None
 
         return full_path.resolve()
@@ -375,14 +375,14 @@ class FileOutputStorageService:
 
         try:
             full_path.unlink()
-            logger.info(f"Deleted file output: {full_path}")
+            logger.info('Deleted file output: %s', full_path)
 
             # Try to clean up empty parent directories (up to outputs/)
             parent = full_path.parent
             while parent != self.outputs_path:
                 try:
                     parent.rmdir()  # Only succeeds if empty
-                    logger.debug(f"Removed empty directory: {parent}")
+                    logger.debug('Removed empty directory: %s', parent)
                     parent = parent.parent
                 except OSError:
                     break  # Directory not empty or other error
@@ -390,7 +390,7 @@ class FileOutputStorageService:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting file {full_path}: {e}")
+            logger.error('Error deleting file %s: %s', full_path, e)
             return False
 
     def get_relative_path(self, absolute_path: Path) -> str:
@@ -425,11 +425,11 @@ class FileOutputStorageService:
                     try:
                         file_path.unlink()
                         deleted += 1
-                        logger.debug(f"Cleaned up temp file: {file_path}")
+                        logger.debug('Cleaned up temp file: %s', file_path)
                     except Exception as e:
-                        logger.warning(f"Failed to delete temp file {file_path}: {e}")
+                        logger.warning('Failed to delete temp file %s: %s', file_path, e)
 
         if deleted:
-            logger.info(f"Cleaned up {deleted} temp files older than {older_than_hours}h")
+            logger.info('Cleaned up %s temp files older than %sh', deleted, older_than_hours)
 
         return deleted

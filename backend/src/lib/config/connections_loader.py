@@ -307,13 +307,13 @@ def load_connections(
         if not connections_path.exists():
             raise FileNotFoundError(f"Connections configuration not found: {connections_path}")
 
-        logger.info(f"Loading connection definitions from: {connections_path}")
+        logger.info('Loading connection definitions from: %s', connections_path)
 
         with open(connections_path, "r") as f:
             data = yaml.safe_load(f)
 
         if not data or "services" not in data:
-            logger.warning(f"No services defined in {connections_path}")
+            logger.warning('No services defined in %s', connections_path)
             _connection_registry = {}
             _initialized = True
             return _connection_registry
@@ -332,11 +332,11 @@ def load_connections(
                 )
 
             except Exception as e:
-                logger.error(f"Failed to load connection {service_id}: {e}")
+                logger.error('Failed to load connection %s: %s', service_id, e)
                 raise
 
         _initialized = True
-        logger.info(f"Loaded {len(_connection_registry)} connection definitions")
+        logger.info('Loaded %s connection definitions', len(_connection_registry))
 
         return _connection_registry
 
@@ -480,7 +480,7 @@ async def check_service_health(service_id: str) -> bool:
 
     conn = _connection_registry.get(service_id)
     if not conn:
-        logger.warning(f"Unknown service: {service_id}")
+        logger.warning('Unknown service: %s', service_id)
         return False
 
     health = conn.health_check
@@ -507,7 +507,7 @@ async def check_service_health(service_id: str) -> bool:
     except Exception as e:
         is_healthy = False
         error_message = str(e)
-        logger.error(f"Health check failed for {service_id}: {e}")
+        logger.error('Health check failed for %s: %s', service_id, e)
 
     # Update cached status
     update_health_status(service_id, is_healthy, error_message)

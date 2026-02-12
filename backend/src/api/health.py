@@ -53,7 +53,7 @@ async def health_check_endpoint() -> Dict[str, Any]:
             }
 
     except Exception as e:
-        logger.error(f"Error checking Weaviate health: {e}")
+        logger.error('Error checking Weaviate health: %s', e)
         health_status["checks"]["weaviate"] = "unhealthy"
         health_status["status"] = "degraded"
         health_status["details"]["weaviate"] = {
@@ -109,7 +109,7 @@ async def readiness_check_endpoint() -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Readiness check failed: {e}")
+        logger.error('Readiness check failed: %s', e)
         raise HTTPException(
             status_code=503,
             detail={

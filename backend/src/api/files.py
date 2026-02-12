@@ -194,7 +194,7 @@ def record_file(
     db.commit()
     db.refresh(file_output)
 
-    logger.info(f"Recorded file output: {file_output.id}")
+    logger.info('Recorded file output: %s', file_output.id)
 
     return _file_to_response(file_output)
 
@@ -289,20 +289,20 @@ def download_file(
         resolved_path = file_path.resolve()
         base_path = storage.base_path.resolve()
         if not resolved_path.is_relative_to(base_path):
-            logger.error(f"Path traversal attempt: {file.file_path}")
+            logger.error('Path traversal attempt: %s', file.file_path)
             raise HTTPException(
                 status_code=404,
                 detail="File not found on storage",
             )
     except (ValueError, PathSecurityError):
-        logger.error(f"Invalid file path: {file.file_path}")
+        logger.error('Invalid file path: %s', file.file_path)
         raise HTTPException(
             status_code=404,
             detail="File not found on storage",
         )
 
     if not file_path.exists():
-        logger.error(f"File missing from disk: {file.file_path}")
+        logger.error('File missing from disk: %s', file.file_path)
         raise HTTPException(
             status_code=404,
             detail="File not found on storage",

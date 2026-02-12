@@ -18,6 +18,7 @@ python-jose[cryptography]>=3.3.0  # JWT validation and JWKS handling
 
 # AI and Chat dependencies
 openai
+tiktoken  # Token preflight checks for embedding limits
 openai-agents[litellm]  # OpenAI Agents SDK for multi-agent orchestration (with LiteLLM for Gemini support)
 anthropic>=0.40.0  # Anthropic SDK for Opus 4.5 chat in Prompt Explorer
 aiohttp  # Async HTTP client for Docling service

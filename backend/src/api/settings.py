@@ -65,7 +65,7 @@ async def get_settings_endpoint(user: Dict[str, Any] = get_auth_dependency()):
         )
 
     except Exception as e:
-        logger.error(f"Error retrieving settings: {e}")
+        logger.error('Error retrieving settings: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve settings: {str(e)}"
@@ -131,7 +131,7 @@ async def update_settings_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating settings: {e}")
+        logger.error('Error updating settings: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update settings: {str(e)}"

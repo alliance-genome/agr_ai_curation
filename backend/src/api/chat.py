@@ -203,21 +203,43 @@ async def load_document_for_chat(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> DocumentStatusResponse:
     """Select a document for chat interactions."""
-    logger.info(f"[LOAD] Loading document for chat: {payload.document_id}")
+    user_id = user.get("sub")
+    logger.info(
+        "Loading document for chat: %s",
+        payload.document_id,
+        extra={"user_id": user_id, "document_id": payload.document_id},
+    )
 
     try:
-        document_detail = await get_document(user['sub'], payload.document_id)
-        logger.info(f"[LOAD] Successfully retrieved document: {payload.document_id}")
+        document_detail = await get_document(user["sub"], payload.document_id)
+        logger.info(
+            "Successfully retrieved document: %s",
+            payload.document_id,
+            extra={"user_id": user_id, "document_id": payload.document_id},
+        )
     except ValueError as exc:
-        logger.warning(f"[LOAD] Document not found: {payload.document_id}")
+        logger.warning(
+            "Document not found: %s",
+            payload.document_id,
+            extra={"user_id": user_id, "document_id": payload.document_id},
+        )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error(f"[LOAD] Error loading document {payload.document_id}: {exc}")
+        logger.error(
+            "Error loading document %s: %s",
+            payload.document_id,
+            exc,
+            extra={"user_id": user_id, "document_id": payload.document_id},
+        )
         raise HTTPException(status_code=500, detail="Failed to load document for chat") from exc
 
     document_summary = document_detail.get("document")
     if not document_summary:
-        logger.error(f"Document payload missing summary for {payload.document_id}")
+        logger.error(
+            "Document payload missing summary for %s",
+            payload.document_id,
+            extra={"user_id": user_id, "document_id": payload.document_id},
+        )
         raise HTTPException(status_code=500, detail="Document summary unavailable")
 
     document_state.set_document(user['sub'], document_summary)
@@ -270,7 +292,11 @@ async def create_session(user: Dict[str, Any] = get_auth_dependency()):
     session_id = str(uuid.uuid4())
     created_at = datetime.now().isoformat()
 
-    logger.info(f"Created new session: {session_id}")
+    logger.info(
+        "Created new session: %s",
+        session_id,
+        extra={"session_id": session_id, "user_id": user.get("sub")},
+    )
     return SessionResponse(session_id=session_id, created_at=created_at)
 
 
@@ -299,13 +325,23 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
     cognito_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_cognito(cognito_groups)
     if active_groups:
-        logger.info(f"[chat] User has active groups: {active_groups} (from Cognito groups: {cognito_groups})")
+        logger.info(
+            "User has active groups: %s (from Cognito groups: %s)",
+            active_groups,
+            cognito_groups,
+            extra={"session_id": session_id, "user_id": user_id},
+        )
 
     try:
         # Retrieve conversation history for multi-turn context
         conversation_history = _get_conversation_history_for_session(user_id, session_id)
         if conversation_history:
-            logger.info(f"[chat] Including {len(conversation_history)} history messages for session {session_id}")
+            logger.info(
+                "Including %s history messages for session %s",
+                len(conversation_history),
+                session_id,
+                extra={"session_id": session_id, "user_id": user_id},
+            )
 
         # Collect full response from streaming generator
         full_response = ""
@@ -328,7 +364,11 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             elif event_type == "RUN_ERROR":
                 # Capture error and stop processing
                 error_message = event.get("data", {}).get("message", "Unknown error")
-                logger.error(f"Agent error during non-streaming chat: {error_message}")
+                logger.error(
+                    "Agent error during non-streaming chat: %s",
+                    error_message,
+                    extra={"session_id": session_id, "user_id": user_id},
+                )
                 break
 
         # If we got an error, raise it
@@ -343,7 +383,12 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Chat error: {e}", exc_info=True)
+        logger.error(
+            "Chat error: %s",
+            e,
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -365,20 +410,33 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
     document_id = active_doc.get("id") if active_doc else None
     document_name = active_doc.get("filename") if active_doc else None
 
-    doc_info = f"document={document_id[:8]}..." if document_id else "no document"
-    logger.info(f"[chat/stream] Request from user {user_id[:8]}..., {doc_info}")
+    doc_info = f"{document_id[:8]}..." if document_id else "none"
+    logger.info(
+        "Chat stream request received",
+        extra={"session_id": session_id, "user_id": user_id, "document_id": doc_info},
+    )
 
     # Extract active groups from user's Cognito groups for prompt injection
     # Note: Cognito uses "cognito:groups" as the claim key
     cognito_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_cognito(cognito_groups)
     if active_groups:
-        logger.info(f"[chat/stream] User has active groups: {active_groups} (from Cognito groups: {cognito_groups})")
+        logger.info(
+            "User has active groups: %s (from Cognito groups: %s)",
+            active_groups,
+            cognito_groups,
+            extra={"session_id": session_id, "user_id": user_id},
+        )
 
     # Retrieve conversation history for multi-turn context
     conversation_history = _get_conversation_history_for_session(user_id, session_id)
     if conversation_history:
-        logger.info(f"[chat/stream] Including {len(conversation_history)} history messages for session {session_id}")
+        logger.info(
+            "Including %s history messages for session %s",
+            len(conversation_history),
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id},
+        )
 
     # Create local cancellation event (for immediate same-worker cancellation)
     cancel_event = asyncio.Event()
@@ -405,7 +463,11 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
-                    logger.info(f"Chat stream cancelled for session {current_session_id}")
+                    logger.info(
+                        "Chat stream cancelled for session %s",
+                        current_session_id,
+                        extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                    )
                     yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'Run cancelled by user', 'session_id': current_session_id})}\n\n"
                     break
 
@@ -446,13 +508,22 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 conversation_manager.add_exchange(user_id, current_session_id, chat_message.message, full_response)
 
         except asyncio.CancelledError:
-            logger.warning(f"Chat stream cancelled unexpectedly for session {current_session_id}, trace_id={trace_id}")
+            logger.warning(
+                "Chat stream cancelled unexpectedly for session %s",
+                current_session_id,
+                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+            )
             # Emit audit event so it's visible in the audit panel
             yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': 'Stream cancelled unexpectedly', 'context': 'asyncio.CancelledError', 'message': 'The request was interrupted. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
             # Emit RUN_ERROR with trace_id for feedback reporting
             yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'The request was interrupted unexpectedly. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': 'StreamCancelled', 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         except Exception as e:
-            logger.error(f"Stream error: {e}, trace_id={trace_id}", exc_info=True)
+            logger.error(
+                "Stream error: %s",
+                e,
+                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                exc_info=True,
+            )
             # Emit audit event so it's visible in the audit panel
             yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': str(e), 'context': type(e).__name__, 'message': f'An error occurred. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
             # Emit RUN_ERROR with trace_id for feedback reporting
@@ -542,7 +613,11 @@ async def execute_flow_endpoint(
     cognito_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_cognito(cognito_groups)
     if active_groups:
-        logger.info(f"[execute-flow] User has active groups: {active_groups}")
+        logger.info(
+            "User has active groups: %s",
+            active_groups,
+            extra={"session_id": request.session_id, "user_id": user.get('sub')},
+        )
 
     # Use Cognito sub (not db_user.id) for Weaviate tenant isolation
     # This matches how chat endpoints work - Weaviate tenants use the Cognito subject ID
@@ -559,10 +634,12 @@ async def execute_flow_endpoint(
     document_name = active_doc.get("filename") if active_doc else None
 
     logger.info(
-        f"[execute-flow] Starting flow execution: flow_id={request.flow_id}, "
-        f"flow_name='{flow.name}', session_id={request.session_id}, "
-        f"user_id={user_id[:8]}..., document_id={request.document_id}, "
-        f"document_name={document_name}"
+        "Starting flow execution: flow_id=%s flow_name=%s document_id=%s document_name=%s",
+        request.flow_id,
+        flow.name,
+        request.document_id,
+        document_name,
+        extra={"session_id": request.session_id, "user_id": user_id},
     )
 
     # Create local cancellation event (for immediate same-worker cancellation)
@@ -590,7 +667,11 @@ async def execute_flow_endpoint(
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
-                    logger.info(f"Flow execution cancelled for session {current_session_id}")
+                    logger.info(
+                        "Flow execution cancelled for session %s",
+                        current_session_id,
+                        extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                    )
                     yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'Flow execution cancelled by user', 'session_id': current_session_id})}\n\n"
                     break
 
@@ -617,11 +698,20 @@ async def execute_flow_endpoint(
                 yield f"data: {json.dumps(flat_event, default=str)}\n\n"
 
         except asyncio.CancelledError:
-            logger.warning(f"Flow execution cancelled unexpectedly for session {current_session_id}, trace_id={trace_id}")
+            logger.warning(
+                "Flow execution cancelled unexpectedly for session %s",
+                current_session_id,
+                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+            )
             yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': 'Flow cancelled unexpectedly', 'context': 'asyncio.CancelledError'}, 'session_id': current_session_id})}\n\n"
             yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'Flow execution was interrupted unexpectedly.', 'error_type': 'StreamCancelled', 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         except Exception as e:
-            logger.error(f"Flow execution error: {e}, trace_id={trace_id}", exc_info=True)
+            logger.error(
+                "Flow execution error: %s",
+                e,
+                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                exc_info=True,
+            )
             yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': str(e), 'context': type(e).__name__}, 'session_id': current_session_id})}\n\n"
             yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': f'Flow execution error: {str(e)}', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         finally:
@@ -671,7 +761,7 @@ async def get_conversation_status(user: Dict[str, Any] = get_auth_dependency()) 
             message="Conversation status retrieved successfully"
         )
     except Exception as e:
-        logger.error(f"Failed to get conversation status: {e}")
+        logger.error("Failed to get conversation status: %s", e, extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -702,7 +792,7 @@ async def reset_conversation(user: Dict[str, Any] = get_auth_dependency()) -> Co
                 session_id=None
             )
     except Exception as e:
-        logger.error(f"Failed to reset conversation: {e}")
+        logger.error("Failed to reset conversation: %s", e, extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -717,7 +807,11 @@ async def get_session_history(session_id: str, user: Dict[str, Any] = get_auth_d
         stats = conversation_manager.get_session_stats(user_id, session_id)
         return SessionHistoryResponse(**stats)
     except SessionAccessError as e:
-        logger.warning(f"Session access denied: {e}")
+        logger.warning(
+            "Session access denied: %s",
+            e,
+            extra={"session_id": session_id, "user_id": user_id},
+        )
         raise HTTPException(status_code=403, detail="Access denied: session belongs to another user")
 
 
@@ -732,7 +826,11 @@ async def clear_session_history(session_id: str, user: Dict[str, Any] = get_auth
         conversation_manager.clear_session_history(user_id, session_id)
         return {"message": f"History cleared for session {session_id}"}
     except SessionAccessError as e:
-        logger.warning(f"Session access denied: {e}")
+        logger.warning(
+            "Session access denied: %s",
+            e,
+            extra={"session_id": session_id, "user_id": user_id},
+        )
         raise HTTPException(status_code=403, detail="Access denied: session belongs to another user")
 
 

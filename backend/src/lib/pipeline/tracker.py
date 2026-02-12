@@ -62,7 +62,7 @@ class PipelineTracker:
         Returns:
             Updated PipelineStatus
         """
-        logger.info(f"Tracking progress for document {document_id} at stage {stage.value}")
+        logger.info('Tracking progress for document %s at stage %s', document_id, stage.value)
 
         # Get or create pipeline status
         if document_id not in self.pipeline_states:
@@ -146,7 +146,7 @@ class PipelineTracker:
         Returns:
             ProcessingError object
         """
-        logger.error(f"Pipeline failure for document {document_id}: {str(error)}")
+        logger.error('Pipeline failure for document %s: %s', document_id, str(error))
 
         # Determine current stage if not provided
         if stage is None and document_id in self.pipeline_states:
@@ -194,7 +194,7 @@ class PipelineTracker:
         Returns:
             Retry result dictionary
         """
-        logger.info(f"Attempting retry for document {document_id}, stage {stage.value}")
+        logger.info('Attempting retry for document %s, stage %s', document_id, stage.value)
 
         # Check if stage is retryable
         if stage not in self.retry_config.retryable_stages:
@@ -286,7 +286,7 @@ class PipelineTracker:
             self.stage_results[document_id] = []
         self.stage_results[document_id].append(result)
 
-        logger.info(f"Recorded {'successful' if success else 'failed'} result for stage {stage.value}")
+        logger.info('Recorded %s result for stage %s', 'successful' if success else 'failed', stage.value)
         return result
 
     def get_pipeline_statistics(self) -> Dict[str, Any]:
@@ -359,6 +359,6 @@ class PipelineTracker:
             cleared_count += 1
 
         if cleared_count > 0:
-            logger.info(f"Cleared {cleared_count} completed pipelines")
+            logger.info('Cleared %s completed pipelines', cleared_count)
 
         return cleared_count

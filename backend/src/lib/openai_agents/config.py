@@ -97,7 +97,7 @@ def get_model_for_agent(model_name: str) -> Union[str, "LitellmModel"]:
         # LiteLLM uses "gemini/" prefix for Google AI Studio models
         litellm_model_name = f"gemini/{model_name}"
 
-        logger.info(f"[LiteLLM] Creating model for Gemini: {litellm_model_name} (drop_params=True)")
+        logger.info('[LiteLLM] Creating model for Gemini: %s (drop_params=True)', litellm_model_name)
         return LitellmModel(model=litellm_model_name, api_key=api_key)
 
     # OpenAI - just return the model name string
@@ -243,7 +243,7 @@ def _get_env_float(key: str, default: Optional[float]) -> Optional[float]:
     try:
         return float(val)
     except ValueError:
-        logger.warning(f"Invalid float value for {key}: {val}, using default {default}")
+        logger.warning('Invalid float value for %s: %s, using default %s', key, val, default)
         return default
 
 
@@ -254,7 +254,7 @@ def _get_env_reasoning(key: str, default: Optional[ReasoningEffort]) -> Optional
         return default
     if val in ("minimal", "low", "medium", "high"):
         return val  # type: ignore
-    logger.warning(f"Invalid reasoning value for {key}: {val}, using default {default}")
+    logger.warning('Invalid reasoning value for %s: %s, using default %s', key, val, default)
     return default
 
 
@@ -369,7 +369,7 @@ def get_max_turns() -> int:
     try:
         return int(val)
     except ValueError:
-        logger.warning(f"Invalid AGENT_MAX_TURNS value: {val}, using default 20")
+        logger.warning('Invalid AGENT_MAX_TURNS value: %s, using default 20', val)
         return 20
 
 
@@ -380,7 +380,10 @@ def get_max_turns() -> int:
 def log_agent_config(agent_name: str, config: AgentConfig) -> None:
     """Log agent configuration for debugging."""
     logger.info(
-        f"[OpenAI Agents] {agent_name} config: "
-        f"model={config.model}, temp={config.temperature}, "
-        f"reasoning={config.reasoning}, tool_choice={config.tool_choice}"
+        "%s config: model=%s temp=%s reasoning=%s tool_choice=%s",
+        agent_name,
+        config.model,
+        config.temperature,
+        config.reasoning,
+        config.tool_choice,
     )

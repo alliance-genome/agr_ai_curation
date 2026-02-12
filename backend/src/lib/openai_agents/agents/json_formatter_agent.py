@@ -64,9 +64,10 @@ def create_json_formatter_agent() -> Agent:
     save_json = create_json_tool()
 
     logger.info(
-        f"[OpenAI Agents] Creating JSON Formatter agent, "
-        f"model={config.model}, temp={config.temperature}, "
-        f"prompt_v={base_prompt.version}"
+        "Creating JSON Formatter agent, model=%s temp=%s prompt_v=%s",
+        config.model,
+        config.temperature,
+        base_prompt.version,
     )
 
     # Log agent configuration to Langfuse for trace visibility

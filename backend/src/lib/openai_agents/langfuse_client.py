@@ -38,7 +38,10 @@ class OTELContextDetachFilter(logging.Filter):
         if record.name == "opentelemetry.context" and record.levelno == logging.ERROR:
             if "Failed to detach context" in str(record.getMessage()):
                 # Log at DEBUG level for traceability before suppressing
-                logger.debug(f"[Langfuse] Suppressed expected OTEL context detach error: {record.getMessage()}")
+                logger.debug(
+                    "Suppressed expected OTEL context detach error: %s",
+                    record.getMessage(),
+                )
                 return False  # Don't log this record
         return True  # Log all other records
 
@@ -108,9 +111,9 @@ def initialize_langfuse():
         # Test connection
         try:
             auth_result = _langfuse_client.auth_check()
-            logger.info(f"[Langfuse] Initialized and authenticated: {auth_result}")
+            logger.info("Initialized and authenticated: %s", auth_result)
         except Exception as auth_error:
-            logger.warning(f"[Langfuse] Auth check failed (server may be starting): {auth_error}")
+            logger.warning("Auth check failed (server may be starting): %s", auth_error)
 
         return _langfuse_client
 
@@ -118,7 +121,7 @@ def initialize_langfuse():
         logger.error("langfuse package not installed. Run: pip install langfuse")
         return None
     except Exception as e:
-        logger.error(f"Failed to initialize Langfuse: {e}")
+        logger.error("Failed to initialize Langfuse: %s", e)
         return None
 
 
@@ -142,7 +145,7 @@ def flush_langfuse():
         try:
             _langfuse_client.flush()
         except Exception as e:
-            logger.warning(f"Failed to flush Langfuse: {e}")
+            logger.warning("Failed to flush Langfuse: %s", e)
 
 
 def create_trace(
@@ -180,7 +183,7 @@ def create_trace(
         )
         return trace
     except Exception as e:
-        logger.warning(f"Failed to create Langfuse trace: {e}")
+        logger.warning("Failed to create Langfuse trace: %s", e)
         return None
 
 
@@ -238,7 +241,13 @@ def log_agent_config(
     # Store config for later flushing
     pending = _get_pending_configs()
     pending.append(config)
-    logger.info(f"[Langfuse] Queued config for agent: {agent_name}, model={model}, tools={len(tools or [])} (pending: {len(pending)})")
+    logger.info(
+        "Queued config for agent: %s, model=%s, tools=%s (pending: %s)",
+        agent_name,
+        model,
+        len(tools or []),
+        len(pending),
+    )
 
 
 def flush_agent_configs(root_span) -> int:
@@ -255,13 +264,13 @@ def flush_agent_configs(root_span) -> int:
         Number of configs flushed
     """
     if _langfuse_client is None:
-        logger.debug("[Langfuse] Not configured, skipping agent config flush")
+        logger.debug("Not configured, skipping agent config flush")
         clear_pending_configs()
         return 0
 
     pending = _get_pending_configs()
     if not pending:
-        logger.debug("[Langfuse] No pending agent configs to flush")
+        logger.debug("No pending agent configs to flush")
         return 0
 
     count = 0
@@ -281,13 +290,17 @@ def flush_agent_configs(root_span) -> int:
                 }
             )
             count += 1
-            logger.debug(f"[Langfuse] Flushed config for agent: {agent_name}")
+            logger.debug("Flushed config for agent: %s", agent_name)
         except Exception as e:
-            logger.warning(f"Failed to flush agent config for {config.get('agent_name', 'Unknown')}: {e}")
+            logger.warning(
+                "Failed to flush agent config for %s: %s",
+                config.get("agent_name", "Unknown"),
+                e,
+            )
 
     # Clear the pending list
     clear_pending_configs()
-    logger.info(f"[Langfuse] Flushed {count} agent configs to trace {root_span.trace_id[:8]}...")
+    logger.info("Flushed %s agent configs to trace %s...", count, root_span.trace_id[:8])
     return count
 
 
@@ -300,7 +313,7 @@ except ImportError:
         global _observe_fallback_warned
         if not _observe_fallback_warned:
             logger.warning(
-                "[Langfuse] langfuse package not installed - @observe decorator is a no-op. "
+                "langfuse package not installed - @observe decorator is a no-op. "
                 "Install langfuse for function tracing: pip install langfuse"
             )
             _observe_fallback_warned = True

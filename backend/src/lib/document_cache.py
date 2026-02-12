@@ -77,12 +77,12 @@ def get_cached_metadata(user_id: str, document_id: str) -> Optional[CachedDocume
         cached = _cache.get(key)
 
         if cached and (time.time() - cached.fetched_at) < _TTL_SECONDS:
-            logger.info(f"[DocumentCache] Cache HIT for document {document_id[:8]}...")
+            logger.info('[DocumentCache] Cache HIT for document %s...', document_id[:8])
             return cached
 
         if cached:
             # Entry exists but is expired - remove it atomically
-            logger.info(f"[DocumentCache] Cache EXPIRED for document {document_id[:8]}...")
+            logger.info('[DocumentCache] Cache EXPIRED for document %s...', document_id[:8])
             del _cache[key]
 
     return None
@@ -112,7 +112,7 @@ def set_cached_metadata(
             fetched_at=time.time()
         )
 
-    logger.info(f"[DocumentCache] Cached metadata for document {document_id[:8]}...")
+    logger.info('[DocumentCache] Cached metadata for document %s...', document_id[:8])
 
 
 def invalidate_cache(user_id: str, document_id: str) -> None:
@@ -130,4 +130,4 @@ def invalidate_cache(user_id: str, document_id: str) -> None:
     with _lock:
         if key in _cache:
             del _cache[key]
-            logger.info(f"[DocumentCache] Invalidated cache for document {document_id[:8]}...")
+            logger.info('[DocumentCache] Invalidated cache for document %s...', document_id[:8])

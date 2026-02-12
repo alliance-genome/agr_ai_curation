@@ -48,7 +48,7 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
         if callable(original_func):
             return original_func
     except (AttributeError, IndexError, TypeError) as e:
-        logger.error(f"Failed to unwrap FunctionTool: {e}")
+        logger.error('Failed to unwrap FunctionTool: %s', e)
 
     raise ValueError(
         f"Could not extract underlying function from FunctionTool '{tool.name}'. "
@@ -522,4 +522,4 @@ Some agents have organism-specific rules. Use these MOD aliases:
     )
     logger.debug("Registered: get_prompt")
 
-    logger.info(f"Registered {registry.get_tool_count()} diagnostic tools")
+    logger.info('Registered %s diagnostic tools', registry.get_tool_count())

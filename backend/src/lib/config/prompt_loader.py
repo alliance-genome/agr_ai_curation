@@ -211,7 +211,7 @@ def _load_base_prompt(
     prompt_yaml = agent_folder / "prompt.yaml"
 
     if not prompt_yaml.exists():
-        logger.debug(f"No prompt.yaml in {agent_folder.name}")
+        logger.debug('No prompt.yaml in %s', agent_folder.name)
         return None
 
     try:
@@ -219,14 +219,14 @@ def _load_base_prompt(
             data = yaml.safe_load(f)
 
         if not data:
-            logger.warning(f"Empty prompt.yaml in {agent_folder.name}")
+            logger.warning('Empty prompt.yaml in %s', agent_folder.name)
             return None
 
         # Extract fields
         content = data.get("content")
 
         if not content:
-            logger.warning(f"Missing content in {prompt_yaml}")
+            logger.warning('Missing content in %s', prompt_yaml)
             return None
 
         # Use folder name as agent_name - this IS the canonical identifier
@@ -264,10 +264,10 @@ def _load_base_prompt(
         return agent_name
 
     except yaml.YAMLError as e:
-        logger.error(f"Failed to parse {prompt_yaml}: {e}")
+        logger.error('Failed to parse %s: %s', prompt_yaml, e)
         raise
     except Exception as e:
-        logger.error(f"Failed to load prompt from {agent_folder.name}: {e}")
+        logger.error('Failed to load prompt from %s: %s', agent_folder.name, e)
         raise
 
 
@@ -305,7 +305,7 @@ def _load_group_rules(
                 data = yaml.safe_load(f)
 
             if not data:
-                logger.warning(f"Empty group rules file: {rule_file}")
+                logger.warning('Empty group rules file: %s', rule_file)
                 continue
 
             # Extract fields
@@ -315,10 +315,10 @@ def _load_group_rules(
             if not group_id:
                 # Try to infer from filename (e.g., fb.yaml -> FB)
                 group_id = rule_file.stem.upper()
-                logger.debug(f"Inferred group_id '{group_id}' from filename {rule_file.name}")
+                logger.debug("Inferred group_id '%s' from filename %s", group_id, rule_file.name)
 
             if not content:
-                logger.warning(f"Missing content in {rule_file}")
+                logger.warning('Missing content in %s', rule_file)
                 continue
 
             # Calculate relative path for source_file
@@ -343,10 +343,10 @@ def _load_group_rules(
             count += 1
 
         except yaml.YAMLError as e:
-            logger.error(f"Failed to parse {rule_file}: {e}")
+            logger.error('Failed to parse %s: %s', rule_file, e)
             raise
         except Exception as e:
-            logger.error(f"Failed to load group rule from {rule_file}: {e}")
+            logger.error('Failed to load group rule from %s: %s', rule_file, e)
             raise
 
     return count
@@ -395,7 +395,7 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
 
     except Exception as e:
         # If advisory lock fails (e.g., SQLite in tests), proceed as loader
-        logger.debug(f"Advisory lock not available (non-PostgreSQL?): {e}")
+        logger.debug('Advisory lock not available (non-PostgreSQL?): %s', e)
         return (True, True)
 
 
@@ -486,7 +486,7 @@ def load_prompts(
             # - Changed prompts: old version deactivated, new version created
             # - New prompts: version 1 created
             # This maintains YAML as the source of truth on every startup.
-            logger.info(f"Loading prompts from YAML: {agents_path}")
+            logger.info('Loading prompts from YAML: %s', agents_path)
 
             # Compute project root once for all source_file paths
             project_root = _find_project_root()

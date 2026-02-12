@@ -14,10 +14,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-    ports:
-      - 127.0.0.1:3030:3030
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3030/api/health || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -153,6 +151,11 @@ services:
       - WEAVIATE_GRPC_HOST=${WEAVIATE_GRPC_HOST:-weaviate}
       - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
       - WEAVIATE_GRPC_SECURE=${WEAVIATE_GRPC_SECURE:-false}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=${EMBEDDING_TOKEN_PREFLIGHT_ENABLED}
+      - EMBEDDING_MODEL_TOKEN_LIMIT=${EMBEDDING_MODEL_TOKEN_LIMIT}
+      - EMBEDDING_TOKEN_SAFETY_MARGIN=${EMBEDDING_TOKEN_SAFETY_MARGIN}
+      - CONTENT_PREVIEW_CHARS=${CONTENT_PREVIEW_CHARS}
       - PDF_STORAGE_PATH=${PDF_STORAGE_PATH:-/app/pdf_storage}
       - FILE_OUTPUT_STORAGE_PATH=${FILE_OUTPUT_STORAGE_PATH:-/app/file_outputs}
       - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-}
@@ -182,6 +185,8 @@ services:
       - SNS_REGION=${SNS_REGION:-us-east-1}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
+      # Tool failure alerts (reuses PROMPT_SUGGESTIONS_SNS_TOPIC_ARN)
+      - TOOL_FAILURE_ALERTS_ENABLED=${TOOL_FAILURE_ALERTS_ENABLED:-false}
       # AWS Cognito Authentication Configuration
       - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}

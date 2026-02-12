@@ -64,16 +64,16 @@ try:
         # Initialize JWKS client for token validation
         jwks_url = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}/.well-known/jwks.json"
         jwks_client = PyJWKClient(jwks_url)
-        logger.info(f"✅ Cognito authentication initialized with pool: {cognito_user_pool_id}")
-        logger.info(f"   Redirect URI: {cognito_redirect_uri}")
-        logger.info(f"   Secure cookies: {secure_cookies}")
+        logger.info("Cognito authentication initialized with pool: %s", cognito_user_pool_id)
+        logger.info("Redirect URI: %s", cognito_redirect_uri)
+        logger.info("Secure cookies: %s", secure_cookies)
     elif not is_dev_mode():
         # Only warn if not in dev mode (expected in dev mode)
-        logger.warning("⚠️  Cognito not fully configured - falling back to dev mode")
-        logger.warning("   Set COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_CLIENT_SECRET, COGNITO_DOMAIN")
+        logger.warning("Cognito not fully configured - falling back to dev mode")
+        logger.warning("Set COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_CLIENT_SECRET, COGNITO_DOMAIN")
 
 except Exception as e:
-    logger.error(f"❌ Failed to initialize Cognito configuration: {e}")
+    logger.error("Failed to initialize Cognito configuration: %s", e)
     cognito_user_pool_id = None
     cognito_client_id = None
 
@@ -103,7 +103,7 @@ async def _get_user_from_cookie_impl(
     """
     # Dev mode bypass
     if is_dev_mode():
-        logger.debug("🔧 DEV_MODE enabled - returning mock user")
+        logger.debug("DEV_MODE enabled - returning mock user")
         mock_user_dict = {
             "sub": "dev-user-123",
             "uid": "dev-user-123",
@@ -153,10 +153,10 @@ async def _get_user_from_cookie_impl(
         return decoded_token
 
     except jwt.ExpiredSignatureError:
-        logger.warning("⚠️  Token expired")
+        logger.warning("Token expired")
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError as e:
-        logger.error(f"❌ Invalid token: {e}")
+        logger.error("Invalid token: %s", e)
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
@@ -196,7 +196,7 @@ async def login(request: Request) -> RedirectResponse:
     # Check if Cognito is configured
     if not is_cognito_configured():
         if is_dev_mode():
-            logger.info("🔧 DEV_MODE: Redirecting to dev bypass")
+            logger.info("DEV_MODE: Redirecting to dev bypass")
             return RedirectResponse(url=f"{get_frontend_url()}?dev_mode=true", status_code=302)
         else:
             raise HTTPException(
@@ -229,7 +229,7 @@ async def login(request: Request) -> RedirectResponse:
 
         full_authorize_url = f"{authorize_url}?{urlencode(authorize_params)}"
 
-        logger.info(f"🔐 Initiating OAuth2 login for redirect_uri: {cognito_redirect_uri}")
+        logger.info("Initiating OAuth2 login for redirect_uri: %s", cognito_redirect_uri)
 
         # Create redirect response
         redirect_response = RedirectResponse(url=full_authorize_url, status_code=302)
@@ -255,7 +255,7 @@ async def login(request: Request) -> RedirectResponse:
         return redirect_response
 
     except Exception as e:
-        logger.error(f"❌ Login failed: {e}")
+        logger.error("Login failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
@@ -287,13 +287,13 @@ async def callback(
         # Verify state (CSRF protection)
         stored_state = request.cookies.get("oauth_state")
         if not stored_state or stored_state != state:
-            logger.error("❌ Invalid state parameter (CSRF protection)")
+            logger.error("Invalid state parameter (CSRF protection)")
             raise HTTPException(status_code=403, detail="Invalid state parameter")
 
         # Get code_verifier from cookie
         code_verifier = request.cookies.get("oauth_code_verifier")
         if not code_verifier:
-            logger.error("❌ Missing code_verifier cookie")
+            logger.error("Missing code_verifier cookie")
             raise HTTPException(status_code=400, detail="Missing code_verifier")
 
         # Exchange authorization code for tokens
@@ -315,12 +315,12 @@ async def callback(
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        logger.info(f"🔄 Exchanging authorization code for tokens")
+        logger.info("Exchanging authorization code for tokens")
 
         token_response = requests.post(token_endpoint, data=token_data, headers=headers)
 
         if token_response.status_code != 200:
-            logger.error(f"❌ Token exchange failed: {token_response.status_code} - {token_response.text}")
+            logger.error("Token exchange failed: %s - %s", token_response.status_code, token_response.text)
             raise HTTPException(
                 status_code=500,
                 detail=f"Token exchange failed: {token_response.text}"
@@ -331,7 +331,7 @@ async def callback(
         access_token = tokens.get("access_token")
 
         if not id_token or not access_token:
-            logger.error("❌ Missing tokens in response")
+            logger.error("Missing tokens in response")
             raise HTTPException(status_code=500, detail="Missing tokens in response")
 
         # Validate ID token with JWKS
@@ -349,10 +349,10 @@ async def callback(
                 options={"verify_at_hash": True}
             )
 
-            logger.info(f"✅ Authentication successful for user: {decoded_token.get('email', 'unknown')}")
+            logger.info("Authentication successful for user: %s", decoded_token.get('email', 'unknown'))
 
         except jwt.InvalidTokenError as e:
-            logger.error(f"❌ Token validation failed: {e}")
+            logger.error("Token validation failed: %s", e)
             raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
         # Create redirect response to frontend
@@ -378,7 +378,7 @@ async def callback(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Callback failed: {e}")
+        logger.error("Callback failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Callback failed: {str(e)}")
 
 
@@ -409,7 +409,7 @@ async def logout(request: Request) -> RedirectResponse:
     # Clear authentication cookie
     redirect_response.delete_cookie(key="cognito_token")
 
-    logger.info("👋 User logged out")
+    logger.info("User logged out")
 
     return redirect_response
 

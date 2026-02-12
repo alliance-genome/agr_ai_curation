@@ -230,8 +230,7 @@ def get_all_agent_tools(
         )
     elif doc_context:
         logger.debug(
-            f"[Flow Executor] Using pre-fetched document context: {doc_context.section_count()} sections"
-        )
+            '[Flow Executor] Using pre-fetched document context: %s sections', doc_context.section_count())
 
     # Build context for agent creation
     # Start with document context if available, then add flow-specific params
@@ -264,20 +263,19 @@ def get_all_agent_tools(
 
         entry = _resolve_flow_agent_entry(agent_id)
         if not entry:
-            logger.warning(f"[Flow Executor] Agent '{agent_id}' in flow but not resolvable, skipping")
+            logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
             continue
 
         # Check if this agent requires document and we don't have one
         if entry.get("requires_document", False) and not document_id:
             logger.warning(
-                f"[Flow Executor] Agent '{agent_id}' requires document but none provided, skipping"
-            )
+                "[Flow Executor] Agent '%s' requires document but none provided, skipping", agent_id)
             continue
 
         try:
             agent = get_agent_by_id(agent_id, **context)
         except Exception as e:
-            logger.warning(f"[Flow Executor] Failed to create agent '{agent_id}': {e}")
+            logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
             continue
 
         # Prepend per-node custom instructions (step-specific, not agent-global)
@@ -317,11 +315,11 @@ def get_all_agent_tools(
             specialist_name=specialist_name,
         )
 
-        logger.info(f"[Flow Executor] Created streaming tool: {tool_name} ({specialist_name})")
+        logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
         all_tools.append(streaming_tool)
         created_tool_names.add(tool_name)
 
-    logger.info(f"[Flow Executor] Created {len(all_tools)} streaming tools for flow")
+    logger.info('[Flow Executor] Created %s streaming tools for flow', len(all_tools))
     return all_tools, created_tool_names
 
 
@@ -699,13 +697,11 @@ async def execute_flow(
         event_type = event.get("type")
         if event_type == "FILE_READY":
             logger.info(
-                f"[Flow Executor] Output file produced - terminating flow '{flow.name}'"
-            )
+                "[Flow Executor] Output file produced - terminating flow '%s'", flow.name)
             break
         elif event_type == "CHAT_OUTPUT_READY":
             logger.info(
-                f"[Flow Executor] Chat output produced - terminating flow '{flow.name}'"
-            )
+                "[Flow Executor] Chat output produced - terminating flow '%s'", flow.name)
             break
 
     # Emit flow-specific completion event
@@ -718,4 +714,4 @@ async def execute_flow(
         }
     }
 
-    logger.info(f"[Flow Executor] Flow completed: '{flow.name}'")
+    logger.info("[Flow Executor] Flow completed: '%s'", flow.name)

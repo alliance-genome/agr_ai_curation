@@ -74,7 +74,7 @@ class SchemaLoader:
 
         # Generate JSON schema from model
         schema = model_class.model_json_schema()
-        logger.info(f"Generated schema for: {schema_name}")
+        logger.info('Generated schema for: %s', schema_name)
 
         # Cache it
         self._schema_cache[schema_name] = schema

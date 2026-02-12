@@ -1,6 +1,7 @@
 """Document chunking stage of the processing pipeline."""
 
 import logging
+import re
 from typing import List, Dict, Any
 
 from src.models.chunk import (
@@ -13,6 +14,89 @@ from src.models.chunk import (
 from src.models.strategy import ChunkingStrategy
 
 logger = logging.getLogger(__name__)
+
+
+def _split_oversized_text(text: str, max_chars: int, overlap_chars: int = 0) -> List[str]:
+    """Recursively split text that exceeds max_chars."""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be greater than 0")
+
+    if len(text) <= max_chars:
+        return [text]
+
+    segments: List[str] = []
+
+    # Try paragraph split first
+    paragraphs = text.split("\n\n")
+    if len(paragraphs) > 1:
+        current = ""
+        for para in paragraphs:
+            candidate = f"{current}\n\n{para}" if current else para
+            if len(candidate) > max_chars:
+                if current:
+                    segments.append(current)
+                if len(para) > max_chars:
+                    segments.extend(_split_oversized_text(para, max_chars, overlap_chars))
+                    current = ""
+                else:
+                    current = para
+            else:
+                current = candidate
+        if current:
+            segments.append(current)
+        if segments:
+            return segments
+
+    # Then sentence split
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    if len(sentences) > 1:
+        current = ""
+        for sentence in sentences:
+            candidate = f"{current} {sentence}" if current else sentence
+            if len(candidate) > max_chars:
+                if current:
+                    segments.append(current)
+                if len(sentence) > max_chars:
+                    segments.extend(_split_oversized_text(sentence, max_chars, overlap_chars))
+                    current = ""
+                else:
+                    current = sentence
+            else:
+                current = candidate
+        if current:
+            segments.append(current)
+        if segments:
+            return segments
+
+    # Last resort: hard split near word boundaries with optional overlap
+    effective_overlap = 0
+    if overlap_chars > 0:
+        effective_overlap = min(overlap_chars, max_chars - 1)
+
+    start = 0
+    text_len = len(text)
+    while start < text_len:
+        end = min(start + max_chars, text_len)
+        if end < text_len:
+            for i in range(end, max(start, end - 200), -1):
+                if text[i] in (" ", "\n"):
+                    end = i
+                    break
+
+        segment = text[start:end]
+        if not segment:
+            segment = text[start:min(start + max_chars, text_len)]
+            end = start + len(segment)
+        segments.append(segment)
+
+        if end >= text_len:
+            break
+
+        start = end - effective_overlap
+        if start < 0:
+            start = 0
+
+    return segments
 
 
 class ChunkingError(Exception):
@@ -58,7 +142,7 @@ async def chunk_parsed_document(
     if not elements:
         raise ChunkingError("No elements to chunk")
 
-    logger.info(f"Starting chunking with strategy: {strategy.strategy_name}")
+    logger.info('Starting chunking with strategy: %s', strategy.strategy_name)
 
     try:
         # Group elements by chunking method
@@ -87,7 +171,7 @@ async def chunk_parsed_document(
         # Assign chunk indices
         document_chunks = assign_chunk_indices(document_chunks)
 
-        logger.info(f"Created {len(document_chunks)} chunks")
+        logger.info('Created %s chunks', len(document_chunks))
         return document_chunks
 
     except Exception as e:
@@ -142,11 +226,38 @@ def _chunk_by_title(
                 if strategy.overlap_characters > 0 and current_chunk["content"]:
                     overlap_text = current_chunk["content"][-strategy.overlap_characters:]
 
-                current_chunk = {
-                    "content": overlap_text + element_text,
-                    "elements": [element],
-                    "metadata": dict(element.get("metadata", {}))
-                }
+                combined_content = overlap_text + element_text
+                if len(combined_content) > strategy.max_characters:
+                    logger.warning(
+                        "Single element exceeds max_characters (%d > %d). Splitting element of type '%s'.",
+                        len(combined_content),
+                        strategy.max_characters,
+                        element_type,
+                    )
+                    split_contents = _split_oversized_text(
+                        combined_content,
+                        strategy.max_characters,
+                        strategy.overlap_characters,
+                    )
+                    for split_content in split_contents[:-1]:
+                        chunks.append(
+                            {
+                                "content": split_content,
+                                "elements": [element],
+                                "metadata": dict(element.get("metadata", {})),
+                            }
+                        )
+                    current_chunk = {
+                        "content": split_contents[-1],
+                        "elements": [element],
+                        "metadata": dict(element.get("metadata", {})),
+                    }
+                else:
+                    current_chunk = {
+                        "content": combined_content,
+                        "elements": [element],
+                        "metadata": dict(element.get("metadata", {}))
+                    }
             else:
                 current_chunk["content"] = new_content
                 current_chunk["elements"].append(element)
@@ -188,11 +299,37 @@ def _chunk_by_paragraph(
             if strategy.overlap_characters > 0 and current_chunk["content"]:
                 overlap_text = current_chunk["content"][-strategy.overlap_characters:]
 
-            current_chunk = {
-                "content": overlap_text + element_text,
-                "elements": [element],
-                "metadata": dict(element.get("metadata", {}))
-            }
+            combined_content = overlap_text + element_text
+            if len(combined_content) > strategy.max_characters:
+                logger.warning(
+                    "Single element exceeds max_characters (%d > %d). Splitting oversized paragraph element.",
+                    len(combined_content),
+                    strategy.max_characters,
+                )
+                split_contents = _split_oversized_text(
+                    combined_content,
+                    strategy.max_characters,
+                    strategy.overlap_characters,
+                )
+                for split_content in split_contents[:-1]:
+                    chunks.append(
+                        {
+                            "content": split_content,
+                            "elements": [element],
+                            "metadata": dict(element.get("metadata", {})),
+                        }
+                    )
+                current_chunk = {
+                    "content": split_contents[-1],
+                    "elements": [element],
+                    "metadata": dict(element.get("metadata", {})),
+                }
+            else:
+                current_chunk = {
+                    "content": combined_content,
+                    "elements": [element],
+                    "metadata": dict(element.get("metadata", {}))
+                }
         else:
             current_chunk["content"] = new_content
             current_chunk["elements"].append(element)
@@ -247,7 +384,6 @@ def _chunk_by_sentence(
     strategy: ChunkingStrategy
 ) -> List[Dict[str, Any]]:
     """Chunk elements by sentence boundaries."""
-    import re
 
     # Combine all text
     full_text = "\n\n".join(element.get("text", "") for element in elements)
@@ -287,11 +423,35 @@ def _chunk_by_sentence(
                         break
                 overlap_text = " ".join(overlap_sentences) + " "
 
-            current_chunk = {
-                "content": overlap_text + sentence,
-                "sentences": [sentence],
-                "metadata": {}
-            }
+            combined_content = overlap_text + sentence
+            if len(combined_content) > strategy.max_characters:
+                logger.warning(
+                    "Single sentence exceeds max_characters (%d > %d). Splitting sentence chunk.",
+                    len(combined_content),
+                    strategy.max_characters,
+                )
+                split_contents = _split_oversized_text(
+                    combined_content,
+                    strategy.max_characters,
+                    strategy.overlap_characters,
+                )
+                for split_content in split_contents[:-1]:
+                    chunks.append({
+                        "content": split_content,
+                        "elements": [],
+                        "metadata": {}
+                    })
+                current_chunk = {
+                    "content": split_contents[-1],
+                    "sentences": [split_contents[-1]],
+                    "metadata": {}
+                }
+            else:
+                current_chunk = {
+                    "content": combined_content,
+                    "sentences": [sentence],
+                    "metadata": {}
+                }
         else:
             current_chunk["content"] = new_content
             current_chunk["sentences"].append(sentence)
@@ -487,9 +647,9 @@ async def store_chunks_batch(
         # This would store to database
         # For now, just count
         stored_count += len(batch)
-        logger.debug(f"Stored batch of {len(batch)} chunks")
+        logger.debug('Stored batch of %s chunks', len(batch))
 
-    logger.info(f"Stored total of {stored_count} chunks")
+    logger.info('Stored total of %s chunks', stored_count)
     return stored_count
 
 
@@ -503,5 +663,5 @@ async def update_processing_status(
         document_id: Document UUID
         status: New status value
     """
-    logger.info(f"Updating document {document_id} status to: {status}")
+    logger.info('Updating document %s status to: %s', document_id, status)
     # Will be integrated with tracker module

@@ -104,7 +104,7 @@ def get_user_collections(
     document_chunk_collection = client.collections.get("DocumentChunk").with_tenant(tenant_name)
     pdf_document_collection = client.collections.get("PDFDocument").with_tenant(tenant_name)
 
-    logger.debug(f"Retrieved tenant-scoped collections for user {user_id} (tenant: {tenant_name})")
+    logger.debug('Retrieved tenant-scoped collections for user %s (tenant: %s)', user_id, tenant_name)
 
     return document_chunk_collection, pdf_document_collection
 

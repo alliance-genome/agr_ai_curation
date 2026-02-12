@@ -98,7 +98,7 @@ def _rest_api_impl(
     final_headers = headers.copy() if headers else {}
     final_headers.setdefault('User-Agent', 'AI-Curation-Bot/1.0')
 
-    logger.debug(f"[OpenAI Agents] REST API {method} {url}")
+    logger.debug("REST API %s %s", method, url)
 
     try:
         request_kwargs = {
@@ -121,7 +121,7 @@ def _rest_api_impl(
         return HttpResponse(status="ok", status_code=response.status_code, data=data)
 
     except requests.exceptions.HTTPError as e:
-        logger.error(f"[OpenAI Agents] HTTP error: {e}")
+        logger.error("HTTP error: %s", e)
         error_detail = str(e)
         if e.response is not None:
             try:
@@ -136,16 +136,16 @@ def _rest_api_impl(
             message=f"HTTP {e.response.status_code if e.response else 'error'}: {error_detail}"
         )
     except requests.exceptions.Timeout:
-        logger.error("[OpenAI Agents] Request timeout")
+        logger.error("Request timeout")
         return HttpResponse(status="error", message="Request timed out after 30 seconds")
     except requests.exceptions.ConnectionError:
-        logger.error("[OpenAI Agents] Connection error")
+        logger.error("Connection error")
         return HttpResponse(status="error", message="Connection error: Unable to reach API endpoint")
     except requests.exceptions.RequestException as e:
-        logger.error(f"[OpenAI Agents] Request error: {e}")
+        logger.error("Request error: %s", e)
         return HttpResponse(status="error", message=f"Request error: {str(e)}")
     except Exception as e:
-        logger.error(f"[OpenAI Agents] Unexpected REST API error: {e}", exc_info=True)
+        logger.error("Unexpected REST API error: %s", e, exc_info=True)
         return HttpResponse(status="error", message=f"Unexpected error: {str(e)}")
 
 

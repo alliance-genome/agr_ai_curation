@@ -336,16 +336,16 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
             return None
 
         result = content.strip()
-        logger.debug(f"LLM abstract extraction result: {len(result)} chars")
+        logger.debug('LLM abstract extraction result: %s chars', len(result))
 
         if result == "NO_ABSTRACT_FOUND" or len(result) < 50:
-            logger.debug(f"LLM could not extract a clear abstract (result={result[:50] if result else 'empty'})")
+            logger.debug('LLM could not extract a clear abstract (result=%s)', result[:50] if result else 'empty')
             return None
 
         return result
 
     except Exception as e:
-        logger.warning(f"LLM abstract extraction failed: {type(e).__name__}: {e}")
+        logger.warning('LLM abstract extraction failed: %s: %s', type(e).__name__, e)
         return None
 
 
@@ -383,7 +383,7 @@ async def fetch_document_abstract(
     if hierarchy and hierarchy.get("abstract_section_title"):
         llm_abstract_section = hierarchy["abstract_section_title"]
         abstract_names.append(llm_abstract_section)
-        logger.debug(f"Using LLM-identified abstract section: '{llm_abstract_section}'")
+        logger.debug("Using LLM-identified abstract section: '%s'", llm_abstract_section)
 
     # Add common fallback names (will be tried if LLM section not found)
     for name in ["Abstract", "Summary"]:
@@ -409,7 +409,7 @@ async def fetch_document_abstract(
                     )
                     return abstract_text
         except Exception as e:
-            logger.warning(f"Error fetching abstract section '{section_name}': {e}")
+            logger.warning("Error fetching abstract section '%s': %s", section_name, e)
             continue
 
     # Strategy 3: Keyword search fallback
@@ -421,7 +421,7 @@ async def fetch_document_abstract(
 
     for keyword in keywords_to_try:
         try:
-            logger.debug(f"Trying keyword search for '{keyword}'...")
+            logger.debug("Trying keyword search for '%s'...", keyword)
             keyword_chunks = await search_chunks_by_keyword(
                 document_id=document_id,
                 keyword=keyword,
@@ -485,7 +485,7 @@ async def fetch_document_abstract(
                     return combined_text
 
         except Exception as e:
-            logger.warning(f"Error in keyword search for '{keyword}': {e}")
+            logger.warning("Error in keyword search for '%s': %s", keyword, e)
             continue
 
     # Strategy 4: Last resort - send first 5 chunks to LLM
@@ -515,9 +515,9 @@ async def fetch_document_abstract(
                     return extracted
 
     except Exception as e:
-        logger.warning(f"Error in last-resort abstract extraction: {e}")
+        logger.warning('Error in last-resort abstract extraction: %s', e)
 
-    logger.debug(f"No abstract found for document {document_id[:8]}...")
+    logger.debug('No abstract found for document %s...', document_id[:8])
     return None
 
 
@@ -560,5 +560,5 @@ def fetch_document_abstract_sync(
         # No event loop exists, create a new one
         return asyncio.run(fetch_document_abstract(document_id, user_id, hierarchy))
     except Exception as e:
-        logger.warning(f"Error in sync abstract fetch: {e}")
+        logger.warning('Error in sync abstract fetch: %s', e)
         return None

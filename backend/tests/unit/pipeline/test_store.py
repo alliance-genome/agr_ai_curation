@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import src.lib.pipeline.store as store_module
 from src.lib.pipeline.store import (
     store_to_weaviate,
     store_chunks_to_weaviate,
@@ -51,6 +52,26 @@ async def test_store_to_weaviate_calls_status_updates():
     assert stats["stored_chunks"] == 1
     mock_status.assert_awaited_once()
     mock_metadata.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
+    chunks = [{"chunk_index": 0, "content": "hello"}]
+    document_id = "doc-1"
+    weaviate_client = MagicMock()
+
+    async def fake_chunks_store(chunks_arg, doc_id, client, user_id):  # noqa: ANN001
+        raise BatchInsertError("failed", failed_objects=[{"chunk_index": 0}])
+
+    with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store), patch(
+        "src.lib.pipeline.store.update_document_metadata", new=AsyncMock()
+    ) as mock_metadata, patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()) as mock_status:
+        with pytest.raises(StorageError):
+            await store_to_weaviate(chunks, document_id, weaviate_client, user_id="test_user")
+
+    assert mock_status.await_count == 2
+    assert mock_status.await_args_list[1].kwargs["embedding_status"] == "failed"
+    mock_metadata.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -144,27 +165,100 @@ async def test_store_chunks_to_weaviate_success_path():
 
 
 @pytest.mark.asyncio
-async def test_store_chunks_to_weaviate_handles_batch_error():
-    chunks = [{"chunk_index": 0, "content": "alpha", "metadata": {}}]
+async def test_store_chunks_to_weaviate_raises_when_batch_reports_failed_objects():
+    chunks = [
+        {"chunk_index": 0, "content": "alpha", "metadata": {}},
+        {"chunk_index": 1, "content": "beta", "metadata": {}},
+    ]
 
     weaviate_client = MagicMock()
-    collection = MagicMock()
+    chunk_collection = MagicMock()
+    pdf_collection = MagicMock()
     batch_ctx = MagicMock()
-    batch_ctx.add_object.side_effect = Exception("boom")
-    collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.failed_objects = [{"message": "openai token overflow"}]
 
     @contextmanager
     def fake_session():
-        yield MagicMock(collections=MagicMock(get=MagicMock(return_value=collection)))
+        yield MagicMock()
 
     weaviate_client.session.side_effect = fake_session
 
     event_loop = MagicMock()
-    event_loop.run_in_executor.side_effect = lambda _, func: func()
 
-    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop):
+    def run_executor(_, func):
+        func()
+        return asyncio.sleep(0)
+
+    event_loop.run_in_executor.side_effect = run_executor
+
+    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
         with pytest.raises(BatchInsertError):
             await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
+
+    assert batch_ctx.add_object.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_to_weaviate_raises_when_batch_add_object_fails():
+    chunks = [{"chunk_index": 0, "content": "alpha", "metadata": {}}]
+
+    weaviate_client = MagicMock()
+    chunk_collection = MagicMock()
+    pdf_collection = MagicMock()
+    batch_ctx = MagicMock()
+    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.add_object.side_effect = Exception("single add_object failed")
+    batch_ctx.failed_objects = []
+
+    @contextmanager
+    def fake_session():
+        yield MagicMock()
+
+    weaviate_client.session.side_effect = fake_session
+
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
+        with pytest.raises(BatchInsertError):
+            await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_to_weaviate_raises_when_token_preflight_exceeds_limit(monkeypatch):
+    chunks = [{"chunk_index": 0, "content": "alpha", "metadata": {}}]
+    weaviate_client = MagicMock()
+    chunk_collection = MagicMock()
+    pdf_collection = MagicMock()
+    batch_ctx = MagicMock()
+    chunk_collection.batch.dynamic.return_value.__enter__.return_value = batch_ctx
+    batch_ctx.failed_objects = []
+    chunk_collection.query.fetch_objects.return_value = MagicMock(objects=[MagicMock()])
+
+    class FakeEncoder:
+        def encode(self, value):  # noqa: ANN001
+            return list(range(store_module.TOKEN_HARD_LIMIT + 10))
+
+    monkeypatch.setattr(store_module, "_tiktoken_encoder", FakeEncoder())
+
+    @contextmanager
+    def fake_session():
+        yield MagicMock()
+
+    weaviate_client.session.side_effect = fake_session
+
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
+        with pytest.raises(BatchInsertError):
+            await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
+
+    assert batch_ctx.add_object.call_count == 0
 
 
 @pytest.mark.asyncio

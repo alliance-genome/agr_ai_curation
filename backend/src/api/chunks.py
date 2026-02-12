@@ -65,7 +65,7 @@ async def get_document_chunks_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving chunks for document {document_id}: {e}")
+        logger.error('Error retrieving chunks for document %s: %s', document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve chunks: {str(e)}"

@@ -163,13 +163,13 @@ def load_groups(
         if not groups_path.exists():
             raise FileNotFoundError(f"Groups configuration not found: {groups_path}")
 
-        logger.info(f"Loading group definitions from: {groups_path}")
+        logger.info('Loading group definitions from: %s', groups_path)
 
         with open(groups_path, "r") as f:
             data = yaml.safe_load(f)
 
         if not data or "groups" not in data:
-            logger.warning(f"No groups defined in {groups_path}")
+            logger.warning('No groups defined in %s', groups_path)
             _group_registry = {}
             _cognito_to_group = {}
             _valid_group_ids = []
@@ -202,11 +202,11 @@ def load_groups(
                 )
 
             except Exception as e:
-                logger.error(f"Failed to load group {group_id}: {e}")
+                logger.error('Failed to load group %s: %s', group_id, e)
                 raise
 
         _initialized = True
-        logger.info(f"Loaded {len(_group_registry)} group definitions")
+        logger.info('Loaded %s group definitions', len(_group_registry))
 
         return _group_registry
 

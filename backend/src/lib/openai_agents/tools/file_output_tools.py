@@ -150,7 +150,7 @@ async def _save_csv_impl(
 
     # Log any warnings from validation
     for warning in warnings:
-        logger.warning(f"[CSV Tool] Validation warning: {warning}")
+        logger.warning('[CSV Tool] Validation warning: %s', warning)
 
     # Extract just the filename from the path
     full_filename = file_path.name
@@ -179,7 +179,7 @@ async def _save_csv_impl(
         )
     except Exception as e:
         db.rollback()
-        logger.error(f"[CSV Tool] Failed to register file in database: {e}")
+        logger.error('[CSV Tool] Failed to register file in database: %s', e)
         raise
     finally:
         db.close()
@@ -310,7 +310,7 @@ async def _save_tsv_impl(
     )
 
     for warning in warnings:
-        logger.warning(f"[TSV Tool] Validation warning: {warning}")
+        logger.warning('[TSV Tool] Validation warning: %s', warning)
 
     full_filename = file_path.name
 
@@ -338,7 +338,7 @@ async def _save_tsv_impl(
         )
     except Exception as e:
         db.rollback()
-        logger.error(f"[TSV Tool] Failed to register file in database: {e}")
+        logger.error('[TSV Tool] Failed to register file in database: %s', e)
         raise
     finally:
         db.close()
@@ -438,7 +438,7 @@ async def _save_json_impl(
     )
 
     for warning in warnings:
-        logger.warning(f"[JSON Tool] Validation warning: {warning}")
+        logger.warning('[JSON Tool] Validation warning: %s', warning)
 
     full_filename = file_path.name
 
@@ -466,7 +466,7 @@ async def _save_json_impl(
         )
     except Exception as e:
         db.rollback()
-        logger.error(f"[JSON Tool] Failed to register file in database: {e}")
+        logger.error('[JSON Tool] Failed to register file in database: %s', e)
         raise
     finally:
         db.close()

@@ -80,7 +80,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
     user_id = user["sub"]
     cleaned_count = 0
 
-    logger.info(f"[Phantom Check] Starting phantom document check for user {user_id[:8]}...")
+    logger.info('[Phantom Check] Starting phantom document check for user %s...', user_id[:8])
 
     try:
         # Step 1: Get user's database ID
@@ -88,7 +88,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
         try:
             db_user = session.query(User).filter(User.auth_sub == user_id).first()
             if not db_user:
-                logger.info(f"[Phantom Check] User not provisioned yet, skipping")
+                logger.info('[Phantom Check] User not provisioned yet, skipping')
                 return 0  # User not provisioned yet
 
             # Step 2: Get all document IDs from PostgreSQL for this user
@@ -97,11 +97,11 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
             ).all()
 
             if not pg_docs:
-                logger.info(f"[Phantom Check] No documents in PostgreSQL, nothing to check")
+                logger.info('[Phantom Check] No documents in PostgreSQL, nothing to check')
                 return 0  # No documents to check
 
             pg_doc_ids = {str(doc.id) for doc in pg_docs}
-            logger.info(f"[Phantom Check] Found {len(pg_doc_ids)} documents in PostgreSQL")
+            logger.info('[Phantom Check] Found %s documents in PostgreSQL', len(pg_doc_ids))
 
             # Step 3: Get all document IDs from Weaviate for this user's tenant
             connection = get_connection()
@@ -121,10 +121,10 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
                     )
 
                     weaviate_doc_ids = {str(obj.uuid) for obj in response.objects}
-                    logger.info(f"[Phantom Check] Found {len(weaviate_doc_ids)} documents in Weaviate")
+                    logger.info('[Phantom Check] Found %s documents in Weaviate', len(weaviate_doc_ids))
 
                 except Exception as e:
-                    logger.warning(f"[Phantom Check] Error fetching Weaviate documents: {e}")
+                    logger.warning('[Phantom Check] Error fetching Weaviate documents: %s', e)
                     return 0
 
             # Step 4: Find inconsistencies in both directions
@@ -134,12 +134,12 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
             orphan_ids = weaviate_doc_ids - pg_doc_ids
 
             if not phantom_ids and not orphan_ids:
-                logger.info(f"[Phantom Check] ✓ All clean - {len(pg_doc_ids)} documents in sync")
+                logger.info('[Phantom Check] ✓ All clean - %s documents in sync', len(pg_doc_ids))
                 return 0
 
             # Step 5a: Delete phantom records from PostgreSQL
             if phantom_ids:
-                logger.warning(f"[Phantom Check] Found {len(phantom_ids)} phantom documents (in PG, not in Weaviate)")
+                logger.warning('[Phantom Check] Found %s phantom documents (in PG, not in Weaviate)', len(phantom_ids))
 
                 for phantom_id in phantom_ids:
                     phantom_doc = session.query(ViewerPDFDocument).filter(
@@ -155,19 +155,19 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
                                 doc_dir = file_path.parent
                                 if doc_dir.exists():
                                     shutil.rmtree(doc_dir)
-                                    logger.info(f"[Phantom Check] Cleaned up filesystem for phantom doc {phantom_id}")
+                                    logger.info('[Phantom Check] Cleaned up filesystem for phantom doc %s', phantom_id)
                         except Exception as fs_err:
-                            logger.warning(f"[Phantom Check] Failed to cleanup files for phantom {phantom_id}: {fs_err}")
+                            logger.warning('[Phantom Check] Failed to cleanup files for phantom %s: %s', phantom_id, fs_err)
 
                         session.delete(phantom_doc)
                         cleaned_count += 1
-                        logger.info(f"[Phantom Check] Deleted phantom PG record {phantom_id} ({phantom_doc.filename})")
+                        logger.info('[Phantom Check] Deleted phantom PG record %s (%s)', phantom_id, phantom_doc.filename)
 
                 session.commit()
 
             # Step 5b: Delete orphan records from Weaviate
             if orphan_ids:
-                logger.warning(f"[Phantom Check] Found {len(orphan_ids)} orphan documents (in Weaviate, not in PG)")
+                logger.warning('[Phantom Check] Found %s orphan documents (in Weaviate, not in PG)', len(orphan_ids))
 
                 with connection.session() as client:
                     try:
@@ -177,20 +177,20 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
                             try:
                                 pdf_collection.data.delete_by_id(uuid.UUID(orphan_id))
                                 cleaned_count += 1
-                                logger.info(f"[Phantom Check] Deleted orphan Weaviate doc {orphan_id}")
+                                logger.info('[Phantom Check] Deleted orphan Weaviate doc %s', orphan_id)
                             except Exception as del_err:
-                                logger.warning(f"[Phantom Check] Failed to delete orphan {orphan_id}: {del_err}")
+                                logger.warning('[Phantom Check] Failed to delete orphan %s: %s', orphan_id, del_err)
 
                     except Exception as e:
-                        logger.error(f"[Phantom Check] Error cleaning orphan Weaviate docs: {e}")
+                        logger.error('[Phantom Check] Error cleaning orphan Weaviate docs: %s', e)
 
-            logger.info(f"[Phantom Check] Cleaned up {cleaned_count} inconsistent documents for user {user_id[:8]}")
+            logger.info('[Phantom Check] Cleaned up %s inconsistent documents for user %s', cleaned_count, user_id[:8])
 
         finally:
             session.close()
 
     except Exception as e:
-        logger.error(f"Error during phantom document cleanup: {e}")
+        logger.error('Error during phantom document cleanup: %s', e)
 
     return cleaned_count
 
@@ -281,8 +281,7 @@ def validate_user_file_path(
             resolved_path.relative_to(user_storage_root)
         except ValueError:
             logger.warning(
-                f"Path traversal attempt detected: {file_path} resolves outside user storage for {user_id}"
-            )
+                'Path traversal attempt detected: %s resolves outside user storage for %s', file_path, user_id)
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: file path validation failed"
@@ -293,7 +292,7 @@ def validate_user_file_path(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating file path {file_path}: {e}")
+        logger.error('Error validating file path %s: %s', file_path, e)
         raise HTTPException(
             status_code=500,
             detail="File path validation error"
@@ -328,7 +327,7 @@ async def list_documents_endpoint(
         # This handles cases where documents exist in PostgreSQL but not Weaviate
         phantoms_cleaned = await cleanup_phantom_documents(user)
         if phantoms_cleaned > 0:
-            logger.info(f"Cleaned up {phantoms_cleaned} phantom documents before listing")
+            logger.info('Cleaned up %s phantom documents before listing', phantoms_cleaned)
 
         doc_filter = DocumentFilter(
             search_term=search,
@@ -370,7 +369,7 @@ async def list_documents_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"Error listing documents: {e}")
+        logger.error('Error listing documents: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve documents: {str(e)}"
@@ -477,7 +476,7 @@ async def get_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving document {document_id}: {e}")
+        logger.error('Error retrieving document %s: %s', document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve document: {str(e)}"
@@ -517,7 +516,7 @@ async def update_document_endpoint(
         raise
     except Exception as e:
         session.rollback()
-        logger.error(f"Error updating document {document_id}: {e}")
+        logger.error('Error updating document %s: %s', document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update document: {str(e)}"
@@ -595,35 +594,35 @@ async def delete_document_endpoint(
                         # Sanity check: Ensure we are deleting a subdirectory of storage
                         if doc_dir.exists() and base_storage in doc_dir.parents:
                             shutil.rmtree(doc_dir)
-                            logger.info(f"Deleted filesystem artifacts for document {document_id}")
+                            logger.info('Deleted filesystem artifacts for document %s', document_id)
 
                     # 2. Delete Docling JSON: {user_id}/docling_json/{doc_id}.json
                     if doc_to_delete.docling_json_path:
                         docling_path = FilePath(base_storage) / doc_to_delete.docling_json_path
                         if docling_path.exists() and base_storage in docling_path.parents:
                             docling_path.unlink()
-                            logger.info(f"Deleted Docling JSON for {document_id}")
+                            logger.info('Deleted Docling JSON for %s', document_id)
 
                     # 3. Delete Processed JSON: {user_id}/processed_json/{doc_id}.json
                     if doc_to_delete.processed_json_path:
                         processed_path = FilePath(base_storage) / doc_to_delete.processed_json_path
                         if processed_path.exists() and base_storage in processed_path.parents:
                             processed_path.unlink()
-                            logger.info(f"Deleted Processed JSON for {document_id}")
+                            logger.info('Deleted Processed JSON for %s', document_id)
 
                 except Exception as fs_error:
-                    logger.error(f"Failed to clean up files for {document_id}: {fs_error}")
+                    logger.error('Failed to clean up files for %s: %s', document_id, fs_error)
 
                 # Delete DB record
                 cleanup_session.delete(doc_to_delete)
                 cleanup_session.commit()
-                logger.info(f"Deleted PostgreSQL record for {document_id}")
+                logger.info('Deleted PostgreSQL record for %s', document_id)
 
                 # Invalidate document metadata cache to prevent stale cache hits
                 from src.lib.document_cache import invalidate_cache
                 invalidate_cache(user["sub"], document_id)
         except Exception as db_error:
-            logger.error(f"Failed to cleanup PostgreSQL for {document_id}: {db_error}")
+            logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
         finally:
             cleanup_session.close()
 
@@ -637,7 +636,7 @@ async def delete_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting document {document_id}: {e}")
+        logger.error('Error deleting document %s: %s', document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete document: {str(e)}"
@@ -712,7 +711,7 @@ async def upload_document_endpoint(
                     # Check if the OLD document exists in Weaviate
                     existing_weaviate_doc = await get_document(user["sub"], str(existing.id))
                     if not existing_weaviate_doc:
-                        logger.warning(f"Phantom document detected (Hash match in PG, missing in Weaviate): {existing.id}. Cleaning up old record.")
+                        logger.warning('Phantom document detected (Hash match in PG, missing in Weaviate): %s. Cleaning up old record.', existing.id)
 
                         # Delete the phantom PG record
                         session.delete(existing)
@@ -723,7 +722,7 @@ async def upload_document_endpoint(
                 except ValueError as not_found_err:
                     # Document not found in Weaviate - this IS a phantom document
                     # get_document raises ValueError when document doesn't exist
-                    logger.warning(f"Phantom document detected (ValueError - not in Weaviate): {existing.id}. Cleaning up: {not_found_err}")
+                    logger.warning('Phantom document detected (ValueError - not in Weaviate): %s. Cleaning up: %s', existing.id, not_found_err)
 
                     # Delete the phantom PG record
                     session.delete(existing)
@@ -732,7 +731,7 @@ async def upload_document_endpoint(
                     # Clear 'existing' so we don't trigger the 409 error
                     existing = None
                 except Exception as check_err:
-                    logger.error(f"Error checking phantom status: {check_err}")
+                    logger.error('Error checking phantom status: %s', check_err)
                     # If check fails for OTHER reasons, we conservatively assume it's a real duplicate
 
                 if existing:
@@ -811,9 +810,9 @@ async def upload_document_endpoint(
                     user_id=user_id,  # FR-011, FR-014: Pass user ID for tenant scoping
                     validate_first=False  # Already validated
                 )
-                logger.info(f"Document {document.id} processing completed: {result}")
+                logger.info('Document %s processing completed: %s', document.id, result)
             except Exception as e:
-                logger.error(f"Error processing document {document.id}: {e}", exc_info=True)
+                logger.error('Error processing document %s: %s', document.id, e, exc_info=True)
                 # Update document status to failed
                 from ..lib.weaviate_client.documents import update_document_status
                 await update_document_status(document.id, user_id, "failed")
@@ -842,7 +841,7 @@ async def upload_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading document: {e}")
+        logger.error('Error uploading document: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to upload document: {str(e)}"
@@ -895,7 +894,7 @@ async def get_document_processing_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting document status: {e}")
+        logger.error('Error getting document status: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get document status: {str(e)}"
@@ -1026,7 +1025,7 @@ async def stream_document_progress(
                 yield f"data: {json.dumps(timeout_data)}\n\n"
 
         except Exception as e:
-            logger.error(f"Error in SSE stream for document {document_id}: {e}")
+            logger.error('Error in SSE stream for document %s: %s', document_id, e)
             error_data = {
                 'error': str(e),
                 'document_id': document_id,
@@ -1136,7 +1135,7 @@ async def get_download_info(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting download info for document {document_id}: {e}")
+        logger.error('Error getting download info for document %s: %s', document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get download info: {str(e)}"
@@ -1250,7 +1249,7 @@ async def download_document_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error downloading {file_type} for document {document_id}: {e}")
+        logger.error('Error downloading %s for document %s: %s', file_type, document_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to download file: {str(e)}"

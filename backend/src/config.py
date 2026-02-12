@@ -68,7 +68,7 @@ def get_log_level() -> str:
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
     if level not in valid_levels:
-        logger.warning(f"Invalid log level '{level}', defaulting to INFO")
+        logger.warning("Invalid log level '%s', defaulting to INFO", level)
         return 'INFO'
 
     return level

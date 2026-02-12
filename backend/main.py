@@ -7,7 +7,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
-import sys
 import os
 
 # Disable telemetry before any imports that might use it
@@ -18,15 +17,12 @@ from src.api import documents, chunks, processing, strategies, settings, schema,
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_pdf_storage_path
+from src.lib.logging_config import configure_logging, create_request_context_middleware
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
 from src.lib.weaviate_client.settings import get_embedding_config
 from src.models.sql.database import SessionLocal
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +48,59 @@ def _validate_docling_timeout():
                 f"Please update .env file: DOCLING_TIMEOUT=300"
             )
             raise RuntimeError(error_msg)
-        logger.info(f"✅ DOCLING_TIMEOUT validated: {timeout_int} seconds")
+        logger.info("DOCLING_TIMEOUT validated: %s seconds", timeout_int)
     except ValueError:
         raise RuntimeError(f"DOCLING_TIMEOUT must be an integer, got: {docling_timeout}")
+
+
+def _validate_embedding_env():
+    """Validate required embedding/token preflight environment variables."""
+    required_vars = [
+        "EMBEDDING_MODEL",
+        "EMBEDDING_TOKEN_PREFLIGHT_ENABLED",
+        "EMBEDDING_MODEL_TOKEN_LIMIT",
+        "EMBEDDING_TOKEN_SAFETY_MARGIN",
+        "CONTENT_PREVIEW_CHARS",
+    ]
+    missing = [name for name in required_vars if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(
+            "Missing required embedding environment variables: "
+            + ", ".join(sorted(missing))
+        )
+
+    preflight_raw = os.getenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "").lower()
+    if preflight_raw not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+        raise RuntimeError(
+            "EMBEDDING_TOKEN_PREFLIGHT_ENABLED must be true/false (or 1/0, yes/no, on/off)"
+        )
+
+    try:
+        model_limit = int(os.getenv("EMBEDDING_MODEL_TOKEN_LIMIT", ""))
+    except ValueError as exc:
+        raise RuntimeError("EMBEDDING_MODEL_TOKEN_LIMIT must be an integer") from exc
+    if model_limit <= 0:
+        raise RuntimeError("EMBEDDING_MODEL_TOKEN_LIMIT must be > 0")
+
+    try:
+        safety_margin = int(os.getenv("EMBEDDING_TOKEN_SAFETY_MARGIN", ""))
+    except ValueError as exc:
+        raise RuntimeError("EMBEDDING_TOKEN_SAFETY_MARGIN must be an integer") from exc
+    if safety_margin < 0:
+        raise RuntimeError("EMBEDDING_TOKEN_SAFETY_MARGIN must be >= 0")
+    if safety_margin >= model_limit:
+        raise RuntimeError(
+            "EMBEDDING_TOKEN_SAFETY_MARGIN must be less than EMBEDDING_MODEL_TOKEN_LIMIT"
+        )
+
+    try:
+        preview_chars = int(os.getenv("CONTENT_PREVIEW_CHARS", ""))
+    except ValueError as exc:
+        raise RuntimeError("CONTENT_PREVIEW_CHARS must be an integer") from exc
+    if preview_chars <= 0:
+        raise RuntimeError("CONTENT_PREVIEW_CHARS must be > 0")
+
+    logger.info("Embedding/token preflight environment variables validated")
 
 
 async def initialize_weaviate_collections(connection: WeaviateConnection):
@@ -70,7 +116,7 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
     # Get the configured embedding model from settings (it's sync, not async)
     from src.lib.weaviate_client.settings import _current_config
     embedding_model = _current_config["embedding"]["modelName"]
-    logger.info(f"Using embedding model from settings: {embedding_model}")
+    logger.info("Using embedding model from settings: %s", embedding_model)
 
     with connection.session() as client:
         # Get list of existing collections - list_all() returns strings in v4
@@ -89,18 +135,18 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
                 "vector_index_config": Configure.VectorIndex.hnsw(),
                 "multi_tenancy_config": Configure.multi_tenancy(enabled=True),  # Enable multi-tenancy
                 "properties": [
-                    Property(name="documentId", data_type=DataType.TEXT),
+                    Property(name="documentId", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="chunkIndex", data_type=DataType.INT),
                     Property(name="content", data_type=DataType.TEXT, vectorize_property_name=True),  # Vectorize content
-                    Property(name="contentPreview", data_type=DataType.TEXT, vectorize_property_name=False),  # Don't vectorize preview
-                    Property(name="elementType", data_type=DataType.TEXT),
+                    Property(name="contentPreview", data_type=DataType.TEXT, vectorize_property_name=False, skip_vectorization=True),  # Keep preview out of vectorization
+                    Property(name="elementType", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="pageNumber", data_type=DataType.INT),
-                    Property(name="sectionTitle", data_type=DataType.TEXT),
-                    Property(name="sectionPath", data_type=DataType.TEXT_ARRAY),
-                    Property(name="contentType", data_type=DataType.TEXT),
-                    Property(name="metadata", data_type=DataType.TEXT),
+                    Property(name="sectionTitle", data_type=DataType.TEXT, skip_vectorization=True),
+                    Property(name="sectionPath", data_type=DataType.TEXT_ARRAY, skip_vectorization=True),
+                    Property(name="contentType", data_type=DataType.TEXT, skip_vectorization=True),
+                    Property(name="metadata", data_type=DataType.TEXT, skip_vectorization=True),
                     Property(name="embeddingTimestamp", data_type=DataType.DATE),
-                    Property(name="docItemProvenance", data_type=DataType.TEXT),  # For chunk highlighting
+                    Property(name="docItemProvenance", data_type=DataType.TEXT, skip_vectorization=True),  # For chunk highlighting
                 ]
             },
             "PDFDocument": {
@@ -125,9 +171,9 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
         for collection_name, config in required_collections.items():
             if collection_name not in existing_names:
                 # Collection doesn't exist - create with multi-tenancy
-                logger.info(f"Creating collection with multi-tenancy: {collection_name}")
+                logger.info("Creating collection with multi-tenancy: %s", collection_name)
                 client.collections.create(name=collection_name, **config)
-                logger.info(f"✅ Collection {collection_name} created with multi-tenancy enabled")
+                logger.info("Collection %s created with multi-tenancy enabled", collection_name)
             else:
                 # Collection exists - check if multi-tenancy is enabled
                 collection = client.collections.get(collection_name)
@@ -135,14 +181,20 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
 
                 # Check if multi-tenancy is already enabled
                 if collection_config.multi_tenancy_config and collection_config.multi_tenancy_config.enabled:
-                    logger.info(f"✅ Collection {collection_name} already has multi-tenancy enabled - skipping")
+                    logger.info(
+                        "Collection %s already has multi-tenancy enabled - skipping",
+                        collection_name,
+                    )
                 else:
                     # Multi-tenancy not enabled - need to migrate (one-time operation)
-                    logger.warning(f"⚠️  Collection {collection_name} exists without multi-tenancy - performing one-time migration")
-                    logger.warning(f"⚠️  This will DELETE all existing data in {collection_name}")
+                    logger.warning(
+                        "Collection %s exists without multi-tenancy - performing one-time migration",
+                        collection_name,
+                    )
+                    logger.warning("This will DELETE all existing data in %s", collection_name)
                     client.collections.delete(collection_name)
                     client.collections.create(name=collection_name, **config)
-                    logger.info(f"✅ Collection {collection_name} recreated with multi-tenancy enabled")
+                    logger.info("Collection %s recreated with multi-tenancy enabled", collection_name)
 
 
 @asynccontextmanager
@@ -153,8 +205,9 @@ async def lifespan(app: FastAPI):
     # Validate critical environment variables
     try:
         _validate_docling_timeout()
+        _validate_embedding_env()
     except RuntimeError as e:
-        logger.error(f"❌ FATAL: {e}")
+        logger.error("FATAL: %s", e)
         raise
 
     try:
@@ -164,18 +217,18 @@ async def lifespan(app: FastAPI):
         weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
         weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
-        logger.info(f"Connecting to Weaviate at {weaviate_url}...")
+        logger.info("Connecting to Weaviate at %s...", weaviate_url)
         connection = WeaviateConnection(url=weaviate_url)
         await connection.connect_to_weaviate()
-        logger.info("✅ Successfully connected to Weaviate")
+        logger.info("Successfully connected to Weaviate")
 
         # Simple health check - try to list collections
         try:
             with connection.session() as client:
                 collections = client.collections.list_all()
-                logger.info(f"✅ Weaviate health check passed - found {len(collections)} collections")
+                logger.info("Weaviate health check passed - found %s collections", len(collections))
         except Exception as health_error:
-            logger.error(f"❌ WEAVIATE HEALTH CHECK FAILED: {health_error}")
+            logger.error("WEAVIATE HEALTH CHECK FAILED: %s", health_error)
             logger.error("Cannot start without Weaviate connection!")
             raise RuntimeError("Weaviate is not accessible - check if container is running") from health_error
 
@@ -184,7 +237,7 @@ async def lifespan(app: FastAPI):
 
         # Initialize required collections
         await initialize_weaviate_collections(connection)
-        logger.info("✅ Successfully initialized Weaviate collections")
+        logger.info("Successfully initialized Weaviate collections")
 
         # Sync prompts from YAML to database (YAML is source of truth)
         # This must run BEFORE cache initialization
@@ -198,21 +251,22 @@ async def lifespan(app: FastAPI):
                 logger.debug("Prompt loader already initialized")
             else:
                 logger.info(
-                    f"✅ Prompts synced from YAML: {counts['base_prompts']} base, "
-                    f"{counts['group_rules']} group rules"
+                    "Prompts synced from YAML: %s base, %s group rules",
+                    counts["base_prompts"],
+                    counts["group_rules"],
                 )
 
             # Initialize prompt cache from database
             init_prompt_cache(db)
-            logger.info("✅ Prompt cache initialized")
+            logger.info("Prompt cache initialized")
 
             # Load group definitions from config/groups.yaml
             # This must run after prompts so group rules can be resolved
             from src.lib.config.groups_loader import load_groups
             groups = load_groups()
-            logger.info(f"✅ Group definitions loaded: {len(groups)} groups")
+            logger.info("Group definitions loaded: %s groups", len(groups))
         except Exception as e:
-            logger.error(f"❌ FATAL: Failed to initialize prompts/groups: {e}")
+            logger.error("FATAL: Failed to initialize prompts/groups: %s", e)
             db.rollback()  # Rollback any partial changes on failure
             raise  # Re-raise to prevent app startup
         finally:
@@ -234,48 +288,48 @@ async def lifespan(app: FastAPI):
                 get_optional_connections,
             )
             connections = load_connections()
-            logger.info(f"✅ Connection definitions loaded: {len(connections)} services")
+            logger.info("Connection definitions loaded: %s services", len(connections))
 
             # Check health of required services
             required_services = get_required_connections()
             optional_services = get_optional_connections()
-            logger.info(f"   Required services: {[s.service_id for s in required_services]}")
-            logger.info(f"   Optional services: {[s.service_id for s in optional_services]}")
+            logger.info("Required services: %s", [s.service_id for s in required_services])
+            logger.info("Optional services: %s", [s.service_id for s in optional_services])
 
             if strict_mode and required_services:
-                logger.info("🔍 Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
+                logger.info("Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")
                 try:
                     all_healthy, failed_services = await check_required_services_healthy()
 
                     if not all_healthy:
                         error_msg = f"Required services are unhealthy: {failed_services}"
-                        logger.error(f"❌ FATAL: {error_msg}")
+                        logger.error("FATAL: %s", error_msg)
                         logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
                         raise RuntimeError(error_msg)
 
-                    logger.info("✅ All required services are healthy")
+                    logger.info("All required services are healthy")
                 except RuntimeError:
                     raise  # Re-raise health check failures
                 except Exception as e:
                     # Unexpected errors during health check should also block startup
                     raise RuntimeError(f"Health check failed unexpectedly: {e}") from e
             elif required_services:
-                logger.warning("⚠️ HEALTH_CHECK_STRICT_MODE=false - skipping required service health enforcement")
+                logger.warning("HEALTH_CHECK_STRICT_MODE=false - skipping required service health enforcement")
                 logger.warning("   This is not recommended for production deployments")
 
         except FileNotFoundError as e:
             # Config file not found - this is optional, always continue
-            logger.warning(f"⚠️ Connections config not found (optional): {e}")
+            logger.warning("Connections config not found (optional): %s", e)
         except RuntimeError:
             raise  # Re-raise startup failures (health check failures, etc.)
         except Exception as e:
             # Config file exists but failed to load (parse error, etc.)
             if strict_mode:
-                logger.error(f"❌ FATAL: Failed to load connections config: {e}")
+                logger.error("FATAL: Failed to load connections config: %s", e)
                 logger.error("Set HEALTH_CHECK_STRICT_MODE=false to bypass (not recommended for production)")
                 raise RuntimeError(f"Connections config load failed: {e}") from e
             else:
-                logger.warning(f"⚠️ Failed to load connections config (non-fatal): {e}")
+                logger.warning("Failed to load connections config (non-fatal): %s", e)
 
         # Initialize Langfuse observability
         try:
@@ -283,18 +337,18 @@ async def lifespan(app: FastAPI):
             if is_langfuse_configured():
                 langfuse_client = initialize_langfuse()
                 if langfuse_client:
-                    logger.info("✅ Langfuse observability initialized")
+                    logger.info("Langfuse observability initialized")
                 else:
-                    logger.warning("⚠️ Langfuse initialization returned None - tracing may not work")
+                    logger.warning("Langfuse initialization returned None - tracing may not work")
             else:
-                logger.info("ℹ️ Langfuse not configured - running without observability")
+                logger.info("Langfuse not configured - running without observability")
         except ImportError as e:
-            logger.warning(f"⚠️ Langfuse package not available: {e}")
+            logger.warning("Langfuse package not available: %s", e)
         except Exception as e:
-            logger.warning(f"⚠️ Langfuse initialization failed (non-fatal): {e}")
+            logger.warning("Langfuse initialization failed (non-fatal): %s", e)
 
     except Exception as e:
-        logger.error(f"❌ CRITICAL: Failed to initialize Weaviate: {e}")
+        logger.error("CRITICAL: Failed to initialize Weaviate: %s", e)
         logger.error("The application cannot start without Weaviate database connection!")
         raise  # Fail fast - don't start if DB isn't ready
 
@@ -305,7 +359,7 @@ async def lifespan(app: FastAPI):
         connection = WeaviateConnection()
         await connection.close()
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.error("Error during shutdown: %s", e)
 
 
 app = FastAPI(
@@ -375,6 +429,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Request correlation middleware - adds request_id to all log lines.
+create_request_context_middleware(app)
 
 # Include routers
 # Authentication endpoints (under /auth)
@@ -470,7 +527,7 @@ async def health_check():
         db_client.get_genes_by_taxon('NCBITaxon:6239', limit=1)
         health_status["services"]["curation_db"] = "connected"
     except Exception as e:
-        logger.error(f"Curation database health check failed: {e}")
+        logger.error("Curation database health check failed: %s", e)
         health_status["services"]["curation_db"] = "disconnected"
         health_status["status"] = "degraded"
 
@@ -481,7 +538,7 @@ async def health_check():
         await redis_client.ping()
         health_status["services"]["redis"] = "connected"
     except Exception as e:
-        logger.error(f"Redis health check failed: {e}")
+        logger.error("Redis health check failed: %s", e)
         health_status["services"]["redis"] = "disconnected"
         health_status["status"] = "degraded"
 

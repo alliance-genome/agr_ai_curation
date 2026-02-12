@@ -40,7 +40,7 @@ async def get_chunking_strategies_endpoint() -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Error retrieving chunking strategies: {e}")
+        logger.error('Error retrieving chunking strategies: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve chunking strategies: {str(e)}"

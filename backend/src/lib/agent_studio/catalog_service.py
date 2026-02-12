@@ -812,7 +812,7 @@ def get_tool_registry() -> Dict[str, Dict[str, Any]]:
 
                     registry[metadata.name] = tool_dict
                 except Exception as e:
-                    logger.warning(f"Failed to introspect {name}: {e}")
+                    logger.warning('Failed to introspect %s: %s', name, e)
 
     return registry
 
@@ -1082,7 +1082,7 @@ def _build_catalog() -> PromptCatalog:
             continue
 
         if not system_prompt:
-            logger.warning(f"Skipping {agent_id}: no system prompt found in database")
+            logger.warning('Skipping %s: no system prompt found in database', agent_id)
             continue
 
         # Build MOD rules dict from database prompts

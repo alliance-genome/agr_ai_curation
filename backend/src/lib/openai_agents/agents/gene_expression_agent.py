@@ -113,11 +113,11 @@ def create_gene_expression_agent(
                 component_name="gene_expression",
                 prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Gene Expression agent configured with group-specific rules: {active_groups}")
+            logger.info('Gene Expression agent configured with group-specific rules: %s', active_groups)
         except ImportError as e:
-            logger.warning(f"Could not import mod_config, skipping group injection: {e}")
+            logger.warning('Could not import mod_config, skipping group injection: %s', e)
         except Exception as e:
-            logger.error(f"Failed to inject group rules: {e}")
+            logger.error('Failed to inject group rules: %s', e)
 
     # Inject document context (hierarchy + abstract) using shared utility
     context_text, structure_info = format_document_context_for_prompt(
@@ -149,9 +149,11 @@ def create_gene_expression_agent(
     model = get_model_for_agent(config.model)
 
     logger.info(
-        f"[OpenAI Agents] Creating Gene Expression agent for document {document_id[:8]}..., "
-        f"model={config.model}, prompt_v={base_prompt.version}, structure={structure_info}, "
-        f"output_type=plain_text, guardrail=tool_required(min=1)"
+        "Creating Gene Expression agent, model=%s prompt_v=%s structure=%s",
+        config.model,
+        base_prompt.version,
+        structure_info,
+        extra={"document_id": document_id[:8]},
     )
 
     # Log agent configuration to Langfuse for trace visibility

@@ -313,6 +313,32 @@ deploy-check: ## Dry-run to see what would be deployed
 	@./scripts/deploy_alliance.sh --dry-run --verbose
 
 # =============================================================================
+# PRODUCTION (EC2 with GELF logging)
+# =============================================================================
+
+.PHONY: prod
+prod: check-env ## Start all services with GELF logging (for EC2 deployment)
+	@echo "$(GREEN)Starting all services with GELF logging...$(NC)"
+	@set -a && . "$(ENV_FILE)" && set +a && \
+		docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+.PHONY: prod-build
+prod-build: check-env ## Rebuild and start all services with GELF logging
+	@echo "$(GREEN)Rebuilding all services with GELF logging...$(NC)"
+	@set -a && . "$(ENV_FILE)" && export VITE_GIT_SHA=$$(git rev-parse --short HEAD) && set +a && \
+		docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+.PHONY: prod-down
+prod-down: ## Stop all production services
+	@echo "$(YELLOW)Stopping production services...$(NC)"
+	@docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+.PHONY: prod-logs
+prod-logs: ## Follow logs for production services (limited - use Kibana for full logs)
+	@echo "$(YELLOW)Note: With GELF driver, docker logs shows limited output. Use Kibana for full logs.$(NC)"
+	@docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=50
+
+# =============================================================================
 # HELP
 # =============================================================================
 

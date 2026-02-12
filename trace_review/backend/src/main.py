@@ -8,7 +8,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .logging_config import configure_logging, create_request_context_middleware
 from .services.cache_manager import CacheManager
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,7 @@ async def lifespan(app: FastAPI):
     # Startup
     ttl_hours = int(os.getenv("CACHE_TTL_HOURS", "1"))
     app.state.cache_manager = CacheManager(ttl_hours=ttl_hours)
-    logger.info(f"Cache manager initialized with TTL: {ttl_hours} hours")
+    logger.info("Cache manager initialized with TTL: %s hours", ttl_hours)
 
     yield
 
@@ -44,6 +47,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Request correlation middleware - adds request_id to all log lines.
+create_request_context_middleware(app)
 
 
 @app.get("/")

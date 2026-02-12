@@ -391,7 +391,7 @@ async def test_custom_agent_endpoint(
             }
             yield f"data: {json.dumps(done_event)}\n\n"
         except asyncio.CancelledError:
-            logger.warning(f"Custom-agent test stream cancelled: custom_agent_id={custom_agent_id}")
+            logger.warning('Custom-agent test stream cancelled: custom_agent_id=%s', custom_agent_id)
             error_event = {
                 "type": "RUN_ERROR",
                 "message": "Custom-agent test cancelled unexpectedly.",
@@ -403,8 +403,7 @@ async def test_custom_agent_endpoint(
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
             logger.error(
-                f"Custom-agent test stream error for {custom_agent_id}: {exc}",
-                exc_info=True,
+                'Custom-agent test stream error for %s: %s', custom_agent_id, exc, exc_info=True,
             )
             error_event = {
                 "type": "RUN_ERROR",

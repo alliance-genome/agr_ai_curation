@@ -67,7 +67,7 @@ class DiagnosticToolRegistry:
             tags: Optional tags for filtering/search
         """
         if name in self._tools:
-            logger.warning(f"Tool '{name}' already registered, overwriting")
+            logger.warning("Tool '%s' already registered, overwriting", name)
             # Remove from old category
             old_tool = self._tools[name]
             if old_tool.category in self._categories:
@@ -92,7 +92,7 @@ class DiagnosticToolRegistry:
             self._categories[category] = []
         self._categories[category].append(name)
 
-        logger.debug(f"Registered diagnostic tool: {name} (category: {category})")
+        logger.debug('Registered diagnostic tool: %s (category: %s)', name, category)
 
     def unregister(self, name: str) -> bool:
         """
@@ -110,7 +110,7 @@ class DiagnosticToolRegistry:
                 n for n in self._categories[tool.category] if n != name
             ]
 
-        logger.info(f"Unregistered diagnostic tool: {name}")
+        logger.info('Unregistered diagnostic tool: %s', name)
         return True
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:
@@ -198,7 +198,7 @@ def get_diagnostic_tools_registry() -> DiagnosticToolRegistry:
         from . import tool_definitions
         tool_definitions.register_all_tools(_registry_instance)
         _registry_instance._initialized = True
-        logger.info(f"Diagnostic tools registry initialized with {_registry_instance.get_tool_count()} tools")
+        logger.info('Diagnostic tools registry initialized with %s tools', _registry_instance.get_tool_count())
     return _registry_instance
 
 

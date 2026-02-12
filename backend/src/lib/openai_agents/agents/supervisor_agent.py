@@ -25,6 +25,7 @@ Factory functions are registered in AGENT_FACTORIES mapping agent_id to callable
 
 import asyncio
 import logging
+import time
 from typing import Optional, List, Literal, Dict, Any, Callable
 
 from agents import Agent, ModelSettings, Runner, RunConfig, function_tool
@@ -79,7 +80,7 @@ def _get_agent_factory(agent_id: str) -> Optional[Callable]:
 
     factory = get_factory_by_agent_id(agent_id)
     if factory is None:
-        logger.warning(f"[OpenAI Agents] No factory found for agent: {agent_id}")
+        logger.warning("No factory found for agent: %s", agent_id)
     return factory
 
 
@@ -105,7 +106,7 @@ def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[s
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections(document_id, user_id))
     except Exception as e:
-        logger.warning(f"[OpenAI Agents] Failed to fetch document sections: {e}")
+        logger.warning("Failed to fetch document sections: %s", e)
         return []
 
 
@@ -133,7 +134,7 @@ def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Di
             # No running loop, safe to use asyncio.run()
             return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
     except Exception as e:
-        logger.warning(f"[OpenAI Agents] Failed to fetch document hierarchy: {e}")
+        logger.warning("Failed to fetch document hierarchy: %s", e)
         return None
 
 
@@ -312,13 +313,13 @@ def _create_dynamic_specialist_tools(
 
         # Skip document-dependent agents if no document is loaded
         if requires_document and (not document_id or not user_id):
-            logger.debug(f"[OpenAI Agents] Skipping {tool_name} - requires document but none loaded")
+            logger.debug("Skipping %s - requires document but none loaded", tool_name)
             continue
 
         # Get factory function
         factory = _get_agent_factory(agent_id)
         if factory is None:
-            logger.warning(f"[OpenAI Agents] No factory found for agent: {agent_id}")
+            logger.warning("No factory found for agent: %s", agent_id)
             continue
 
         # Build factory kwargs based on agent requirements
@@ -359,15 +360,15 @@ def _create_dynamic_specialist_tools(
             )
             specialist_tools.append(streaming_tool)
 
-            logger.info(f"[OpenAI Agents] Created dynamic tool: {tool_name}")
+            logger.info("Created dynamic tool: %s", tool_name)
 
         except Exception as e:
-            logger.error(f"[OpenAI Agents] Failed to create tool {tool_name}: {e}")
+            logger.error("Failed to create tool %s: %s", tool_name, e)
             continue
 
     # Warn if no specialist tools were created
     if not specialist_tools:
-        logger.warning("[OpenAI Agents] No specialist tools created - supervisor may have limited functionality")
+        logger.warning("No specialist tools created - supervisor may have limited functionality")
 
     return specialist_tools
 
@@ -413,6 +414,7 @@ def create_supervisor_agent(
         An Agent instance configured as a supervisor with specialist tools
     """
     from ..config import get_agent_config, log_agent_config, get_model_for_agent
+    route_start = time.monotonic()
 
     # Get supervisor config from registry + environment
     config = get_agent_config("supervisor")
@@ -434,20 +436,23 @@ def create_supervisor_agent(
         if safety_guardrail:
             input_guardrails.append(safety_guardrail)
         else:
-            logger.warning("[OpenAI Agents] Guardrails requested but not available")
+            logger.warning("Guardrails requested but not available")
     elif enable_guardrails:
-        logger.warning("[OpenAI Agents] Guardrails requested but module not imported")
+        logger.warning("Guardrails requested but module not imported")
 
     logger.info(
-        f"[OpenAI Agents] Creating Supervisor agent with dynamic tool discovery, "
-        f"model={config.model}, temp={config.temperature}, reasoning={config.reasoning}"
+        "Creating Supervisor agent with dynamic tool discovery, model=%s temp=%s reasoning=%s",
+        config.model,
+        config.temperature,
+        config.reasoning,
+        extra={"operation": "supervisor_routing_setup"},
     )
 
     # Extract section names from hierarchy for document-dependent agents
     sections = []
     if hierarchy and hierarchy.get("sections"):
         sections = [s.get("name") for s in hierarchy.get("sections", []) if s.get("name")]
-        logger.info(f"[OpenAI Agents] Extracted {len(sections)} sections from pre-fetched hierarchy")
+        logger.info("Extracted %s sections from pre-fetched hierarchy", len(sections))
 
     # =========================================================================
     # DYNAMIC SPECIALIST TOOL CREATION
@@ -466,7 +471,16 @@ def create_supervisor_agent(
         active_groups=active_groups,
     )
 
-    logger.info(f"[OpenAI Agents] Dynamic discovery created {len(specialist_tools)} specialist tools")
+    routing_duration_ms = (time.monotonic() - route_start) * 1000
+    logger.info(
+        "Dynamic discovery created %s specialist tools",
+        len(specialist_tools),
+        extra={
+            "operation": "supervisor_routing_setup",
+            "specialist_tool_count": len(specialist_tools),
+            "duration_ms": round(routing_duration_ms, 1),
+        },
+    )
 
     # Export to File tool (always available - supervisor built-in, not a specialist agent)
     # Allows supervisor to export data as downloadable CSV, TSV, or JSON files
@@ -524,10 +538,10 @@ The tool returns file information including a download URL that will render as a
             return json_module.dumps(result)
 
         except ValueError as e:
-            logger.error(f"[export_to_file] Validation error: {e}")
+            logger.error("export_to_file validation error: %s", e)
             return json_module.dumps({"error": str(e)})
         except Exception as e:
-            logger.error(f"[export_to_file] Error generating file: {e}")
+            logger.error("export_to_file error generating file: %s", e)
             return json_module.dumps({"error": f"Failed to generate file: {str(e)}"})
 
     specialist_tools.append(export_to_file_tool)
@@ -558,16 +572,18 @@ The tool returns file information including a download URL that will render as a
                 component_name="supervisor",
                 prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Supervisor configured with group-specific dispatch rules: {active_groups}")
+            logger.info("Supervisor configured with group-specific dispatch rules: %s", active_groups)
         except ImportError as e:
-            logger.warning(f"Could not import mod_config for supervisor, skipping injection: {e}")
+            logger.warning("Could not import mod_config for supervisor, skipping injection: %s", e)
         except Exception as e:
             # Don't fail if supervisor rules don't exist - they're optional
-            logger.debug(f"No supervisor group rules found or error: {e}")
+            logger.debug("No supervisor group rules found or error: %s", e)
 
     logger.info(
-        f"[OpenAI Agents] Creating Supervisor agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}, groups={active_groups}"
+        "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",
+        config.model,
+        base_prompt.version,
+        active_groups,
     )
 
     # Create the supervisor with specialist tools
@@ -608,6 +624,6 @@ The tool returns file information including a download URL that will render as a
         }
     )
 
-    logger.info(f"[OpenAI Agents] Supervisor configured with {len(specialist_tools)} specialist tools")
+    logger.info("Supervisor configured with %s specialist tools", len(specialist_tools))
 
     return supervisor

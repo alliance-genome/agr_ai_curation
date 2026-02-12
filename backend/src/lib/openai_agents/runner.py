@@ -14,6 +14,7 @@ Langfuse Integration:
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Dict, Any, Optional, List
@@ -46,6 +47,7 @@ from src.models.sql.database import SessionLocal
 
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id
+from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 
 # Logger must be defined early since _create_openai_client_kwargs uses it at module load
 logger = logging.getLogger(__name__)
@@ -59,10 +61,10 @@ def _configure_api_mode():
     """
     if is_gemini_provider():
         set_default_openai_api("chat_completions")
-        logger.info("[LLM Client] Using chat_completions API mode for Gemini compatibility")
+        logger.info("Using chat_completions API mode for Gemini compatibility")
     else:
         # OpenAI supports the Responses API (default)
-        logger.info("[LLM Client] Using responses API mode (OpenAI default)")
+        logger.info("Using responses API mode (OpenAI default)")
 
 
 # Configure API mode at module load
@@ -86,7 +88,12 @@ def _create_openai_client_kwargs() -> dict:
         kwargs["base_url"] = base_url
 
     provider = "gemini" if is_gemini_provider() else "openai"
-    logger.info(f"[LLM Client] Using provider: {provider}, base_url: {base_url or 'default'}")
+    logger.info(
+        "Using provider=%s base_url=%s",
+        provider,
+        base_url or "default",
+        extra={"provider": provider, "base_url": base_url or "default"},
+    )
 
     return kwargs
 
@@ -172,7 +179,7 @@ def _log_used_prompts_to_db(
     """
     used_prompts = get_used_prompts()
     if not used_prompts:
-        logger.debug("[Prompt Logging] No prompts to log")
+        logger.debug("No prompts to log")
         return 0
 
     # Add prompt version metadata to Langfuse span if provided
@@ -195,10 +202,10 @@ def _log_used_prompts_to_db(
                     "prompt_count": len(prompt_versions),
                 }
             )
-            logger.debug(f"[Langfuse] Added {len(prompt_versions)} prompt versions to span metadata")
+            logger.debug("Added %s prompt versions to span metadata", len(prompt_versions))
         except Exception as e:
             # Non-critical - continue even if Langfuse update fails
-            logger.warning(f"[Langfuse] Failed to add prompt versions to span: {e}")
+            logger.warning("Failed to add prompt versions to span: %s", e)
 
     try:
         db = SessionLocal()
@@ -211,15 +218,21 @@ def _log_used_prompts_to_db(
             )
             db.commit()
             logger.info(
-                f"[Prompt Logging] Logged {len(entries)} prompt usages to database "
-                f"(trace_id={trace_id[:16]}...)"
+                "Logged %s prompt usages to database",
+                len(entries),
+                extra={"trace_id": trace_id, "session_id": session_id},
             )
             return len(entries)
         finally:
             db.close()
     except Exception as e:
         # Log error but don't fail the request - prompt logging is non-critical
-        logger.error(f"[Prompt Logging] Failed to log prompts: {e}", exc_info=True)
+        logger.error(
+            "Failed to log prompts: %s",
+            e,
+            extra={"trace_id": trace_id, "session_id": session_id},
+            exc_info=True,
+        )
         return 0
 
 from .agents.supervisor_agent import create_supervisor_agent
@@ -279,10 +292,14 @@ async def _run_agent_with_tracing(
     # Events appended to this list are yielded during stream processing
     live_events: List[Dict[str, Any]] = []
     set_live_event_list(live_events)
-    logger.info("[OpenAI Agents] Live event list enabled for real-time streaming")
+    logger.info(
+        "Live event list enabled for real-time streaming",
+        extra={"trace_id": trace_id, "user_id": user_id},
+    )
 
     # max_turns from config gives agents more time to think and process complex queries
     max_turns = get_max_turns()
+    llm_run_start = time.monotonic()
     result = Runner.run_streamed(agent, input=input_items, max_turns=max_turns, run_config=run_config)
 
     # Track position in live_events list for yielding new events
@@ -309,14 +326,22 @@ async def _run_agent_with_tracing(
                 async for event in result.stream_events():
                     await sdk_queue.put(("sdk", event))
             except Exception as e:
-                logger.error(f"[OpenAI Agents] SDK producer error: {e}")
+                logger.error(
+                    "SDK producer error: %s",
+                    e,
+                    extra={"trace_id": trace_id, "user_id": user_id},
+                    exc_info=True,
+                )
                 await sdk_queue.put(("error", e))
             finally:
                 await sdk_queue.put(None)  # Sentinel to signal completion
 
         # Start SDK producer as background task
         sdk_task = asyncio.create_task(sdk_producer())
-        logger.info("[OpenAI Agents] Started SDK producer task for concurrent streaming")
+        logger.info(
+            "Started SDK producer task for concurrent streaming",
+            extra={"trace_id": trace_id, "user_id": user_id},
+        )
 
         try:
             while True:
@@ -325,7 +350,11 @@ async def _run_agent_with_tracing(
                 while live_events_yielded < len(live_events):
                     specialist_event = live_events[live_events_yielded]
                     live_events_yielded += 1
-                    logger.info(f"[OpenAI Agents] Yielding live specialist event: {specialist_event.get('type')}")
+                    logger.debug(
+                        "Yielding live specialist event: %s",
+                        specialist_event.get("type"),
+                        extra={"trace_id": trace_id, "user_id": user_id},
+                    )
                     yield ("live", specialist_event)
 
                 # Try to get SDK event with short timeout
@@ -334,7 +363,10 @@ async def _run_agent_with_tracing(
                     item = await asyncio.wait_for(sdk_queue.get(), timeout=0.05)
                     if item is None:
                         # SDK stream completed
-                        logger.info("[OpenAI Agents] SDK stream completed")
+                        logger.info(
+                            "SDK stream completed",
+                            extra={"trace_id": trace_id, "user_id": user_id},
+                        )
                         break
                     if item[0] == "error":
                         # CRITICAL: Yield remaining live events BEFORE re-raising
@@ -343,9 +375,10 @@ async def _run_agent_with_tracing(
                         while live_events_yielded < len(live_events):
                             specialist_event = live_events[live_events_yielded]
                             live_events_yielded += 1
-                            logger.info(
-                                f"[OpenAI Agents] Yielding live event before error: "
-                                f"{specialist_event.get('type')}"
+                            logger.debug(
+                                "Yielding live event before error: %s",
+                                specialist_event.get("type"),
+                                extra={"trace_id": trace_id, "user_id": user_id},
                             )
                             yield ("live", specialist_event)
 
@@ -360,7 +393,11 @@ async def _run_agent_with_tracing(
             while live_events_yielded < len(live_events):
                 specialist_event = live_events[live_events_yielded]
                 live_events_yielded += 1
-                logger.info(f"[OpenAI Agents] Yielding final live specialist event: {specialist_event.get('type')}")
+                logger.debug(
+                    "Yielding final live specialist event: %s",
+                    specialist_event.get("type"),
+                    extra={"trace_id": trace_id, "user_id": user_id},
+                )
                 yield ("live", specialist_event)
 
         finally:
@@ -393,7 +430,11 @@ async def _run_agent_with_tracing(
                             # Emit AGENT_GENERATING once when text streaming starts
                             if not is_generating:
                                 is_generating = True
-                                logger.info(f"[OpenAI Agents] Agent generating response: {current_agent}")
+                                logger.debug(
+                                    "Agent generating response: %s",
+                                    current_agent,
+                                    extra={"trace_id": trace_id, "user_id": user_id},
+                                )
                                 yield {
                                     "type": "AGENT_GENERATING",
                                     "timestamp": _now_iso(),
@@ -457,7 +498,16 @@ async def _run_agent_with_tracing(
                                 except Exception:
                                     pass
                         tools_called.append(tool_name)
-                        logger.info(f"[OpenAI Agents] Tool call started: {tool_name}")
+                        logger.info(
+                            "Tool call started: %s",
+                            tool_name,
+                            extra={
+                                "trace_id": trace_id,
+                                "user_id": user_id,
+                                "tool_name": tool_name,
+                                "agent": current_agent,
+                            },
+                        )
                         # Audit event: TOOL_START
                         yield {
                             "type": "TOOL_START",
@@ -476,15 +526,23 @@ async def _run_agent_with_tracing(
                         output_preview = str(output)[:300]
                         if len(str(output)) > 300:
                             output_preview += "..."
-                        logger.info(f"[OpenAI Agents] Tool call completed, output length: {len(str(output))}")
                         # Get last tool name for the completion event
                         last_tool = tools_called[-1] if tools_called else "tool"
+                        logger.info(
+                            "Tool call completed, output length=%s",
+                            len(str(output)),
+                            extra={"trace_id": trace_id, "user_id": user_id, "tool_name": last_tool},
+                        )
 
                         # Emit any remaining collected specialist events (fallback for batch mode)
                         # Most events should have been streamed via queue, this catches any stragglers
                         specialist_events = get_collected_events()
                         if specialist_events:
-                            logger.info(f"[OpenAI Agents] Emitting {len(specialist_events)} remaining specialist events")
+                            logger.info(
+                                "Emitting %s remaining specialist events",
+                                len(specialist_events),
+                                extra={"trace_id": trace_id, "user_id": user_id},
+                            )
                             for specialist_event in specialist_events:
                                 yield specialist_event
                             clear_collected_events()
@@ -503,7 +561,10 @@ async def _run_agent_with_tracing(
                         # Check if chat_output agent completed (for flow termination)
                         # This signals that a chat-based flow has produced its final output
                         if last_tool == "ask_chat_output_specialist":
-                            logger.info("[OpenAI Agents] Chat output agent completed")
+                            logger.info(
+                                "Chat output agent completed",
+                                extra={"trace_id": trace_id, "user_id": user_id},
+                            )
                             yield {
                                 "type": "CHAT_OUTPUT_READY",
                                 "timestamp": _now_iso(),
@@ -526,8 +587,10 @@ async def _run_agent_with_tracing(
                                     output_data.get("filename")
                                 ):
                                     logger.info(
-                                        f"[OpenAI Agents] File output detected: "
-                                        f"{output_data.get('filename')} ({output_data.get('format')})"
+                                        "File output detected: %s (%s)",
+                                        output_data.get("filename"),
+                                        output_data.get("format"),
+                                        extra={"trace_id": trace_id, "user_id": user_id},
                                     )
                                     yield {
                                         "type": "FILE_READY",
@@ -561,7 +624,11 @@ async def _run_agent_with_tracing(
                         target_agent = getattr(item, "target_agent", None)
                         if target_agent:
                             target_name = getattr(target_agent, "name", "unknown")
-                            logger.info(f"[OpenAI Agents] Handoff to: {target_name}")
+                            logger.info(
+                                "Handoff to: %s",
+                                target_name,
+                                extra={"trace_id": trace_id, "user_id": user_id},
+                            )
                             yield {
                                 "type": "HANDOFF_START",
                                 "data": {
@@ -575,14 +642,22 @@ async def _run_agent_with_tracing(
                         source_agent = getattr(item, "source_agent", None)
                         if source_agent:
                             source_name = getattr(source_agent, "name", "unknown")
-                            logger.info(f"[OpenAI Agents] Handoff completed from: {source_name}")
+                            logger.info(
+                                "Handoff completed from: %s",
+                                source_name,
+                                extra={"trace_id": trace_id, "user_id": user_id},
+                            )
 
             elif event_type == "agent_updated_stream_event":
                 # Handle agent switches during handoffs
                 new_agent = getattr(event, "new_agent", None)
                 if new_agent:
                     new_agent_name = getattr(new_agent, "name", "unknown")
-                    logger.info(f"[OpenAI Agents] Agent switched to: {new_agent_name}")
+                    logger.info(
+                        "Agent switched to: %s",
+                        new_agent_name,
+                        extra={"trace_id": trace_id, "user_id": user_id},
+                    )
                     # Emit completion for previous agent
                     yield {
                         "type": "AGENT_COMPLETE",
@@ -627,9 +702,18 @@ async def _run_agent_with_tracing(
             if not full_response:
                 full_response = str(final_output)
 
+    duration_ms = (time.monotonic() - llm_run_start) * 1000
     logger.info(
-        f"[OpenAI Agents] Run completed. Response length: {len(full_response)}, "
-        f"Tool calls: {tool_calls_count}, Agents used: {agents_used}, trace_id: {trace_id}"
+        "Run completed",
+        extra={
+            "trace_id": trace_id,
+            "user_id": user_id,
+            "response_length": len(full_response),
+            "tool_calls": tool_calls_count,
+            "agents_used": agents_used,
+            "duration_ms": round(duration_ms, 1),
+            "operation": "llm_stream_run",
+        },
     )
 
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
@@ -734,8 +818,9 @@ async def run_agent_streamed(
     """
     doc_info = f"document {document_id[:8]}..." if document_id else "no document"
     logger.info(
-        f"[OpenAI Agents] Starting streamed run for {doc_info}, "
-        f"query='{user_message[:50]}...'"
+        "Starting streamed run for %s",
+        doc_info,
+        extra={"user_id": user_id, "session_id": session_id, "query_preview": user_message[:50]},
     )
 
     # Clear any leftover data from previous runs
@@ -754,7 +839,11 @@ async def run_agent_streamed(
         # Use pre-fetched context (optimization path from flow executor)
         hierarchy = doc_context.hierarchy
         abstract = doc_context.abstract
-        logger.debug(f"[OpenAI Agents] Using pre-fetched document context: {doc_context.section_count()} sections")
+        logger.debug(
+            "Using pre-fetched document context: %s sections",
+            doc_context.section_count(),
+            extra={"user_id": user_id, "session_id": session_id},
+        )
     elif document_id and user_id:
         # Fetch fresh (standard chat path)
         doc_context = DocumentContext.fetch(document_id, user_id, document_name)
@@ -776,7 +865,11 @@ async def run_agent_streamed(
     else:
         # Custom agent provided (e.g., flow supervisor)
         agent_name = getattr(agent, 'name', 'Custom Agent')
-        logger.info(f"[OpenAI Agents] Using provided agent: {agent_name}")
+        logger.info(
+            "Using provided agent: %s",
+            agent_name,
+            extra={"user_id": user_id, "session_id": session_id},
+        )
 
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
@@ -802,7 +895,11 @@ async def run_agent_streamed(
     # hierarchy is already fetched above and passed to supervisor agent
     # Log if we'll be adding it to trace metadata
     if hierarchy:
-        logger.info(f"[Langfuse] Adding document hierarchy to trace: {len(hierarchy.get('sections', []))} sections")
+        logger.info(
+            "Adding document hierarchy to trace: %s sections",
+            len(hierarchy.get("sections", [])),
+            extra={"user_id": user_id, "session_id": session_id},
+        )
 
     if langfuse:
         # Use start_as_current_span() to SET THE ACTIVE CONTEXT
@@ -841,7 +938,11 @@ async def run_agent_streamed(
             query_preview = user_message[:50] + "..." if len(user_message) > 50 else user_message
             trace_name = f"chat: {query_preview}"
 
-            logger.info(f"[Langfuse] Creating trace: name='{trace_name}', session_id={session_id}, user_id={user_id}")
+            logger.info(
+                "Creating trace: name=%s",
+                trace_name,
+                extra={"session_id": session_id, "user_id": user_id},
+            )
 
             span_context_manager = langfuse.start_as_current_span(
                 name="chat-flow",
@@ -873,15 +974,24 @@ async def run_agent_streamed(
                 set_current_trace_id(trace_id)
 
                 logger.info(
-                    f"[Langfuse] Trace created: trace_id={trace_id}, "
-                    f"session_id={session_id}, tags={trace_tags}, "
-                    f"document_id={document_id}"
+                    "Trace created",
+                    extra={
+                        "trace_id": trace_id,
+                        "session_id": session_id,
+                        "user_id": user_id,
+                        "tags": trace_tags,
+                        "document_id": document_id,
+                    },
                 )
 
                 # Flush queued agent configs to the trace as EVENT observations
                 # These were collected during agent creation before trace existed
                 config_count = flush_agent_configs(root_span)
-                logger.info(f"[Langfuse] Flushed {config_count} agent configs to trace {trace_id[:8]}...")
+                logger.info(
+                    "Flushed %s agent configs to trace",
+                    config_count,
+                    extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                )
 
                 # Emit start event AFTER we have the Langfuse trace_id
                 yield {
@@ -923,10 +1033,15 @@ async def run_agent_streamed(
                                 }
                             )
                             logger.info(
-                                f"[Langfuse] Trace completed: trace_id={trace_id}, "
-                                f"response_length={data.get('response_length', 0)}, "
-                                f"tool_calls={data.get('tool_calls', 0)}, "
-                                f"agents_used={data.get('agents_used', [])}"
+                                "Trace completed",
+                                extra={
+                                    "trace_id": trace_id,
+                                    "session_id": session_id,
+                                    "user_id": user_id,
+                                    "response_length": data.get("response_length", 0),
+                                    "tool_calls": data.get("tool_calls", 0),
+                                    "agents_used": data.get("agents_used", []),
+                                },
                             )
                             # Note: Prompt logging moved to finally block for guaranteed execution
                         yield event
@@ -935,9 +1050,15 @@ async def run_agent_streamed(
                     # Specialist failed to produce structured output after retry
                     # This is a specific error that provides clear context to the user
                     logger.error(
-                        f"[OpenAI Agents] Specialist output error: {e}, "
-                        f"specialist={e.specialist_name}, output_type={e.output_type_name}, "
-                        f"trace_id: {trace_id}",
+                        "Specialist output error: %s",
+                        e,
+                        extra={
+                            "trace_id": trace_id,
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "specialist_name": e.specialist_name,
+                            "output_type": e.output_type_name,
+                        },
                         exc_info=True
                     )
                     root_span.update(
@@ -950,6 +1071,17 @@ async def run_agent_streamed(
                         level="ERROR",
                         status_message=str(e),
                         metadata={"specialist_retry_failed": True}
+                    )
+                    _alert_task = asyncio.create_task(
+                        notify_tool_failure(
+                            error_type="SpecialistOutputError",
+                            error_message=str(e),
+                            source="infrastructure",
+                            specialist_name=e.specialist_name,
+                            trace_id=trace_id,
+                            session_id=session_id,
+                            curator_id=user_id,
+                        )
                     )
                     # Audit event: SPECIALIST_ERROR (more specific than SUPERVISOR_ERROR)
                     yield {
@@ -981,11 +1113,32 @@ async def run_agent_streamed(
                     }
 
                 except Exception as e:
-                    logger.error(f"[OpenAI Agents] Run error: {e}, trace_id: {trace_id}", exc_info=True)
+                    logger.error(
+                        "Run error: %s",
+                        e,
+                        extra={
+                            "trace_id": trace_id,
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "error_type": type(e).__name__,
+                        },
+                        exc_info=True,
+                    )
                     root_span.update(
                         output={"error": str(e), "error_type": type(e).__name__},
                         level="ERROR",
                         status_message=str(e)
+                    )
+                    _alert_task = asyncio.create_task(
+                        notify_tool_failure(
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                            source="infrastructure",
+                            specialist_name=agent.name,
+                            trace_id=trace_id,
+                            session_id=session_id,
+                            curator_id=user_id,
+                        )
                     )
                     # Audit event: SUPERVISOR_ERROR
                     yield {
@@ -1022,19 +1175,38 @@ async def run_agent_streamed(
                 # The trace is still captured correctly - the error is just about cleanup.
                 try:
                     span_context_manager.__exit__(None, None, None)
-                    logger.info(f"[Langfuse] Span context closed for trace_id={trace_id}")
+                    logger.info(
+                        "Span context closed",
+                        extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                    )
                 except ValueError as e:
                     if "Token was created in a different Context" in str(e):
                         # Expected when generator is abandoned or suspended across async boundaries
-                        logger.debug(f"[Langfuse] OTEL context detach skipped (async boundary): {e}")
+                        logger.debug(
+                            "OTEL context detach skipped (async boundary): %s",
+                            e,
+                            extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                        )
                     else:
                         # Unexpected ValueError - log but don't crash
-                        logger.warning(f"[Langfuse] Unexpected error during span cleanup: {e}")
+                        logger.warning(
+                            "Unexpected error during span cleanup: %s",
+                            e,
+                            extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                        )
                 flush_langfuse()
-                logger.info(f"[Langfuse] Flushed trace data for trace_id={trace_id}")
+                logger.info(
+                    "Flushed trace data",
+                    extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                )
 
         except Exception as e:
-            logger.error(f"[Langfuse] Failed to create span context: {e}", exc_info=True)
+            logger.error(
+                "Failed to create span context: %s",
+                e,
+                extra={"trace_id": fallback_trace_id, "session_id": session_id, "user_id": user_id},
+                exc_info=True,
+            )
             # Fall back to running without tracing
             # Set fallback trace_id in context for tools
             set_current_trace_id(fallback_trace_id)
@@ -1068,7 +1240,10 @@ async def run_agent_streamed(
                 _log_used_prompts_to_db(trace_id=fallback_trace_id, session_id=session_id)
     else:
         # No Langfuse configured, run without tracing
-        logger.info("[Langfuse] Not configured, running without tracing")
+        logger.info(
+            "Langfuse not configured, running without tracing",
+            extra={"trace_id": fallback_trace_id, "session_id": session_id, "user_id": user_id},
+        )
         # Set fallback trace_id in context for tools
         set_current_trace_id(fallback_trace_id)
         yield {

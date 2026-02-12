@@ -146,7 +146,7 @@ async def get_schema_endpoint() -> Dict[str, Any]:
         return schema
 
     except Exception as e:
-        logger.error(f"Error retrieving schema: {e}")
+        logger.error('Error retrieving schema: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve schema: {str(e)}"
@@ -198,7 +198,7 @@ async def update_schema_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating schema: {e}")
+        logger.error('Error updating schema: %s', e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update schema: {str(e)}"

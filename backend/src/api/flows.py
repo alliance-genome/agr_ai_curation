@@ -139,7 +139,7 @@ async def list_flows(
     # Convert to summary responses (excludes full flow_definition)
     flow_summaries = [_flow_to_summary_response(flow) for flow in flows]
 
-    logger.info(f"Listed {len(flow_summaries)} flows for user {db_user.id} (page {page})")
+    logger.info('Listed %s flows for user %s (page %s)', len(flow_summaries), db_user.id, page)
 
     return FlowListResponse(
         flows=flow_summaries,
@@ -161,7 +161,7 @@ async def get_flow(
     """
     flow = verify_flow_ownership(db, flow_id, user)
 
-    logger.info(f"Retrieved flow {flow_id} for user {flow.user_id}")
+    logger.info('Retrieved flow %s for user %s', flow_id, flow.user_id)
 
     return FlowResponse.model_validate(flow)
 
@@ -200,13 +200,13 @@ async def create_flow(
                 detail="A flow with this name already exists"
             )
         # Wrap other integrity errors to avoid exposing database internals
-        logger.error(f"Unexpected IntegrityError creating flow: {e}")
+        logger.error('Unexpected IntegrityError creating flow: %s', e)
         raise HTTPException(
             status_code=500,
             detail="Database error while creating flow"
         )
 
-    logger.info(f"Created flow {flow.id} '{flow.name}' for user {db_user.id}")
+    logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
 
     return FlowResponse.model_validate(flow)
 
@@ -222,21 +222,27 @@ async def update_flow(
 
     Only provided fields are updated. Flow name must remain unique for the user.
     """
-    logger.info(f"[Flow Update] Starting update for flow {flow_id}")
-    logger.debug(f"[Flow Update] Request payload: name={request.name is not None}, "
-                 f"description={request.description is not None}, "
-                 f"flow_definition={request.flow_definition is not None}")
+    logger.info('[Flow Update] Starting update for flow %s', flow_id)
+    logger.debug(
+        "[Flow Update] Request payload: name=%s, description=%s, flow_definition=%s",
+        request.name is not None,
+        request.description is not None,
+        request.flow_definition is not None,
+    )
 
     flow = verify_flow_ownership(db, flow_id, user)
-    logger.debug(f"[Flow Update] Current flow state: name='{flow.name}', "
-                 f"updated_at={flow.updated_at}")
+    logger.debug(
+        "[Flow Update] Current flow state: name='%s', updated_at=%s",
+        flow.name,
+        flow.updated_at,
+    )
 
     # Track what was updated for logging
     updates = []
 
     # Update name if provided
     if request.name is not None:
-        logger.debug(f"[Flow Update] Changing name: '{flow.name}' -> '{request.name}'")
+        logger.debug("[Flow Update] Changing name: '%s' -> '%s'", flow.name, request.name)
         flow.name = request.name
         updates.append("name")
 
@@ -250,7 +256,7 @@ async def update_flow(
         # Log node count for visibility without dumping entire definition
         node_count = len(request.flow_definition.nodes) if request.flow_definition.nodes else 0
         edge_count = len(request.flow_definition.edges) if request.flow_definition.edges else 0
-        logger.debug(f"[Flow Update] Updating flow_definition: {node_count} nodes, {edge_count} edges")
+        logger.debug('[Flow Update] Updating flow_definition: %s nodes, %s edges', node_count, edge_count)
         flow.flow_definition = request.flow_definition.model_dump()
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
         # We must explicitly flag it as modified for the UPDATE to be emitted
@@ -259,14 +265,14 @@ async def update_flow(
 
     # Only commit if something changed
     if updates:
-        logger.info(f"[Flow Update] Committing changes to flow {flow_id}: {', '.join(updates)}")
+        logger.info('[Flow Update] Committing changes to flow %s: %s', flow_id, ', '.join(updates))
         try:
             db.commit()
-            logger.debug(f"[Flow Update] Commit completed, refreshing flow object")
+            logger.debug('[Flow Update] Commit completed, refreshing flow object')
             db.refresh(flow)
-            logger.info(f"[Flow Update] Success - flow {flow_id} updated_at now: {flow.updated_at}")
+            logger.info('[Flow Update] Success - flow %s updated_at now: %s', flow_id, flow.updated_at)
         except IntegrityError as e:
-            logger.error(f"[Flow Update] IntegrityError during commit: {e}")
+            logger.error('[Flow Update] IntegrityError during commit: %s', e)
             db.rollback()
             # Check if it's a unique constraint violation on name
             if "uq_user_flow_name_active" in str(e.orig).lower():
@@ -275,13 +281,13 @@ async def update_flow(
                     detail="A flow with this name already exists"
                 )
             # Wrap other integrity errors to avoid exposing database internals
-            logger.error(f"Unexpected IntegrityError updating flow {flow_id}: {e}")
+            logger.error('Unexpected IntegrityError updating flow %s: %s', flow_id, e)
             raise HTTPException(
                 status_code=500,
                 detail="Database error while updating flow"
             )
     else:
-        logger.info(f"[Flow Update] No changes detected for flow {flow_id}")
+        logger.info('[Flow Update] No changes detected for flow %s', flow_id)
 
     return FlowResponse.model_validate(flow)
 
@@ -303,7 +309,7 @@ async def delete_flow(
     flow.is_active = False
     db.commit()
 
-    logger.info(f"Soft-deleted flow {flow_id} '{flow.name}'")
+    logger.info("Soft-deleted flow %s '%s'", flow_id, flow.name)
 
     return OperationResult(
         success=True,

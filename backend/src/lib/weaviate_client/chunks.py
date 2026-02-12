@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 import asyncio
@@ -36,6 +37,7 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
+    operation_start = time.monotonic()
 
     with connection.session() as client:
         try:
@@ -102,7 +104,7 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
 
                 # Check for any errors in the batch result
                 if hasattr(result, 'errors') and result.errors:
-                    logger.error(f"Batch insertion had errors: {result.errors}")
+                    logger.error("Batch insertion had errors: %s", result.errors)
 
             # T038: Update document chunk count using tenant-scoped collection
             try:
@@ -114,9 +116,15 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
                     }
                 )
             except Exception as e:
-                logger.warning(f"Failed to update document chunk count: {e}")
+                logger.warning("Failed to update document chunk count: %s", e)
 
-            logger.info(f"Stored {len(chunks)} chunks for document {document_id}")
+            duration_ms = (time.monotonic() - operation_start) * 1000
+            logger.info(
+                "Stored %s chunks for document %s",
+                len(chunks),
+                document_id,
+                extra={"duration_ms": round(duration_ms, 1), "operation": "weaviate_store_chunks"},
+            )
 
             return {
                 "success": True,
@@ -127,7 +135,7 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
             }
 
         except Exception as e:
-            logger.error(f"Failed to store chunks: {e}")
+            logger.error("Failed to store chunks: %s", e)
             return {
                 "success": False,
                 "message": f"Failed to store chunks: {e}",
@@ -197,7 +205,7 @@ async def hybrid_search_chunks(
     short_token = len(norm_query.split()) <= 3 or len(norm_query) < 15
     if short_token:
         # push lexical by default for short/symbol-like inputs
-        logger.info(f"⚙️ Detected short/symbol-like query; enabling BM25 boost and disabling MMR/rerank")
+        logger.info("Detected short/symbol-like query; enabling BM25 boost and disabling MMR/rerank")
         use_bm25_boost = True
         apply_reranking = False
         apply_mmr = False
@@ -206,13 +214,18 @@ async def hybrid_search_chunks(
                 rerank_override: Optional[bool] = None,
                 mmr_override: Optional[bool] = None) -> List[Dict[str, Any]]:
         try:
+            search_start = time.monotonic()
             # V5: Log search parameters
             logger.info(
-                f"V5 Hybrid Search Starting - "
-                f"document_id={document_id}, query='{norm_query[:50]}...', "
-                f"alpha={alpha_override or alpha}, initial_limit={initial_limit}, final_limit={limit}, "
-                f"reranking={rerank_override if rerank_override is not None else apply_reranking}, "
-                f"MMR={mmr_override if mmr_override is not None else apply_mmr}, MMR_lambda={mmr_lambda}"
+                "V5 Hybrid Search Starting - document_id=%s query=%s alpha=%s initial_limit=%s final_limit=%s reranking=%s MMR=%s MMR_lambda=%s",
+                document_id,
+                norm_query[:50],
+                alpha_override or alpha,
+                initial_limit,
+                limit,
+                rerank_override if rerank_override is not None else apply_reranking,
+                mmr_override if mmr_override is not None else apply_mmr,
+                mmr_lambda,
             )
 
             with connection.session() as client:
@@ -231,14 +244,17 @@ async def hybrid_search_chunks(
                     # Use new local variable to avoid UnboundLocalError
                     validated_keywords = section_keywords
                     if isinstance(validated_keywords, str):
-                        logger.warning(f"⚠️ section_keywords received as string, converting to list: {validated_keywords}")
+                        logger.warning(
+                            "section_keywords received as string, converting to list: %s",
+                            validated_keywords,
+                        )
                         validated_keywords = [validated_keywords]
 
                     # Filter out empty strings and strip whitespace
                     validated_keywords = [kw.strip() for kw in validated_keywords if kw and kw.strip()]
 
                     if not validated_keywords:
-                        logger.warning("⚠️ section_keywords was empty after validation, skipping section filtering")
+                        logger.warning("section_keywords was empty after validation, skipping section filtering")
                         combined_filter = base_filter
                     else:
                         # Build OR filter for section title matching
@@ -253,7 +269,7 @@ async def hybrid_search_chunks(
 
                         # Combine document filter AND section filter
                         combined_filter = base_filter & section_filter
-                        logger.info(f"🔍 Section filtering active: {validated_keywords}")
+                        logger.info("Section filtering active: %s", validated_keywords)
                 else:
                     combined_filter = base_filter
 
@@ -296,7 +312,7 @@ async def hybrid_search_chunks(
                             query_params["bm25_operator"] = BM25Operator.or_(minimum_match=2)
                             # (or strict: BM25Operator.and_() for all terms to match)
                     except Exception as e:
-                        logger.debug(f"BM25 boost not available (v{weaviate_version}): {e}")
+                        logger.debug("BM25 boost not available (v%s): %s", weaviate_version, e)
 
                 # Add reranking if available
                 if rerank_override if rerank_override is not None else apply_reranking:
@@ -322,7 +338,7 @@ async def hybrid_search_chunks(
                 response = collection.query.hybrid(**query_params)
 
                 # V5: Log retrieval results
-                logger.info(f"V5: Retrieved {len(response.objects)} chunks from Weaviate")
+                logger.info("V5: Retrieved %s chunks from Weaviate", len(response.objects))
 
                 # Process results with correct format
                 chunks = []
@@ -375,13 +391,18 @@ async def hybrid_search_chunks(
 
                     # Log score explanation in debug mode
                     if explain_scores and obj.metadata and hasattr(obj.metadata, 'explain_score'):
-                        logger.debug(f"Score breakdown: {obj.metadata.explain_score}")
+                        logger.debug("Score breakdown: %s", obj.metadata.explain_score)
 
                     chunks.append(chunk)
 
                 # Apply MMR if enabled and we have enough results
                 if (mmr_override if mmr_override is not None else apply_mmr) and len(chunks) > limit:
-                    logger.info(f"V5: Applying MMR diversification (lambda={mmr_lambda}, candidates={len(chunks)}, target={limit})")
+                    logger.info(
+                        "V5: Applying MMR diversification (lambda=%s, candidates=%s, target=%s)",
+                        mmr_lambda,
+                        len(chunks),
+                        limit,
+                    )
                     from .mmr_diversifier import mmr_diversify
                     pre_mmr_count = len(chunks)
                     chunks = mmr_diversify(
@@ -390,26 +411,34 @@ async def hybrid_search_chunks(
                         top_k=limit,
                         vector_field="_vector"  # Tell MMR where vectors are
                     )
-                    logger.info(f"V5: MMR reduced {pre_mmr_count} chunks to {len(chunks)} diverse results")
+                    logger.info("V5: MMR reduced %s chunks to %s diverse results", pre_mmr_count, len(chunks))
                     # Clean up vectors after MMR
                     for chunk in chunks:
                         chunk.pop("_vector", None)
                 else:
                     if not (mmr_override if mmr_override is not None else apply_mmr):
-                        logger.info(f"V5: MMR disabled, returning top {limit} chunks")
+                        logger.info("V5: MMR disabled, returning top %s chunks", limit)
                     else:
-                        logger.info(f"V5: Not enough chunks for MMR ({len(chunks)} <= {limit})")
+                        logger.info("V5: Not enough chunks for MMR (%s <= %s)", len(chunks), limit)
                     chunks = chunks[:limit]
 
+                search_duration_ms = (time.monotonic() - search_start) * 1000
                 logger.info(
-                    f"V5 Search Complete: Final {len(chunks)} results "
-                    f"(α={alpha}, rerank={apply_reranking}, mmr={apply_mmr})"
+                    "V5 Search Complete: Final %s results (alpha=%s, rerank=%s, mmr=%s)",
+                    len(chunks),
+                    alpha,
+                    apply_reranking,
+                    apply_mmr,
+                    extra={
+                        "duration_ms": round(search_duration_ms, 1),
+                        "operation": "weaviate_hybrid_search",
+                    },
                 )
 
                 return chunks
 
         except Exception as e:
-            logger.error(f"Search failed: {e}", exc_info=True)
+            logger.error("Search failed: %s", e, exc_info=True)
             raise
 
     # Retry strategy: lexical-first fallbacks for short/symbol queries or explicit strategy
@@ -503,14 +532,18 @@ async def get_chunks_by_section(
             )
             
             if not start_response.objects:
-                logger.info(f"No section header found for '{section_title}'")
+                logger.info("No section header found for '%s'", section_title)
                 return []
                 
             start_chunk = start_response.objects[0]
             start_index = start_chunk.properties.get("chunkIndex")
             found_title = start_chunk.properties.get("sectionTitle")
             
-            logger.info(f"Found section '{found_title}' at index {start_index}. Reading forward...")
+            logger.info(
+                "Found section '%s' at index %s. Reading forward...",
+                found_title,
+                start_index,
+            )
             
             # Step 2: Fetch range of chunks starting from start_index
             range_filter = Filter.by_property("chunkIndex").greater_or_equal(start_index)
@@ -624,7 +657,11 @@ async def search_chunks_by_keyword(
             )
 
             if not response.objects:
-                logger.debug(f"No chunks found with keyword '{keyword}' in pages 1-{max_page}")
+                logger.debug(
+                    "No chunks found with keyword '%s' in pages 1-%s",
+                    keyword,
+                    max_page,
+                )
                 return []
 
             # Filter to chunks that actually contain the keyword
@@ -647,7 +684,12 @@ async def search_chunks_by_keyword(
                     break
 
             if chunks:
-                logger.info(f"Found {len(chunks)} chunks with keyword '{keyword}' in pages 1-{max_page}")
+                logger.info(
+                    "Found %s chunks with keyword '%s' in pages 1-%s",
+                    len(chunks),
+                    keyword,
+                    max_page,
+                )
 
             return chunks
 
@@ -732,7 +774,12 @@ async def get_chunks_from_index(
 
                 # Stop if section changes (and we have at least one chunk)
                 if stop_on_section_change and chunks and section != first_section:
-                    logger.debug(f"Stopping at chunk {props.get('chunkIndex')} - section changed from '{first_section}' to '{section}'")
+                    logger.debug(
+                        "Stopping at chunk %s - section changed from '%s' to '%s'",
+                        props.get("chunkIndex"),
+                        first_section,
+                        section,
+                    )
                     break
 
                 chunks.append({
@@ -875,13 +922,13 @@ async def get_document_hierarchy(
             ).first()
 
             if doc and doc.hierarchy_metadata:
-                logger.info(f"Retrieved hierarchy metadata for document {document_id}")
+                logger.info("Retrieved hierarchy metadata for document %s", document_id)
                 return doc.hierarchy_metadata
             else:
-                logger.info(f"No hierarchy metadata found for document {document_id}")
+                logger.info("No hierarchy metadata found for document %s", document_id)
                 return None
         except Exception as e:
-            logger.error(f"Error retrieving hierarchy metadata: {e}")
+            logger.error("Error retrieving hierarchy metadata: %s", e)
             return None
         finally:
             session.close()
@@ -955,10 +1002,14 @@ async def get_chunks_by_parent_section(
             )
 
             if not response.objects:
-                logger.info(f"No chunks found for parent section '{parent_section}'")
+                logger.info("No chunks found for parent section '%s'", parent_section)
                 return []
 
-            logger.info(f"Found {len(response.objects)} chunks for parent section '{parent_section}'")
+            logger.info(
+                "Found %s chunks for parent section '%s'",
+                len(response.objects),
+                parent_section,
+            )
 
             chunks = []
             for obj in response.objects:
@@ -1059,10 +1110,19 @@ async def get_chunks_by_subsection(
             )
 
             if not response.objects:
-                logger.info(f"No chunks found for subsection '{subsection}' in '{parent_section}'")
+                logger.info(
+                    "No chunks found for subsection '%s' in '%s'",
+                    subsection,
+                    parent_section,
+                )
                 return []
 
-            logger.info(f"Found {len(response.objects)} chunks for subsection '{subsection}' in '{parent_section}'")
+            logger.info(
+                "Found %s chunks for subsection '%s' in '%s'",
+                len(response.objects),
+                subsection,
+                parent_section,
+            )
 
             chunks = []
             for obj in response.objects:
@@ -1243,7 +1303,7 @@ async def get_document_sections_hierarchical(
                 finally:
                     session.close()
             except Exception as e:
-                logger.warning(f"Could not fetch abstract_section_title from database: {e}")
+                logger.warning("Could not fetch abstract_section_title from database: %s", e)
 
             return {
                 "sections": result,
@@ -1306,7 +1366,7 @@ def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
             )
 
             deleted_count = result.get("results", {}).get("successful", 0)
-            logger.info(f"Deleted {deleted_count} chunks for document {document_id}")
+            logger.info("Deleted %s chunks for document %s", deleted_count, document_id)
 
             return {
                 "success": True,
@@ -1316,7 +1376,7 @@ def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            logger.error(f"Failed to delete chunks: {e}")
+            logger.error("Failed to delete chunks: %s", e)
             return {
                 "success": False,
                 "message": f"Failed to delete chunks: {e}",
@@ -1364,7 +1424,7 @@ def update_chunk_embeddings(chunk_id: str, vector: List[float], user_id: str) ->
                 vector=vector
             )
 
-            logger.info(f"Updated embedding for chunk {chunk_id}")
+            logger.info("Updated embedding for chunk %s", chunk_id)
 
             return {
                 "success": True,
@@ -1373,7 +1433,7 @@ def update_chunk_embeddings(chunk_id: str, vector: List[float], user_id: str) ->
             }
 
         except Exception as e:
-            logger.error(f"Failed to update chunk embedding: {e}")
+            logger.error("Failed to update chunk embedding: %s", e)
             return {
                 "success": False,
                 "message": f"Failed to update chunk embedding: {e}",
@@ -1478,7 +1538,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                         try:
                             doc_items = json.loads(doc_items_str)
                         except:
-                            logger.warning(f"Failed to parse docItemProvenance for chunk {chunk_id}")
+                            logger.warning("Failed to parse docItemProvenance for chunk %s", chunk_id)
                             doc_items = []
 
                     chunk_data = {
@@ -1512,7 +1572,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                 }
 
             except Exception as e:
-                logger.error(f"Failed to get chunks: {e}", exc_info=True)
+                logger.error("Failed to get chunks: %s", e, exc_info=True)
                 raise
 
     # Use asyncio.to_thread for Python 3.9+ or fall back to run_in_executor
@@ -1524,7 +1584,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, _fetch_page)
     except Exception as e:
-        logger.error(f"Error fetching chunks: {e}")
+        logger.error("Error fetching chunks: %s", e)
         raise
 
     return result

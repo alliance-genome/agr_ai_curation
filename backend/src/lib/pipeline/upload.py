@@ -29,7 +29,7 @@ class PDFUploadHandler:
         """
         self.storage_path = storage_path or Path("/tmp/pdf_uploads")
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Upload handler initialized with storage path: {self.storage_path}")
+        logger.info('Upload handler initialized with storage path: %s', self.storage_path)
 
     async def save_uploaded_pdf(
         self,
@@ -108,7 +108,7 @@ class PDFUploadHandler:
                 metadata=doc_metadata
             )
 
-            logger.info(f"Successfully saved PDF: {original_filename} with ID: {document_id}")
+            logger.info('Successfully saved PDF: %s with ID: %s', original_filename, document_id)
             return saved_path, document
 
         except Exception as e:
@@ -267,7 +267,7 @@ class PDFUploadHandler:
                 "storage_type": "filesystem"
             }
 
-            logger.info(f"Stored raw PDF for document {document_id} at {permanent_path}")
+            logger.info('Stored raw PDF for document %s at %s', document_id, permanent_path)
             return storage_metadata
 
         except Exception as e:
@@ -344,7 +344,7 @@ async def generate_checksum(
                 hasher.update(chunk)
 
         checksum = hasher.hexdigest()
-        logger.debug(f"Generated {algorithm} checksum for {file_path.name}: {checksum}")
+        logger.debug('Generated %s checksum for %s: %s', algorithm, file_path.name, checksum)
         return checksum
 
     except Exception as e:
@@ -391,11 +391,11 @@ def cleanup_temp_files(document_id: str, storage_path: Optional[Path] = None) ->
 
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temporary files for document {document_id}")
+            logger.info('Cleaned up temporary files for document %s', document_id)
             return True
 
         return False
 
     except Exception as e:
-        logger.error(f"Failed to cleanup temp files: {str(e)}")
+        logger.error('Failed to cleanup temp files: %s', str(e))
         return False

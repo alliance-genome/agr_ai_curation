@@ -137,8 +137,7 @@ class ConversationManager:
                     oldest_session = next(iter(user_sessions))
                     del user_sessions[oldest_session]
                     logger.debug(
-                        f"Evicted oldest session for user {user_id[:8]}...: {oldest_session}"
-                    )
+                        'Evicted oldest session for user %s...: %s', user_id[:8], oldest_session)
             else:
                 # Move to end (LRU)
                 user_sessions.move_to_end(session_id)
@@ -324,12 +323,12 @@ Please consider this conversation history when generating your response.
                         f"({session_count} sessions cleared)"
                     )
                 else:
-                    logger.info(f"No sessions to reset for user {user_id[:8]}...")
+                    logger.info('No sessions to reset for user %s...', user_id[:8])
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to reset conversation memory for user {user_id[:8]}...: {e}")
+            logger.error('Failed to reset conversation memory for user %s...: %s', user_id[:8], e)
             return False
 
     def get_memory_stats(self, user_id: Optional[str] = None) -> dict:
@@ -386,7 +385,7 @@ Please consider this conversation history when generating your response.
                     }
 
         except Exception as e:
-            logger.error(f"Failed to get memory stats: {e}")
+            logger.error('Failed to get memory stats: %s', e)
 
         return stats
 

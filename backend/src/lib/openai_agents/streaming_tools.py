@@ -141,7 +141,7 @@ _consecutive_call_tracker: ContextVar[Dict[str, Any]] = ContextVar(
 def reset_consecutive_call_tracker():
     """Reset the consecutive call tracker. Call this at the start of a new conversation."""
     _consecutive_call_tracker.set({"last_tool": None, "count": 0})
-    logger.debug("[Batching Nudge] Tracker reset for new request")
+    logger.debug("Tracker reset for new request")
 
 
 def _track_specialist_call(tool_name: str) -> int:
@@ -166,7 +166,7 @@ def _track_specialist_call(tool_name: str) -> int:
     # Update the tracker with new state
     _consecutive_call_tracker.set({"last_tool": tool_name, "count": new_count})
 
-    logger.debug(f"[Batching Nudge] {tool_name} called, consecutive count: {new_count}")
+    logger.debug("%s called, consecutive count: %s", tool_name, new_count)
     return new_count
 
 
@@ -209,7 +209,7 @@ Note: You've called this specialist {consecutive_count} times for individual {en
 If separate calls are intentional for this task, no problem.
 ---"""
 
-    logger.info(f"[Batching Nudge] Generated nudge for {tool_name} after {consecutive_count} consecutive calls")
+    logger.info("Generated nudge for %s after %s consecutive calls", tool_name, consecutive_count)
     return nudge
 
 
@@ -278,7 +278,7 @@ def set_live_event_list(event_list: Optional[List[Dict[str, Any]]]):
         event_list: A list to append events to, or None to disable
     """
     _live_event_list_var.set(event_list)
-    logger.info(f"[Streaming Tools] Live event list set: {event_list is not None}")
+    logger.debug("Live event list set: %s", event_list is not None)
 
 
 def get_live_event_list() -> Optional[List[Dict[str, Any]]]:
@@ -305,7 +305,7 @@ def add_specialist_event(event: Dict[str, Any]):
         # Real-time mode: append to list immediately
         # Python's list.append() is thread-safe (GIL protected)
         event_list.append(event)
-        logger.info(f"[Streaming Tools] Appended event to live list: {event.get('type')}, list_len={len(event_list)}")
+        logger.debug("Appended event to live list: %s, list_len=%s", event.get("type"), len(event_list))
     else:
         # Batch mode: collect for later emission
         events = _specialist_events.get()
@@ -351,7 +351,7 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
                     if page_number:
                         doc_items = [{"page": page_number}]
                     else:
-                        logger.debug(f"[Streaming Tools] Chunk {chunk_id} has no doc_items or page_number, skipping")
+                        logger.debug("Chunk %s has no doc_items or page_number, skipping", chunk_id)
                         continue
 
                 # Emit CHUNK_PROVENANCE event
@@ -375,7 +375,7 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
                 doc_items = section.get("doc_items") or []
 
                 if not doc_items:
-                    logger.debug(f"[Streaming Tools] Section '{section_title}' has no doc_items, skipping provenance")
+                    logger.debug("Section '%s' has no doc_items, skipping provenance", section_title)
                     return
 
                 # Emit CHUNK_PROVENANCE event with the section's doc_items
@@ -386,12 +386,16 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
                     "doc_items": doc_items,
                     "source_tool": tool_name,
                 })
-                logger.debug(f"[Streaming Tools] Emitted CHUNK_PROVENANCE for section '{section_title}' with {len(doc_items)} doc_items")
+                logger.debug(
+                    "Emitted CHUNK_PROVENANCE for section '%s' with %s doc_items",
+                    section_title,
+                    len(doc_items),
+                )
 
     except json.JSONDecodeError as e:
-        logger.warning(f"[Streaming Tools] Failed to parse {tool_name} output for chunk provenance: {e}")
+        logger.warning("Failed to parse %s output for chunk provenance: %s", tool_name, e)
     except Exception as e:
-        logger.warning(f"[Streaming Tools] Error extracting chunk provenance from {tool_name}: {e}")
+        logger.warning("Error extracting chunk provenance from %s: %s", tool_name, e)
 
 
 async def run_specialist_with_events(
@@ -429,13 +433,18 @@ async def run_specialist_with_events(
     if tool_name:
         consecutive_count = _track_specialist_call(tool_name)
     else:
-        logger.warning(f"[Batching Nudge] tool_name is None for {specialist_name}, skipping consecutive call tracking")
+        logger.warning("tool_name is None for %s, skipping consecutive call tracking", specialist_name)
 
     # Use config default if not specified
     if max_turns is None:
         max_turns = get_max_turns()
 
-    logger.info(f"[Streaming Tools] Starting {specialist_name} with input: {input_text[:100]}... (max_turns={max_turns})")
+    logger.info(
+        "Starting specialist=%s (max_turns=%s)",
+        specialist_name,
+        max_turns,
+        extra={"specialist_name": specialist_name, "tool_name": tool_name},
+    )
 
     # Commit pending prompts for this specialist - moves from pending to used
     # This is where the agent ACTUALLY executes, so we log the prompts now
@@ -475,8 +484,11 @@ async def run_specialist_with_events(
             if total_event_count <= 5 or total_event_count % 10 == 0:
                 # Log first 5 events and then every 10th to avoid spam
                 logger.debug(
-                    f"[Streaming Tools] {specialist_name} event #{total_event_count}: "
-                    f"type={event_type}, event_class={type(event).__name__}"
+                    "%s event #%s: type=%s, event_class=%s",
+                    specialist_name,
+                    total_event_count,
+                    event_type,
+                    type(event).__name__,
                 )
 
             # Handle raw_response_event - shows model responses
@@ -495,7 +507,7 @@ async def run_specialist_with_events(
                             # This provides visual feedback in the audit panel
                             if not is_generating:
                                 is_generating = True
-                                logger.info(f"[Streaming Tools] {specialist_name} generating response (emitting AGENT_GENERATING)")
+                                logger.debug("%s generating response (emitting AGENT_GENERATING)", specialist_name)
                                 add_specialist_event({
                                     "type": "AGENT_GENERATING",
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -515,10 +527,7 @@ async def run_specialist_with_events(
                             text_len = len(result._accumulated_text)
                             if text_len <= 200 or text_len % 500 < len(delta_text):
                                 preview = result._accumulated_text[-200:] if text_len > 200 else result._accumulated_text
-                                logger.info(
-                                    f"[Streaming Tools] {specialist_name} TEXT OUTPUT ({text_len} chars): "
-                                    f"...{preview}"
-                                )
+                                logger.debug("%s TEXT OUTPUT (%s chars): ...%s", specialist_name, text_len, preview)
 
                     # Capture reasoning summary delta events (GPT-5 reasoning mode)
                     elif response_type == "ResponseReasoningSummaryPartDoneEvent":
@@ -527,9 +536,10 @@ async def run_specialist_with_events(
                         if part:
                             text = getattr(part, "text", None)
                             if text:
-                                logger.info(
-                                    f"[Streaming Tools] {specialist_name} REASONING SUMMARY PART: "
-                                    f"{text[:300]}{'...' if len(text) > 300 else ''}"
+                                logger.debug(
+                                    "%s REASONING SUMMARY PART: %s",
+                                    specialist_name,
+                                    text[:300] + ("..." if len(text) > 300 else ""),
                                 )
 
                     elif response_type == "ResponseReasoningSummaryTextDeltaEvent":
@@ -545,18 +555,22 @@ async def run_specialist_with_events(
                             reasoning_len = len(result._accumulated_reasoning)
                             if reasoning_len <= 200 or reasoning_len % 500 < len(delta):
                                 preview = result._accumulated_reasoning[-200:] if reasoning_len > 200 else result._accumulated_reasoning
-                                logger.info(
-                                    f"[Streaming Tools] {specialist_name} REASONING DELTA ({reasoning_len} chars): "
-                                    f"...{preview}"
+                                logger.debug(
+                                    "%s REASONING DELTA (%s chars): ...%s",
+                                    specialist_name,
+                                    reasoning_len,
+                                    preview,
                                 )
 
                     elif response_type == "ResponseReasoningSummaryTextDoneEvent":
                         # Final reasoning summary text
                         text = getattr(data, "text", "")
                         if text:
-                            logger.info(
-                                f"[Streaming Tools] {specialist_name} REASONING COMPLETE ({len(text)} chars): "
-                                f"{text[:500]}{'...' if len(text) > 500 else ''}"
+                            logger.debug(
+                                "%s REASONING COMPLETE (%s chars): %s",
+                                specialist_name,
+                                len(text),
+                                text[:500] + ("..." if len(text) > 500 else ""),
                             )
 
                     elif response_type == "ResponseTextDoneEvent":
@@ -564,36 +578,39 @@ async def run_specialist_with_events(
                         full_text = getattr(data, "text", "")
                         if full_text:
                             logger.warning(
-                                f"[Streaming Tools] {specialist_name} GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! "
-                                f"Length: {len(full_text)} chars. First 500: {full_text[:500]}..."
+                                "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
+                                specialist_name,
+                                len(full_text),
+                                full_text[:500],
+                                extra={"specialist_name": specialist_name},
                             )
                     elif response_type not in ("ResponseFunctionCallArgumentsDeltaEvent",):
                         # Log other response types (but not the spammy argument deltas)
-                        logger.info(f"[Streaming Tools] {specialist_name} raw_response: type={response_type}")
+                        logger.debug("%s raw_response: type=%s", specialist_name, response_type)
 
                         # Extra logging for any Reasoning-related events we might have missed
                         if "Reasoning" in response_type:
-                            logger.info(
-                                f"[Streaming Tools] {specialist_name} REASONING EVENT: {response_type}"
-                            )
+                            logger.debug("%s REASONING EVENT: %s", specialist_name, response_type)
                             # Try to extract any useful content from the event data
                             for attr in ["delta", "text", "summary", "part", "content"]:
                                 if hasattr(data, attr):
                                     value = getattr(data, attr, None)
                                     if value:
-                                        logger.info(
-                                            f"[Streaming Tools] {specialist_name} REASONING.{attr}: "
-                                            f"{str(value)[:300]}{'...' if len(str(value)) > 300 else ''}"
+                                        logger.debug(
+                                            "%s REASONING.%s: %s",
+                                            specialist_name,
+                                            attr,
+                                            str(value)[:300] + ("..." if len(str(value)) > 300 else ""),
                                         )
 
                     # Check for output content in the response
                     if hasattr(data, "output"):
                         output_items = getattr(data, "output", [])
                         if output_items:
-                            logger.info(f"[Streaming Tools] {specialist_name} response has {len(output_items)} output items")
+                            logger.debug("%s response has %s output items", specialist_name, len(output_items))
                             for i, item in enumerate(output_items[:3]):  # Log first 3 items
                                 item_type = getattr(item, "type", type(item).__name__)
-                                logger.debug(f"[Streaming Tools] {specialist_name} output[{i}]: type={item_type}")
+                                logger.debug("%s output[%s]: type=%s", specialist_name, i, item_type)
 
             if event_type == "run_item_stream_event":
                 item = getattr(event, "item", None)
@@ -603,9 +620,11 @@ async def run_specialist_with_events(
                     # Log ALL item types for debugging (not just tool calls)
                     if item_type not in ("tool_call_item", "tool_call_output_item"):
                         # Log non-tool item types at INFO level
-                        logger.info(
-                            f"[Streaming Tools] {specialist_name} item: type={item_type}, "
-                            f"item_class={type(item).__name__}"
+                        logger.debug(
+                            "%s item: type=%s, item_class=%s",
+                            specialist_name,
+                            item_type,
+                            type(item).__name__,
                         )
 
                         # Special handling for reasoning_item - log the reasoning content
@@ -662,41 +681,39 @@ async def run_specialist_with_events(
                             if reasoning_content:
                                 # Log reasoning content (truncate to 500 chars for readability)
                                 content_preview = str(reasoning_content)[:500]
-                                logger.info(
-                                    f"[Streaming Tools] {specialist_name} REASONING ITEM ({len(str(reasoning_content))} chars): "
-                                    f"{content_preview}{'...' if len(str(reasoning_content)) > 500 else ''}"
+                                logger.debug(
+                                    "%s REASONING ITEM (%s chars): %s",
+                                    specialist_name,
+                                    len(str(reasoning_content)),
+                                    content_preview + ("..." if len(str(reasoning_content)) > 500 else ""),
                                 )
                             else:
                                 # Log all attributes of the item to understand its structure
                                 attrs = [a for a in dir(item) if not a.startswith('_')]
-                                logger.info(
-                                    f"[Streaming Tools] {specialist_name} reasoning_item attributes: {attrs}"
-                                )
+                                logger.debug("%s reasoning_item attributes: %s", specialist_name, attrs)
                                 # Also dump the item to see what's in it
                                 try:
                                     if hasattr(item, "model_dump"):
                                         item_dict = item.model_dump()
-                                        logger.info(
-                                            f"[Streaming Tools] {specialist_name} reasoning_item dump: {str(item_dict)[:500]}"
-                                        )
+                                        logger.debug("%s reasoning_item dump: %s", specialist_name, str(item_dict)[:500])
                                 except Exception as e:
-                                    logger.debug(f"Could not dump reasoning_item: {e}")
+                                    logger.debug("Could not dump reasoning_item: %s", e)
 
                         # Try to extract any content from the item
                         if hasattr(item, "content"):
                             content = getattr(item, "content", None)
                             if content:
                                 content_preview = str(content)[:100]
-                                logger.info(f"[Streaming Tools] {specialist_name} item content: {content_preview}...")
+                                logger.debug("%s item content: %s...", specialist_name, content_preview)
                         if hasattr(item, "text"):
                             text = getattr(item, "text", None)
                             if text:
                                 text_preview = str(text)[:100]
-                                logger.info(f"[Streaming Tools] {specialist_name} item text: {text_preview}...")
+                                logger.debug("%s item text: %s...", specialist_name, text_preview)
                         if hasattr(item, "raw_item"):
                             raw = getattr(item, "raw_item", None)
                             if raw:
-                                logger.debug(f"[Streaming Tools] {specialist_name} raw_item type: {type(raw).__name__}")
+                                logger.debug("%s raw_item type: %s", specialist_name, type(raw).__name__)
 
                     if item_type == "tool_call_item":
                         # Reset is_generating flag - new tool call means a new generation phase after
@@ -722,7 +739,12 @@ async def run_specialist_with_events(
                                 except Exception:
                                     pass
 
-                        logger.info(f"[Streaming Tools] {specialist_name} calling: {current_tool_name}")
+                        logger.info(
+                            "%s calling: %s",
+                            specialist_name,
+                            current_tool_name,
+                            extra={"specialist_name": specialist_name, "tool_name": current_tool_name},
+                        )
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_START type so frontend can display it
@@ -748,7 +770,10 @@ async def run_specialist_with_events(
                         # Track tool call completion
                         # Skip if we don't have a current tool (edge case - output without prior call)
                         if current_tool_name is None:
-                            logger.debug(f"[Streaming Tools] {specialist_name} received tool output without prior tool call, skipping")
+                            logger.debug(
+                                "%s received tool output without prior tool call, skipping",
+                                specialist_name,
+                            )
                             continue
 
                         output = getattr(item, "output", "")
@@ -761,7 +786,18 @@ async def run_specialist_with_events(
                             duration = datetime.now(timezone.utc) - current_tool_start
                             duration_ms = int(duration.total_seconds() * 1000)
 
-                        logger.info(f"[Streaming Tools] {specialist_name} {current_tool_name} complete ({duration_ms}ms)")
+                        logger.info(
+                            "%s %s complete (%sms)",
+                            specialist_name,
+                            current_tool_name,
+                            duration_ms,
+                            extra={
+                                "specialist_name": specialist_name,
+                                "tool_name": current_tool_name,
+                                "duration_ms": duration_ms,
+                                "operation": "specialist_tool_execution",
+                            },
+                        )
 
                         # Update the last tool call with output info
                         if tool_calls:
@@ -799,8 +835,10 @@ async def run_specialist_with_events(
                                     output_data.get("filename")
                                 ):
                                     logger.info(
-                                        f"[Streaming Tools] File output detected from {specialist_name}: "
-                                        f"{output_data.get('filename')} ({output_data.get('format')})"
+                                        "File output detected from %s: %s (%s)",
+                                        specialist_name,
+                                        output_data.get("filename"),
+                                        output_data.get("format"),
                                     )
                                     # Emit FILE_READY event for frontend to render FileDownloadCard
                                     add_specialist_event({
@@ -818,21 +856,27 @@ async def run_specialist_with_events(
                                     })
                             except (json.JSONDecodeError, TypeError, AttributeError) as e:
                                 # Not JSON or not FileInfo - this is normal for most tools
-                                logger.debug(f"[Streaming Tools] FileInfo detection skipped: {type(e).__name__}")
+                                logger.debug("FileInfo detection skipped: %s", type(e).__name__)
 
                         current_tool_start = None
                         current_tool_name = None
 
         # Log comprehensive event summary for debugging
         logger.info(
-            f"[Streaming Tools] {specialist_name} stream completed normally. "
-            f"Total events: {total_event_count}, Event types: {event_type_counts}"
+            "%s stream completed normally. Total events: %s, Event types: %s",
+            specialist_name,
+            total_event_count,
+            event_type_counts,
         )
 
     except Exception as e:
         logger.error(
-            f"[Streaming Tools] {specialist_name} stream error: {type(e).__name__}: {e}. "
-            f"Events before error: {total_event_count}, Event types: {event_type_counts}"
+            "%s stream error: %s: %s. Events before error: %s, Event types: %s",
+            specialist_name,
+            type(e).__name__,
+            e,
+            total_event_count,
+            event_type_counts,
         )
         # Re-raise to propagate the error
         raise
@@ -844,23 +888,24 @@ async def run_specialist_with_events(
     # Get final output - handle both structured and string outputs
     final_output = ""
     logger.info(
-        f"[Streaming Tools] {specialist_name} checking final_output: "
-        f"hasattr={hasattr(result, 'final_output')}, "
-        f"value={getattr(result, 'final_output', 'N/A')}, "
-        f"type={type(getattr(result, 'final_output', None))}"
+        "%s checking final_output: hasattr=%s, value=%s, type=%s",
+        specialist_name,
+        hasattr(result, "final_output"),
+        getattr(result, "final_output", "N/A"),
+        type(getattr(result, "final_output", None)),
     )
 
     if hasattr(result, "final_output") and result.final_output is not None:
         if hasattr(result.final_output, "model_dump"):
             # Structured output (Pydantic model)
             final_output = json.dumps(result.final_output.model_dump())
-            logger.info(f"[Streaming Tools] {specialist_name} final_output is Pydantic model: {final_output[:200]}...")
+            logger.info("%s final_output is Pydantic model: %s...", specialist_name, final_output[:200])
         else:
             # String output
             final_output = str(result.final_output)
-            logger.info(f"[Streaming Tools] {specialist_name} final_output is string: {final_output[:200]}...")
+            logger.info("%s final_output is string: %s...", specialist_name, final_output[:200])
     else:
-        logger.warning(f"[Streaming Tools] {specialist_name} has no final_output!")
+        logger.warning("%s has no final_output!", specialist_name)
 
         # =============================================================================
         # TEXT OUTPUT FALLBACK PARSING
@@ -884,30 +929,36 @@ async def run_specialist_with_events(
             from agents.items import ItemHelpers
             if hasattr(result, 'new_items') and result.new_items:
                 logger.info(
-                    f"[Streaming Tools] {specialist_name} Checking new_items for text output "
-                    f"({len(result.new_items)} items)"
+                    "%s Checking new_items for text output (%s items)",
+                    specialist_name,
+                    len(result.new_items),
                 )
                 for item in reversed(result.new_items):
                     item_type = getattr(item, 'type', None)
-                    logger.info(f"[Streaming Tools] {specialist_name} new_items item: type={item_type}")
+                    logger.debug("%s new_items item: type=%s", specialist_name, item_type)
                     if item_type == 'message_output_item':
                         text_from_items = ItemHelpers.text_message_output(item)
                         if text_from_items:
                             logger.info(
-                                f"[Streaming Tools] {specialist_name} Found complete text in new_items "
-                                f"({len(text_from_items)} chars). First 200: {text_from_items[:200]}..."
+                                "%s Found complete text in new_items (%s chars). First 200: %s...",
+                                specialist_name,
+                                len(text_from_items),
+                                text_from_items[:200],
                             )
                             break
             else:
                 logger.warning(
-                    f"[Streaming Tools] {specialist_name} new_items is empty or missing! "
-                    f"hasattr={hasattr(result, 'new_items')}, "
-                    f"value={getattr(result, 'new_items', 'N/A')}"
+                    "%s new_items is empty or missing! hasattr=%s, value=%s",
+                    specialist_name,
+                    hasattr(result, "new_items"),
+                    getattr(result, "new_items", "N/A"),
                 )
         except Exception as e:
             logger.warning(
-                f"[Streaming Tools] {specialist_name} Error extracting from new_items: "
-                f"{type(e).__name__}: {e}"
+                "%s Error extracting from new_items: %s: %s",
+                specialist_name,
+                type(e).__name__,
+                e,
             )
 
         if text_from_items and output_type is not None:
@@ -915,8 +966,9 @@ async def run_specialist_with_events(
             text_stripped = text_from_items.strip()
 
             logger.info(
-                f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                f"Extracting JSON from new_items ({len(text_stripped)} chars)"
+                "%s TEXT FALLBACK: Extracting JSON from new_items (%s chars)",
+                specialist_name,
+                len(text_stripped),
             )
 
             # Find JSON object boundaries
@@ -926,8 +978,9 @@ async def run_specialist_with_events(
             if json_start >= 0 and json_end > json_start:
                 json_candidate = text_stripped[json_start:json_end + 1]
                 logger.info(
-                    f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                    f"Found JSON candidate from new_items ({len(json_candidate)} chars)"
+                    "%s TEXT FALLBACK: Found JSON candidate from new_items (%s chars)",
+                    specialist_name,
+                    len(json_candidate),
                 )
 
                 try:
@@ -941,9 +994,10 @@ async def run_specialist_with_events(
                     final_output = json.dumps(validated_output.model_dump())
 
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} TEXT FALLBACK SUCCESS! "
-                        f"Parsed and validated {output_type.__name__} from new_items. "
-                        f"JSON length: {len(final_output)} chars"
+                        "%s TEXT FALLBACK SUCCESS! Parsed and validated %s from new_items. JSON length: %s chars",
+                        specialist_name,
+                        output_type.__name__,
+                        len(final_output),
                     )
 
                     # Emit audit event for visibility
@@ -961,32 +1015,39 @@ async def run_specialist_with_events(
 
                 except json.JSONDecodeError as e:
                     logger.warning(
-                        f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                        f"JSON parsing failed from new_items: {e}. "
-                        f"JSON candidate length: {len(json_candidate)}, First 200 chars: {json_candidate[:200]}..."
+                        "%s TEXT FALLBACK: JSON parsing failed from new_items: %s. JSON candidate length: %s, First 200 chars: %s...",
+                        specialist_name,
+                        e,
+                        len(json_candidate),
+                        json_candidate[:200],
                     )
                 except Exception as e:
                     logger.warning(
-                        f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                        f"Pydantic validation failed: {type(e).__name__}: {e}"
+                        "%s TEXT FALLBACK: Pydantic validation failed: %s: %s",
+                        specialist_name,
+                        type(e).__name__,
+                        e,
                     )
             else:
                 logger.warning(
-                    f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                    f"No JSON object found in new_items ({len(text_stripped)} chars). "
-                    f"First 200 chars: {text_stripped[:200]}..."
+                    "%s TEXT FALLBACK: No JSON object found in new_items (%s chars). First 200 chars: %s...",
+                    specialist_name,
+                    len(text_stripped),
+                    text_stripped[:200],
                 )
         elif text_from_items:
             # Plain text agent - use text_from_items directly as output
             logger.info(
-                f"[Streaming Tools] {specialist_name}: Using text from new_items as plain text output "
-                f"({len(text_from_items)} chars)"
+                "%s: Using text from new_items as plain text output (%s chars)",
+                specialist_name,
+                len(text_from_items),
             )
             final_output = text_from_items
         elif output_type is not None:
             logger.warning(
-                f"[Streaming Tools] {specialist_name}: No text found in new_items, "
-                f"cannot extract {output_type.__name__}"
+                "%s: No text found in new_items, cannot extract %s",
+                specialist_name,
+                output_type.__name__,
             )
 
         # =============================================================================
@@ -999,9 +1060,9 @@ async def run_specialist_with_events(
             accumulated_text = result._accumulated_text.strip()
             if accumulated_text:
                 logger.info(
-                    f"[Streaming Tools] {specialist_name} STREAMING TEXT FALLBACK: "
-                    f"Using accumulated text from stream ({len(accumulated_text)} chars) "
-                    f"since new_items had no message_output_item"
+                    "%s STREAMING TEXT FALLBACK: Using accumulated text from stream (%s chars) since new_items had no message_output_item",
+                    specialist_name,
+                    len(accumulated_text),
                 )
                 final_output = accumulated_text
 
@@ -1020,8 +1081,8 @@ async def run_specialist_with_events(
         # If text fallback succeeded, skip the retry mechanism
         if final_output:
             logger.info(
-                f"[Streaming Tools] {specialist_name} TEXT FALLBACK: "
-                f"Skipping retry mechanism - output successfully extracted from text"
+                "%s TEXT FALLBACK: Skipping retry mechanism - output successfully extracted from text",
+                specialist_name,
             )
         else:
             # =============================================================================
@@ -1035,8 +1096,9 @@ async def run_specialist_with_events(
                 output_type_name = output_type.__name__
 
                 logger.warning(
-                    f"[Streaming Tools] {specialist_name} produced no output but expects {output_type_name}. "
-                    f"Attempting retry with nudge prompt..."
+                    "%s produced no output but expects %s. Attempting retry with nudge prompt...",
+                    specialist_name,
+                    output_type_name,
                 )
 
                 # Emit retry audit event
@@ -1067,8 +1129,9 @@ async def run_specialist_with_events(
                     retry_input = previous_items + [{"role": "user", "content": nudge_prompt}]
 
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} retry: including {len(previous_items)} previous items "
-                        f"plus nudge prompt"
+                        "%s retry: including %s previous items plus nudge prompt",
+                        specialist_name,
+                        len(previous_items),
                     )
 
                     # Create a simplified "retry agent" WITHOUT output_guardrails
@@ -1098,13 +1161,15 @@ async def run_specialist_with_events(
                     )
 
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} retry: created simplified retry agent "
-                        f"without tools or guardrails for output synthesis"
+                        "%s retry: created simplified retry agent without tools or guardrails for output synthesis",
+                        specialist_name,
                     )
 
                     # Re-run with nudge (reduced max_turns since we just need output synthesis)
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} retry: starting Runner.run_streamed with model={retry_model}"
+                        "%s retry: starting Runner.run_streamed with model=%s",
+                        specialist_name,
+                        retry_model,
                     )
 
                     retry_start_time = datetime.now(timezone.utc)
@@ -1121,20 +1186,23 @@ async def run_specialist_with_events(
                         retry_event_count += 1
                         # Log every event type for debugging
                         event_type = getattr(retry_event, 'type', str(type(retry_event).__name__))
-                        logger.debug(f"[Streaming Tools] {specialist_name} retry event {retry_event_count}: {event_type}")
+                        logger.debug("%s retry event %s: %s", specialist_name, retry_event_count, event_type)
 
                     retry_duration_ms = (datetime.now(timezone.utc) - retry_start_time).total_seconds() * 1000
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} retry stream consumed: "
-                        f"{retry_event_count} events in {retry_duration_ms:.0f}ms"
+                        "%s retry stream consumed: %s events in %.0fms",
+                        specialist_name,
+                        retry_event_count,
+                        retry_duration_ms,
                     )
 
                     # Debug: Log retry_result attributes
                     logger.info(
-                        f"[Streaming Tools] {specialist_name} retry result inspection: "
-                        f"has final_output attr={hasattr(retry_result, 'final_output')}, "
-                        f"final_output value={getattr(retry_result, 'final_output', 'N/A')}, "
-                        f"type={type(getattr(retry_result, 'final_output', None))}"
+                        "%s retry result inspection: has final_output attr=%s, final_output value=%s, type=%s",
+                        specialist_name,
+                        hasattr(retry_result, "final_output"),
+                        getattr(retry_result, "final_output", "N/A"),
+                        type(getattr(retry_result, "final_output", None)),
                     )
 
                     # Check retry result
@@ -1146,8 +1214,9 @@ async def run_specialist_with_events(
                             final_output = str(retry_result.final_output)
 
                         logger.info(
-                            f"[Streaming Tools] {specialist_name} retry SUCCEEDED! "
-                            f"Output length: {len(final_output)}"
+                            "%s retry SUCCEEDED! Output length: %s",
+                            specialist_name,
+                            len(final_output),
                         )
 
                         # Emit success event (warning severity - something unusual happened)
@@ -1170,9 +1239,10 @@ async def run_specialist_with_events(
                         )
 
                         logger.error(
-                            f"[Streaming Tools] {specialist_name} retry FAILED! "
-                            f"Still no output after nudge prompt. "
-                            f"Events consumed: {retry_event_count}, Duration: {retry_duration_ms:.0f}ms"
+                            "%s retry FAILED! Still no output after nudge prompt. Events consumed: %s, Duration: %.0fms",
+                            specialist_name,
+                            retry_event_count,
+                            retry_duration_ms,
                         )
 
                         # Emit ERROR audit event so it shows in the audit panel
@@ -1200,7 +1270,7 @@ async def run_specialist_with_events(
                     raise
                 except Exception as e:
                     # Retry mechanism itself failed
-                    logger.error(f"[Streaming Tools] {specialist_name} retry mechanism error: {e}")
+                    logger.error("%s retry mechanism error: %s", specialist_name, e)
                     raise SpecialistOutputError(
                         specialist_name=specialist_name,
                         output_type_name=output_type_name,
@@ -1227,9 +1297,11 @@ async def run_specialist_with_events(
     })
 
     logger.info(
-        f"[Streaming Tools] {specialist_name} complete: "
-        f"{len(tool_calls)} tool calls, {total_duration_ms}ms total, "
-        f"output_length={len(final_output)}"
+        "%s complete: %s tool calls, %sms total, output_length=%s",
+        specialist_name,
+        len(tool_calls),
+        total_duration_ms,
+        len(final_output),
     )
 
     # Inject batching nudge if threshold was hit (exactly at threshold, not after)
@@ -1237,8 +1309,10 @@ async def run_specialist_with_events(
         nudge = _generate_batching_nudge(tool_name, consecutive_count)
         if nudge:
             logger.info(
-                f"[Batching Nudge] TRIGGERED for {tool_name} after {consecutive_count} consecutive calls. "
-                f"Injecting reminder to supervisor about batching {get_batching_config().get(tool_name, {}).get('entity', 'items')}."
+                "TRIGGERED for %s after %s consecutive calls. Injecting reminder to supervisor about batching %s.",
+                tool_name,
+                consecutive_count,
+                get_batching_config().get(tool_name, {}).get("entity", "items"),
             )
             final_output += nudge
 

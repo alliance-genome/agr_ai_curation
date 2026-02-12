@@ -47,7 +47,7 @@ def create_sql_query_tool(database_url: str, tool_name: str = "sql_query"):
         except Exception:
             return "***"
 
-    logger.info(f"[OpenAI Agents] SQL tool '{tool_name}' initialized: {mask_url(database_url)}")
+    logger.info("SQL tool '%s' initialized: %s", tool_name, mask_url(database_url))
 
     @function_tool(name_override=tool_name)
     def sql_query(query: str) -> SqlQueryResult:
@@ -70,7 +70,7 @@ def create_sql_query_tool(database_url: str, tool_name: str = "sql_query"):
 
                 if result.returns_rows:
                     rows = [dict(row._mapping) for row in result]
-                    logger.debug(f"[OpenAI Agents] SQL query returned {len(rows)} rows")
+                    logger.debug("SQL query returned %s rows", len(rows))
                     return SqlQueryResult(status="ok", rows=rows, count=len(rows))
                 else:
                     return SqlQueryResult(
@@ -79,15 +79,15 @@ def create_sql_query_tool(database_url: str, tool_name: str = "sql_query"):
                     )
 
         except sa.exc.DBAPIError as e:
-            logger.error(f"[OpenAI Agents] Database error: {e}")
+            logger.error("Database error: %s", e)
             # Sanitize: don't expose raw database error details to agent
             return SqlQueryResult(status="error", message="Database error: query failed. Check syntax and table/column names.")
         except sa.exc.SQLAlchemyError as e:
-            logger.error(f"[OpenAI Agents] SQLAlchemy error: {e}")
+            logger.error("SQLAlchemy error: %s", e)
             # Sanitize: generic message for query errors
             return SqlQueryResult(status="error", message="Query error: unable to execute query. Verify SQL syntax.")
         except Exception as e:
-            logger.error(f"[OpenAI Agents] Unexpected SQL error: {e}", exc_info=True)
+            logger.error("Unexpected SQL error: %s", e, exc_info=True)
             # Sanitize: never expose internal error details
             return SqlQueryResult(status="error", message="An unexpected error occurred while executing the query.")
 

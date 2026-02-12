@@ -27,7 +27,7 @@ def cli(ctx, url: str, api_key: Optional[str]):
         connect_to_weaviate(url, api_key)
         ctx.obj['connected'] = True
     except Exception as e:
-        logger.error(f"Failed to connect to Weaviate: {e}")
+        logger.error('Failed to connect to Weaviate: %s', e)
         ctx.obj['connected'] = False
 
 

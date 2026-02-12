@@ -104,7 +104,7 @@ class PromptService:
         try:
             return UUID(candidate)
         except Exception:
-            logger.warning(f"Invalid custom agent ID in source_file metadata: {source_file}")
+            logger.warning('Invalid custom agent ID in source_file metadata: %s', source_file)
             return None
 
     def log_all_used_prompts(
@@ -256,8 +256,7 @@ class PromptService:
         refresh_cache(self.db)
 
         logger.info(
-            f"Activated prompt version: {agent_name}:{prompt_type}:{group_id or 'base'} v{version}"
-        )
+            'Activated prompt version: %s:%s:%s v%s', agent_name, prompt_type, group_id or 'base', version)
 
         return prompt
 

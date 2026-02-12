@@ -42,7 +42,7 @@ class TraceExtractor:
                 raise ValueError("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set for remote source")
 
         # Log configuration for troubleshooting
-        logger.debug(f"TraceExtractor initialized: source={source}, host={self.host}, pk={self.public_key[:20] if self.public_key else 'None'}...")
+        logger.debug("TraceExtractor initialized: source=%s, host=%s, pk=%s...", source, self.host, self.public_key[:20] if self.public_key else "None")
 
         # Initialize Langfuse SDK client
         self.client = Langfuse(

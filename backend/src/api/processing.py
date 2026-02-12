@@ -122,9 +122,9 @@ async def reprocess_document_endpoint(
                     user_id=user_id,
                     validate_first=False # Already validated
                 )
-                logger.info(f"Document {document_id} reprocessing completed: {result}")
+                logger.info('Document %s reprocessing completed: %s', document_id, result)
             except Exception as e:
-                logger.error(f"Error reprocessing document {document_id}: {e}", exc_info=True)
+                logger.error('Error reprocessing document %s: %s', document_id, e, exc_info=True)
                 await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
 
         background_tasks.add_task(process_document)
@@ -143,7 +143,7 @@ async def reprocess_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reprocessing document {document_id}: {e}")
+        logger.error('Error reprocessing document %s: %s', document_id, e)
 
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
@@ -219,7 +219,7 @@ async def reembed_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error re-embedding document {document_id}: {e}")
+        logger.error('Error re-embedding document %s: %s', document_id, e)
 
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)

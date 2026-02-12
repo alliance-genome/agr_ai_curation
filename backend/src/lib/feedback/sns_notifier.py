@@ -171,8 +171,7 @@ class SNSNotifier:
 
         except ClientError as e:
             logger.error(
-                f"Failed to send SNS notification for feedback {feedback_id}: {e}",
-                exc_info=True,
+                'Failed to send SNS notification for feedback %s: %s', feedback_id, e, exc_info=True,
                 extra={
                     "topic_arn": self.topic_arn,
                     "region": self.region,
@@ -185,8 +184,7 @@ class SNSNotifier:
             return False
         except Exception as e:
             logger.error(
-                f"Unexpected error sending SNS notification: {e}",
-                exc_info=True,
+                'Unexpected error sending SNS notification: %s', e, exc_info=True,
                 extra={
                     "topic_arn": self.topic_arn,
                     "region": self.region,

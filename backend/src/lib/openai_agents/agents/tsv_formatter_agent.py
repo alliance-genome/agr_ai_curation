@@ -64,9 +64,10 @@ def create_tsv_formatter_agent() -> Agent:
     save_tsv = create_tsv_tool()
 
     logger.info(
-        f"[OpenAI Agents] Creating TSV Formatter agent, "
-        f"model={config.model}, temp={config.temperature}, "
-        f"prompt_v={base_prompt.version}"
+        "Creating TSV Formatter agent, model=%s temp=%s prompt_v=%s",
+        config.model,
+        config.temperature,
+        base_prompt.version,
     )
 
     # Log agent configuration to Langfuse for trace visibility

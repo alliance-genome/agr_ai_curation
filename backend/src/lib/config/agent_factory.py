@@ -83,11 +83,10 @@ def get_agent_factory(folder_name: str) -> Optional[Callable[..., Agent]]:
             continue
         except Exception as e:
             logger.warning(
-                f"[AgentFactory] Error loading module {module_path}: {e}"
-            )
+                '[AgentFactory] Error loading module %s: %s', module_path, e)
             continue
 
-    logger.warning(f"[AgentFactory] No factory found for agent: {folder_name}")
+    logger.warning('[AgentFactory] No factory found for agent: %s', folder_name)
     return None
 
 
@@ -106,7 +105,7 @@ def get_factory_by_agent_id(agent_id: str) -> Optional[Callable[..., Agent]]:
     """
     agent_def = get_agent_definition(agent_id)
     if agent_def is None:
-        logger.warning(f"[AgentFactory] Unknown agent_id: {agent_id}")
+        logger.warning('[AgentFactory] Unknown agent_id: %s', agent_id)
         return None
 
     return get_agent_factory(agent_def.folder_name)
@@ -140,7 +139,7 @@ def create_agent(
     try:
         return factory(**kwargs)
     except Exception as e:
-        logger.error(f"[AgentFactory] Failed to create {folder_name} agent: {e}")
+        logger.error('[AgentFactory] Failed to create %s agent: %s', folder_name, e)
         return None
 
 
@@ -165,7 +164,7 @@ def create_agent_by_id(
     try:
         return factory(**kwargs)
     except Exception as e:
-        logger.error(f"[AgentFactory] Failed to create agent {agent_id}: {e}")
+        logger.error('[AgentFactory] Failed to create agent %s: %s', agent_id, e)
         return None
 
 

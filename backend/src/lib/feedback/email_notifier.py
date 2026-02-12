@@ -56,7 +56,7 @@ class EmailNotifier:
         for attempt in range(self.MAX_RETRIES):
             try:
                 self._send_email(message)
-                logger.info(f"Successfully sent feedback notification for {feedback_report.id}")
+                logger.info('Successfully sent feedback notification for %s', feedback_report.id)
                 return  # Success - exit retry loop
 
             except smtplib.SMTPException as e:

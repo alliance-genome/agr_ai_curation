@@ -106,11 +106,11 @@ def create_pdf_agent(
                 component_name="pdf",
                 prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"PDF agent configured with group-specific rules: {active_groups}")
+            logger.info('PDF agent configured with group-specific rules: %s', active_groups)
         except ImportError as e:
-            logger.warning(f"Could not import mod_config, skipping group injection: {e}")
+            logger.warning('Could not import mod_config, skipping group injection: %s', e)
         except Exception as e:
-            logger.error(f"Failed to inject group rules: {e}")
+            logger.error('Failed to inject group rules: %s', e)
 
     # Inject document context (hierarchy + abstract) using shared utility
     context_text, structure_info = format_document_context_for_prompt(
@@ -140,9 +140,13 @@ def create_pdf_agent(
     model = get_model_for_agent(config.model)
 
     logger.info(
-        f"[OpenAI Agents] Creating PDF agent for document {document_id[:8]}... "
-        f"model={config.model}, temp={config.temperature}, tool_choice={config.tool_choice}, "
-        f"structure={structure_info}, guardrail=tool_required(min=1), prompt_v={base_prompt.version}"
+        "Creating PDF agent, model=%s temp=%s tool_choice=%s structure=%s prompt_v=%s",
+        config.model,
+        config.temperature,
+        config.tool_choice,
+        structure_info,
+        base_prompt.version,
+        extra={"document_id": document_id[:8]},
     )
 
     # Log agent configuration to Langfuse for trace visibility

@@ -93,7 +93,7 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
     # Load the module
     spec = importlib.util.spec_from_file_location(module_name, schema_path)
     if spec is None or spec.loader is None:
-        logger.warning(f"Could not load spec for {schema_path}")
+        logger.warning('Could not load spec for %s', schema_path)
         return {}
 
     module = importlib.util.module_from_spec(spec)
@@ -105,7 +105,7 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
     try:
         spec.loader.exec_module(module)
     except Exception as e:
-        logger.error(f"Failed to execute module {schema_path}: {e}")
+        logger.error('Failed to execute module %s: %s', schema_path, e)
         # Clean up
         sys.modules.pop(module_name, None)
         _registered_modules.remove(module_name)
@@ -123,9 +123,9 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
             # This prevents StructuredMessageEnvelope (imported base class) from being registered
             if getattr(obj, "__module__", None) == module_name:
                 envelope_classes[name] = obj
-                logger.debug(f"Found envelope class: {name} in {folder_name}/schema.py")
+                logger.debug('Found envelope class: %s in %s/schema.py', name, folder_name)
             else:
-                logger.debug(f"Skipping imported class: {name} (from {getattr(obj, '__module__', 'unknown')})")
+                logger.debug('Skipping imported class: %s (from %s)', name, getattr(obj, '__module__', 'unknown'))
 
     return envelope_classes
 
@@ -166,7 +166,7 @@ def discover_agent_schemas(
         if not agents_path.exists():
             raise FileNotFoundError(f"Agents directory not found: {agents_path}")
 
-        logger.info(f"Discovering agent schemas from: {agents_path}")
+        logger.info('Discovering agent schemas from: %s', agents_path)
 
         _schema_registry = {}
         _schema_by_agent = {}
@@ -179,7 +179,7 @@ def discover_agent_schemas(
 
             schema_py = folder / "schema.py"
             if not schema_py.exists():
-                logger.debug(f"No schema.py in {folder.name}")
+                logger.debug('No schema.py in %s', folder.name)
                 continue
 
             try:
@@ -194,7 +194,7 @@ def discover_agent_schemas(
                         continue
 
                     _schema_registry[class_name] = cls
-                    logger.info(f"Registered schema: {class_name} from {folder.name}/schema.py")
+                    logger.info('Registered schema: %s from %s/schema.py', class_name, folder.name)
 
                 # Also map by agent folder for convenience
                 # Use the first envelope class found as the "primary" schema
@@ -203,11 +203,11 @@ def discover_agent_schemas(
                     _schema_by_agent[folder.name] = primary_class
 
             except Exception as e:
-                logger.error(f"Failed to load schemas from {folder.name}: {e}")
+                logger.error('Failed to load schemas from %s: %s', folder.name, e)
                 raise
 
         _initialized = True
-        logger.info(f"Discovered {len(_schema_registry)} schema envelope classes")
+        logger.info('Discovered %s schema envelope classes', len(_schema_registry))
 
         return _schema_registry
 

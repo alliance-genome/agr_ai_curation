@@ -48,7 +48,7 @@ class FeedbackService:
                 logger.warning("SNS enabled but SNS_TOPIC_ARN not configured, falling back to Email")
                 self.notifier = EmailNotifier()
             else:
-                logger.info(f"Using SNS for feedback notifications: {sns_topic_arn}")
+                logger.info('Using SNS for feedback notifications: %s', sns_topic_arn)
                 self.notifier = SNSNotifier(topic_arn=sns_topic_arn, region=sns_region)
         else:
             # Use existing SMTP email notifier
@@ -96,7 +96,7 @@ class FeedbackService:
         self.db.add(report)
         self.db.commit()
 
-        logger.info(f"Created feedback payload {feedback_id} for session {session_id}")
+        logger.info('Created feedback payload %s for session %s', feedback_id, session_id)
         return feedback_id
 
     def process_feedback_report(self, feedback_id: str) -> None:
@@ -117,7 +117,7 @@ class FeedbackService:
         )
 
         if not report:
-            logger.error(f"Feedback report {feedback_id} not found in database")
+            logger.error('Feedback report %s not found in database', feedback_id)
             return
 
         try:
@@ -126,15 +126,15 @@ class FeedbackService:
             report.processing_started_at = datetime.utcnow()
             self.db.commit()
 
-            logger.info(f"Starting background processing for feedback {feedback_id}")
+            logger.info('Starting background processing for feedback %s', feedback_id)
 
             # Send notification (SNS or email)
             try:
                 self.notifier.send_feedback_notification(report)
                 report.email_sent_at = datetime.utcnow()
-                logger.info(f"Sent notification for feedback {feedback_id}")
+                logger.info('Sent notification for feedback %s', feedback_id)
             except Exception as e:
-                logger.error(f"Notification failed for {feedback_id}: {str(e)}", exc_info=True)
+                logger.error('Notification failed for %s: %s', feedback_id, str(e), exc_info=True)
                 report.error_details = f"Notification error: {str(e)}"
 
             # Mark as completed
@@ -142,13 +142,12 @@ class FeedbackService:
             report.processing_completed_at = datetime.utcnow()
             self.db.commit()
 
-            logger.info(f"Completed background processing for feedback {feedback_id}")
+            logger.info('Completed background processing for feedback %s', feedback_id)
 
         except Exception as e:
             # Catch-all for unexpected errors
             logger.error(
-                f"Unexpected error processing feedback {feedback_id}: {str(e)}",
-                exc_info=True
+                'Unexpected error processing feedback %s: %s', feedback_id, str(e), exc_info=True
             )
             report.processing_status = ProcessingStatus.FAILED
             report.error_details = f"Unexpected error: {str(e)}"

@@ -83,7 +83,7 @@ def update_embedding_config(config: Dict[str, Any]) -> Dict[str, Any]:
             "batchSize": config.get("batchSize", 100)
         })
 
-        logger.info(f"Updated embedding config: {_current_config['embedding']}")
+        logger.info('Updated embedding config: %s', _current_config['embedding'])
 
         return {
             "success": True,
@@ -92,7 +92,7 @@ def update_embedding_config(config: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Failed to update embedding config: {e}")
+        logger.error('Failed to update embedding config: %s', e)
         return {
             "success": False,
             "message": f"Failed to update embedding config: {e}",
@@ -196,7 +196,7 @@ def update_schema(schema_config: Dict[str, Any]) -> Dict[str, Any]:
                 }
 
                 client.schema.create_class(schema)
-                logger.info(f"Created collection: {collection_name}")
+                logger.info('Created collection: %s', collection_name)
 
                 # Create DocumentChunk collection
                 chunk_schema = {
@@ -280,7 +280,7 @@ def update_schema(schema_config: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            logger.error(f"Failed to update schema: {e}")
+            logger.error('Failed to update schema: %s', e)
             return {
                 "success": False,
                 "message": f"Failed to update schema: {e}",

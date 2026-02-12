@@ -57,6 +57,7 @@ from src.lib.agent_studio.custom_agent_service import (
 )
 from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
+from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
 from src.models.sql import get_db
@@ -310,7 +311,7 @@ async def get_catalog(
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
     except Exception as e:
-        logger.error(f"Failed to get prompt catalog: {e}", exc_info=True)
+        logger.error('Failed to get prompt catalog: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -331,7 +332,7 @@ async def refresh_catalog(
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
     except Exception as e:
-        logger.error(f"Failed to refresh prompt catalog: {e}", exc_info=True)
+        logger.error('Failed to refresh prompt catalog: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -362,7 +363,7 @@ async def get_combined_prompt(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get combined prompt: {e}", exc_info=True)
+        logger.error('Failed to get combined prompt: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -450,7 +451,7 @@ async def get_prompt_preview(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get prompt preview for '{agent_id}': {e}", exc_info=True)
+        logger.error("Failed to get prompt preview for '%s': %s", agent_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -537,7 +538,7 @@ async def test_agent_endpoint(
             }
             yield f"data: {json.dumps(done_event)}\n\n"
         except asyncio.CancelledError:
-            logger.warning(f"Agent test stream cancelled: agent_id={agent_id}")
+            logger.warning('Agent test stream cancelled: agent_id=%s', agent_id)
             error_event = {
                 "type": "RUN_ERROR",
                 "message": "Agent test cancelled unexpectedly.",
@@ -548,7 +549,7 @@ async def test_agent_endpoint(
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
-            logger.error(f"Agent test stream error for {agent_id}: {exc}", exc_info=True)
+            logger.error('Agent test stream error for %s: %s', agent_id, exc, exc_info=True)
             error_event = {
                 "type": "RUN_ERROR",
                 "message": f"Agent test failed: {exc}",
@@ -580,6 +581,49 @@ ANTHROPIC_SUGGESTION_TOOL = {
     "description": SUBMIT_SUGGESTION_TOOL["description"],
     "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
 }
+
+REPORT_TOOL_FAILURE_TOOL = {
+    "name": "report_tool_failure",
+    "description": """Report a tool failure to the development team.
+
+Use this tool immediately when any tool call returns an infrastructure or service
+failure (error status, timeout, connection failure, service unavailable, or
+unexpected empty response that indicates a system issue).
+
+Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tool_name": {
+                "type": "string",
+                "description": "Name of the tool that failed",
+            },
+            "error_message": {
+                "type": "string",
+                "description": "Error message or concise description of the failure",
+            },
+            "error_type": {
+                "type": "string",
+                "enum": [
+                    "timeout",
+                    "connection_error",
+                    "service_unavailable",
+                    "unexpected_error",
+                    "empty_response",
+                    "api_error",
+                ],
+                "description": "Category of the tool failure",
+            },
+            "context": {
+                "type": "string",
+                "description": "Optional brief context describing what you were trying to do",
+            },
+        },
+        "required": ["tool_name", "error_message", "error_type"],
+    },
+}
+
+ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = REPORT_TOOL_FAILURE_TOOL
 
 # =============================================================================
 # Token-Aware Trace Analysis Tools (Claude-Specific Endpoints)
@@ -744,6 +788,7 @@ def _get_all_opus_tools() -> List[dict]:
     """
     tools = [
         ANTHROPIC_SUGGESTION_TOOL,
+        ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
         # Token-aware trace analysis tools (recommended)
         GET_TRACE_SUMMARY_TOOL,
         GET_TOOL_CALLS_SUMMARY_TOOL,
@@ -758,7 +803,7 @@ def _get_all_opus_tools() -> List[dict]:
     registry = get_diagnostic_tools_registry()
     diagnostic_tools = registry.get_anthropic_tools()
     tools.extend(diagnostic_tools)
-    logger.debug(f"Loaded {len(diagnostic_tools)} diagnostic tools for Opus")
+    logger.debug('Loaded %s diagnostic tools for Opus', len(diagnostic_tools))
 
     return tools
 
@@ -982,18 +1027,36 @@ async def _handle_tool_call(
             "message": "Suggestion submitted successfully. The development team will review it.",
         }
 
+    elif tool_name == "report_tool_failure":
+        _alert_task = asyncio.create_task(
+            notify_tool_failure(
+                error_type=tool_input.get("error_type", "unexpected_error"),
+                error_message=tool_input.get("error_message", "No error message provided"),
+                source="opus_report",
+                specialist_name=tool_input.get("tool_name"),
+                trace_id=context.trace_id if context else None,
+                session_id=None,
+                curator_id=user_email,
+                context=tool_input.get("context"),
+            )
+        )
+        return {
+            "status": "success",
+            "message": "Failure report sent to dev team",
+        }
+
     # Check if this is a diagnostic tool from the registry
     registry = get_diagnostic_tools_registry()
     tool_def = registry.get_tool(tool_name)
 
     if tool_def:
         # Execute the diagnostic tool handler
-        logger.debug(f"Executing diagnostic tool: {tool_name}")
+        logger.debug('Executing diagnostic tool: %s', tool_name)
         try:
             result = tool_def.handler(**tool_input)
             return result
         except Exception as e:
-            logger.error(f"Diagnostic tool {tool_name} failed: {e}", exc_info=True)
+            logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
             return {
                 "success": False,
                 "error": f"Tool execution failed: {str(e)}",
@@ -1051,11 +1114,11 @@ async def chat_with_opus(
         try:
             db_user = set_global_user_from_cognito(db, user)
             set_workflow_user_context(user_id=db_user.id, user_email=user_email)
-            logger.debug(f"Set workflow context for user {db_user.id}")
+            logger.debug('Set workflow context for user %s', db_user.id)
         finally:
             db.close()
     except Exception as e:
-        logger.warning(f"Could not set workflow user context: {e}")
+        logger.warning('Could not set workflow user context: %s', e)
         # Continue without user context - create_flow will fail gracefully
 
     # Set flow context if user is on Flows tab (for get_current_flow tool)
@@ -1068,7 +1131,7 @@ async def chat_with_opus(
             "entry_node_id": None,  # Will be determined by the tool
         }
         set_current_flow_context(flow_context)
-        logger.debug(f"Set flow context: {flow_context.get('flow_name')}")
+        logger.debug('Set flow context: %s', flow_context.get('flow_name'))
     else:
         # Clear any previous flow context
         clear_current_flow_context()
@@ -1215,7 +1278,7 @@ async def chat_with_opus(
             ])
 
             if is_context_overflow:
-                logger.warning(f"Context overflow detected: {e}")
+                logger.warning('Context overflow detected: %s', e)
                 error_event = {
                     "type": "CONTEXT_OVERFLOW",
                     "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
@@ -1228,7 +1291,18 @@ async def chat_with_opus(
                     ]
                 }
             else:
-                logger.error(f"Anthropic bad request error: {e}", exc_info=True)
+                _alert_task = asyncio.create_task(
+                    notify_tool_failure(
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        source="infrastructure",
+                        specialist_name="agent_studio_opus",
+                        trace_id=request.context.trace_id if request.context else None,
+                        session_id=None,
+                        curator_id=user_email,
+                    )
+                )
+                logger.error('Anthropic bad request error: %s', e, exc_info=True)
                 error_event = {
                     "type": "ERROR",
                     "message": f"Bad request: {str(e)}",
@@ -1236,7 +1310,18 @@ async def chat_with_opus(
             yield f"data: {json.dumps(error_event)}\n\n"
 
         except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}", exc_info=True)
+            _alert_task = asyncio.create_task(
+                notify_tool_failure(
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    source="infrastructure",
+                    specialist_name="agent_studio_opus",
+                    trace_id=request.context.trace_id if request.context else None,
+                    session_id=None,
+                    curator_id=user_email,
+                )
+            )
+            logger.error('Anthropic API error: %s', e, exc_info=True)
             error_event = {
                 "type": "ERROR",
                 "message": f"API error: {str(e)}",
@@ -1254,7 +1339,7 @@ async def chat_with_opus(
             ])
 
             if is_context_overflow:
-                logger.warning(f"Context overflow (general exception): {e}")
+                logger.warning('Context overflow (general exception): %s', e)
                 error_event = {
                     "type": "CONTEXT_OVERFLOW",
                     "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
@@ -1267,7 +1352,18 @@ async def chat_with_opus(
                     ]
                 }
             else:
-                logger.error(f"Chat stream error: {e}", exc_info=True)
+                _alert_task = asyncio.create_task(
+                    notify_tool_failure(
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        source="infrastructure",
+                        specialist_name="agent_studio_opus",
+                        trace_id=request.context.trace_id if request.context else None,
+                        session_id=None,
+                        curator_id=user_email,
+                    )
+                )
+                logger.error('Chat stream error: %s', e, exc_info=True)
                 error_event = {
                     "type": "ERROR",
                     "message": str(e),
@@ -1359,10 +1455,10 @@ def _send_error_notification_sns(user_email: str, error_message: str, context: O
                 "type": {"DataType": "String", "StringValue": "submission_error"},
             }
         )
-        logger.info(f"Error notification sent to SNS: {response['MessageId']}")
+        logger.info('Error notification sent to SNS: %s', response['MessageId'])
 
     except Exception as e:
-        logger.error(f"Failed to send error notification via SNS: {e}", exc_info=True)
+        logger.error('Failed to send error notification via SNS: %s', e, exc_info=True)
 
 
 async def _process_suggestion_background(
@@ -1380,7 +1476,7 @@ async def _process_suggestion_background(
     On failure, sends an error notification via SNS.
     """
     try:
-        logger.info(f"[Background] Starting Opus suggestion processing for {user_email}")
+        logger.info('[Background] Starting Opus suggestion processing for %s', user_email)
 
         # Call Opus synchronously to get the tool call
         client = anthropic.Anthropic(api_key=api_key)
@@ -1403,7 +1499,7 @@ async def _process_suggestion_background(
 
         if not tool_use_block:
             error_msg = "Opus did not call submit_prompt_suggestion despite forced tool choice"
-            logger.error(f"[Background] {error_msg}")
+            logger.error('[Background] %s', error_msg)
             _send_error_notification_sns(user_email, error_msg, context)
             return
 
@@ -1417,20 +1513,20 @@ async def _process_suggestion_background(
         )
 
         if tool_result.get("success"):
-            logger.info(f"[Background] Suggestion submitted successfully for {user_email}: {tool_result.get('suggestion_id')}")
+            logger.info('[Background] Suggestion submitted successfully for %s: %s', user_email, tool_result.get('suggestion_id'))
         else:
             error_msg = tool_result.get("error", "Unknown error during tool execution")
-            logger.error(f"[Background] Tool execution failed: {error_msg}")
+            logger.error('[Background] Tool execution failed: %s', error_msg)
             _send_error_notification_sns(user_email, error_msg, context)
 
     except anthropic.APIError as e:
         error_msg = f"Anthropic API error: {str(e)}"
-        logger.error(f"[Background] {error_msg}", exc_info=True)
+        logger.error('[Background] %s', error_msg, exc_info=True)
         _send_error_notification_sns(user_email, error_msg, context)
 
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
-        logger.error(f"[Background] {error_msg}", exc_info=True)
+        logger.error('[Background] %s', error_msg, exc_info=True)
         _send_error_notification_sns(user_email, error_msg, context)
 
 
@@ -1526,7 +1622,7 @@ Please review our conversation history above and submit a general suggestion usi
                 {"role": msg.role, "content": msg.content}
                 for msg in request.messages
             ]
-            logger.info(f"[AI-Assisted Submit] Received {len(messages)} messages from frontend")
+            logger.info('[AI-Assisted Submit] Received %s messages from frontend', len(messages))
         else:
             logger.warning("[AI-Assisted Submit] No messages provided by frontend!")
 
@@ -1546,7 +1642,7 @@ Please review our conversation history above and submit a general suggestion usi
             api_key=api_key,
         )
 
-        logger.info(f"[AI-Assisted Submit] Background task spawned for {user_email}")
+        logger.info('[AI-Assisted Submit] Background task spawned for %s', user_email)
         return DirectSubmissionResponse(
             success=True,
             message="Submission sent",
@@ -1555,7 +1651,7 @@ Please review our conversation history above and submit a general suggestion usi
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Direct submission error: {e}", exc_info=True)
+        logger.error('Direct submission error: %s', e, exc_info=True)
         return DirectSubmissionResponse(
             success=False,
             message="An error occurred",
@@ -1577,7 +1673,7 @@ def _fetch_trace_for_opus(trace_id: str) -> Optional[str]:
         # Fetch trace details
         trace = client.api.trace.get(trace_id)
         if not trace:
-            logger.warning(f"Trace not found: {trace_id}")
+            logger.warning('Trace not found: %s', trace_id)
             return None
 
         # Fetch observations
@@ -1669,7 +1765,7 @@ def _fetch_trace_for_opus(trace_id: str) -> Optional[str]:
         return "\n".join(lines)
 
     except Exception as e:
-        logger.error(f"Failed to fetch trace for Opus: {e}", exc_info=True)
+        logger.error('Failed to fetch trace for Opus: %s', e, exc_info=True)
         return None
 
 
@@ -1861,6 +1957,19 @@ You have a 200K token context window. Large traces can exceed this.
 **Rationale:** Chris needs to hear about issues to improve the system, but repeated offers feel pushy. Two well-timed offers strikes the right balance.
 </feedback_submission_rules>
 
+<tool_failure_reporting>
+## Tool Failure Reporting
+
+When any tool call returns a service/infrastructure failure (status "error", timeout,
+connection failure, service unavailable, or unexpected empty response), you MUST:
+
+1. Call `report_tool_failure` immediately
+2. Tell the user exactly: "I've flagged this issue for the dev team."
+3. Continue helping with an alternative approach whenever possible
+
+Do NOT report user input errors such as invalid gene names, invalid IDs, or malformed curator queries.
+</tool_failure_reporting>
+
 <constraints>
 ## Critical Constraints
 
@@ -1914,6 +2023,9 @@ Include `token_info` in responses for budget management:
 - **`submit_prompt_suggestion`** - Submit improvement suggestions.
   - Types: improvement, bug, clarification, mod_specific, missing_case
   - Use when: concrete improvement identified, curator agrees, sufficient detail available
+- **`report_tool_failure`** - Report infrastructure/service tool failures to the development team.
+  - Use immediately for tool errors/timeouts/connection failures
+  - Do not use for user input mistakes (bad IDs, invalid symbols)
 </tools>
 
 <guidelines>
@@ -2166,19 +2278,19 @@ async def get_trace_context(
             detail=f"Trace '{trace_id}' not found"
         )
     except LangfuseUnavailableError as e:
-        logger.error(f"Langfuse unavailable: {e}")
+        logger.error('Langfuse unavailable: %s', e)
         raise HTTPException(
             status_code=503,
             detail="Trace service temporarily unavailable"
         )
     except TraceContextError as e:
-        logger.error(f"Trace context extraction failed: {e}", exc_info=True)
+        logger.error('Trace context extraction failed: %s', e, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Failed to extract trace context"
         )
     except Exception as e:
-        logger.error(f"Unexpected error getting trace context: {e}", exc_info=True)
+        logger.error('Unexpected error getting trace context: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -2248,7 +2360,7 @@ async def submit_suggestion(
             message="Suggestion submitted successfully. The development team will review it.",
         )
     except Exception as e:
-        logger.error(f"Failed to submit suggestion: {e}", exc_info=True)
+        logger.error('Failed to submit suggestion: %s', e, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Failed to submit suggestion"
@@ -2273,7 +2385,7 @@ async def get_all_tools_endpoint(
         tools = get_all_tools()
         return {"tools": tools}
     except Exception as e:
-        logger.error(f"Failed to get tools: {e}", exc_info=True)
+        logger.error('Failed to get tools: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2317,5 +2429,5 @@ async def get_tool_details_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get tool details: {e}", exc_info=True)
+        logger.error('Failed to get tool details: %s', e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

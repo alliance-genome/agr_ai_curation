@@ -45,9 +45,9 @@ def create_disease_agent() -> Agent:
         # Create SQL tool pointing to curation database
         sql_tool = create_sql_query_tool(database_url, tool_name="curation_db_sql")
         tools.append(sql_tool)
-        logger.info("[OpenAI Agents] Disease agent configured with Curation Database")
+        logger.info("Disease agent configured with Curation Database")
     else:
-        logger.warning("[OpenAI Agents] CURATION_DB_URL not set - Disease agent will have limited functionality")
+        logger.warning("CURATION_DB_URL not set - Disease agent will have limited functionality")
 
     # Get base prompt from cache (zero DB queries at runtime)
     base_prompt = get_prompt("disease")
@@ -79,8 +79,9 @@ def create_disease_agent() -> Agent:
     model = get_model_for_agent(config.model)
 
     logger.info(
-        f"[OpenAI Agents] Creating Disease agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}"
+        "Creating Disease agent, model=%s, prompt_v=%s",
+        config.model,
+        base_prompt.version,
     )
 
     # Log agent configuration to Langfuse for trace visibility

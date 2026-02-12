@@ -215,7 +215,7 @@ async def submit_suggestion_sns(
                 MessageAttributes=message_attrs
             )
 
-            logger.info(f"Suggestion {suggestion_id} sent to SNS: {response['MessageId']}")
+            logger.info('Suggestion %s sent to SNS: %s', suggestion_id, response['MessageId'])
 
             return {
                 "status": "success",
@@ -224,11 +224,11 @@ async def submit_suggestion_sns(
             }
 
         except Exception as e:
-            logger.error(f"Failed to send suggestion to SNS: {e}", exc_info=True)
+            logger.error('Failed to send suggestion to SNS: %s', e, exc_info=True)
             # Fall through to log-only mode
 
     # Log-only mode (SNS not configured or failed)
-    logger.info(f"Prompt suggestion received (SNS disabled): {json.dumps(message, indent=2)}")
+    logger.info('Prompt suggestion received (SNS disabled): %s', json.dumps(message, indent=2))
 
     return {
         "status": "success",

@@ -30,7 +30,7 @@ def read_maintenance_message() -> Optional[str]:
     """
     try:
         if not os.path.exists(MAINTENANCE_MESSAGE_FILE):
-            logger.debug(f"Maintenance file not found: {MAINTENANCE_MESSAGE_FILE}")
+            logger.debug('Maintenance file not found: %s', MAINTENANCE_MESSAGE_FILE)
             return None
 
         with open(MAINTENANCE_MESSAGE_FILE, 'r') as f:
@@ -40,13 +40,13 @@ def read_maintenance_message() -> Optional[str]:
         for line in lines:
             stripped = line.strip()
             if stripped and not stripped.startswith('#'):
-                logger.info(f"Maintenance message active: {stripped[:50]}...")
+                logger.info('Maintenance message active: %s...', stripped[:50])
                 return stripped
 
         return None
 
     except Exception as e:
-        logger.error(f"Error reading maintenance message: {e}")
+        logger.error('Error reading maintenance message: %s', e)
         return None
 
 

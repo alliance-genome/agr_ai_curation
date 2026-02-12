@@ -71,11 +71,11 @@ def create_allele_agent(active_groups: Optional[List[str]] = None) -> Agent:
                 component_name="allele",
                 prompts_out=prompts_used,  # Collect group prompts for tracking
             )
-            logger.info(f"Allele agent configured with group-specific rules: {active_groups}")
+            logger.info('Allele agent configured with group-specific rules: %s', active_groups)
         except ImportError as e:
-            logger.warning(f"Could not import mod_config, skipping injection: {e}")
+            logger.warning('Could not import mod_config, skipping injection: %s', e)
         except Exception as e:
-            logger.error(f"Failed to inject group rules: {e}")
+            logger.error('Failed to inject group rules: %s', e)
 
     # Build model settings using shared helper (supports both OpenAI and Gemini)
     from ..config import build_model_settings, get_model_for_agent
@@ -91,8 +91,10 @@ def create_allele_agent(active_groups: Optional[List[str]] = None) -> Agent:
     model = get_model_for_agent(config.model)
 
     logger.info(
-        f"[OpenAI Agents] Creating Allele agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}, groups={active_groups}"
+        "Creating Allele agent, model=%s prompt_v=%s groups=%s",
+        config.model,
+        base_prompt.version,
+        active_groups,
     )
 
     # Log agent configuration to Langfuse for trace visibility

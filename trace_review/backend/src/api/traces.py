@@ -1,6 +1,7 @@
 """
 Trace analysis API endpoints
 """
+import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from typing import Dict, Any
@@ -18,6 +19,7 @@ from ..analyzers.agent_config import AgentConfigAnalyzer
 from .auth import get_auth_dependency
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Group descriptions for display (Alliance MODs as default groups)
@@ -159,7 +161,7 @@ async def analyze_trace(
         }
 
     except Exception as e:
-        logger.exception(f"Error analyzing trace: {str(e)}")
+        logger.exception("Error analyzing trace: %s", e)
         raise HTTPException(
             status_code=500,
             detail=f"Error analyzing trace: {str(e)}"
@@ -197,9 +199,7 @@ async def export_trace(
     - If not cached, fetches from Langfuse, analyzes, and caches
     - Returns complete analysis data
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Exporting trace {trace_id} from source: {source}")
+    logger.info("Exporting trace %s from source: %s", trace_id, source)
 
     cache_manager = request.app.state.cache_manager
 
@@ -211,12 +211,12 @@ async def export_trace(
 
     # Cache miss - fetch from Langfuse and analyze
     try:
-        logger.info(f"Trace {trace_id} not in cache, fetching from {source}")
+        logger.info("Trace %s not in cache, fetching from %s", trace_id, source)
         extractor = TraceExtractor(source=source)
         trace_data = extractor.extract_complete_trace(trace_id)
-        logger.info(f"Successfully extracted trace {trace_id}")
+        logger.info("Successfully extracted trace %s", trace_id)
     except Exception as e:
-        logger.error(f"Error extracting trace {trace_id}: {str(e)}")
+        logger.error("Error extracting trace %s: %s", trace_id, e)
         raise HTTPException(
             status_code=404,
             detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
@@ -287,12 +287,12 @@ async def export_trace(
         }
 
         cache_manager.set(trace_id, cache_data)
-        logger.info(f"Cached trace {trace_id}")
+        logger.info("Cached trace %s", trace_id)
 
         return cache_data
 
     except Exception as e:
-        logger.exception(f"Error analyzing trace {trace_id}: {str(e)}")
+        logger.exception("Error analyzing trace %s: %s", trace_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Error analyzing trace: {str(e)}"

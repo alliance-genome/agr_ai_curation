@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import logging
 import os
 import asyncio
+import time
 from contextlib import suppress
 
 import httpx
@@ -98,13 +99,13 @@ class DocumentPipelineOrchestrator:
                 validation = validate_pdf(file_path)
                 if not validation["is_valid"]:
                     raise PipelineError(f"PDF validation failed: {validation['errors']}")
-                logger.info(f"PDF validation passed for document {document_id}")
+                logger.info("PDF validation passed for document %s", document_id)
 
             # Initialize pipeline status
             await self._initialize_pipeline(document_id)
 
             # Stage 1: Parse PDF
-            logger.info(f"Starting PDF parsing for document {document_id}")
+            logger.info("Starting PDF parsing for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.PARSING)
 
             from .docling_parser import parse_pdf_document
@@ -118,6 +119,7 @@ class DocumentPipelineOrchestrator:
                 logger.debug("Docling progress monitor not started: %s", monitor_error)
 
             try:
+                parse_start = time.monotonic()
                 # T032: Pass user_id to enable user-specific file storage (FR-012)
                 parse_result = await parse_pdf_document(file_path, document_id, user_id, extraction_strategy)
             finally:
@@ -135,12 +137,19 @@ class DocumentPipelineOrchestrator:
             await self._update_file_paths(document_id, docling_json_path, processed_json_path)
 
             stages_completed.append(ProcessingStage.PARSING)
-            logger.info(f"Parsed {len(elements)} elements from document {document_id}")
+            parse_duration_ms = (time.monotonic() - parse_start) * 1000
+            logger.info(
+                "Parsed %s elements from document %s",
+                len(elements),
+                document_id,
+                extra={"duration_ms": round(parse_duration_ms, 1), "operation": "pdf_parse"},
+            )
 
             # Stage 1.5: Resolve Hierarchy
             hierarchy_metadata = None
             try:
-                logger.info(f"Resolving section hierarchy for document {document_id}")
+                hierarchy_start = time.monotonic()
+                logger.info("Resolving section hierarchy for document %s", document_id)
                 # Send progress update to prevent UI freeze perception
                 await self.tracker.track_pipeline_progress(
                     document_id,
@@ -153,24 +162,37 @@ class DocumentPipelineOrchestrator:
                 # Store hierarchy metadata in document record for later trace injection
                 if hierarchy_metadata:
                     await self._store_hierarchy_metadata(document_id, hierarchy_metadata)
-                    logger.info(f"Stored hierarchy metadata with {len(hierarchy_metadata.top_level_sections)} top-level sections")
+                    hierarchy_duration_ms = (time.monotonic() - hierarchy_start) * 1000
+                    logger.info(
+                        "Stored hierarchy metadata with %s top-level sections",
+                        len(hierarchy_metadata.top_level_sections),
+                        extra={"duration_ms": round(hierarchy_duration_ms, 1), "operation": "hierarchy_resolution"},
+                    )
             except Exception as e:
-                logger.warning(f"Hierarchy resolution failed (continuing with flat structure): {e}")
+                logger.warning("Hierarchy resolution failed (continuing with flat structure): %s", e)
 
             # Stage 2: Chunk document
-            logger.info(f"Starting chunking for document {document_id}")
+            logger.info("Starting chunking for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.CHUNKING)
 
             from .chunk import chunk_parsed_document
+            chunk_start = time.monotonic()
             chunks = await chunk_parsed_document(elements, strategy, document_id)
             stages_completed.append(ProcessingStage.CHUNKING)
-            logger.info(f"Created {len(chunks)} chunks from document {document_id}")
+            chunk_duration_ms = (time.monotonic() - chunk_start) * 1000
+            logger.info(
+                "Created %s chunks from document %s",
+                len(chunks),
+                document_id,
+                extra={"duration_ms": round(chunk_duration_ms, 1), "operation": "document_chunking"},
+            )
 
             # Stage 3: Store to Weaviate (Weaviate handles embeddings)
-            logger.info(f"Storing to Weaviate for document {document_id}")
+            logger.info("Storing to Weaviate for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.STORING)
 
             from .store import store_to_weaviate
+            store_start = time.monotonic()
             await store_to_weaviate(
                 chunks,
                 document_id,
@@ -178,6 +200,12 @@ class DocumentPipelineOrchestrator:
                 user_id
             )
             stages_completed.append(ProcessingStage.STORING)
+            store_duration_ms = (time.monotonic() - store_start) * 1000
+            logger.info(
+                "Stored document %s in Weaviate",
+                document_id,
+                extra={"duration_ms": round(store_duration_ms, 1), "operation": "weaviate_store"},
+            )
 
             # Mark as completed
             await self._update_status(document_id, ProcessingStage.COMPLETED)
@@ -194,7 +222,7 @@ class DocumentPipelineOrchestrator:
             )
 
         except Exception as e:
-            logger.error(f"Pipeline failed for document {document_id}: {str(e)}")
+            logger.error("Pipeline failed for document %s: %s", document_id, e)
 
             # Mark as failed
             await self._handle_failure(document_id, e)
@@ -309,7 +337,11 @@ class DocumentPipelineOrchestrator:
         Raises:
             NotImplementedError: This feature is not yet implemented
         """
-        logger.warning(f"Stage retry requested for {stage.value} on document {document_id}, but feature not yet implemented")
+        logger.warning(
+            "Stage retry requested for %s on document %s, but feature not yet implemented",
+            stage.value,
+            document_id,
+        )
 
         raise NotImplementedError(
             "Stage retry not yet implemented. "
@@ -354,9 +386,9 @@ class DocumentPipelineOrchestrator:
                 doc.docling_json_path = docling_json_path
                 doc.processed_json_path = processed_json_path
                 session.commit()
-                logger.info(f"Updated file paths for document {document_id}")
+                logger.info("Updated file paths for document %s", document_id)
         except Exception as e:
-            logger.error(f"Error updating file paths for document {document_id}: {e}")
+            logger.error("Error updating file paths for document %s: %s", document_id, e)
             session.rollback()
         finally:
             session.close()
@@ -375,9 +407,9 @@ class DocumentPipelineOrchestrator:
                 # Note: Column must be added to PDFDocument model if not present
                 doc.hierarchy_metadata = hierarchy_metadata.model_dump()
                 session.commit()
-                logger.info(f"Stored hierarchy metadata for document {document_id}")
+                logger.info("Stored hierarchy metadata for document %s", document_id)
         except Exception as e:
-            logger.error(f"Error storing hierarchy metadata for document {document_id}: {e}")
+            logger.error("Error storing hierarchy metadata for document %s: %s", document_id, e)
             session.rollback()
         finally:
             session.close()

@@ -86,7 +86,7 @@ class DocumentContext:
             )
         else:
             # Cache miss - fetch from Weaviate
-            logger.info(f"[DocumentContext] Cache miss, fetching from Weaviate: {document_id[:8]}...")
+            logger.info('[DocumentContext] Cache miss, fetching from Weaviate: %s...', document_id[:8])
 
             hierarchy = fetch_document_hierarchy_sync(document_id, user_id)
             if hierarchy:
@@ -98,7 +98,7 @@ class DocumentContext:
             # Fetch abstract (uses hierarchy's abstract_section_title if available)
             abstract = fetch_document_abstract_sync(document_id, user_id, hierarchy)
             if abstract:
-                logger.info(f"[DocumentContext] Fetched abstract: {len(abstract)} chars")
+                logger.info('[DocumentContext] Fetched abstract: %s chars', len(abstract))
 
             # Store in cache for subsequent requests
             set_cached_metadata(user_id, document_id, hierarchy, abstract)
@@ -110,7 +110,7 @@ class DocumentContext:
                 for s in hierarchy.get("sections", [])
                 if s.get("name")
             ]
-            logger.debug(f"[DocumentContext] Extracted {len(sections)} section names")
+            logger.debug('[DocumentContext] Extracted %s section names', len(sections))
 
         return cls(
             document_id=document_id,

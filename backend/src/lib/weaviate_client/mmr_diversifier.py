@@ -90,5 +90,5 @@ def mmr_diversify(
         chunk.pop(vector_field, None)  # Remove internal vector field
         result.append(chunk)
 
-    logger.debug(f"MMR selected {len(result)} diverse results from {len(chunks)} candidates")
+    logger.debug('MMR selected %s diverse results from %s candidates', len(result), len(chunks))
     return result

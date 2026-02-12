@@ -184,16 +184,13 @@ def get_frontend_url() -> str:
 # ===========================
 
 def setup_logging(level: str = "INFO") -> None:
-    """
-    Setup logging configuration.
+    """Setup logging configuration.
 
-    Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    Deprecated: Use ``from src.logging_config import configure_logging`` instead.
+    Kept for backwards compatibility.
     """
-    logging.basicConfig(
-        level=getattr(logging, level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    from .logging_config import configure_logging
+    configure_logging()
 
 
 def get_env_source() -> Optional[str]:

@@ -71,14 +71,14 @@ try:
         # Initialize JWKS client for token validation
         jwks_url = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}/.well-known/jwks.json"
         jwks_client = PyJWKClient(jwks_url)
-        logger.info(f"Cognito authentication initialized with pool: {cognito_user_pool_id}")
+        logger.info('Cognito authentication initialized with pool: %s', cognito_user_pool_id)
     else:
         logger.warning(
             "Cognito authentication not configured - COGNITO_USER_POOL_ID and/or COGNITO_CLIENT_ID not set. "
             "Authentication endpoints will not work."
         )
 except Exception as e:
-    logger.error(f"Failed to initialize Cognito authentication: {e}")
+    logger.error('Failed to initialize Cognito authentication: %s', e)
     logger.warning("Authentication endpoints will not work until Cognito is configured.")
 
 
@@ -149,7 +149,7 @@ async def login(request: Request) -> RedirectResponse:
 
     authorize_url = f"{cognito_domain}/oauth2/authorize?{urlencode(authorize_params)}"
 
-    logger.info(f"Redirecting to Cognito login: {authorize_url}")
+    logger.info('Redirecting to Cognito login: %s', authorize_url)
 
     # Create redirect response with cookies for PKCE/CSRF state
     # Store state and code_verifier in session for callback verification
@@ -219,13 +219,13 @@ async def callback(
         # 1. User's session timed out and they have a stale redirect URL
         # 2. User took longer than 10 minutes to complete login
         # 3. Browser cleared cookies during the login flow
-        logger.info(f"OAuth state cookie missing - redirecting to fresh login. Incoming state: {state}")
+        logger.info('OAuth state cookie missing - redirecting to fresh login. Incoming state: %s', state)
         return RedirectResponse(url="/api/auth/login", status_code=302)
 
     if stored_state != state:
         # State exists but doesn't match - this is a real CSRF concern
         # Still redirect to login for better UX, but log as warning
-        logger.warning(f"State mismatch - possible CSRF or stale session. Expected: {stored_state}, Got: {state}")
+        logger.warning('State mismatch - possible CSRF or stale session. Expected: %s, Got: %s', stored_state, state)
         return RedirectResponse(url="/api/auth/login", status_code=302)
 
     # Get configuration
@@ -275,7 +275,7 @@ async def callback(
         logger.info("Successfully exchanged authorization code for access token")
 
     except requests.RequestException as e:
-        logger.error(f"Failed to exchange authorization code: {e}")
+        logger.error('Failed to exchange authorization code: %s', e)
         raise HTTPException(
             status_code=400,
             detail=f"Failed to exchange authorization code: {str(e)}"
@@ -306,10 +306,10 @@ async def callback(
             "groups": decoded_token.get("cognito:groups", [])  # List of group names
         }
 
-        logger.info(f"User authenticated: {cognito_user['sub']} ({cognito_user['email']})")
+        logger.info('User authenticated: %s (%s)', cognito_user['sub'], cognito_user['email'])
 
     except JWTError as e:
-        logger.error(f"Failed to validate ID token: {e}")
+        logger.error('Failed to validate ID token: %s', e)
         raise HTTPException(
             status_code=400,
             detail=f"Failed to validate ID token: {str(e)}"
@@ -336,7 +336,7 @@ async def callback(
     redirect_response.delete_cookie(key="oauth_state")
     redirect_response.delete_cookie(key="oauth_code_verifier")
 
-    logger.info(f"Set authentication cookie for user: {cognito_user['sub']}")
+    logger.info('Set authentication cookie for user: %s', cognito_user['sub'])
 
     return redirect_response
 
@@ -420,7 +420,7 @@ async def _get_user_from_cookie_impl(
                 else:
                     # Unknown group, create a generic group name
                     cognito_groups.append(f"{group_id.lower()}-curators")
-            logger.info(f"DEV_USER_GROUPS={dev_user_groups} -> cognito:groups={cognito_groups}")
+            logger.info('DEV_USER_GROUPS=%s -> cognito:groups=%s', dev_user_groups, cognito_groups)
 
         # Use SimpleNamespace to support both dict-like .get() and attribute access .uid
         mock_user_dict = {
@@ -487,7 +487,7 @@ async def _get_user_from_cookie_impl(
         return user
 
     except JWTError as e:
-        logger.error(f"Token validation failed: {e}")
+        logger.error('Token validation failed: %s', e)
         raise HTTPException(
             status_code=401,
             detail="Invalid authentication token"
@@ -546,7 +546,7 @@ async def logout(
         )
 
     # Log logout event
-    logger.info(f"User {user['sub']} ({user['email']}) logged out")
+    logger.info('User %s (%s) logged out', user['sub'], user['email'])
 
     # Clear the authentication cookie
     # Contract requires JSON response, so we clear cookie via Response object

@@ -33,7 +33,7 @@ class ChunkBoundingBox(BaseModel):
     def validate_right(cls, v: float, info: ValidationInfo) -> float:
         left = info.data.get('left') if info.data else None
         if left is not None and v <= left:
-            logger.error(f"❌ BoundingBox validation failed: right ({v}) must be greater than left ({left})")
+            logger.error("BoundingBox validation failed: right (%s) must be greater than left (%s)", v, left)
             raise ValueError(f"right ({v}) must be greater than left ({left})")
         return v
 
@@ -46,24 +46,42 @@ class ChunkBoundingBox(BaseModel):
         if top is not None:
             # Allow bottom == top for flat lines/elements (zero height)
             if v == top:
-                logger.warning(f"⚠️ BoundingBox has zero height: top={top}, bottom={v}. This is allowed for flat elements.")
+                logger.warning(
+                    "BoundingBox has zero height: top=%s, bottom=%s. This is allowed for flat elements.",
+                    top,
+                    v,
+                )
                 return v
 
             # For BOTTOMLEFT or BOTTOMRIGHT origins, top > bottom (Y increases upward)
             # For TOPLEFT or TOPRIGHT origins, bottom > top (Y increases downward)
             if coord_origin in ['BOTTOMLEFT', 'BOTTOMRIGHT']:
                 if v > top:
-                    logger.error(f"❌ BoundingBox validation failed: For {coord_origin} coordinates, "
-                               f"bottom ({v}) must be less than or equal to top ({top}) because Y increases upward. "
-                               f"Full bbox data: left={info.data.get('left')}, top={top}, "
-                               f"right={info.data.get('right')}, bottom={v}, origin={coord_origin}")
+                    logger.error(
+                        "BoundingBox validation failed: For %s coordinates, bottom (%s) must be <= top (%s) because Y increases upward. Full bbox data: left=%s, top=%s, right=%s, bottom=%s, origin=%s",
+                        coord_origin,
+                        v,
+                        top,
+                        info.data.get("left"),
+                        top,
+                        info.data.get("right"),
+                        v,
+                        coord_origin,
+                    )
                     raise ValueError(f"For {coord_origin} coordinates, bottom must be less than or equal to top (got bottom={v}, top={top})")
             else:  # TOPLEFT or TOPRIGHT
                 if v < top:
-                    logger.error(f"❌ BoundingBox validation failed: For {coord_origin} coordinates, "
-                               f"bottom ({v}) must be greater than or equal to top ({top}) because Y increases downward. "
-                               f"Full bbox data: left={info.data.get('left')}, top={top}, "
-                               f"right={info.data.get('right')}, bottom={v}, origin={coord_origin}")
+                    logger.error(
+                        "BoundingBox validation failed: For %s coordinates, bottom (%s) must be >= top (%s) because Y increases downward. Full bbox data: left=%s, top=%s, right=%s, bottom=%s, origin=%s",
+                        coord_origin,
+                        v,
+                        top,
+                        info.data.get("left"),
+                        top,
+                        info.data.get("right"),
+                        v,
+                        coord_origin,
+                    )
                     raise ValueError(f"For {coord_origin} coordinates, bottom must be greater than or equal to top (got bottom={v}, top={top})")
         return v
 

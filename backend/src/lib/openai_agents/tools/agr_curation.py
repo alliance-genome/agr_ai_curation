@@ -60,7 +60,7 @@ def _validate_curie_in_result(result: Dict[str, Any], curie_field: str = "curie"
     if curie:
         result["curie_validated"] = is_valid_curie(curie)
         if not result["curie_validated"]:
-            logger.warning(f"Invalid CURIE prefix detected: {curie}")
+            logger.warning('Invalid CURIE prefix detected: %s', curie)
     else:
         result["curie_validated"] = False
     return result
@@ -168,7 +168,7 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     # Determine MOD from taxon
     mod = TAXON_TO_PROVIDER.get(taxon_id)
     if not mod:
-        logger.debug(f"Unknown taxon {taxon_id}, skipping fullname attribution extraction")
+        logger.debug('Unknown taxon %s, skipping fullname attribution extraction', taxon_id)
         return None
 
     # Only attempt extraction for MODs known to have attribution info
@@ -276,8 +276,14 @@ def agr_curation_query(
         limit_value, warnings = _normalize_limit(limit)
 
         # Log query parameters for tracing
-        logger.debug(f"[agr_curation_query] method={method}, allele_symbol={allele_symbol}, "
-                    f"gene_symbol={gene_symbol}, data_provider={data_provider}, include_synonyms={include_synonyms}")
+        logger.debug(
+            '[agr_curation_query] method=%s, allele_symbol=%s, gene_symbol=%s, data_provider=%s, include_synonyms=%s',
+            method,
+            allele_symbol,
+            gene_symbol,
+            data_provider,
+            include_synonyms,
+        )
 
         # GET GENE BY EXACT SYMBOL (uses SQL IN clause - requires exact match)
         if method == "get_gene_by_exact_symbol":
@@ -319,9 +325,9 @@ def agr_curation_query(
                                     "gene_type": gene.geneType.get("name") if gene.geneType and isinstance(gene.geneType, dict) else str(gene.geneType) if gene.geneType else None,
                                 })
                         except Exception as e:
-                            logger.warning(f"Failed to fetch gene {result.get('entity_curie')}: {e}")
+                            logger.warning('Failed to fetch gene %s: %s', result.get('entity_curie'), e)
                 except Exception as e:
-                    logger.warning(f"Failed to search taxon {tid}: {e}")
+                    logger.warning('Failed to search taxon %s: %s', tid, e)
 
             validated_data = genes_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -387,9 +393,9 @@ def agr_curation_query(
 
                                 genes_data.append(gene_entry)
                         except Exception as e:
-                            logger.warning(f"Failed to fetch gene details: {e}")
+                            logger.warning('Failed to fetch gene details: %s', e)
                 except Exception as e:
-                    logger.warning(f"Failed to fuzzy search taxon {tid}: {e}")
+                    logger.warning('Failed to fuzzy search taxon %s: %s', tid, e)
 
             validated_data = genes_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -444,7 +450,7 @@ def agr_curation_query(
             # Normalize allele symbol: convert Gene<allele> to Gene<sup>allele</sup>
             symbol_variants = _normalize_allele_symbol_for_db(allele_symbol)
             if len(symbol_variants) > 1:
-                logger.info(f"Normalized allele symbol '{allele_symbol}' to variants: {symbol_variants}")
+                logger.info("Normalized allele symbol '%s' to variants: %s", allele_symbol, symbol_variants)
 
             alleles_data: List[Dict[str, Any]] = []
             seen_curies = set()  # Avoid duplicates across variants
@@ -475,9 +481,9 @@ def agr_curation_query(
                                         "fullname_attribution": _extract_fullname_attribution(fullname, tid),
                                     })
                             except Exception as e:
-                                logger.warning(f"Failed to fetch allele details: {e}")
+                                logger.warning('Failed to fetch allele details: %s', e)
                     except Exception as e:
-                        logger.warning(f"Failed to search alleles in taxon {tid} with variant '{symbol_variant}': {e}")
+                        logger.warning("Failed to search alleles in taxon %s with variant '%s': %s", tid, symbol_variant, e)
 
             validated_data = alleles_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -551,9 +557,9 @@ def agr_curation_query(
 
                                 alleles_data.append(allele_entry)
                         except Exception as e:
-                            logger.warning(f"Failed to fetch allele details: {e}")
+                            logger.warning('Failed to fetch allele details: %s', e)
                 except Exception as e:
-                    logger.warning(f"Failed to fuzzy search alleles in taxon {tid}: {e}")
+                    logger.warning('Failed to fuzzy search alleles in taxon %s: %s', tid, e)
 
             validated_data = alleles_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -561,8 +567,11 @@ def agr_curation_query(
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             # Log search results for tracing
-            logger.debug(f"[agr_curation_query] search_alleles returning {len(validated_data)} results: "
-                        f"{[d.get('curie') for d in validated_data[:5]]}")
+            logger.debug(
+                '[agr_curation_query] search_alleles returning %s results: %s',
+                len(validated_data),
+                [d.get('curie') for d in validated_data[:5]],
+            )
 
             return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
 
@@ -666,5 +675,5 @@ def agr_curation_query(
             )
 
     except Exception as e:
-        logger.error(f"[OpenAI Agents] AGR query error: {e}", exc_info=True)
+        logger.error("AGR query error: %s", e, exc_info=True)
         return _err(f"Query error: {str(e)}")

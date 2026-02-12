@@ -266,7 +266,7 @@ def load_agent_definitions(
         if not agents_path.exists():
             raise FileNotFoundError(f"Agents directory not found: {agents_path}")
 
-        logger.info(f"Loading agent definitions from: {agents_path}")
+        logger.info('Loading agent definitions from: %s', agents_path)
 
         _agent_registry = {}
         _agents_by_folder = {}
@@ -279,7 +279,7 @@ def load_agent_definitions(
 
             agent_yaml = folder / "agent.yaml"
             if not agent_yaml.exists():
-                logger.debug(f"Skipping {folder.name}: no agent.yaml found")
+                logger.debug('Skipping %s: no agent.yaml found', folder.name)
                 continue
 
             try:
@@ -287,7 +287,7 @@ def load_agent_definitions(
                     data = yaml.safe_load(f)
 
                 if not data:
-                    logger.warning(f"Empty agent.yaml in {folder.name}")
+                    logger.warning('Empty agent.yaml in %s', folder.name)
                     continue
 
                 agent = AgentDefinition.from_yaml(folder.name, data)
@@ -300,14 +300,14 @@ def load_agent_definitions(
                 )
 
             except yaml.YAMLError as e:
-                logger.error(f"Failed to parse {agent_yaml}: {e}")
+                logger.error('Failed to parse %s: %s', agent_yaml, e)
                 raise
             except Exception as e:
-                logger.error(f"Failed to load agent from {folder.name}: {e}")
+                logger.error('Failed to load agent from %s: %s', folder.name, e)
                 raise
 
         _initialized = True
-        logger.info(f"Loaded {len(_agent_registry)} agent definitions")
+        logger.info('Loaded %s agent definitions', len(_agent_registry))
 
         return _agent_registry
 

@@ -117,7 +117,7 @@ async def pii_pattern_guardrail(
     pii_type = check_for_pii(text)
 
     if pii_type:
-        logger.warning(f"[Guardrail] PII pattern detected: {pii_type}")
+        logger.warning('[Guardrail] PII pattern detected: %s', pii_type)
         return GuardrailFunctionOutput(
             output_info=SafetyCheckOutput(
                 is_safe=False,
@@ -192,7 +192,7 @@ async def llm_safety_guardrail(
 
     output = result.final_output
     if not output.is_safe:
-        logger.warning(f"[Guardrail] Safety check failed: {output.reasoning}")
+        logger.warning('[Guardrail] Safety check failed: %s', output.reasoning)
 
     return GuardrailFunctionOutput(
         output_info=output,
@@ -271,7 +271,7 @@ Scientific questions are ALWAYS on-topic even if not directly about the allowed 
 
         output = result.final_output
         if not output.is_on_topic:
-            logger.info(f"[Guardrail] Off-topic query: {output.reasoning}")
+            logger.info('[Guardrail] Off-topic query: %s', output.reasoning)
 
         return GuardrailFunctionOutput(
             output_info=output,
@@ -376,7 +376,7 @@ class ToolCallTracker:
         """Record that a tool was called."""
         self._call_count += 1
         self._tool_names.append(tool_name)
-        logger.debug(f"[ToolCallTracker] Recorded call #{self._call_count}: {tool_name}")
+        logger.debug('[ToolCallTracker] Recorded call #%s: %s', self._call_count, tool_name)
 
     def has_tool_calls(self) -> bool:
         """Check if at least one tool was called."""

@@ -2,6 +2,7 @@
 
 import logging
 import json
+import os
 from typing import List, Dict, Any, Optional, Sequence, Union
 from datetime import datetime, timezone
 import asyncio
@@ -13,6 +14,103 @@ from src.models.chunk import DocumentChunk, ChunkMetadata
 from ..weaviate_client.documents import update_document_status_detailed
 
 logger = logging.getLogger(__name__)
+
+try:
+    import tiktoken
+except ImportError:  # pragma: no cover - optional dependency safeguard
+    tiktoken = None
+
+def _get_required_env(name: str) -> str:
+    """Read required env var and fail if missing."""
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value.strip()
+
+
+def _get_required_int_env(name: str) -> int:
+    """Read required integer env var and fail if invalid."""
+    raw_value = _get_required_env(name)
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer, got {raw_value!r}") from exc
+
+
+def _get_required_bool_env(name: str) -> bool:
+    """Read required boolean env var and fail if invalid."""
+    raw_value = _get_required_env(name).lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"Environment variable {name} must be true/false, got {raw_value!r}")
+
+
+def _validate_required_embedding_env_vars() -> None:
+    """Validate required embedding env vars are present and coherent."""
+    required_names = [
+        "EMBEDDING_MODEL",
+        "EMBEDDING_TOKEN_PREFLIGHT_ENABLED",
+        "EMBEDDING_MODEL_TOKEN_LIMIT",
+        "EMBEDDING_TOKEN_SAFETY_MARGIN",
+        "CONTENT_PREVIEW_CHARS",
+    ]
+    missing = [name for name in required_names if os.getenv(name) in (None, "")]
+    if missing:
+        raise RuntimeError(
+            "Missing required embedding environment variables: " + ", ".join(sorted(missing))
+        )
+
+
+def _get_embedding_model_name() -> str:
+    """Resolve embedding model from environment."""
+    return _get_required_env("EMBEDDING_MODEL")
+
+
+_validate_required_embedding_env_vars()
+EMBEDDING_MODEL_NAME = _get_embedding_model_name()
+EMBEDDING_MODEL_TOKEN_LIMIT = _get_required_int_env("EMBEDDING_MODEL_TOKEN_LIMIT")
+TOKEN_SAFETY_MARGIN = _get_required_int_env("EMBEDDING_TOKEN_SAFETY_MARGIN")
+MAX_PREVIEW_CHARS = _get_required_int_env("CONTENT_PREVIEW_CHARS")  # ~400 tokens for reranking
+TOKEN_PREFLIGHT_ENABLED = _get_required_bool_env("EMBEDDING_TOKEN_PREFLIGHT_ENABLED")
+
+if EMBEDDING_MODEL_TOKEN_LIMIT <= 0:
+    raise RuntimeError("EMBEDDING_MODEL_TOKEN_LIMIT must be > 0")
+if TOKEN_SAFETY_MARGIN < 0:
+    raise RuntimeError("EMBEDDING_TOKEN_SAFETY_MARGIN must be >= 0")
+if MAX_PREVIEW_CHARS <= 0:
+    raise RuntimeError("CONTENT_PREVIEW_CHARS must be > 0")
+if TOKEN_SAFETY_MARGIN >= EMBEDDING_MODEL_TOKEN_LIMIT:
+    raise RuntimeError(
+        "EMBEDDING_TOKEN_SAFETY_MARGIN must be less than EMBEDDING_MODEL_TOKEN_LIMIT"
+    )
+
+TOKEN_HARD_LIMIT = EMBEDDING_MODEL_TOKEN_LIMIT - TOKEN_SAFETY_MARGIN
+
+if TOKEN_PREFLIGHT_ENABLED and tiktoken is None:
+    raise RuntimeError(
+        "EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true requires tiktoken to be installed"
+    )
+
+_tiktoken_encoder = None
+if TOKEN_PREFLIGHT_ENABLED and tiktoken is not None:
+    try:
+        _tiktoken_encoder = tiktoken.encoding_for_model(EMBEDDING_MODEL_NAME)
+    except Exception:
+        try:
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+            logger.warning(
+                "No direct tiktoken encoding for model %s; using cl100k_base fallback",
+                EMBEDDING_MODEL_NAME,
+            )
+        except Exception as exc:  # pragma: no cover - encoder init is environment-specific
+            raise RuntimeError(
+                f"Unable to initialize tiktoken encoder for EMBEDDING_MODEL={EMBEDDING_MODEL_NAME}"
+            ) from exc
+
+if not TOKEN_PREFLIGHT_ENABLED:
+    logger.warning("Embedding token preflight is disabled via EMBEDDING_TOKEN_PREFLIGHT_ENABLED")
 
 
 def generate_deterministic_uuid(document_id: str, chunk_index: int, content: str) -> str:
@@ -66,7 +164,7 @@ async def store_to_weaviate(
         from ..weaviate_helpers import get_connection
         weaviate_client = get_connection()
 
-    logger.info(f"Starting Weaviate storage for {len(chunks)} chunks")
+    logger.info('Starting Weaviate storage for %s chunks', len(chunks))
 
     # Normalise chunks to plain dictionaries for storage
     prepared_chunks: List[Dict[str, Any]] = []
@@ -119,6 +217,12 @@ async def store_to_weaviate(
             user_id
         )
 
+        if results["failed_count"] > 0:
+            raise BatchInsertError(
+                f"Chunk storage failed for {results['failed_count']} chunks",
+                failed_objects=results.get("failed_ids", []),
+            )
+
         # Update document metadata
         stats = {
             "total_chunks": len(prepared_chunks),
@@ -130,10 +234,14 @@ async def store_to_weaviate(
         # Update document status
         await update_document_metadata(document_id, stats, weaviate_client, user_id)
 
-        logger.info(f"Successfully stored {results['stored_count']} chunks to Weaviate")
+        logger.info('Successfully stored %s chunks to Weaviate', results['stored_count'])
         return stats
 
     except Exception as e:
+        try:
+            await update_document_status_detailed(document_id, user_id, embedding_status="failed")
+        except Exception as status_err:  # pragma: no cover - best-effort status update
+            logger.warning("Failed to mark document %s embedding status as failed: %s", document_id, status_err)
         error_msg = f"Weaviate storage failed: {str(e)}"
         logger.error(error_msg)
         raise StorageError(error_msg) from e
@@ -167,7 +275,120 @@ async def store_chunks_to_weaviate(
 
     stored_count = 0
     failed_count = 0
-    stored_ids = []
+    stored_ids: List[str] = []
+
+    def _bool_to_str(val: Any) -> Optional[str]:
+        """Convert Python bool to string for TEXT schema fields."""
+        if val is None:
+            return None
+        return "true" if val else "false"
+
+    def _prepare_chunk_for_insert(chunk: Dict[str, Any]) -> tuple[int, str, Dict[str, Any]]:
+        """Build Weaviate properties and deterministic UUID for one chunk."""
+        chunk_index = chunk.get("chunk_index", 0)
+        content = chunk.get("content", "")
+
+        if _tiktoken_encoder is not None and content:
+            try:
+                token_count = len(_tiktoken_encoder.encode(content))
+                if token_count > TOKEN_HARD_LIMIT:
+                    raise BatchInsertError(
+                        (
+                            f"Chunk {chunk_index} for document {document_id} has {token_count} tokens "
+                            f"(limit: {TOKEN_HARD_LIMIT})"
+                        ),
+                        failed_objects=[{"chunk_index": chunk_index, "token_count": token_count}],
+                    )
+            except BatchInsertError:
+                raise
+            except Exception as token_err:
+                logger.warning(
+                    "Token preflight check failed for chunk %s. Proceeding without token preflight: %s",
+                    chunk_index,
+                    token_err,
+                )
+
+        content_preview = content[:MAX_PREVIEW_CHARS]
+        if len(content) > MAX_PREVIEW_CHARS:
+            content_preview = content_preview.rsplit(" ", 1)[0] + "..."
+
+        source_metadata = chunk.get("metadata", {}) or {}
+        if isinstance(source_metadata, str):
+            try:
+                source_metadata = json.loads(source_metadata)
+            except json.JSONDecodeError:
+                source_metadata = {"raw_metadata": source_metadata}
+
+        doc_items = chunk.get("doc_items")
+        if not doc_items and isinstance(source_metadata, dict):
+            doc_items = source_metadata.get("doc_items")
+        if isinstance(source_metadata, dict) and doc_items:
+            source_metadata.setdefault("doc_items", doc_items)
+
+        is_top_level_val = (
+            chunk.get("is_top_level")
+            if chunk.get("is_top_level") is not None
+            else source_metadata.get("is_top_level")
+        )
+
+        properties = {
+            "documentId": document_id,
+            "chunkIndex": chunk_index,
+            "content": content,
+            "contentPreview": content_preview,
+            "elementType": chunk.get("element_type", "unknown"),
+            "pageNumber": chunk.get("page_number"),
+            "sectionTitle": chunk.get("section_title") or source_metadata.get("section_title"),
+            "sectionPath": chunk.get("section_path") or source_metadata.get("section_path"),
+            # Hierarchy fields from LLM-based section resolution
+            "parentSection": chunk.get("parent_section") or source_metadata.get("parent_section"),
+            "subsection": chunk.get("subsection") or source_metadata.get("subsection"),
+            "isTopLevel": _bool_to_str(is_top_level_val),
+            "contentType": source_metadata.get("content_type"),
+            "metadata": json.dumps(source_metadata, default=str),
+            "embeddingTimestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+
+        if doc_items:
+            properties["docItemProvenance"] = json.dumps(doc_items, default=str)
+
+        chunk_uuid = generate_deterministic_uuid(document_id, chunk_index, content)
+        return chunk_index, chunk_uuid, properties
+
+    def _verify_document_chunks(collection: Any) -> None:
+        """Best-effort check that at least one inserted chunk exists."""
+        try:
+            test_query = collection.query.fetch_objects(
+                where=collection.query.where("documentId").equal(document_id),
+                limit=1
+            )
+            if not test_query.objects:
+                error_msg = (
+                    f"Batch insert verification failed: No chunks found for document "
+                    f"{document_id} after insert"
+                )
+                logger.error(error_msg)
+                raise BatchInsertError(error_msg, failed_objects=[])
+            logger.info('Batch insert verified: Chunks successfully stored for document %s', document_id)
+        except Exception as verify_err:
+            logger.warning('Could not verify chunk insert for document %s: %s', document_id, verify_err)
+
+    def _cleanup_chunk_uuids(collection: Any, candidate_uuids: List[str]) -> None:
+        """Best-effort cleanup to avoid partial persistence after batch failures."""
+        deleted_count = 0
+        for chunk_uuid in candidate_uuids:
+            try:
+                collection.data.delete_by_id(chunk_uuid)
+                deleted_count += 1
+            except Exception:
+                # Ignore missing IDs or delete failures; this is compensating cleanup.
+                continue
+        if deleted_count > 0:
+            logger.warning(
+                "Cleaned up %d potentially partial chunk objects for document %s",
+                deleted_count,
+                document_id,
+            )
 
     def sync_store():
         """Synchronous function to store chunks in Weaviate."""
@@ -179,7 +400,7 @@ async def store_chunks_to_weaviate(
                 # Get tenant-scoped collection (FR-011: user-specific data isolation)
                 from ..weaviate_helpers import get_user_collections
                 try:
-                    chunk_collection, pdf_collection = get_user_collections(client, user_id)
+                    chunk_collection, _ = get_user_collections(client, user_id)
                     collection = chunk_collection
                 except Exception as e:
                     # Fail fast - collection should exist from startup
@@ -187,145 +408,38 @@ async def store_chunks_to_weaviate(
                     logger.error(error_msg)
                     raise CollectionNotFoundError(error_msg) from e
 
-                # Store chunks in batch
-                batch_errors = []
-                batch_response = None
+                prepared_batch: List[tuple[int, str, Dict[str, Any]]] = []
+                for chunk in chunks:
+                    prepared_batch.append(_prepare_chunk_for_insert(chunk))
+                candidate_uuids = [chunk_uuid for _, chunk_uuid, _ in prepared_batch]
+
                 with collection.batch.dynamic() as batch:
-                    for chunk in chunks:
-                        chunk_index = chunk.get("chunk_index", 0)
-
-                        # V5: No embedding check - using server-side embeddings
-                        # Chunks no longer need client-side embeddings
-
-                        # Prepare properties for Weaviate
-                        content = chunk.get("content", "")
-                        # V5: Prepare chunk with content preview for reranking
-                        # Cross-encoders truncate at ~512 tokens. We create a preview
-                        # field with first 400 tokens for reranking while keeping
-                        # full content for the LLM.
-                        MAX_PREVIEW_CHARS = 1600  # ~400 tokens (4 chars per token)
-
-                        content_preview = content[:MAX_PREVIEW_CHARS]
-                        if len(content) > MAX_PREVIEW_CHARS:
-                            # Add ellipsis to indicate truncation
-                            content_preview = content_preview.rsplit(' ', 1)[0] + '...'
-
-                        source_metadata = chunk.get("metadata", {}) or {}
-                        if isinstance(source_metadata, str):
-                            try:
-                                source_metadata = json.loads(source_metadata)
-                            except json.JSONDecodeError:
-                                source_metadata = {"raw_metadata": source_metadata}
-
-                        doc_items = chunk.get("doc_items")
-                        if not doc_items and isinstance(source_metadata, dict):
-                            doc_items = source_metadata.get("doc_items")
-
-                        if isinstance(source_metadata, dict) and doc_items:
-                            source_metadata.setdefault("doc_items", doc_items)
-
-                        # Helper to convert is_top_level bool to string for Weaviate text schema
-                        def _bool_to_str(val):
-                            if val is None:
-                                return None
-                            return "true" if val else "false"
-
-                        is_top_level_val = chunk.get("is_top_level") if chunk.get("is_top_level") is not None else source_metadata.get("is_top_level")
-
-                        properties = {
-                            "documentId": document_id,
-                            "chunkIndex": chunk_index,
-                            "content": content,  # Full text for LLM
-                            "contentPreview": content_preview,  # V5: Shortened for reranker
-                            "elementType": chunk.get("element_type", "unknown"),
-                            "pageNumber": chunk.get("page_number"),
-                            "sectionTitle": chunk.get("section_title") or source_metadata.get("section_title"),
-                            "sectionPath": chunk.get("section_path") or source_metadata.get("section_path"),
-                            # Hierarchy fields from LLM-based section resolution
-                            "parentSection": chunk.get("parent_section") or source_metadata.get("parent_section"),
-                            "subsection": chunk.get("subsection") or source_metadata.get("subsection"),
-                            "isTopLevel": _bool_to_str(is_top_level_val),
-                            "contentType": source_metadata.get("content_type"),
-                            "metadata": json.dumps(source_metadata, default=str),
-                            "embeddingTimestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
-
-                        if doc_items:
-                            # Surface provenance explicitly for downstream hybrid search consumers
-                            # Serialize doc_items to JSON string for TEXT field storage
-                            properties["docItemProvenance"] = json.dumps(doc_items, default=str)
-
-                        # Add to batch with deterministic UUID
+                    for chunk_index, chunk_uuid, properties in prepared_batch:
                         try:
-                            # Generate deterministic UUID based on content
-                            chunk_uuid = generate_deterministic_uuid(
-                                document_id,
-                                chunk_index,
-                                content
-                            )
-                            # V5: No vector parameter - Weaviate generates embeddings server-side!
-                            batch.add_object(
-                                properties=properties,
-                                # vector=chunk.get("embedding"),  # V5: REMOVED - server-side embeddings
-                                uuid=chunk_uuid
-                            )
-                            stored_ids.append(chunk_uuid)
-                            stored_count += 1
-                        except Exception as e:
-                            # Fail fast with clear error message
-                            error_msg = f"Failed to add chunk {chunk_index} to batch: {str(e)}"
-                            logger.error(error_msg)
-                            batch_errors.append({"chunk_index": chunk_index, "error": str(e)})
-                            failed_count += 1
-                            # Don't continue on batch errors - fail fast
+                            batch.add_object(properties=properties, uuid=chunk_uuid)
+                        except Exception as add_err:
+                            _cleanup_chunk_uuids(collection, candidate_uuids)
                             raise BatchInsertError(
-                                error_msg,
-                                failed_objects=batch_errors
-                            ) from e
-
-                    # Store the batch response before context exits
+                                f"Failed to add chunk {chunk_index} to batch",
+                                failed_objects=[{"chunk_index": chunk_index, "error": str(add_err)}],
+                            ) from add_err
                     batch_response = batch
 
-                # The batch context manager will flush on exit
-                # Check batch results after context exit
+                if batch_response and hasattr(batch_response, "failed_objects") and batch_response.failed_objects:
+                    _cleanup_chunk_uuids(collection, candidate_uuids)
+                    raise BatchInsertError(
+                        f"Batch insert failed for {len(batch_response.failed_objects)} objects",
+                        failed_objects=list(batch_response.failed_objects),
+                    )
 
-            # Check for batch errors from the response
-            if batch_response and hasattr(batch_response, 'failed_objects') and batch_response.failed_objects:
-                error_msg = f"Batch insert failed for {len(batch_response.failed_objects)} objects"
-                logger.error(f"{error_msg}: {batch_response.failed_objects}")
-                # Don't store metadata since chunks failed
-                raise BatchInsertError(
-                    error_msg,
-                    failed_objects=batch_response.failed_objects
-                )
-
-            # If we have any failed chunks from add_object, raise error (fail-fast)
-            if batch_errors:
-                error_msg = f"Failed to store {len(batch_errors)} chunks"
-                raise BatchInsertError(
-                    error_msg,
-                    failed_objects=batch_errors
-                )
-
-            # Verify chunks were actually stored
-            logger.info(f"Batch insert completed: {stored_count} chunks added to batch")
-
-            # Quick verification - check if at least one chunk exists
-            try:
-                test_query = collection.query.fetch_objects(
-                    where=collection.query.where("documentId").equal(document_id),
-                    limit=1
-                )
-                if not test_query.objects:
-                    error_msg = f"Batch insert verification failed: No chunks found for document {document_id} after insert"
-                    logger.error(error_msg)
-                    raise BatchInsertError(error_msg, failed_objects=[])
-                logger.info(f"Batch insert verified: Chunks successfully stored for document {document_id}")
-            except Exception as e:
-                logger.warning(f"Could not verify batch insert: {e}")
+                stored_ids = [chunk_uuid for _, chunk_uuid, _ in prepared_batch]
+                stored_count = len(stored_ids)
+                failed_count = 0
+                logger.info("Batch insert completed successfully: %d chunks", stored_count)
+                _verify_document_chunks(collection)
 
         except Exception as e:
-            logger.error(f"Error in sync_store: {e}")
+            logger.error('Error in sync_store: %s', e)
             raise
 
     # Run synchronous storage in async context
@@ -334,7 +448,8 @@ async def store_chunks_to_weaviate(
     return {
         "stored_count": stored_count,
         "failed_count": failed_count,
-        "stored_ids": stored_ids
+        "stored_ids": stored_ids,
+        "failed_ids": [],
     }
 
 
@@ -358,7 +473,15 @@ async def update_document_metadata(
     # T036: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped metadata updates (FR-011, FR-014)")
-    logger.info(f"Updating metadata for document {document_id}")
+    logger.info('Updating metadata for document %s', document_id)
+
+    stored_chunks = int(stats.get("stored_chunks", 0) or 0)
+    failed_chunks = int(stats.get("failed_chunks", 0) or 0)
+    if failed_chunks > 0:
+        embedding_status = "failed"
+    else:
+        embedding_status = "completed"
+    processing_status = "completed" if stored_chunks > 0 else "failed"
 
     def sync_update():
         """Synchronous function to update document metadata."""
@@ -374,21 +497,21 @@ async def update_document_metadata(
                     collection.data.update(
                         uuid=document_id,
                         properties={
-                            "chunkCount": stats["stored_chunks"],
-                            "vectorCount": stats["stored_chunks"],
-                            "processingStatus": "completed",
-                            "embeddingStatus": "completed"
+                            "chunkCount": stored_chunks,
+                            "vectorCount": stored_chunks,
+                            "processingStatus": processing_status,
+                            "embeddingStatus": embedding_status,
                         }
                     )
-                    logger.info(f"Successfully updated metadata for document {document_id}")
+                    logger.info('Successfully updated metadata for document %s', document_id)
 
                 except Exception as e:
-                    logger.warning(f"Could not update document metadata: {e}")
+                    logger.warning('Could not update document metadata: %s', e)
                     # Document may not exist in PDFDocument collection yet
                     # This is okay as we've stored the chunks successfully
 
         except Exception as e:
-            logger.error(f"Metadata update failed: {e}")
+            logger.error('Metadata update failed: %s', e)
 
     # Run synchronous update in async context
     await asyncio.get_event_loop().run_in_executor(None, sync_update)
@@ -404,5 +527,5 @@ async def update_processing_status(
         document_id: Document UUID
         status: New status value
     """
-    logger.info(f"Updating document {document_id} status to: {status}")
+    logger.info('Updating document %s status to: %s', document_id, status)
     # This will be integrated with tracker module

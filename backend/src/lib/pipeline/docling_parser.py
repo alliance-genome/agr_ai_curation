@@ -80,7 +80,7 @@ class DoclingParser:
         extract_tables = enable_table_extraction if enable_table_extraction is not None else True
         extract_equations = os.getenv("ENABLE_EQUATION_EXTRACTION", "true").lower() == "true"
 
-        logger.info(f"Sending {file_path.name} to Docling service for {document_id}")
+        logger.info('Sending %s to Docling service for %s', file_path.name, document_id)
 
         try:
             # Use aiohttp for async HTTP request
@@ -180,7 +180,7 @@ class DoclingParser:
             lambda: file_path.write_text(json.dumps(result, indent=2))
         )
 
-        logger.info(f"Saved raw Docling JSON to {file_path}")
+        logger.info('Saved raw Docling JSON to %s', file_path)
         # Return path relative to pdf_storage root: {user_id}/docling_json/{doc_id}.json
         return file_path.relative_to(pdf_storage)
 
@@ -211,7 +211,7 @@ class DoclingParser:
             lambda: file_path.write_text(json.dumps(elements, indent=2))
         )
 
-        logger.info(f"Saved processed JSON to {file_path}")
+        logger.info('Saved processed JSON to %s', file_path)
         # Return path relative to pdf_storage root: {user_id}/processed_json/{doc_id}.json
         return file_path.relative_to(pdf_storage)
 
@@ -310,7 +310,7 @@ def handle_parsing_errors(error: Exception) -> None:
         logger.error("Docling service returned an error. Check service logs.")
 
     else:
-        logger.error(f"Unhandled parsing error: {error_message}")
+        logger.error('Unhandled parsing error: %s', error_message)
 
 
 def get_extraction_strategy() -> str:
@@ -336,6 +336,6 @@ async def update_processing_status(
     status: str
 ) -> None:
     """Update the processing status of a document."""
-    logger.info(f"Updating document {document_id} status to: {status}")
+    logger.info('Updating document %s status to: %s', document_id, status)
     timestamp = datetime.now().isoformat()
-    logger.debug(f"Status update: {document_id} -> {status} at {timestamp}")
+    logger.debug('Status update: %s -> %s at %s', document_id, status, timestamp)

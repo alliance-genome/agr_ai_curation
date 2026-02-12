@@ -75,13 +75,13 @@ def get_aws_credentials(secret_id: str = 'ai-curation/db/curation-readonly',
         response = client.get_secret_value(SecretId=secret_id)
         secret = json.loads(response['SecretString'])
 
-        logger.info(f"Retrieved credentials from AWS Secrets Manager: {secret_id}")
-        logger.debug(f"Database user: {secret.get('username')}")
+        logger.info('Retrieved credentials from AWS Secrets Manager: %s', secret_id)
+        logger.debug('Database user: %s', secret.get('username'))
 
         return secret
 
     except Exception as e:
-        logger.error(f"Failed to retrieve credentials from AWS Secrets Manager: {e}")
+        logger.error('Failed to retrieve credentials from AWS Secrets Manager: %s', e)
         raise
 
 
@@ -123,10 +123,10 @@ def create_database_config(
             config.host = parsed.hostname
             config.port = str(parsed.port) if parsed.port else '5432'
 
-            logger.info(f"Using CURATION_DB_URL environment variable: {config.host}:{config.port}/{config.database}")
+            logger.info('Using CURATION_DB_URL environment variable: %s:%s/%s', config.host, config.port, config.database)
             return config
         except Exception as e:
-            logger.warning(f"Failed to parse CURATION_DB_URL, will try AWS Secrets Manager: {e}")
+            logger.warning('Failed to parse CURATION_DB_URL, will try AWS Secrets Manager: %s', e)
 
     # Fetch credentials from AWS if not provided and CURATION_DB_URL not available
     if secret is None:
@@ -140,7 +140,7 @@ def create_database_config(
     config.host = host
     config.port = port
 
-    logger.info(f"Using AWS credentials: {config.host}:{config.port}/{config.database}")
+    logger.info('Using AWS credentials: %s:%s/%s', config.host, config.port, config.database)
 
     return config
 
@@ -202,7 +202,7 @@ def get_agr_db_client(
         encoded_password = urllib.parse.quote(env_password, safe='')
         curation_db_url = f"postgresql://{env_user}:{encoded_password}@{env_host}:{env_port}/{env_name}"
         os.environ['CURATION_DB_URL'] = curation_db_url
-        logger.info(f"Using PERSISTENT_STORE_DB_* env vars: {env_host}:{env_port}/{env_name}")
+        logger.info('Using PERSISTENT_STORE_DB_* env vars: %s:%s/%s', env_host, env_port, env_name)
 
     # Clear cache if force_new requested
     if force_new:
@@ -211,7 +211,7 @@ def get_agr_db_client(
                 _db_client.close()
                 logger.info("Closed existing database connection")
             except Exception as e:
-                logger.warning(f"Error closing database connection: {e}")
+                logger.warning('Error closing database connection: %s', e)
         _db_client = None
         get_agr_db_client.cache_clear()
 
@@ -227,7 +227,7 @@ def get_agr_db_client(
         return _db_client
 
     except Exception as e:
-        logger.error(f"Failed to create AGR database client: {e}")
+        logger.error('Failed to create AGR database client: %s', e)
         raise
 
 
@@ -244,7 +244,7 @@ def close_agr_db_client():
             _db_client.close()
             logger.info("Closed AGR database client")
         except Exception as e:
-            logger.warning(f"Error closing database client: {e}")
+            logger.warning('Error closing database client: %s', e)
         finally:
             _db_client = None
             get_agr_db_client.cache_clear()

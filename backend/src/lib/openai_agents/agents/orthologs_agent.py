@@ -72,8 +72,9 @@ def create_orthologs_agent() -> Agent:
     model = get_model_for_agent(config.model)
 
     logger.info(
-        f"[OpenAI Agents] Creating Orthologs agent, model={config.model}, "
-        f"prompt_v={base_prompt.version}"
+        "Creating Orthologs agent, model=%s prompt_v=%s",
+        config.model,
+        base_prompt.version,
     )
 
     # Log agent configuration to Langfuse for trace visibility

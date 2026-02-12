@@ -84,8 +84,7 @@ def submit_feedback(
         )
 
         logger.info(
-            f"Created feedback payload {feedback_id}, scheduling background processing"
-        )
+            'Created feedback payload %s, scheduling background processing', feedback_id)
 
         # Phase 2: Schedule background processing (trace extraction, enrichment, email)
         # NOTE: We create a new service instance in the background task because
@@ -107,8 +106,7 @@ def submit_feedback(
                 bg_service.process_feedback_report(feedback_id)
             except Exception as e:
                 logger.error(
-                    f"Background processing failed for feedback {feedback_id}: {str(e)}",
-                    exc_info=True,
+                    'Background processing failed for feedback %s: %s', feedback_id, str(e), exc_info=True,
                 )
             finally:
                 bg_db.close()
@@ -124,7 +122,7 @@ def submit_feedback(
 
     except ValueError as e:
         # Validation errors (from Pydantic or business logic)
-        logger.warning(f"Validation error in feedback submission: {str(e)}")
+        logger.warning('Validation error in feedback submission: %s', str(e))
         return JSONResponse(
             status_code=400,
             content={
@@ -137,8 +135,7 @@ def submit_feedback(
     except Exception as e:
         # Database or unexpected errors during lightweight processing
         logger.error(
-            f"Failed to save feedback to database: {str(e)}",
-            exc_info=True,
+            'Failed to save feedback to database: %s', str(e), exc_info=True,
         )
         return JSONResponse(
             status_code=500,

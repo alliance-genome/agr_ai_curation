@@ -32,7 +32,7 @@ def load_prefixes() -> Set[str]:
         prefixes = set(data.get("prefixes", []))
         if not prefixes:
             raise PrefixLoadError(f"Prefix file loaded but contains no prefixes: {PREFIX_FILE}")
-        logger.info(f"Loaded {len(prefixes)} identifier prefixes from {PREFIX_FILE}")
+        logger.info('Loaded %s identifier prefixes from %s', len(prefixes), PREFIX_FILE)
         return prefixes
     except Exception as e:  # noqa: BLE001
         raise PrefixLoadError(f"Failed to load prefixes from {PREFIX_FILE}: {e}") from e

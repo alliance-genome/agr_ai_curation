@@ -189,7 +189,7 @@ def inject_group_rules(
 
     # Normalize all group IDs
     normalized_groups = [normalize_group_id(g) for g in group_ids]
-    logger.info(f"Injecting rules for groups: {normalized_groups}")
+    logger.info('Injecting rules for groups: %s', normalized_groups)
 
     # Load from cache (no fallback - cache must be initialized)
     from src.lib.prompts.cache import get_prompt_optional, is_initialized
@@ -235,12 +235,12 @@ def _inject_from_cache(
             collected_groups.append(group_id)
             if prompts_out is not None:
                 prompts_out.append(prompt)
-            logger.debug(f"Loaded {group_id} rules for {component_name} from cache (v{prompt.version})")
+            logger.debug('Loaded %s rules for %s from cache (v%s)', group_id, component_name, prompt.version)
         else:
-            logger.debug(f"No cached group rules found for {component_name}/{group_id}")
+            logger.debug('No cached group rules found for %s/%s', component_name, group_id)
 
     if not collected_content:
-        logger.warning(f"No group rules found in cache for {normalized_groups}/{component_name}")
+        logger.warning('No group rules found in cache for %s/%s', normalized_groups, component_name)
         return base_prompt
 
     # Group rules are pre-rendered in the database, just concatenate them

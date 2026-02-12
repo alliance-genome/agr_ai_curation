@@ -1,0 +1,118 @@
+# docker-compose.prod.yml
+# Production/Dev EC2 override - enables GELF logging for all services.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   OR: make prod
+#
+# Prerequisites:
+#   - Log-Access-Group (sg-0451f962e9b18aefa) attached to EC2 instance
+#   - UDP 12201 connectivity to logs.alliancegenome.org verified
+#
+# Environment variables (set in ~/.agr_ai_curation/.env):
+#   GELF_HOST  - GELF endpoint hostname (default: logs.alliancegenome.org)
+#   GELF_PORT  - GELF endpoint port (default: 12201)
+#   LOG_ENV    - Environment label: "production" or "dev" (default: production)
+
+x-gelf-logging: &gelf-logging
+  driver: gelf
+  options:
+    gelf-address: "udp://${GELF_HOST:-logs.alliancegenome.org}:${GELF_PORT:-12201}"
+    tag: "ai-curation-{{.Name}}"
+    labels: "log_env,log_tier,log_component"
+
+services:
+  # === Application Services ===
+
+  backend:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: api
+      log_component: openai-agents
+
+  frontend:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: web
+      log_component: nextjs
+
+  trace_review_backend:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: api
+      log_component: trace-review
+
+  # === Observability Services ===
+
+  langfuse:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: observability
+      log_component: langfuse
+
+  langfuse-worker:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: observability
+      log_component: langfuse-worker
+
+  # === Data Services ===
+
+  weaviate:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: database
+      log_component: weaviate
+
+  reranker-transformers:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: ml
+      log_component: reranker
+
+  redis:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: cache
+      log_component: redis
+
+  clickhouse:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: analytics
+      log_component: clickhouse
+
+  minio:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: storage
+      log_component: minio
+
+  postgres:
+    logging: *gelf-logging
+    labels:
+      log_env: ${LOG_ENV:-production}
+      log_tier: database
+      log_component: postgres
+
+  # === Disable local-only logging services on EC2 ===
+  # These are replaced by Kibana when GELF is active.
+  # Using profiles means they won't start unless --profile local is passed.
+
+  loki:
+    profiles:
+      - local
+
+  promtail:
+    profiles:
+      - local

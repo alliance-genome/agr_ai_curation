@@ -78,11 +78,11 @@ class WeaviateConnection:
                     skip_init_checks=False
                 )
 
-            logger.info(f"Connected to Weaviate at {self.url}")
+            logger.info('Connected to Weaviate at %s', self.url)
             return self._client
 
         except Exception as e:
-            logger.error(f"Failed to connect to Weaviate: {e}")
+            logger.error('Failed to connect to Weaviate: %s', e)
             raise Exception(f"Connection failed: {e}")
 
     def disconnect(self) -> None:
@@ -91,7 +91,7 @@ class WeaviateConnection:
             try:
                 self._client.close()
             except Exception as e:
-                logger.error(f"Error closing Weaviate connection: {e}")
+                logger.error('Error closing Weaviate connection: %s', e)
             finally:
                 self._client = None
                 logger.info("Disconnected from Weaviate")
@@ -171,7 +171,7 @@ class WeaviateConnection:
                     "collections": len(collections) if collections else 0
                 }
             except Exception as e:
-                logger.error(f"Health check failed: {e}")
+                logger.error('Health check failed: %s', e)
                 return {
                     "status": "unhealthy",
                     "message": str(e)
@@ -274,7 +274,7 @@ def health_check() -> Dict[str, Any]:
                 "modules": {}  # Module info would need separate queries in v4
             }
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            logger.error('Health check failed: %s', e)
             return {
                 "healthy": False,
                 "error": str(e)
@@ -320,7 +320,7 @@ def get_collection_info(collection_name: str) -> Dict[str, Any]:
                 }
             }
         except Exception as e:
-            logger.error(f"Failed to get collection info: {e}")
+            logger.error('Failed to get collection info: %s', e)
             return {
                 "error": str(e)
             }

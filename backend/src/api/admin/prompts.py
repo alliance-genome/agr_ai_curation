@@ -91,7 +91,7 @@ async def require_admin(user: dict = get_auth_dependency()) -> dict:
 
     user_email = user.get("email", "").lower()
     if user_email not in admin_emails:
-        logger.warning(f"Admin access denied for user: {user_email}")
+        logger.warning('Admin access denied for user: %s', user_email)
         raise HTTPException(
             status_code=403,
             detail="Admin access required. Contact your administrator.",
@@ -337,8 +337,7 @@ async def create_prompt(
             if request.activate and existing and existing.is_active:
                 existing.is_active = False
                 logger.info(
-                    f"Deactivated prompt {request.agent_name}:{request.prompt_type}:{request.group_id or 'base'} v{existing.version}"
-                )
+                    'Deactivated prompt %s:%s:%s v%s', request.agent_name, request.prompt_type, request.group_id or 'base', existing.version)
 
             # Create the new prompt version
             new_prompt = PromptTemplate(
@@ -403,8 +402,7 @@ async def create_prompt(
                 continue
             else:
                 logger.error(
-                    f"Version collision persisted after {max_retries} attempts: {e}"
-                )
+                    'Version collision persisted after %s attempts: %s', max_retries, e)
                 raise HTTPException(
                     status_code=409,
                     detail="Version collision occurred. Please try again.",
@@ -473,8 +471,7 @@ async def activate_prompt(
         previous_version = current_active.version
         current_active.is_active = False
         logger.info(
-            f"Deactivated prompt {prompt.agent_name}:{prompt.prompt_type}:{prompt.group_id or 'base'} v{previous_version}"
-        )
+            'Deactivated prompt %s:%s:%s v%s', prompt.agent_name, prompt.prompt_type, prompt.group_id or 'base', previous_version)
 
     # Activate the new version
     prompt.is_active = True
@@ -522,7 +519,7 @@ async def refresh_cache(
     prompt_cache.refresh(db)
     cache_info = prompt_cache.get_cache_info()
 
-    logger.info(f"Prompt cache manually refreshed by {admin.get('email')}")
+    logger.info('Prompt cache manually refreshed by %s', admin.get('email'))
 
     return CacheRefreshResponse(
         status="refreshed",

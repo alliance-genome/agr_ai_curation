@@ -1,6 +1,7 @@
 """Document operations library for Weaviate."""
 
 import logging
+import time
 from collections import Counter
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
@@ -92,7 +93,12 @@ async def async_list_documents(
                 filter_obj.min_vector_count is not None or
                 filter_obj.max_vector_count is not None
             )
-            logger.info(f"[DEBUG] Filter check: has_filters={has_filters}, min_vector_count={getattr(filter_obj, 'min_vector_count', None)}, max_vector_count={getattr(filter_obj, 'max_vector_count', None)}")
+            logger.debug(
+                "Filter check: has_filters=%s, min_vector_count=%s, max_vector_count=%s",
+                has_filters,
+                getattr(filter_obj, "min_vector_count", None),
+                getattr(filter_obj, "max_vector_count", None),
+            )
             if has_filters:
                 from weaviate.classes.query import Filter
                 conditions = []
@@ -127,7 +133,11 @@ async def async_list_documents(
                     where_filter = conditions[0]
                 elif len(conditions) > 1:
                     where_filter = Filter.all_of(conditions)
-                logger.info(f"[DEBUG] Built filter with {len(conditions)} conditions, where_filter={where_filter}")
+                logger.debug(
+                    "Built filter with %s conditions, where_filter=%s",
+                    len(conditions),
+                    where_filter,
+                )
 
             # Query for documents using v4 fetch_objects
             from weaviate.classes.query import Sort
@@ -135,6 +145,7 @@ async def async_list_documents(
             # Build sort object
             sort_obj = Sort.by_property(sort_by, ascending=(sort_order == "asc"))
 
+            query_start = time.monotonic()
             # Execute query with limit and offset using gRPC filters API
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -146,10 +157,10 @@ async def async_list_documents(
                     include_vector=False
                 )
             )
-            logger.info(f"[DEBUG] Weaviate query returned {len(response.objects)} objects")
+            logger.debug("Weaviate query returned %s objects", len(response.objects))
             for obj in response.objects[:3]:  # Log first 3
                 props = obj.properties
-                logger.info(f"[DEBUG]   - {props.get('filename')}: chunkCount={props.get('chunkCount')}")
+                logger.debug("Sample result: %s chunkCount=%s", props.get("filename"), props.get("chunkCount"))
 
             # T030: Query PostgreSQL for ownership verification (defense-in-depth, FR-014)
             # Build map of document_id -> PostgreSQL record for ownership filtering
@@ -216,6 +227,11 @@ async def async_list_documents(
 
             total_items = count_response.total_count if count_response else 0
             offset = (page - 1) * page_size
+            duration_ms = (time.monotonic() - query_start) * 1000
+            logger.info(
+                "Weaviate document listing query completed",
+                extra={"duration_ms": round(duration_ms, 1), "operation": "weaviate_list_documents"},
+            )
 
             # Return contract-compliant structure (document_endpoints.yaml lines 60-72)
             return {
@@ -226,7 +242,7 @@ async def async_list_documents(
             }
 
         except Exception as e:
-            logger.error(f"Failed to list documents: {e}")
+            logger.error("Failed to list documents: %s", e)
             raise
 
 
@@ -374,7 +390,7 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
 
             filter_by_doc = Filter.by_property("documentId").equal(document_id)
 
-            logger.info(f"Fetching chunks for document {document_id}")
+            logger.info("Fetching chunks for document %s", document_id)
 
             # Try different approaches to fetch chunks
             chunks_response = None
@@ -394,9 +410,12 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                         include_vector=False
                     )
                 )
-                logger.info(f"Found {len(chunks_response.objects) if chunks_response else 0} chunks using UUID filter")
+                logger.info(
+                    "Found %s chunks using UUID filter",
+                    len(chunks_response.objects) if chunks_response else 0,
+                )
             except Exception as e:
-                logger.warning(f"UUID filter attempt failed: {e}")
+                logger.warning("UUID filter attempt failed: %s", e)
 
             # If no results, try without filter to see if chunks exist at all
             if not chunks_response or len(chunks_response.objects) == 0:
@@ -417,14 +436,22 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                             matching_chunks.append(chunk_obj)
 
                     if matching_chunks:
-                        logger.info(f"Found {len(matching_chunks)} chunks by manual filtering")
+                        logger.info("Found %s chunks by manual filtering", len(matching_chunks))
                         chunks_response = type('obj', (object,), {'objects': matching_chunks[:10]})()
                     else:
-                        logger.warning(f"No chunks found for document {document_id} among {len(all_chunks.objects)} total chunks")
+                        logger.warning(
+                            "No chunks found for document %s among %s total chunks",
+                            document_id,
+                            len(all_chunks.objects),
+                        )
                 else:
                     logger.warning("No chunks found in the entire collection")
 
-            logger.info(f"Final chunk count for document {document_id}: {len(chunks_response.objects) if chunks_response else 0}")
+            logger.info(
+                "Final chunk count for document %s: %s",
+                document_id,
+                len(chunks_response.objects) if chunks_response else 0,
+            )
 
             chunks = []
             embedding_models = Counter()
@@ -522,7 +549,7 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            logger.error(f"Failed to get document {document_id}: {e}")
+            logger.error("Failed to get document %s: %s", document_id, e)
             raise
 
 
@@ -589,7 +616,10 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                     db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
 
                     if not db_user:
-                        logger.warning(f"User with auth_sub {user_id} not found in database during delete")
+                        logger.warning(
+                            "User with auth_sub %s not found in database during delete",
+                            user_id,
+                        )
                     else:
                         # Try to find and delete from PostgreSQL with ownership check
                         pdf_doc = db.get(PdfDocumentModel, UUID(document_id))
@@ -599,19 +629,31 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                                 db.delete(pdf_doc)
                                 db.commit()
                                 postgres_deleted = True
-                                logger.info(f"Deleted document {document_id} from PostgreSQL (user_id={db_user.id})")
+                                logger.info(
+                                    "Deleted document %s from PostgreSQL (user_id=%s)",
+                                    document_id,
+                                    db_user.id,
+                                )
                             else:
-                                logger.warning(f"Document {document_id} ownership mismatch in PostgreSQL (doc.user_id={pdf_doc.user_id}, user_id={db_user.id})")
+                                logger.warning(
+                                    "Document %s ownership mismatch in PostgreSQL (doc.user_id=%s, user_id=%s)",
+                                    document_id,
+                                    pdf_doc.user_id,
+                                    db_user.id,
+                                )
                         else:
-                            logger.info(f"Document {document_id} not found in PostgreSQL, skipping")
+                            logger.info("Document %s not found in PostgreSQL, skipping", document_id)
                 finally:
                     db.close()
             except Exception as e:
-                logger.warning(f"Failed to delete from PostgreSQL: {e}")
+                logger.warning("Failed to delete from PostgreSQL: %s", e)
                 # Don't fail the whole operation if PostgreSQL deletion fails
 
-            logger.info(f"Deleted document {document_id} and its chunks from Weaviate" +
-                       (" and PostgreSQL" if postgres_deleted else ""))
+            logger.info(
+                "Deleted document %s and its chunks from Weaviate%s",
+                document_id,
+                " and PostgreSQL" if postgres_deleted else "",
+            )
 
             return {
                 "success": bool(doc_deleted),
@@ -623,7 +665,7 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            logger.error(f"Failed to delete document {document_id}: {e}")
+            logger.error("Failed to delete document %s: %s", document_id, e)
             return {
                 "success": False,
                 "message": f"Failed to delete document: {e}",
@@ -693,7 +735,11 @@ async def re_embed_document(
                 )
             )
 
-            logger.info(f"Triggered re-embedding for document {document_id} ({total_chunks} chunks)")
+            logger.info(
+                "Triggered re-embedding for document %s (%s chunks)",
+                document_id,
+                total_chunks,
+            )
 
             return {
                 "success": True,
@@ -703,7 +749,7 @@ async def re_embed_document(
             }
 
         except Exception as e:
-            logger.error(f"Failed to trigger re-embedding for {document_id}: {e}")
+            logger.error("Failed to trigger re-embedding for %s: %s", document_id, e)
             return {
                 "success": False,
                 "message": f"Failed to trigger re-embedding: {e}",
@@ -817,7 +863,7 @@ async def update_document_status_detailed(
             if embedding_status:
                 status_updates.append(f"embeddingStatus={embedding_status}")
 
-            logger.info(f"Updated document {document_id}: {', '.join(status_updates)}")
+            logger.info("Updated document %s: %s", document_id, ", ".join(status_updates))
 
             return {
                 "success": True,
@@ -827,7 +873,7 @@ async def update_document_status_detailed(
             }
 
         except Exception as e:
-            logger.error(f"Failed to update document status for {document_id}: {e}")
+            logger.error("Failed to update document status for %s: %s", document_id, e)
             return {
                 "success": False,
                 "message": f"Failed to update document status: {e}",
@@ -881,7 +927,7 @@ async def update_document_status(document_id: str, user_id: str, status: str) ->
                 )
             )
 
-            logger.info(f"Updated document {document_id} status to {status}")
+            logger.info("Updated document %s status to %s", document_id, status)
 
             return {
                 "success": True,
@@ -889,7 +935,7 @@ async def update_document_status(document_id: str, user_id: str, status: str) ->
             }
 
         except Exception as e:
-            logger.error(f"Failed to update document status: {e}")
+            logger.error("Failed to update document status: %s", e)
             return {
                 "success": False,
                 "message": f"Failed to update status: {e}",
@@ -941,7 +987,7 @@ async def search_similar(document_id: str, user_id: str, limit: int = 5) -> List
                 vector = source_doc.objects[0].vector
 
                 if not vector:
-                    logger.warning(f"Document {document_id} has no vector")
+                    logger.warning("Document %s has no vector", document_id)
                     return []
 
                 # Search for similar documents using near_vector
@@ -970,7 +1016,7 @@ async def search_similar(document_id: str, user_id: str, limit: int = 5) -> List
                 return similar_docs[:limit]
 
             except Exception as e:
-                logger.error(f"Failed to find similar documents: {e}")
+                logger.error("Failed to find similar documents: %s", e)
                 raise
 
     # Run synchronous search in async context
@@ -1037,7 +1083,7 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
                 )
             )
 
-            logger.info(f"Creating document in Weaviate: {document.id}")
+            logger.info("Creating document in Weaviate: %s", document.id)
 
             return {
                 "success": True,
@@ -1046,5 +1092,5 @@ async def create_document(user_id: str, document: Any) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            logger.error(f"Failed to create document: {e}")
+            logger.error("Failed to create document: %s", e)
             raise

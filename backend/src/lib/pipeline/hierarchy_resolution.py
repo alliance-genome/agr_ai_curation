@@ -137,7 +137,7 @@ async def resolve_document_hierarchy(
     # Extract just the titles for the LLM call
     section_titles = [s["title"] for s in section_info_list]
 
-    logger.info(f"[HIERARCHY] Found {len(section_titles)} unique section titles. Calling LLM...")
+    logger.info('[HIERARCHY] Found %s unique section titles. Calling LLM...', len(section_titles))
 
     # 2. Call LLM to resolve hierarchy (pass section info with previews)
     hierarchy_result, abstract_section_title, raw_response = await _call_llm_for_hierarchy(section_info_list)
@@ -147,11 +147,11 @@ async def resolve_document_hierarchy(
         return elements, None
 
     # Log the resolved hierarchy
-    logger.info(f"[HIERARCHY] Resolved {len(hierarchy_result)} section classifications")
+    logger.info('[HIERARCHY] Resolved %s section classifications', len(hierarchy_result))
     for item in hierarchy_result[:5]:  # Log first 5
-        logger.info(f"  - '{item.header}' -> parent={item.parent_section}, subsection={item.subsection}, top_level={item.is_top_level}")
+        logger.info("  - '%s' -> parent=%s, subsection=%s, top_level=%s", item.header, item.parent_section, item.subsection, item.is_top_level)
     if len(hierarchy_result) > 5:
-        logger.info(f"  ... and {len(hierarchy_result) - 5} more")
+        logger.info('  ... and %s more', len(hierarchy_result) - 5)
 
     # 3. Build lookup map (normalized for matching by section_title)
     hierarchy_map: Dict[str, SectionItem] = {}
@@ -206,7 +206,7 @@ async def resolve_document_hierarchy(
 
             updated_count += 1
 
-    logger.info(f"[HIERARCHY] Applied hierarchy to {updated_count} elements.")
+    logger.info('[HIERARCHY] Applied hierarchy to %s elements.', updated_count)
 
     # 5. Build metadata for storage and tracing
     hierarchy_metadata = None
@@ -228,9 +228,9 @@ async def resolve_document_hierarchy(
             llm_raw_response=raw_response
         )
 
-        logger.info(f"[HIERARCHY] Top-level sections: {top_level_sections}")
+        logger.info('[HIERARCHY] Top-level sections: %s', top_level_sections)
         if abstract_section_title:
-            logger.info(f"[HIERARCHY] Abstract section: '{abstract_section_title}'")
+            logger.info("[HIERARCHY] Abstract section: '%s'", abstract_section_title)
 
     return elements, hierarchy_metadata
 
@@ -338,7 +338,7 @@ Common abstract locations when not explicitly labeled:
     try:
         model_name = os.getenv("HIERARCHY_LLM_MODEL", "gpt-5-mini")
         reasoning_effort = os.getenv("HIERARCHY_LLM_REASONING", "low")
-        logger.info(f"[HIERARCHY] Calling {model_name} (reasoning={reasoning_effort}) for hierarchy resolution...")
+        logger.info('[HIERARCHY] Calling %s (reasoning=%s) for hierarchy resolution...', model_name, reasoning_effort)
 
         # Build model settings with reasoning for GPT-5 models
         is_gpt5 = model_name.startswith("gpt-5")
@@ -380,14 +380,14 @@ Common abstract locations when not explicitly labeled:
         raw_response["sections_count"] = len(sections)
         raw_response["abstract_section_title"] = abstract_section_title
 
-        logger.info(f"[HIERARCHY] Successfully parsed {len(sections)} section items")
+        logger.info('[HIERARCHY] Successfully parsed %s section items', len(sections))
         if abstract_section_title:
-            logger.info(f"[HIERARCHY] LLM identified abstract in section: '{abstract_section_title}'")
+            logger.info("[HIERARCHY] LLM identified abstract in section: '%s'", abstract_section_title)
         else:
             logger.info("[HIERARCHY] LLM did not identify an abstract section")
 
         return sections, abstract_section_title, raw_response
 
     except Exception as e:
-        logger.error(f"[HIERARCHY] LLM hierarchy resolution failed: {e}", exc_info=True)
+        logger.error('[HIERARCHY] LLM hierarchy resolution failed: %s', e, exc_info=True)
         return [], None, None
