@@ -183,10 +183,10 @@ class TestEmailNotifierSendNotification:
         with patch("src.lib.feedback.email_notifier.logger") as mock_logger:
             notifier.send_feedback_notification(sample_feedback_report)
 
-            # Should log success
+            # Should log success (format string + args with %s pattern)
             mock_logger.info.assert_called()
-            log_message = mock_logger.info.call_args[0][0]
-            assert "feedback_123" in log_message
+            call_args = mock_logger.info.call_args[0]
+            assert "feedback_123" in str(call_args)
 
     def test_send_feedback_notification_logs_retries(
         self, mock_smtp, mock_config, sample_feedback_report
@@ -233,11 +233,11 @@ class TestEmailNotifierSendNotification:
             except Exception:
                 pass
 
-            # Should log error
+            # Should log error (format string + args with %s pattern)
             mock_logger.error.assert_called()
-            log_message = mock_logger.error.call_args[0][0]
-            assert "feedback_123" in log_message
-            assert "failed" in log_message.lower()
+            call_args = mock_logger.error.call_args[0]
+            assert "feedback_123" in str(call_args)
+            assert "failed" in call_args[0].lower()
 
     def test_send_feedback_notification_includes_langfuse_link(
         self, mock_smtp, mock_config, sample_feedback_report
