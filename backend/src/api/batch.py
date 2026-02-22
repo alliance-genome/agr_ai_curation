@@ -31,7 +31,7 @@ from ..schemas.batch import (
     BatchListResponse,
     BatchValidationResponse,
 )
-from ..services.user_service import set_global_user_from_cognito
+from ..services.user_service import principal_from_claims, provision_user
 
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ async def create_batch(
         404: If flow not found or not owned by user
         400: If flow is not batch-compatible
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
 
     # Verify flow exists and user owns it
     flow = db.query(CurationFlow).filter(
@@ -139,7 +139,7 @@ async def get_running_batch_count(
         - running_count: Number of batches in PENDING or RUNNING state
         - pending_documents: Number of documents remaining to process across all running batches
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
     return {
         "running_count": service.count_running_batches(db_user.id),
@@ -156,7 +156,7 @@ async def list_batches(
 
     Returns batches ordered by created_at descending (most recent first).
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
     batches = service.list_batches(db_user.id)
 
@@ -176,7 +176,7 @@ async def get_batch(
 
     Returns full batch information including per-document status.
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
     batch = service.get_batch(batch_id, db_user.id)
 
@@ -254,7 +254,7 @@ async def download_batch_zip(
     from pathlib import Path
     from ..models.sql.file_output import FileOutput
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
 
     batch = service.get_batch(batch_id, db_user.id)
@@ -400,7 +400,7 @@ async def stream_batch_progress(
     Returns:
         StreamingResponse with SSE events
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     user_id = db_user.id  # Capture user_id for use in generator
     service = BatchService(db)
 
@@ -577,7 +577,7 @@ async def cancel_batch(
         404: If batch not found or not owned by user
         400: If batch is not in a cancellable state
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
 
     try:
@@ -608,7 +608,7 @@ async def validate_flow_for_batch_endpoint(
 
     Returns validation result with any incompatibility errors.
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = provision_user(db, principal_from_claims(user))
 
     # Get flow from database
     flow = db.query(CurationFlow).filter(

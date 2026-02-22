@@ -21,5 +21,5 @@ class AlleleCurationEnvelope(StructuredMessageEnvelope):
     )
     species: Optional[List[str]] = Field(
         default=None,
-        description="Species/taxa mentioned (e.g., NCBITaxon:6239)"
+        description="Species/taxa mentioned (e.g., NCBITaxon:10090)"
     )

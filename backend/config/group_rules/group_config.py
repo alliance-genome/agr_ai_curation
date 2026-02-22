@@ -4,11 +4,11 @@ Group-specific rule loading and prompt injection.
 This module handles:
 1. Loading group rules from the prompt cache (pre-rendered from database)
 2. Formatting rules for prompt injection
-3. Mapping Cognito groups to default organization groups
+3. Mapping identity provider groups to default organization groups
 4. Injecting formatted rules into agent/tool prompts
 
 Usage:
-    from config.group_rules import inject_group_rules, get_groups_from_cognito
+    from config.group_rules import inject_group_rules, get_groups_from_provider_groups
 
     # Inject MGI-specific rules into allele agent
     instructions = inject_group_rules(
@@ -18,8 +18,8 @@ Usage:
         component_name="allele"
     )
 
-    # Get user's default groups from their Cognito groups
-    groups = get_groups_from_cognito(["mgi-curators", "developers"])
+    # Get user's default groups from identity provider groups
+    groups = get_groups_from_provider_groups(["mgi-curators", "developers"])
     # Returns: ["MGI"]
 """
 
@@ -36,25 +36,6 @@ logger = logging.getLogger(__name__)
 
 # Base path for group rules (same directory as this module)
 GROUP_RULES_PATH = Path(__file__).parent
-
-
-# DEPRECATED: This hardcoded mapping is no longer used.
-# Cognito-to-group mapping is now loaded from config/groups.yaml via groups_loader.
-# This dict is kept for backwards compatibility with any code that might reference it directly.
-# TODO: Remove in future version once all references are migrated.
-COGNITO_GROUP_TO_GROUP: Dict[str, List[str]] = {
-    # MOD-specific curator groups
-    "mgi-curators": ["MGI"],
-    "flybase-curators": ["FB"],
-    "wormbase-curators": ["WB"],
-    "zfin-curators": ["ZFIN"],
-    "rgd-curators": ["RGD"],
-    "sgd-curators": ["SGD"],
-    "hgnc-curators": ["HGNC"],
-    # Alliance-wide groups (no default group, user chooses)
-    "alliance-admins": [],
-    "developers": [],  # Dev users can set via DEV_USER_GROUPS env var
-}
 
 
 # Canonical group ID normalization
@@ -113,28 +94,36 @@ def normalize_group_id(group_id: str) -> str:
     return GROUP_ID_ALIASES.get(normalized, group_id.upper())
 
 
-def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
+def get_groups_from_provider_groups(provider_groups: List[str]) -> List[str]:
     """
-    Map Cognito group memberships to default organization group(s).
+    Map identity provider group memberships to default organization group(s).
 
     This function delegates to groups_loader which reads from config/groups.yaml.
-    The YAML file is the source of truth for Cognito-to-group mappings.
+    The YAML file is the source of truth for provider-group mappings.
 
     Args:
-        cognito_groups: List of Cognito group names user belongs to
+        provider_groups: List of identity provider group names user belongs to
 
     Returns:
         List of canonical group IDs to use as defaults
 
     Example:
-        >>> get_groups_from_cognito(["mgi-curators", "developers"])
+        >>> get_groups_from_provider_groups(["mgi-curators", "developers"])
         ["MGI"]
-        >>> get_groups_from_cognito(["alliance-admins"])
+        >>> get_groups_from_provider_groups(["alliance-admins"])
         []  # No default, user must choose
     """
-    from src.lib.config.groups_loader import get_groups_for_cognito_groups
+    from src.lib.config.groups_loader import get_groups_for_provider_groups
 
-    return get_groups_for_cognito_groups(cognito_groups)
+    return get_groups_for_provider_groups(provider_groups)
+
+
+def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
+    """Deprecated wrapper for backwards compatibility."""
+    logger.warning(
+        "get_groups_from_cognito() is deprecated; use get_groups_from_provider_groups()."
+    )
+    return get_groups_from_provider_groups(cognito_groups)
 
 
 def inject_group_rules(

@@ -330,6 +330,48 @@ def is_cognito_configured() -> bool:
     return bool(pool_id and client_id)
 
 
+def get_auth_provider() -> str:
+    """Get configured authentication provider type.
+
+    AUTH_PROVIDER is required and must be explicit to avoid deployment bias.
+    """
+    provider = os.getenv("AUTH_PROVIDER", "").strip().lower()
+    if not provider:
+        raise ValueError(
+            "AUTH_PROVIDER must be set explicitly (one of: cognito, oidc, dev)"
+        )
+    if provider not in {"cognito", "oidc", "dev"}:
+        raise ValueError(
+            f"Invalid AUTH_PROVIDER '{provider}'. Expected one of: cognito, oidc, dev"
+        )
+    return provider
+
+
+def is_auth_configured() -> bool:
+    """Check whether auth is configured for the selected provider."""
+    if is_dev_mode():
+        return True
+
+    try:
+        provider = get_auth_provider()
+    except ValueError as exc:
+        logger.error("Authentication configuration error: %s", exc)
+        return False
+
+    if provider == "dev":
+        logger.error("AUTH_PROVIDER=dev requires DEV_MODE=true")
+        return False
+    if provider == "cognito":
+        return is_cognito_configured()
+    if provider == "oidc":
+        return (
+            bool(os.getenv("OIDC_ISSUER_URL"))
+            and bool(os.getenv("OIDC_CLIENT_ID"))
+            and bool(os.getenv("OIDC_REDIRECT_URI"))
+        )
+    return False
+
+
 def is_running_on_ec2() -> bool:
     """Detect if application is running on an AWS EC2 instance.
 

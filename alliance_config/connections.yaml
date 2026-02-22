@@ -1,14 +1,14 @@
 # =============================================================================
-# ALLIANCE GENOME EXTERNAL CONNECTIONS
+# ALLIANCE GENOME EXTERNAL CONNECTIONS (DEPRECATED)
 # =============================================================================
-# Alliance-specific connection configuration for external services.
+# DEPRECATED: This file is no longer loaded at runtime.
+# The canonical connection configuration is at: config/connections.yaml
 #
-# During deployment, this file is copied to config/connections.yaml
+# This file is retained as a reference for the Alliance-specific deployment
+# template structure. All runtime connection settings should be configured
+# in config/connections.yaml using environment variable substitution.
 #
-# All sensitive values use environment variable substitution.
-# See .env.example for required environment variables.
-#
-# TODO: Migrate connection settings from existing codebase
+# See config/connections.yaml for the active configuration.
 # =============================================================================
 
 # -----------------------------------------------------------------------------

@@ -11,13 +11,18 @@ This test validates that the health endpoint:
 """
 
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 @pytest.fixture
 def client(monkeypatch):
     """Create test client with mocked dependencies."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "true")
+    monkeypatch.setenv("EMBEDDING_MODEL_TOKEN_LIMIT", "8191")
+    monkeypatch.setenv("EMBEDDING_TOKEN_SAFETY_MARGIN", "500")
+    monkeypatch.setenv("CONTENT_PREVIEW_CHARS", "1600")
     # Set Cognito env vars to test cognito_configured field
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_test123")
     monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id-12345")
@@ -33,9 +38,9 @@ def client(monkeypatch):
 @pytest.fixture
 def mock_weaviate_connection():
     """Mock WeaviateConnection for tests."""
-    # Patch get_connection since health.py uses get_connection() not WeaviateConnection directly
-    with patch("src.lib.weaviate_helpers.get_connection") as mock:
-        connection = AsyncMock()
+    # Patch module-local import target used by src.api.health.
+    with patch("src.api.health.get_connection") as mock:
+        connection = MagicMock()
         mock.return_value = connection
         yield connection
 
@@ -184,3 +189,51 @@ class TestAuthHealthEndpointFailureCases:
         # Verify it's a health failure, not auth failure
         data = response.json()
         assert "detail" in data  # Error format from existing implementation
+
+
+class TestAuthProviderConfigHelpers:
+    """Provider configuration helper tests (no API server required)."""
+
+    def test_is_auth_configured_for_cognito(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.setenv("AUTH_PROVIDER", "cognito")
+        monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_pool")
+        monkeypatch.setenv("COGNITO_CLIENT_ID", "client-id")
+        assert is_auth_configured() is True
+
+    def test_is_auth_configured_for_oidc(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example.org")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "oidc-client")
+        monkeypatch.setenv("OIDC_REDIRECT_URI", "http://localhost:3002/auth/callback")
+        assert is_auth_configured() is True
+
+    def test_is_auth_configured_for_oidc_requires_redirect_uri(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example.org")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "oidc-client")
+        monkeypatch.delenv("OIDC_REDIRECT_URI", raising=False)
+        assert is_auth_configured() is False
+
+    def test_is_auth_configured_returns_false_when_auth_provider_unset(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+        assert is_auth_configured() is False
+
+    def test_is_auth_configured_dev_provider_requires_dev_mode(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.setenv("AUTH_PROVIDER", "dev")
+        monkeypatch.setenv("DEV_MODE", "false")
+        assert is_auth_configured() is False

@@ -1,7 +1,8 @@
 """
-Tests for connections_loader.py health check functions.
+Tests for connections_loader.py health check functions and curation resolver.
 
-Tests the async health check functions for HTTP, Redis, and Postgres.
+Tests the async health check functions for HTTP, Redis, and Postgres,
+plus the CurationConnectionResolver credential resolution logic.
 """
 
 import pytest
@@ -20,6 +21,11 @@ from src.lib.config.connections_loader import (
     get_connection_status,
     load_connections,
     reset_cache,
+)
+from src.lib.database.curation_resolver import (
+    CurationConnectionResolver,
+    get_curation_resolver,
+    reset_curation_resolver,
 )
 
 
@@ -571,3 +577,160 @@ class TestSanitizeErrorMessage:
         assert password not in result
         assert "***" in result
         assert host in result
+
+
+class TestCurationResolver:
+    """Tests for CurationConnectionResolver credential resolution."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env_and_cache(self, monkeypatch):
+        """Ensure resolver tests are isolated from container-level credential config."""
+        monkeypatch.setenv("CURATION_DB_CREDENTIALS_SOURCE", "env")
+        monkeypatch.delenv("CURATION_DB_AWS_SECRET_ID", raising=False)
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        reset_cache()
+        reset_curation_resolver()
+        yield
+        reset_cache()
+        reset_curation_resolver()
+
+    def setup_method(self):
+        """Reset resolver singleton before each test."""
+        reset_cache()
+        reset_curation_resolver()
+
+    def teardown_method(self):
+        """Clean up resolver after each test."""
+        reset_cache()
+        reset_curation_resolver()
+
+    def test_resolver_returns_url_from_env(self, monkeypatch):
+        """Resolver should use CURATION_DB_URL env var as highest priority."""
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:5432/curation")
+        resolver = CurationConnectionResolver()
+
+        url = resolver.get_connection_url()
+
+        assert url == "postgresql://127.0.0.1:5432/curation"
+
+    def test_resolver_returns_none_when_not_configured(self, monkeypatch):
+        """Resolver should return None when no curation DB is configured."""
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+
+        resolver = CurationConnectionResolver()
+
+        url = resolver.get_connection_url()
+
+        assert url is None
+
+    def test_resolver_is_configured_true_when_url_set(self, monkeypatch):
+        """is_configured() should return True when CURATION_DB_URL is set."""
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:5432/curation")
+        resolver = CurationConnectionResolver()
+
+        assert resolver.is_configured() is True
+
+    def test_resolver_is_configured_false_when_not_set(self, monkeypatch):
+        """is_configured() should return False when no DB config exists."""
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        resolver = CurationConnectionResolver()
+
+        assert resolver.is_configured() is False
+
+    def test_resolver_ignores_legacy_persistent_store_vars(self, monkeypatch):
+        """Legacy PERSISTENT_STORE_DB_* vars should not be used implicitly."""
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        monkeypatch.setenv("PERSISTENT_STORE_DB_HOST", "dbhost")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PORT", "5433")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_NAME", "curation")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_USERNAME", "reader")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PASSWORD", "test_db_password")
+
+        resolver = CurationConnectionResolver()
+        url = resolver.get_connection_url()
+
+        assert url is None
+
+    def test_resolver_uses_curation_url_even_if_legacy_env_present(self, monkeypatch):
+        """CURATION_DB_URL remains explicit override even if legacy env vars are set."""
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:5432/curation")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_HOST", "otherhost")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PORT", "5433")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_NAME", "other")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_USERNAME", "user")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PASSWORD", "pass")
+
+        resolver = CurationConnectionResolver()
+        url = resolver.get_connection_url()
+
+        assert url == "postgresql://127.0.0.1:5432/curation"
+
+    def test_resolver_health_status_not_configured(self, monkeypatch):
+        """get_health_status() should report not_configured when DB is not set up."""
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        resolver = CurationConnectionResolver()
+
+        status = resolver.get_health_status()
+
+        assert status["status"] == "not_configured"
+
+    def test_resolver_get_db_client_returns_none_when_not_configured(self, monkeypatch):
+        """get_db_client() should return None when no URL is configured."""
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        resolver = CurationConnectionResolver()
+
+        client = resolver.get_db_client()
+
+        assert client is None
+
+    def test_resolver_reset_clears_state(self, monkeypatch):
+        """reset() should clear resolved URL and allow re-resolution."""
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:5432/curation")
+        resolver = CurationConnectionResolver()
+
+        url1 = resolver.get_connection_url()
+        assert url1 is not None
+
+        resolver.reset()
+        monkeypatch.delenv("CURATION_DB_URL")
+
+        url2 = resolver.get_connection_url()
+        assert url2 is None
+
+    def test_singleton_returns_same_instance(self):
+        """get_curation_resolver() should return the same instance."""
+        r1 = get_curation_resolver()
+        r2 = get_curation_resolver()
+
+        assert r1 is r2
+
+    def test_resolver_invalid_credentials_source_fails_fast(self, monkeypatch):
+        """Invalid curation_db credentials.source should raise a clear error."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        mock_conn = SimpleNamespace(
+            url="",
+            credentials=SimpleNamespace(source="invalid_source"),
+        )
+
+        with patch("src.lib.config.connections_loader.get_connection", return_value=mock_conn):
+            resolver = CurationConnectionResolver()
+            with pytest.raises(ValueError, match="Invalid curation_db credentials.source"):
+                resolver.get_connection_url()
+
+    def test_resolver_url_source_without_url_fails_fast(self, monkeypatch):
+        """credentials.source=url requires explicit services.curation_db.url value."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        mock_conn = SimpleNamespace(
+            url="",
+            credentials=SimpleNamespace(source="url"),
+        )
+
+        with patch("src.lib.config.connections_loader.get_connection", return_value=mock_conn):
+            resolver = CurationConnectionResolver()
+            with pytest.raises(ValueError, match="credentials.source is 'url'"):
+                resolver.get_connection_url()

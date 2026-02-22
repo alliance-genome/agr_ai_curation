@@ -13,7 +13,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
 from agents import function_tool
 
-from src.lib.database.agr_client import get_agr_db_client
+from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.identifier_validation import is_valid_curie
 from .search_helpers import (
     validate_search_symbol,
@@ -36,16 +36,58 @@ class AgrQueryResult(BaseModel):
     message: Optional[str] = None
 
 
-# Provider to taxon mapping
-PROVIDER_TO_TAXON = {
-    'WB': 'NCBITaxon:6239',      # C. elegans
-    'FB': 'NCBITaxon:7227',      # D. melanogaster
-    'MGI': 'NCBITaxon:10090',    # M. musculus
-    'RGD': 'NCBITaxon:10116',    # R. norvegicus
-    'ZFIN': 'NCBITaxon:7955',    # D. rerio
-    'SGD': 'NCBITaxon:559292',   # S. cerevisiae
-    'HGNC': 'NCBITaxon:9606',    # H. sapiens
-}
+# Provider to taxon mapping — loaded from config/providers.yaml
+def _load_provider_mappings():
+    """Load provider-to-taxon mappings from config/providers.yaml.
+
+    No hardcoded taxon fallback is used. Configuration must be provided via:
+    1) PROVIDERS_CONFIG_PATH (if set), or
+    2) <repo_root>/config/providers.yaml
+    """
+    from pathlib import Path
+    import yaml
+
+    # Strategy 1: explicit env var path
+    env_path = os.getenv("PROVIDERS_CONFIG_PATH")
+    if env_path:
+        config_path = Path(env_path)
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"PROVIDERS_CONFIG_PATH is set but file does not exist: {config_path}"
+            )
+    else:
+        # Strategy 2: default repo location derived from this file path
+        # backend/src/lib/openai_agents/tools/agr_curation.py -> repo root is parents[5]
+        config_path = Path(__file__).resolve().parents[5] / "config" / "providers.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(
+                "config/providers.yaml not found at expected path "
+                f"{config_path}. Set PROVIDERS_CONFIG_PATH to override."
+            )
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    providers = data.get("providers", {})
+    if not providers:
+        raise ValueError("config/providers.yaml is empty or missing 'providers' section")
+    mapping = {}
+    for abbr, info in providers.items():
+        taxon_id = info.get("taxon_id")
+        if not taxon_id:
+            raise ValueError(f"Provider '{abbr}' is missing required 'taxon_id'")
+        mapping[abbr] = taxon_id
+    logger.info("Loaded %d provider mappings from %s", len(mapping), config_path)
+    return mapping
+
+
+_PROVIDER_MAPPING_LOAD_ERROR: Optional[str] = None
+try:
+    PROVIDER_TO_TAXON = _load_provider_mappings()
+except Exception as exc:
+    # Degrade gracefully so unrelated app routes can still boot.
+    _PROVIDER_MAPPING_LOAD_ERROR = str(exc)
+    PROVIDER_TO_TAXON = {}
+    logger.error("Failed to load provider mappings: %s", exc)
 
 # Reverse mapping: taxon to MOD abbreviation
 TAXON_TO_PROVIDER = {v: k for k, v in PROVIDER_TO_TAXON.items()}
@@ -221,6 +263,28 @@ def _validation_warning(message: str) -> AgrQueryResult:
     return AgrQueryResult(status="validation_warning", message=message)
 
 
+def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
+    """Return an error response when method requires provider mappings but they are unavailable."""
+    methods_requiring_provider_map = {
+        "get_gene_by_exact_symbol",
+        "search_genes",
+        "get_allele_by_exact_symbol",
+        "search_alleles",
+    }
+    if method not in methods_requiring_provider_map:
+        return None
+    if PROVIDER_TO_TAXON:
+        return None
+
+    msg = (
+        "Provider mappings are unavailable. Ensure config/providers.yaml is present "
+        "or set PROVIDERS_CONFIG_PATH."
+    )
+    if _PROVIDER_MAPPING_LOAD_ERROR:
+        msg += f" Load error: {_PROVIDER_MAPPING_LOAD_ERROR}"
+    return _err(msg)
+
+
 @function_tool
 def agr_curation_query(
     method: str,
@@ -272,7 +336,15 @@ def agr_curation_query(
         AgrQueryResult with status='ok', 'error', or 'validation_warning'
     """
     try:
-        db = get_agr_db_client()
+        db = get_curation_resolver().get_db_client()
+        if db is None:
+            return AgrQueryResult(
+                status='error',
+                message='AGR Curation Database is not configured. This tool is unavailable.'
+            )
+        provider_mapping_error = _ensure_provider_mappings(method)
+        if provider_mapping_error:
+            return provider_mapping_error
         limit_value, warnings = _normalize_limit(limit)
 
         # Log query parameters for tracing

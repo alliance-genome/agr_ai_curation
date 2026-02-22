@@ -12,8 +12,10 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
+      - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=test-key
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
@@ -94,6 +96,7 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
+      - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
       - WEAVIATE_HOST=weaviate-test
@@ -121,6 +124,7 @@ services:
       dockerfile: backend/Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
+      - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
       - WEAVIATE_HOST=weaviate-test
@@ -146,6 +150,7 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
+      - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
       - WEAVIATE_HOST=weaviate-test

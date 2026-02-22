@@ -13,6 +13,7 @@ Tool Categories:
 
 import logging
 import os
+import inspect
 from typing import Any, Callable, Dict, List, Optional
 
 from agents import FunctionTool
@@ -39,16 +40,52 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
     Raises:
         ValueError: If the underlying function cannot be extracted
     """
-    try:
-        # The closure chain is:
-        # tool.on_invoke_tool -> _on_invoke_tool (closure[0]) -> _on_invoke_tool_impl
-        # _on_invoke_tool_impl has closure[1] = original function
-        impl_func = tool.on_invoke_tool.__closure__[0].cell_contents
-        original_func = impl_func.__closure__[1].cell_contents
-        if callable(original_func):
-            return original_func
-    except (AttributeError, IndexError, TypeError) as e:
-        logger.error('Failed to unwrap FunctionTool: %s', e)
+    seen: set[int] = set()
+    candidates: List[Callable] = []
+
+    def _walk(obj: Any, depth: int = 0) -> None:
+        if obj is None or depth > 4:
+            return
+        obj_id = id(obj)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+
+        if callable(obj):
+            candidates.append(obj)
+            closure = getattr(obj, "__closure__", None)
+            if closure:
+                for cell in closure:
+                    try:
+                        _walk(cell.cell_contents, depth + 1)
+                    except Exception:
+                        continue
+
+        for attr in ("func", "function", "_func", "_function", "handler", "on_invoke_tool"):
+            if hasattr(obj, attr):
+                try:
+                    _walk(getattr(obj, attr), depth + 1)
+                except Exception:
+                    continue
+
+    _walk(tool)
+
+    # Prefer exact name match (most stable signal across SDK versions).
+    for fn in candidates:
+        if getattr(fn, "__name__", "") == tool.name:
+            return fn
+
+    # Fall back to the first callable that is not the SDK invoke wrapper.
+    for fn in candidates:
+        name = getattr(fn, "__name__", "")
+        if "on_invoke_tool" in name:
+            continue
+        try:
+            params = list(inspect.signature(fn).parameters.keys())
+        except Exception:
+            params = []
+        if params != ["ctx", "input"]:
+            return fn
 
     raise ValueError(
         f"Could not extract underlying function from FunctionTool '{tool.name}'. "
@@ -287,7 +324,8 @@ Use data_provider to filter by species: MGI (mouse), FB (fly), WB (worm), ZFIN (
     # -------------------------------------------------------------------------
     # 2. Curation Database SQL Tool
     # -------------------------------------------------------------------------
-    curation_db_url = os.getenv("CURATION_DB_URL")
+    from src.lib.database.curation_resolver import get_curation_resolver
+    curation_db_url = get_curation_resolver().get_connection_url()
     if curation_db_url:
         registry.register(
             name="curation_db_sql",
