@@ -6,6 +6,7 @@
 # Key points:
 # - identity_provider.group_claim defines where group membership is stored in JWT
 # - provider_groups map external identity-provider groups to internal group IDs
+# - legacy key `cognito_groups` is no longer supported (use `provider_groups`)
 # =============================================================================
 
 identity_provider:

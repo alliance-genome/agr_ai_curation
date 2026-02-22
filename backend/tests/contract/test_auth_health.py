@@ -222,3 +222,18 @@ class TestAuthProviderConfigHelpers:
         monkeypatch.setenv("OIDC_CLIENT_ID", "oidc-client")
         monkeypatch.delenv("OIDC_REDIRECT_URI", raising=False)
         assert is_auth_configured() is False
+
+    def test_is_auth_configured_returns_false_when_auth_provider_unset(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+        assert is_auth_configured() is False
+
+    def test_is_auth_configured_dev_provider_requires_dev_mode(self, monkeypatch):
+        pytest.importorskip("dotenv")
+        from src.config import is_auth_configured
+
+        monkeypatch.setenv("AUTH_PROVIDER", "dev")
+        monkeypatch.setenv("DEV_MODE", "false")
+        assert is_auth_configured() is False

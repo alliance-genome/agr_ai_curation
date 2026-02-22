@@ -51,6 +51,6 @@ def create_auth_provider() -> AuthProvider:
         )
 
     if provider_type == "dev":
-        return DevAuthProvider()
+        raise ValueError("AUTH_PROVIDER=dev requires DEV_MODE=true")
 
     raise ValueError(f"Unknown AUTH_PROVIDER: {provider_type}")

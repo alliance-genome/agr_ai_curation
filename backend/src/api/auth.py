@@ -52,14 +52,17 @@ def _get_provider_or_503() -> AuthProvider:
                     logger.error("Failed to initialize auth provider: %s", exc)
 
     if _provider is None:
-        raise HTTPException(status_code=503, detail="Authentication not configured")
+        detail = "Authentication not configured"
+        if _provider_error:
+            detail = f"{detail}: {_provider_error}"
+        raise HTTPException(status_code=503, detail=detail)
     return _provider
 
 
 @router.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Initiate OAuth2 authorization code flow with PKCE."""
-    if not is_auth_configured() and not is_dev_mode():
+    if not is_auth_configured():
         raise HTTPException(status_code=503, detail="Authentication not configured")
 
     provider = _get_provider_or_503()

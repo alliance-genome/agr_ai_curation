@@ -352,7 +352,15 @@ def is_auth_configured() -> bool:
     if is_dev_mode():
         return True
 
-    provider = get_auth_provider()
+    try:
+        provider = get_auth_provider()
+    except ValueError as exc:
+        logger.error("Authentication configuration error: %s", exc)
+        return False
+
+    if provider == "dev":
+        logger.error("AUTH_PROVIDER=dev requires DEV_MODE=true")
+        return False
     if provider == "cognito":
         return is_cognito_configured()
     if provider == "oidc":

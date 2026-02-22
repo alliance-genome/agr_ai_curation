@@ -2,6 +2,8 @@
 
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from src.auth import factory as auth_factory
 from src.auth.providers.cognito_config import create_cognito_provider
 from src.auth.providers.oidc import OIDCAuthProvider
@@ -112,3 +114,12 @@ def test_cognito_provider_uses_logout_uri_param(monkeypatch):
     assert logout_url is not None
     params = parse_qs(urlparse(logout_url).query)
     assert params.get("logout_uri") == ["https://app.example.org/"]
+
+
+def test_factory_dev_provider_requires_dev_mode(monkeypatch):
+    """AUTH_PROVIDER=dev should fail fast unless DEV_MODE is enabled."""
+    monkeypatch.setenv("AUTH_PROVIDER", "dev")
+    monkeypatch.setattr(auth_factory, "is_dev_mode", lambda: False)
+
+    with pytest.raises(ValueError, match="requires DEV_MODE=true"):
+        auth_factory.create_auth_provider()

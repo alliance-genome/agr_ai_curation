@@ -35,6 +35,7 @@ class CurationConnectionResolver:
         self._db_client = None
         self._resolved = False
         self._lock = threading.Lock()
+        self._db_client_lock = threading.Lock()
 
     def _resolve(self) -> None:
         """Resolve the connection URL using the priority chain."""
@@ -51,10 +52,10 @@ class CurationConnectionResolver:
 
             if url:
                 # Log with redacted credentials
-                from src.lib.config.connections_loader import _redact_url_credentials
+                from src.lib.config.connections_loader import redact_url_credentials
                 logger.info(
                     "Curation DB connection resolved: %s",
-                    _redact_url_credentials(url),
+                    redact_url_credentials(url),
                 )
             else:
                 logger.info("Curation DB not configured — agents will operate without it")
@@ -176,39 +177,43 @@ class CurationConnectionResolver:
         if self._db_client is not None:
             return self._db_client
 
-        url = self.get_connection_url()
-        if not url:
-            return None
+        with self._db_client_lock:
+            if self._db_client is not None:
+                return self._db_client
 
-        try:
-            # Import here to avoid circular imports and handle missing package
-            import tempfile
-            if "TMP_PATH" not in os.environ:
-                os.environ["TMP_PATH"] = tempfile.mkdtemp()
+            url = self.get_connection_url()
+            if not url:
+                return None
 
-            from agr_curation_api.db_methods import DatabaseConfig, DatabaseMethods
-            from urllib.parse import urlparse
+            try:
+                # Import here to avoid circular imports and handle missing package
+                import tempfile
+                if "TMP_PATH" not in os.environ:
+                    os.environ["TMP_PATH"] = tempfile.mkdtemp()
 
-            parsed = urlparse(url)
-            config = DatabaseConfig()
-            config.username = parsed.username
-            config.password = parsed.password
-            config.database = parsed.path.lstrip("/")
-            config.host = parsed.hostname
-            config.port = str(parsed.port) if parsed.port else "5432"
+                from agr_curation_api.db_methods import DatabaseConfig, DatabaseMethods
+                from urllib.parse import urlparse
 
-            self._db_client = DatabaseMethods(config)
-            logger.info("Created curation DB client instance")
-            return self._db_client
+                parsed = urlparse(url)
+                config = DatabaseConfig()
+                config.username = parsed.username
+                config.password = parsed.password
+                config.database = parsed.path.lstrip("/")
+                config.host = parsed.hostname
+                config.port = str(parsed.port) if parsed.port else "5432"
 
-        except ImportError:
-            logger.warning(
-                "agr_curation_api package not installed — curation DB client unavailable"
-            )
-            return None
-        except Exception as e:
-            logger.error("Failed to create curation DB client: %s", e)
-            return None
+                self._db_client = DatabaseMethods(config)
+                logger.info("Created curation DB client instance")
+                return self._db_client
+
+            except ImportError:
+                logger.warning(
+                    "agr_curation_api package not installed — curation DB client unavailable"
+                )
+                return None
+            except Exception as e:
+                logger.error("Failed to create curation DB client: %s", e)
+                return None
 
     def is_configured(self) -> bool:
         """Whether curation DB connection is configured (not necessarily available)."""

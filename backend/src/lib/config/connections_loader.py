@@ -203,6 +203,11 @@ def _redact_url_credentials(url: str) -> str:
         return "[URL parsing failed - redacted for safety]"
 
 
+def redact_url_credentials(url: str) -> str:
+    """Public wrapper for URL credential redaction."""
+    return _redact_url_credentials(url)
+
+
 def sanitize_error_message(error: Optional[str], max_length: int = 500) -> Optional[str]:
     """Sanitize error messages for safe display on public endpoints.
 

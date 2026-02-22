@@ -14,7 +14,11 @@ LOGOUT_PATH = "/api/auth/logout"
 def client(monkeypatch):
     """Create test client with auth provider configured for deterministic tests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("AUTH_PROVIDER", "dev")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example.org")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "test-client")
+    monkeypatch.setenv("OIDC_REDIRECT_URI", "http://localhost:3002/auth/callback")
+    monkeypatch.setenv("OIDC_LOGOUT_URL", "https://issuer.example.org/logout")
     monkeypatch.delenv("DEV_MODE", raising=False)
     monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.setenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "true")
