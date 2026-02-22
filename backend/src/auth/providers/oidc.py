@@ -10,8 +10,9 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-from jose import JWTError, jwt
+import jwt
 from jwt import PyJWKClient
+from jwt.exceptions import PyJWTError
 
 from src.auth.base import AuthPrincipal, AuthProvider, TokenSet
 
@@ -38,6 +39,7 @@ class OIDCAuthProvider(AuthProvider):
         self._discovery: Optional[Dict[str, Any]] = None
         self._jwks_client: Optional[PyJWKClient] = None
         self._discovery_lock = threading.Lock()
+        self._jwks_client_lock = threading.Lock()
 
     def _discover(self) -> Dict[str, Any]:
         if self._discovery is not None:
@@ -61,12 +63,16 @@ class OIDCAuthProvider(AuthProvider):
         if self._jwks_client is not None:
             return self._jwks_client
 
-        discovery = self._discover()
-        jwks_uri = discovery.get("jwks_uri")
-        if not jwks_uri:
-            raise ValueError("OIDC discovery missing jwks_uri")
+        with self._jwks_client_lock:
+            if self._jwks_client is not None:
+                return self._jwks_client
 
-        self._jwks_client = PyJWKClient(jwks_uri)
+            discovery = self._discover()
+            jwks_uri = discovery.get("jwks_uri")
+            if not jwks_uri:
+                raise ValueError("OIDC discovery missing jwks_uri")
+
+            self._jwks_client = PyJWKClient(jwks_uri)
         return self._jwks_client
 
     def _extract_groups(self, claims: Dict[str, Any]) -> List[str]:
@@ -164,9 +170,8 @@ class OIDCAuthProvider(AuthProvider):
                 algorithms=["RS256"],
                 audience=self.client_id,
                 issuer=issuer,
-                options={"verify_at_hash": False},
             )
-        except JWTError as exc:
+        except PyJWTError as exc:
             logger.error("OIDC token validation failed: %s", exc)
             raise
 

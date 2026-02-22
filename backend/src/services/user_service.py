@@ -23,7 +23,7 @@ from src.lib.weaviate_helpers import get_connection, get_tenant_name
 logger = logging.getLogger(__name__)
 
 
-def provision_weaviate_tenants(cognito_sub: str) -> bool:
+def provision_weaviate_tenants(auth_sub: str) -> bool:
     """Create Weaviate tenants for new user in multi-tenant collections.
 
     Creates tenants in both:
@@ -31,17 +31,17 @@ def provision_weaviate_tenants(cognito_sub: str) -> bool:
     - PDFDocument collection (for document metadata)
 
     Args:
-        cognito_sub: Cognito user identifier (UUID from 'sub' claim)
+        auth_sub: Auth provider subject identifier (from token 'sub' claim)
 
     Returns:
         True if provisioning succeeded, False if it failed (caller should retry)
 
     Note:
         - Idempotent: Safe to call multiple times (Weaviate ignores duplicate tenants)
-        - Called automatically by set_global_user_from_cognito() on every login
+        - Called automatically by provision_user() on every login
         - Returns False on failure so caller can retry on next login
     """
-    tenant_name = get_tenant_name(cognito_sub)
+    tenant_name = get_tenant_name(auth_sub)
 
     try:
         connection = get_connection()
@@ -60,7 +60,7 @@ def provision_weaviate_tenants(cognito_sub: str) -> bool:
         return True
 
     except Exception as e:
-        logger.error('Failed to provision Weaviate tenants for %s: %s', cognito_sub, e)
+        logger.error('Failed to provision Weaviate tenants for %s: %s', auth_sub, e)
         # Return False to signal failure - caller will retry on next login
         return False
 
@@ -81,7 +81,7 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
     Behavior:
         - First login: Create user record + Weaviate tenants
         - Subsequent logins: Update last_login timestamp
-        - Email changes: Update email from Cognito profile
+        - Email changes: Update email from identity provider profile
 
     Requirements:
         - FR-005: Automatic user creation on first login
@@ -144,7 +144,7 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
     # Existing user - update metadata and retry tenant provisioning if needed
     needs_update = False
 
-    # Update email if changed in Cognito
+    # Update email if changed in identity provider
     if db_user.email != user_email:
         logger.info('Updating email for user %s: %s → %s', auth_sub, db_user.email, user_email)
         db_user.email = user_email

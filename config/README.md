@@ -68,6 +68,8 @@ Required fields:
 
 Note:
 - Legacy `cognito_groups` is no longer supported in `groups.yaml`.
+- `AUTH_PROVIDER` (environment variable) selects the active auth backend.
+- `identity_provider.*` in `groups.yaml` controls group-claim extraction metadata and should align with your token claims.
 
 The internal group ID key (for example, `FB`) is used to match group-specific rules in agent configurations (`config/agents/[agent]/group_rules/[group_id].yaml`).
 

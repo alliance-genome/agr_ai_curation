@@ -16,6 +16,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from fastapi.security import SecurityScopes
 from jose import JWTError
+from jwt.exceptions import PyJWTError
 from sqlalchemy.orm import Session
 
 from src.auth.base import AuthProvider
@@ -37,7 +38,11 @@ _provider_lock = threading.Lock()
 
 
 def _get_provider_or_503() -> AuthProvider:
-    """Get initialized auth provider or raise 503."""
+    """Get initialized auth provider or raise 503.
+
+    Initialization failures are cached for the current process lifetime.
+    After configuration changes, restart the process to retry initialization.
+    """
     global _provider, _provider_error, _provider_failed
 
     if _provider is None and not _provider_failed:
@@ -247,7 +252,7 @@ async def _get_user_from_cookie_impl(
         }
         payload = _with_group_claim_aliases(payload, principal.groups)
         return _build_mock_user(payload)
-    except JWTError as exc:
+    except (JWTError, PyJWTError) as exc:
         logger.error("Token validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     except Exception as exc:

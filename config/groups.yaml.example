@@ -4,7 +4,9 @@
 # Copy this file to groups.yaml and customize it for your deployment.
 #
 # Key points:
+# - AUTH_PROVIDER env var selects the active auth backend implementation
 # - identity_provider.group_claim defines where group membership is stored in JWT
+# - identity_provider.type/group_claim should align with the token claims your provider emits
 # - provider_groups map external identity-provider groups to internal group IDs
 # - legacy key `cognito_groups` is no longer supported (use `provider_groups`)
 # =============================================================================
