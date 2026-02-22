@@ -18,6 +18,7 @@ from src.auth.base import AuthPrincipal, AuthProvider, TokenSet
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_JWT_ALGORITHMS = ["RS256", "RS384", "ES256", "ES384"]
 
 
 class OIDCAuthProvider(AuthProvider):
@@ -167,7 +168,7 @@ class OIDCAuthProvider(AuthProvider):
                 jwt.decode,
                 token,
                 signing_key.key,
-                algorithms=["RS256"],
+                algorithms=DEFAULT_JWT_ALGORITHMS,
                 audience=self.client_id,
                 issuer=issuer,
             )

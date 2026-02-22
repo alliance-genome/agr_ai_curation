@@ -9,6 +9,7 @@ config/
 ├── README.md                    # This file
 ├── groups.yaml                  # Group/organization mappings (from .example)
 ├── connections.yaml             # External service connections (from .example)
+├── providers.yaml               # MOD provider-to-taxon mappings
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
 └── agents/                      # Agent definitions
@@ -89,6 +90,17 @@ databases:
 ```
 
 Supports environment variable substitution using `${VAR}` or `${VAR:-default}` syntax.
+
+### providers.yaml
+
+Defines MOD provider mappings used by tools that need provider-to-taxon resolution.
+
+```yaml
+providers:
+  WB:
+    taxon_id: "NCBITaxon:6239"
+    species: "Caenorhabditis elegans"
+```
 
 ### agents/
 

@@ -1577,6 +1577,20 @@ class TestConnectionsLoader:
         # Should use defaults from YAML
         assert "http://weaviate:8080" == weaviate.url
 
+    def test_curation_db_credentials_source_can_be_set_by_env(self, monkeypatch):
+        """CURATION_DB_CREDENTIALS_SOURCE should control curation_db.credentials.source."""
+        from src.lib.config.connections_loader import load_connections, get_connection
+
+        monkeypatch.setenv("CURATION_DB_CREDENTIALS_SOURCE", "aws_secrets")
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+        load_connections(connections_yaml, force_reload=True)
+
+        curation_db = get_connection("curation_db")
+        assert curation_db is not None
+        assert curation_db.credentials is not None
+        assert curation_db.credentials.source == "aws_secrets"
+
     def test_missing_connections_yaml_raises_error(self, tmp_path):
         """Missing connections.yaml should raise FileNotFoundError."""
         from src.lib.config.connections_loader import load_connections

@@ -50,7 +50,7 @@ def test_validate_token_uses_pyjwt_decode(monkeypatch):
     assert claims["sub"] == "user-123"
     assert captured["token"] == "id-token"
     assert captured["key"] == "fake-signing-key"
-    assert captured["algorithms"] == ["RS256"]
+    assert captured["algorithms"] == ["RS256", "RS384", "ES256", "ES384"]
     assert captured["audience"] == "oidc-client"
     assert captured["issuer"] == "https://issuer.example.org"
 
