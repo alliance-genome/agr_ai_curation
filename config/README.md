@@ -43,17 +43,33 @@ config/
 
 ### groups.yaml
 
-Maps authentication provider groups (e.g., AWS Cognito groups) to internal group IDs used by the system.
+Maps external identity-provider groups/roles to internal group IDs used by the system.
 
 ```yaml
+identity_provider:
+  type: "oidc"
+  group_claim: "groups"
+
 groups:
-  ExternalGroupName:
-    group_id: INTERNAL_ID
-    display_name: "Human Readable Name"
-    description: "Optional description"
+  FB:
+    name: "FlyBase"
+    description: "Drosophila melanogaster curation team"
+    species: "Drosophila melanogaster"
+    taxon: "NCBITaxon:7227"
+    provider_groups:
+      - "flybase-curators"
+      - "flybase-admins"
 ```
 
-The `group_id` value is used to match group-specific rules in agent configurations (`config/agents/[agent]/group_rules/[group_id].yaml`).
+Required fields:
+- `identity_provider.type` (e.g., `oidc`, `cognito`)
+- `identity_provider.group_claim` (JWT claim containing groups)
+- `groups.<GROUP_ID>.provider_groups` (list of external group names)
+
+Note:
+- Legacy `cognito_groups` is no longer supported in `groups.yaml`.
+
+The internal group ID key (for example, `FB`) is used to match group-specific rules in agent configurations (`config/agents/[agent]/group_rules/[group_id].yaml`).
 
 ### connections.yaml
 

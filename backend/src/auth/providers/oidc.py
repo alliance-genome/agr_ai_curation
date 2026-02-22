@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-import requests
 from jose import JWTError, jwt
 from jwt import PyJWKClient
 
@@ -49,7 +48,7 @@ class OIDCAuthProvider(AuthProvider):
                 return self._discovery
 
             discovery_url = f"{self.issuer_url}/.well-known/openid-configuration"
-            response = requests.get(discovery_url, timeout=self.timeout_seconds)
+            response = httpx.get(discovery_url, timeout=self.timeout_seconds)
             response.raise_for_status()
             self._discovery = response.json()
         return self._discovery
