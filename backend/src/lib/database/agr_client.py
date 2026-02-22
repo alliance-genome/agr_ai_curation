@@ -60,6 +60,16 @@ def close_agr_db_client():
 
 
 # Convenience functions for common queries
+def _require_agr_db_client():
+    """Get configured client or raise clear runtime error."""
+    db = get_agr_db_client()
+    if db is None:
+        raise RuntimeError(
+            "AGR curation DB is not configured. "
+            "Set CURATION_DB_URL or configure services.curation_db in config/connections.yaml."
+        )
+    return db
+
 
 def get_genes_for_species(taxon_id: str, limit: Optional[int] = None) -> list:
     """
@@ -72,7 +82,7 @@ def get_genes_for_species(taxon_id: str, limit: Optional[int] = None) -> list:
     Returns:
         List of Gene objects
     """
-    db = get_agr_db_client()
+    db = _require_agr_db_client()
     return db.get_genes_by_taxon(taxon_id, limit=limit)
 
 
@@ -86,7 +96,7 @@ def get_disease_annotations_for_species(taxon_id: str) -> list:
     Returns:
         List of dictionaries with disease annotation data
     """
-    db = get_agr_db_client()
+    db = _require_agr_db_client()
     return db.get_disease_annotations(taxon_id)
 
 
@@ -100,7 +110,7 @@ def get_expression_annotations_for_species(taxon_id: str) -> list:
     Returns:
         List of dictionaries with expression annotation data
     """
-    db = get_agr_db_client()
+    db = _require_agr_db_client()
     return db.get_expression_annotations(taxon_id)
 
 
@@ -112,5 +122,5 @@ def get_available_species() -> list:
         List of tuples: (species_abbreviation, taxon_id)
         Example: [('WB', 'NCBITaxon:XXXXX'), ('FB', 'NCBITaxon:YYYYY'), ...]
     """
-    db = get_agr_db_client()
+    db = _require_agr_db_client()
     return db.get_data_providers()

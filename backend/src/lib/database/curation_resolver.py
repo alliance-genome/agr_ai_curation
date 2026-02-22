@@ -101,8 +101,9 @@ class CurationConnectionResolver:
         source = conn.credentials.source
 
         if source == "url":
-            # URL should have been set in the connection config
-            return conn.url if conn.url else None
+            raise ValueError(
+                "curation_db credentials.source is 'url' but services.curation_db.url is empty"
+            )
 
         if source == "aws_secrets":
             return self._fetch_aws_credentials(conn.credentials)

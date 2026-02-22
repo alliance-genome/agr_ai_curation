@@ -7,10 +7,12 @@ import hashlib
 import logging
 import os
 import secrets
+import threading
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from fastapi.security import SecurityScopes
 from jose import JWTError
@@ -30,6 +32,7 @@ router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 _provider: Optional[AuthProvider] = None
 _provider_error: Optional[str] = None
+_provider_lock = threading.Lock()
 
 
 def _get_provider_or_503() -> AuthProvider:
@@ -37,14 +40,16 @@ def _get_provider_or_503() -> AuthProvider:
     global _provider, _provider_error
 
     if _provider is None:
-        try:
-            _provider = create_auth_provider()
-            _provider_error = None
-            logger.info("Auth provider initialized: %s", _provider.provider_name)
-        except Exception as exc:
-            _provider = None
-            _provider_error = str(exc)
-            logger.error("Failed to initialize auth provider: %s", exc)
+        with _provider_lock:
+            if _provider is None:
+                try:
+                    _provider = create_auth_provider()
+                    _provider_error = None
+                    logger.info("Auth provider initialized: %s", _provider.provider_name)
+                except Exception as exc:
+                    _provider = None
+                    _provider_error = str(exc)
+                    logger.error("Failed to initialize auth provider: %s", exc)
 
     if _provider is None:
         raise HTTPException(status_code=503, detail="Authentication not configured")
@@ -65,7 +70,9 @@ async def login(request: Request) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
 
     try:
-        authorize_url = provider.get_login_url(state, code_challenge, code_challenge_method="S256")
+        authorize_url = await run_in_threadpool(
+            provider.get_login_url, state, code_challenge, "S256"
+        )
     except Exception as exc:
         logger.error("Failed to build login URL: %s", exc)
         raise HTTPException(status_code=503, detail="Authentication provider unavailable")
@@ -276,7 +283,7 @@ async def logout(
     provider = _get_provider_or_503()
     redirect_uri = _build_logout_redirect_uri(request, provider)
 
-    logout_url = provider.get_logout_url(redirect_uri=redirect_uri)
+    logout_url = await run_in_threadpool(provider.get_logout_url, redirect_uri)
     return {
         "status": "logged_out",
         "message": "User session terminated successfully",

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
+import httpx
 import requests
 from jose import JWTError, jwt
 from jwt import PyJWKClient
@@ -35,16 +38,25 @@ class OIDCAuthProvider(AuthProvider):
 
         self._discovery: Optional[Dict[str, Any]] = None
         self._jwks_client: Optional[PyJWKClient] = None
+        self._discovery_lock = threading.Lock()
 
     def _discover(self) -> Dict[str, Any]:
         if self._discovery is not None:
             return self._discovery
 
-        discovery_url = f"{self.issuer_url}/.well-known/openid-configuration"
-        response = requests.get(discovery_url, timeout=self.timeout_seconds)
-        response.raise_for_status()
-        self._discovery = response.json()
+        with self._discovery_lock:
+            if self._discovery is not None:
+                return self._discovery
+
+            discovery_url = f"{self.issuer_url}/.well-known/openid-configuration"
+            response = requests.get(discovery_url, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            self._discovery = response.json()
         return self._discovery
+
+    async def _discover_async(self) -> Dict[str, Any]:
+        """Async wrapper to avoid blocking event loop on discovery HTTP call."""
+        return await asyncio.to_thread(self._discover)
 
     def _get_jwks_client(self) -> PyJWKClient:
         if self._jwks_client is not None:
@@ -99,7 +111,7 @@ class OIDCAuthProvider(AuthProvider):
         return f"{authorize_endpoint}?{urlencode(params)}"
 
     async def handle_callback(self, code: str, code_verifier: str) -> TokenSet:
-        discovery = self._discover()
+        discovery = await self._discover_async()
         token_endpoint = discovery.get("token_endpoint")
         if not token_endpoint:
             raise ValueError("OIDC discovery missing token_endpoint")
@@ -119,12 +131,12 @@ class OIDCAuthProvider(AuthProvider):
         else:
             data["client_id"] = self.client_id
 
-        response = requests.post(
-            token_endpoint,
-            data=data,
-            headers=headers,
-            timeout=self.timeout_seconds,
-        )
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                token_endpoint,
+                data=data,
+                headers=headers,
+            )
         response.raise_for_status()
         payload = response.json()
 
@@ -140,13 +152,14 @@ class OIDCAuthProvider(AuthProvider):
         )
 
     async def validate_token(self, token: str) -> Dict[str, Any]:
-        discovery = self._discover()
+        discovery = await self._discover_async()
         jwks_client = self._get_jwks_client()
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        signing_key = await asyncio.to_thread(jwks_client.get_signing_key_from_jwt, token)
 
         issuer = discovery.get("issuer", self.issuer_url)
         try:
-            decoded = jwt.decode(
+            decoded = await asyncio.to_thread(
+                jwt.decode,
                 token,
                 signing_key.key,
                 algorithms=["RS256"],

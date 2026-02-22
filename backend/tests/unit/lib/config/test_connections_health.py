@@ -719,3 +719,18 @@ class TestCurationResolver:
             resolver = CurationConnectionResolver()
             with pytest.raises(ValueError, match="Invalid curation_db credentials.source"):
                 resolver.get_connection_url()
+
+    def test_resolver_url_source_without_url_fails_fast(self, monkeypatch):
+        """credentials.source=url requires explicit services.curation_db.url value."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        mock_conn = SimpleNamespace(
+            url="",
+            credentials=SimpleNamespace(source="url"),
+        )
+
+        with patch("src.lib.config.connections_loader.get_connection", return_value=mock_conn):
+            resolver = CurationConnectionResolver()
+            with pytest.raises(ValueError, match="credentials.source is 'url'"):
+                resolver.get_connection_url()
