@@ -37,8 +37,9 @@ def create_disease_agent() -> Agent:
     config = get_agent_config("disease")
     log_agent_config("Disease Specialist", config)
 
-    # Use the Curation Database URL (same as other agents)
-    database_url = os.getenv("CURATION_DB_URL")
+    # Use the Curation Database URL via resolver (centralized config)
+    from src.lib.database.curation_resolver import get_curation_resolver
+    database_url = get_curation_resolver().get_connection_url()
 
     tools = []
     if database_url:

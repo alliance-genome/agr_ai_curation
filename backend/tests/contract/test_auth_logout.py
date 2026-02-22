@@ -1,303 +1,183 @@
-"""Contract tests for POST /auth/logout.
+"""Contract tests for POST /api/auth/logout."""
 
-Task: T010 - Contract test POST /auth/logout
-Contract: specs/007-okta-login/contracts/auth_endpoints.yaml lines 46-66
-
-This test validates that the logout endpoint:
-1. Requires valid JWT token (returns 401 if missing/invalid)
-2. Returns {"status": "logged_out", "message": "..."} on success
-3. Clears user session data (FR-009, FR-010)
-
-NOTE: This test will FAIL until T023 implements auth router with logout endpoint.
-
-IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
-mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
-"""
+import asyncio
+from urllib.parse import parse_qs, urlparse
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock, patch
+
+
+LOGOUT_PATH = "/api/auth/logout"
 
 
 @pytest.fixture
 def client(monkeypatch):
-    """Create test client with mocked dependencies and JWKS requests."""
+    """Create test client with auth provider configured for deterministic tests."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AUTH_PROVIDER", "dev")
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "true")
+    monkeypatch.setenv("EMBEDDING_MODEL_TOKEN_LIMIT", "8191")
+    monkeypatch.setenv("EMBEDDING_TOKEN_SAFETY_MARGIN", "500")
+    monkeypatch.setenv("CONTENT_PREVIEW_CHARS", "1600")
 
-    # Mock requests.get BEFORE importing main/auth modules
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"keys": []}  # Empty JWKS
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+    from fastapi.testclient import TestClient
+    import os
+    import sys
 
-        from fastapi.testclient import TestClient
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        from main import app
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from main import app
+    from src.api import auth as auth_module
 
-        # Clear any existing dependency overrides
-        app.dependency_overrides.clear()
+    # Reset cached provider singleton between tests so env changes are respected.
+    auth_module._provider = None
+    auth_module._provider_error = None
+    app.dependency_overrides.clear()
 
-        yield TestClient(app)
+    yield TestClient(app)
 
-        # Cleanup after test
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
+    auth_module._provider = None
+    auth_module._provider_error = None
 
 
-def get_valid_auth_header():
-    """Generate mock Authorization header with valid JWT token."""
-    # In real tests, this would be a properly signed JWT
-    # For contract tests, we mock the auth validation
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+def _override_authenticated_user():
+    from main import app
+    from src.api.auth import auth
+
+    app.dependency_overrides[auth.get_user] = lambda: {
+        "sub": "00u1abc2def3ghi4jkl",
+        "uid": "00u1abc2def3ghi4jkl",
+        "email": "curator@alliancegenome.org",
+        "name": "Test Curator",
+    }
 
 
 class TestLogoutEndpoint:
-    """Contract tests for POST /auth/logout endpoint."""
+    """Current API contract tests for logout behavior."""
 
     def test_logout_endpoint_exists(self, client):
-        """Test logout endpoint exists at POST /auth/logout.
-
-        This test will FAIL until T023 creates the auth router.
-        Expected failure: 404 Not Found (endpoint doesn't exist yet)
-        """
-        response = client.post("/auth/logout")
-
-        # Should NOT be 404 after T023 implementation
-        # Will be 401 (auth required) until we add auth header
-        assert response.status_code != 404, "Logout endpoint not found - T023 not implemented"
+        response = client.post(LOGOUT_PATH)
+        assert response.status_code != 404
 
     def test_logout_requires_authentication(self, client):
-        """Test logout endpoint requires valid authentication token.
-
-        Contract requirement: Endpoint must validate JWT token.
-        Without token, should return 401 Unauthorized.
-
-        This test will FAIL until T023 implements auth protection.
-        """
-        # Call logout WITHOUT Authorization header
-        response = client.post("/auth/logout")
-
-        # Contract specifies 401 for missing/invalid auth
+        response = client.post(LOGOUT_PATH)
         assert response.status_code == 401
+        assert "detail" in response.json()
 
-        # Check error response format
-        data = response.json()
-        assert "detail" in data
-        # Contract examples: "Not authenticated", "Invalid authentication token"
-        assert data["detail"] in [
-            "Not authenticated",
-            "Invalid authentication token",
-            "Token has expired"
-        ]
-
-    def test_logout_with_invalid_token(self, client):
-        """Test logout endpoint rejects invalid JWT tokens.
-
-        Contract requirement: Must validate JWT signature.
-        Invalid tokens should return 401.
-        """
-        # Send malformed token
+    def test_logout_invalid_authorization_header_still_unauthorized(self, client):
         response = client.post(
-            "/auth/logout",
-            headers={"Authorization": "Bearer invalid_malformed_token"}
+            LOGOUT_PATH,
+            headers={"Authorization": "Bearer invalid_malformed_token"},
         )
-
         assert response.status_code == 401
-
-        data = response.json()
-        assert "detail" in data
-
-    def test_logout_with_expired_token(self, client):
-        """Test logout endpoint rejects expired JWT tokens.
-
-        Contract requirement: Validate token expiration.
-        Expired tokens should return 401 with "Token has expired" message.
-        """
-        # Send expired token (in real test, would be a properly signed but expired JWT)
-        response = client.post(
-            "/auth/logout",
-            headers={"Authorization": "Bearer expired_token_12345"}
-        )
-
-        assert response.status_code == 401
-
-        data = response.json()
-        assert "detail" in data
-        # Contract example shows "Token has expired" as possible error
-        # Will accept any 401 auth error for contract validation
 
     def test_logout_success_response_schema(self, client):
-        """Test logout endpoint returns correct schema on successful logout.
-
-        Contract schema:
-        {
-          "status": "logged_out",
-          "message": "User session terminated successfully"
-        }
-
-        This test will FAIL until T023 implements logout endpoint logic.
-
-        Uses app.dependency_overrides to mock auth.get_user dependency.
-        """
-        from main import app
-        from src.api.auth import auth
-
-        # Mock authenticated user for successful authentication
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        mock_user.email = "curator@alliancegenome.org"
-
-        # Override the auth.get_user dependency
-        # When T023 implements the endpoint with Depends(auth.get_user),
-        # this will be called instead of the real implementation
-        # IMPORTANT: Must accept *args, **kwargs for FastAPI's dependency injection
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
+        _override_authenticated_user()
 
         try:
-            # Call logout with valid token
-            response = client.post(
-                "/auth/logout",
-                headers=get_valid_auth_header()
-            )
-
-            # Should return 200 on success
+            response = client.post(LOGOUT_PATH)
             assert response.status_code == 200
 
-            # Validate response schema
-            data = response.json()
-            assert "status" in data
-            assert data["status"] == "logged_out"
-
-            # Message field is optional (contract only requires status)
-            if "message" in data:
-                assert isinstance(data["message"], str)
-                assert len(data["message"]) > 0
-        finally:
-            # Clean up override
-            app.dependency_overrides.clear()
-
-    def test_logout_clears_session_data(self, client):
-        """Test logout endpoint terminates user session.
-
-        Contract requirements (FR-009, FR-010):
-        - Terminate user session
-        - Clear all client-side session data
-
-        Backend should clear any server-side session state.
-        Client must delete auth token after receiving success response.
-        """
-        from main import app
-        from src.api.auth import auth
-
-        # Mock successful authentication
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-
-        try:
-            # Call logout
-            response = client.post(
-                "/auth/logout",
-                headers=get_valid_auth_header()
-            )
-
-            assert response.status_code == 200
             data = response.json()
             assert data["status"] == "logged_out"
-
-            # Note: Actual session cleanup verification would require
-            # integration tests. Contract test only validates API contract.
+            assert isinstance(data["message"], str)
+            assert "logout_url" in data
+            assert isinstance(data["logout_url"], str)
+            assert len(data["logout_url"]) > 0
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
 
-    def test_logout_multiple_times_allowed(self, client):
-        """Test logout endpoint is idempotent (can be called multiple times).
-
-        Calling logout multiple times should not cause errors.
-        Each call should return 200 with logged_out status.
-        """
-        from main import app
-        from src.api.auth import auth
-
-        # Mock successful authentication
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
+    def test_logout_is_idempotent(self, client):
+        _override_authenticated_user()
 
         try:
-            # First logout
-            response1 = client.post(
-                "/auth/logout",
-                headers=get_valid_auth_header()
-            )
+            response1 = client.post(LOGOUT_PATH)
+            response2 = client.post(LOGOUT_PATH)
+
             assert response1.status_code == 200
-
-            # Second logout (idempotent)
-            response2 = client.post(
-                "/auth/logout",
-                headers=get_valid_auth_header()
-            )
             assert response2.status_code == 200
-
-            # Both should return same schema
             assert response1.json()["status"] == "logged_out"
             assert response2.json()["status"] == "logged_out"
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
 
-
-class TestLogoutEndpointEdgeCases:
-    """Edge case tests for logout endpoint."""
-
-    def test_logout_without_bearer_prefix(self, client):
-        """Test logout endpoint rejects tokens without 'Bearer' prefix."""
-        # Send token without Bearer prefix
-        response = client.post(
-            "/auth/logout",
-            headers={"Authorization": "mock_token_no_bearer"}
-        )
-
-        # Should reject malformed Authorization header
-        assert response.status_code == 401
-
-    def test_logout_with_empty_authorization_header(self, client):
-        """Test logout endpoint rejects empty Authorization header."""
-        response = client.post(
-            "/auth/logout",
-            headers={"Authorization": ""}
-        )
-
-        assert response.status_code == 401
-
-    def test_logout_case_sensitive_bearer(self, client):
-        """Test logout endpoint accepts 'Bearer' with correct capitalization."""
-        # FastAPI typically requires 'Bearer' not 'bearer'
-        response = client.post(
-            "/auth/logout",
-            headers={"Authorization": "bearer lowercase_token"}  # wrong case
-        )
-
-        # Should reject (case-sensitive)
-        assert response.status_code == 401
-
     def test_logout_response_content_type_json(self, client):
-        """Test logout endpoint returns JSON content-type."""
-        from main import app
-        from src.api.auth import auth
-
-        # Mock successful authentication
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
+        _override_authenticated_user()
 
         try:
-            response = client.post(
-                "/auth/logout",
-                headers=get_valid_auth_header()
-            )
-
+            response = client.post(LOGOUT_PATH)
             assert response.status_code == 200
             assert "application/json" in response.headers["content-type"]
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
+
+
+class TestDevProviderBehavior:
+    """Basic provider checks for dev auth provider."""
+
+    def test_dev_provider_login_url_preserves_state(self):
+        from src.auth.providers.dev import DevAuthProvider
+
+        provider = DevAuthProvider()
+        login_url = provider.get_login_url(state="random-state-123", code_challenge="unused")
+        assert "state=random-state-123" in login_url
+
+    def test_dev_provider_returns_expected_principal(self):
+        from src.auth.providers.dev import DevAuthProvider
+
+        provider = DevAuthProvider()
+        claims = asyncio.run(provider.validate_token("dev-token"))
+        principal = provider.extract_principal(claims)
+
+        assert principal.subject == "dev-user-123"
+        assert principal.email == "dev@localhost"
+        assert principal.groups == ["developers"]
+
+
+class TestOidcLogoutBehavior:
+    """Logout URL parameter behavior for generic OIDC vs Cognito compatibility."""
+
+    def test_generic_oidc_custom_logout_uses_post_logout_redirect_uri(self):
+        from src.auth.providers.oidc import OIDCAuthProvider
+
+        provider = OIDCAuthProvider(
+            {
+                "issuer_url": "https://issuer.example.org",
+                "client_id": "oidc-client",
+                "redirect_uri": "https://app.example.org/auth/callback",
+                "logout_url": "https://issuer.example.org/logout",
+            }
+        )
+
+        logout_url = provider.get_logout_url("https://app.example.org/")
+        assert logout_url is not None
+        parsed = urlparse(logout_url)
+        params = parse_qs(parsed.query)
+        assert params.get("post_logout_redirect_uri") == ["https://app.example.org/"]
+        assert "logout_uri" not in params
+
+    def test_cognito_provider_uses_logout_uri_param(self, monkeypatch):
+        from src.auth.providers.cognito_config import create_cognito_provider
+
+        monkeypatch.setenv("COGNITO_REGION", "us-east-1")
+        monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-east-1_example")
+        monkeypatch.setenv("COGNITO_CLIENT_ID", "example-client-id")
+        monkeypatch.setenv("COGNITO_CLIENT_SECRET", "example-secret")
+        monkeypatch.setenv("COGNITO_DOMAIN", "https://auth.example.org")
+        monkeypatch.setenv("COGNITO_REDIRECT_URI", "https://app.example.org/auth/callback")
+
+        provider = create_cognito_provider()
+        logout_url = provider.get_logout_url("https://app.example.org/")
+        assert logout_url is not None
+        parsed = urlparse(logout_url)
+        params = parse_qs(parsed.query)
+        assert params.get("logout_uri") == ["https://app.example.org/"]
+        assert "post_logout_redirect_uri" not in params

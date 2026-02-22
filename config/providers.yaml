@@ -1,0 +1,44 @@
+# =============================================================================
+# MOD PROVIDER CONFIGURATION
+# =============================================================================
+# Maps MOD abbreviations to NCBI Taxon IDs and species names.
+# Add or remove providers here when deploying for different MODs.
+#
+# Used by: agr_curation_query tool (PROVIDER_TO_TAXON mapping)
+# =============================================================================
+
+providers:
+  WB:
+    taxon_id: "NCBITaxon:6239"
+    species: "Caenorhabditis elegans"
+    name: "WormBase"
+
+  FB:
+    taxon_id: "NCBITaxon:7227"
+    species: "Drosophila melanogaster"
+    name: "FlyBase"
+
+  MGI:
+    taxon_id: "NCBITaxon:10090"
+    species: "Mus musculus"
+    name: "Mouse Genome Informatics"
+
+  RGD:
+    taxon_id: "NCBITaxon:10116"
+    species: "Rattus norvegicus"
+    name: "Rat Genome Database"
+
+  ZFIN:
+    taxon_id: "NCBITaxon:7955"
+    species: "Danio rerio"
+    name: "Zebrafish Information Network"
+
+  SGD:
+    taxon_id: "NCBITaxon:559292"
+    species: "Saccharomyces cerevisiae"
+    name: "Saccharomyces Genome Database"
+
+  HGNC:
+    taxon_id: "NCBITaxon:9606"
+    species: "Homo sapiens"
+    name: "HUGO Gene Nomenclature Committee"

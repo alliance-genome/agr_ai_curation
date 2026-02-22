@@ -12,8 +12,12 @@
 #   - description: Brief description of the group
 #   - species: Primary model organism (optional)
 #   - taxon: NCBI Taxon ID (optional)
-#   - cognito_groups: List of Cognito groups that map to this group ID
+#   - provider_groups: List of identity provider groups that map to this group ID
 # =============================================================================
+
+identity_provider:
+  type: "cognito"
+  group_claim: "cognito:groups"
 
 groups:
   # ---------------------------------------------------------------------------
@@ -24,7 +28,7 @@ groups:
     description: "Drosophila melanogaster curation team"
     species: "Drosophila melanogaster"
     taxon: "NCBITaxon:7227"
-    cognito_groups:
+    provider_groups:
       - "flybase-curators"
       - "flybase-admins"
 
@@ -36,7 +40,7 @@ groups:
     description: "C. elegans curation team"
     species: "Caenorhabditis elegans"
     taxon: "NCBITaxon:6239"
-    cognito_groups:
+    provider_groups:
       - "wormbase-curators"
       - "wormbase-admins"
 
@@ -48,7 +52,7 @@ groups:
     description: "Mus musculus curation team"
     species: "Mus musculus"
     taxon: "NCBITaxon:10090"
-    cognito_groups:
+    provider_groups:
       - "mgi-curators"
       - "mgi-admins"
 
@@ -60,7 +64,7 @@ groups:
     description: "Danio rerio curation team"
     species: "Danio rerio"
     taxon: "NCBITaxon:7955"
-    cognito_groups:
+    provider_groups:
       - "zfin-curators"
       - "zfin-admins"
 
@@ -72,7 +76,7 @@ groups:
     description: "Rattus norvegicus curation team"
     species: "Rattus norvegicus"
     taxon: "NCBITaxon:10116"
-    cognito_groups:
+    provider_groups:
       - "rgd-curators"
       - "rgd-admins"
 
@@ -84,7 +88,7 @@ groups:
     description: "Saccharomyces cerevisiae curation team"
     species: "Saccharomyces cerevisiae"
     taxon: "NCBITaxon:559292"
-    cognito_groups:
+    provider_groups:
       - "sgd-curators"
       - "sgd-admins"
 
@@ -96,6 +100,6 @@ groups:
     description: "Homo sapiens gene nomenclature"
     species: "Homo sapiens"
     taxon: "NCBITaxon:9606"
-    cognito_groups:
+    provider_groups:
       - "hgnc-curators"
       - "hgnc-admins"

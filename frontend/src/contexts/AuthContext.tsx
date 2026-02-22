@@ -2,12 +2,9 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { logger } from '../services/logger';
 import { getEnvFlag } from '../utils/env';
 
-/**
- * User data from AWS Cognito token
- * Maps to User schema from backend - auth_sub column stores Cognito sub claim
- */
+/** User data resolved from backend auth session. */
 export interface AuthUser {
-  uid: string;           // User ID from Cognito 'sub' claim
+  uid: string;           // User ID from auth subject claim
   email?: string;        // Email address (nullable per contract)
   name?: string;         // Display name (mapped from display_name, nullable per contract)
 }
@@ -35,24 +32,17 @@ interface AuthProviderProps {
 const isDevMode = (): boolean => getEnvFlag(['VITE_DEV_MODE', 'REACT_APP_DEV_MODE', 'DEV_MODE'], false);
 
 /**
- * AuthProvider: Manages authentication state using AWS Cognito OAuth2 flow with httpOnly cookies
+ * AuthProvider: Manages authentication state via backend OAuth session and httpOnly cookies.
  *
  * Design:
- * - Tokens stored in httpOnly cookies (set by backend on /auth/callback)
  * - No client-side token storage (XSS protection)
  * - Auth state fetched from /users/me endpoint
- * - Login redirects to backend /auth/login (which redirects to Cognito Hosted UI)
- * - Logout calls /auth/logout endpoint and redirects to login
+ * - Login redirects to backend /auth/login
+ * - Logout calls /auth/logout endpoint
  *
  * DEV MODE:
  * - When REACT_APP_DEV_MODE=true, bypasses authentication checks
  * - Returns mock user without calling backend
- * - Allows local development without Cognito configuration
- *
- * NOTE: Backend handles complete OAuth2 flow - no client-side SDK needed
- * - Backend manages Authorization Code flow with PKCE
- * - Security maintained: httpOnly cookies + PKCE + CSRF protection via state parameter
- * - Token refresh handled automatically by backend
  */
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // DEV MODE BYPASS: Auto-authenticate with mock user
@@ -88,7 +78,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (response.ok) {
         const userData = await response.json();
-        // Use auth_sub (Cognito 'sub' claim) as the unique user identifier
+        // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
 
         // Check if this is a different user than the one whose data might be in localStorage
@@ -234,9 +224,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   /**
-   * Login: Redirect to backend auth endpoint
-   * Backend will redirect to Cognito Hosted UI, then redirect back to /auth/callback
-   * /auth/callback sets httpOnly cookie and redirects to app
+   * Login: Redirect to backend auth endpoint.
    */
   const login = (): void => {
     logger.info('Redirecting to login', {
@@ -244,14 +232,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       action: 'login',
     });
 
-    // Redirect to backend login endpoint
-    // Backend will handle Cognito OAuth2 redirect flow
+    // Redirect to backend login endpoint; backend handles provider-specific flow.
     window.location.href = '/api/auth/login';
   };
 
   /**
-   * Logout: Call backend logout endpoint to clear httpOnly cookie
-   * Then redirect to Cognito logout endpoint to clear provider session
+   * Logout: Call backend logout endpoint to clear httpOnly cookie.
    */
   const logout = async (): Promise<void> => {
     try {
@@ -287,7 +273,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       localStorage.removeItem('chat-active-document');
       localStorage.removeItem('chat-user-id');
 
-      // Set flag to prevent auto-login after Cognito redirects back
+      // Set flag to prevent immediate auto-login loops after provider redirect.
       sessionStorage.setItem('justLoggedOut', 'true');
 
       logger.info('Logout successful', {
@@ -295,7 +281,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         action: 'logout',
       });
 
-      // Redirect to Cognito logout endpoint if provided, otherwise go to home
+      // Redirect to provider logout endpoint if provided, otherwise go to home.
       if (data.logout_url) {
         window.location.href = data.logout_url;
       } else {

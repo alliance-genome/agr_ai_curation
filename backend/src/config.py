@@ -330,6 +330,27 @@ def is_cognito_configured() -> bool:
     return bool(pool_id and client_id)
 
 
+def get_auth_provider() -> str:
+    """Get configured authentication provider type."""
+    return os.getenv("AUTH_PROVIDER", "cognito").strip().lower()
+
+
+def is_auth_configured() -> bool:
+    """Check whether auth is configured for the selected provider."""
+    provider = get_auth_provider()
+    if provider == "dev":
+        return True
+    if provider == "cognito":
+        return is_cognito_configured()
+    if provider == "oidc":
+        return (
+            bool(os.getenv("OIDC_ISSUER_URL"))
+            and bool(os.getenv("OIDC_CLIENT_ID"))
+            and bool(os.getenv("OIDC_REDIRECT_URI"))
+        )
+    return False
+
+
 def is_running_on_ec2() -> bool:
     """Detect if application is running on an AWS EC2 instance.
 

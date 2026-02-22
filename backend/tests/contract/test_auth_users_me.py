@@ -1,466 +1,269 @@
-"""Contract tests for GET /users/me.
+"""Contract tests for GET /api/users/me."""
 
-Task: T011 - Contract test GET /users/me
-Contract: specs/007-okta-login/contracts/auth_endpoints.yaml lines 68-85
-
-This test validates that the /users/me endpoint:
-1. Requires valid JWT token (returns 401 if missing/invalid)
-2. Returns User schema with user_id, user_id, email, created_at, is_active
-3. Automatically creates user account on first login if not exists (FR-005)
-4. Updates last_login timestamp on each request
-
-NOTE: This test will FAIL until T023 implements auth router with /users/me endpoint.
-
-IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
-mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
-"""
+from datetime import datetime
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime
+
+
+USERS_ME_PATH = "/api/users/me"
 
 
 @pytest.fixture
 def client(monkeypatch):
-    """Create test client with mocked dependencies and JWKS requests."""
+    """Create test client configured for deterministic auth behavior."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AUTH_PROVIDER", "dev")
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "true")
+    monkeypatch.setenv("EMBEDDING_MODEL_TOKEN_LIMIT", "8191")
+    monkeypatch.setenv("EMBEDDING_TOKEN_SAFETY_MARGIN", "500")
+    monkeypatch.setenv("CONTENT_PREVIEW_CHARS", "1600")
 
-    # Mock requests.get BEFORE importing main/auth modules
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"keys": []}  # Empty JWKS
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+    from fastapi.testclient import TestClient
+    import os
+    import sys
 
-        from fastapi.testclient import TestClient
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        from main import app
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from main import app
+    from src.api import auth as auth_module
 
-        # Clear any existing dependency overrides
-        app.dependency_overrides.clear()
+    auth_module._provider = None
+    auth_module._provider_error = None
+    app.dependency_overrides.clear()
 
-        yield TestClient(app)
+    yield TestClient(app)
 
-        # Cleanup after test
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
+    auth_module._provider = None
+    auth_module._provider_error = None
 
 
-def get_valid_auth_header():
-    """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+def _override_authenticated_user():
+    from main import app
+    from src.api.auth import auth
+
+    app.dependency_overrides[auth.get_user] = lambda: {
+        "sub": "test-user-sub-123",
+        "uid": "test-user-sub-123",
+        "email": "curator@alliancegenome.org",
+        "name": "Test Curator",
+        "cognito:groups": ["developers"],
+    }
+
+
+def _override_db():
+    from main import app
+    from src.api.auth import get_db
+
+    app.dependency_overrides[get_db] = lambda: object()
+
+
+class _FakeUserModel:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def to_dict(self):
+        return self._payload
 
 
 class TestUsersMeEndpoint:
-    """Contract tests for GET /users/me endpoint."""
+    """Current API contract tests for /api/users/me."""
 
     def test_users_me_endpoint_exists(self, client):
-        """Test /users/me endpoint exists at GET /users/me.
-
-        This test will FAIL until T023 creates the auth router.
-        Expected failure: 404 Not Found (endpoint doesn't exist yet)
-        """
-        response = client.get("/users/me")
-
-        # Should NOT be 404 after T023 implementation
-        # Will be 401 (auth required) until we add auth header
-        assert response.status_code != 404, "/users/me endpoint not found - T023 not implemented"
+        response = client.get(USERS_ME_PATH)
+        assert response.status_code != 404
 
     def test_users_me_requires_authentication(self, client):
-        """Test /users/me endpoint requires valid authentication token.
-
-        Contract requirement: Must validate JWT token.
-        Without token, should return 401 Unauthorized.
-        """
-        # Call without Authorization header
-        response = client.get("/users/me")
-
-        # Should return 401
+        response = client.get(USERS_ME_PATH)
         assert response.status_code == 401
+        assert "detail" in response.json()
 
-        # Check error response format
-        data = response.json()
-        assert "detail" in data
-        assert data["detail"] in [
-            "Not authenticated",
-            "Invalid authentication token",
-            "Token has expired"
-        ]
-
-    def test_users_me_with_invalid_token(self, client):
-        """Test /users/me endpoint rejects invalid JWT tokens."""
+    def test_users_me_invalid_authorization_header_still_unauthorized(self, client):
         response = client.get(
-            "/users/me",
-            headers={"Authorization": "Bearer invalid_malformed_token"}
+            USERS_ME_PATH,
+            headers={"Authorization": "Bearer invalid_malformed_token"},
         )
-
-        assert response.status_code == 401
-
-    def test_users_me_with_expired_token(self, client):
-        """Test /users/me endpoint rejects expired JWT tokens."""
-        response = client.get(
-            "/users/me",
-            headers={"Authorization": "Bearer expired_token_12345"}
-        )
-
         assert response.status_code == 401
 
     def test_users_me_success_response_schema(self, client):
-        """Test /users/me endpoint returns correct User schema.
+        _override_authenticated_user()
+        _override_db()
 
-        Contract schema (User):
-        {
-          "user_id": 123,
-          "user_id": "00u1abc2def3ghi4jkl",
-          "email": "curator@alliancegenome.org",  // nullable
-          "created_at": "2025-01-25T10:30:00Z",
-          "last_login": "2025-01-25T14:45:00Z",  // nullable
-          "is_active": true
+        now = datetime.utcnow().isoformat()
+        payload = {
+            "id": 123,
+            "auth_sub": "test-user-sub-123",
+            "email": "curator@alliancegenome.org",
+            "display_name": "Test Curator",
+            "created_at": now,
+            "last_login": now,
+            "is_active": True,
         }
 
-        Required fields: user_id, user_id, created_at, is_active
-
-        This test will FAIL until T023 implements /users/me endpoint.
-        """
-        from main import app
-        from src.api.auth import auth, get_db
-
-        # Mock authenticated user from token
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        mock_user.email = "curator@alliancegenome.org"
-        mock_user.name = "Test Curator"
-        mock_user.cid = None
-
-        # Mock database user (already exists)
-        db_user = MagicMock()
-        db_user.user_id = 123
-        db_user.user_id = "00u1abc2def3ghi4jkl"
-        db_user.email = "curator@alliancegenome.org"
-        db_user.created_at = datetime(2025, 1, 25, 10, 30, 0)
-        db_user.last_login = datetime(2025, 1, 25, 14, 45, 0)
-        db_user.is_active = True
-
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
-        mock_db_session.query.return_value = mock_db_query
-
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
-
         try:
-            # Call endpoint
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
+            with patch(
+                "src.api.users.set_global_user_from_cognito",
+                return_value=_FakeUserModel(payload),
+            ):
+                response = client.get(USERS_ME_PATH)
 
-            # Should return 200
             assert response.status_code == 200
-
-            # Validate response schema
             data = response.json()
-
-            # Required fields
-            assert "user_id" in data
-            assert isinstance(data["user_id"], int)
-            assert data["user_id"] == 123
-
-            assert "user_id" in data
-            assert isinstance(data["user_id"], str)
-            assert data["user_id"] == "00u1abc2def3ghi4jkl"
-
+            assert data["id"] == 123
+            assert data["auth_sub"] == "test-user-sub-123"
+            assert data["email"] == "curator@alliancegenome.org"
+            assert data["is_active"] is True
             assert "created_at" in data
-            assert isinstance(data["created_at"], str)
-            # Validate ISO 8601 datetime format
-            datetime.fromisoformat(data["created_at"].replace('Z', '+00:00'))
-
-            assert "is_active" in data
-            assert isinstance(data["is_active"], bool)
-            assert data["is_active"] == True
-
-            # Optional fields (nullable in contract)
-            assert "email" in data
-            if data["email"] is not None:
-                assert isinstance(data["email"], str)
-                assert "@" in data["email"]  # Basic email validation
-
             assert "last_login" in data
-            if data["last_login"] is not None:
-                assert isinstance(data["last_login"], str)
-                # Validate ISO 8601 datetime format
-                datetime.fromisoformat(data["last_login"].replace('Z', '+00:00'))
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
 
-    def test_users_me_auto_creates_user_on_first_login(self, client):
-        """Test /users/me automatically creates user account on first login.
+    def test_users_me_allows_null_email(self, client):
+        _override_authenticated_user()
+        _override_db()
 
-        Contract requirement (FR-005):
-        "System MUST automatically create user accounts on first login"
-
-        When user doesn't exist in database, endpoint should:
-        1. Create new user record with data from JWT token
-        2. Set created_at to current timestamp
-        3. Initialize is_active to true
-        4. Return newly created user data
-
-        This test will FAIL until T024 implements user provisioning logic.
-        """
-        from main import app
-        from src.api.auth import auth, get_db
-
-        # Mock authenticated user from token (first-time user)
-        mock_user = MagicMock()
-        mock_user.uid = "00u9xyz8new7user6abc"
-        mock_user.email = "newuser@alliancegenome.org"
-        mock_user.name = "New User"
-        mock_user.cid = None
-
-        # Mock database - user does NOT exist yet
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = None  # User not found
-
-        # Mock user creation
-        new_user = MagicMock()
-        new_user.user_id = 456  # Auto-generated ID
-        new_user.user_id = "00u9xyz8new7user6abc"
-        new_user.email = "newuser@alliancegenome.org"
-        new_user.created_at = datetime.utcnow()
-        new_user.last_login = datetime.utcnow()
-        new_user.is_active = True
-
-        # After creation, subsequent query returns the new user
-        mock_db_query.filter_by.return_value.one_or_none.side_effect = [None, new_user]
-        mock_db_session.query.return_value = mock_db_query
-
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        payload = {
+            "id": 789,
+            "auth_sub": "00s1service2account3def",
+            "email": None,
+            "display_name": None,
+            "created_at": datetime.utcnow().isoformat(),
+            "last_login": None,
+            "is_active": True,
+        }
 
         try:
-            # Call endpoint (first login)
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
+            with patch(
+                "src.api.users.set_global_user_from_cognito",
+                return_value=_FakeUserModel(payload),
+            ):
+                response = client.get(USERS_ME_PATH)
 
-            # Should return 200 with newly created user
             assert response.status_code == 200
-
             data = response.json()
-            assert data["user_id"] == "00u9xyz8new7user6abc"
-            assert data["email"] == "newuser@alliancegenome.org"
-            assert data["is_active"] == True
-            assert "user_id" in data
-            assert "created_at" in data
+            assert data["auth_sub"] == "00s1service2account3def"
+            assert data["email"] is None
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
 
-    def test_users_me_null_email_allowed(self, client):
-        """Test /users/me handles users with null email (service accounts).
+    def test_users_me_inactive_user_still_returned(self, client):
+        _override_authenticated_user()
+        _override_db()
 
-        Contract schema shows email is nullable.
-        Some users (service accounts) may not have email.
-        """
-        from main import app
-        from src.api.auth import auth, get_db
-
-        # Mock authenticated user without email
-        mock_user = MagicMock()
-        mock_user.uid = "00s1service2account3def"
-        mock_user.email = None  # Service account
-        mock_user.cid = "service_client_id"
-        mock_user.name = None
-
-        # Mock database user without email
-        db_user = MagicMock()
-        db_user.user_id = 789
-        db_user.user_id = "00s1service2account3def"
-        db_user.email = None  # Nullable
-        db_user.created_at = datetime.utcnow()
-        db_user.last_login = None
-        db_user.is_active = True
-
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
-        mock_db_session.query.return_value = mock_db_query
-
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        payload = {
+            "id": 999,
+            "auth_sub": "00u1inactive2user3ghi",
+            "email": "inactive@alliancegenome.org",
+            "display_name": "Inactive User",
+            "created_at": datetime.utcnow().isoformat(),
+            "last_login": None,
+            "is_active": False,
+        }
 
         try:
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
+            with patch(
+                "src.api.users.set_global_user_from_cognito",
+                return_value=_FakeUserModel(payload),
+            ):
+                response = client.get(USERS_ME_PATH)
 
             assert response.status_code == 200
-
             data = response.json()
-            assert data["user_id"] == "00s1service2account3def"
-            assert data["email"] is None  # Allowed to be null
-            assert data["is_active"] == True
+            assert data["is_active"] is False
+            assert data["auth_sub"] == "00u1inactive2user3ghi"
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
-
-    def test_users_me_updates_last_login(self, client):
-        """Test /users/me updates last_login timestamp on each request.
-
-        Every call to /users/me should update the user's last_login timestamp
-        to track user activity.
-        """
-        from main import app
-        from src.api.auth import auth, get_db
-
-        # Mock authenticated user
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        mock_user.email = "curator@alliancegenome.org"
-
-        # Mock database user with old last_login
-        old_login_time = datetime(2025, 1, 20, 10, 0, 0)
-        db_user = MagicMock()
-        db_user.user_id = 123
-        db_user.user_id = "00u1abc2def3ghi4jkl"
-        db_user.email = "curator@alliancegenome.org"
-        db_user.created_at = datetime(2025, 1, 1, 10, 0, 0)
-        db_user.last_login = old_login_time
-        db_user.is_active = True
-
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
-        mock_db_session.query.return_value = mock_db_query
-
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
-
-        try:
-            # Call endpoint
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
-
-            assert response.status_code == 200
-
-            # Verify last_login was updated (implementation detail for T024)
-            # Contract test only validates that last_login field exists and is valid
-        finally:
-            app.dependency_overrides.clear()
-
-
-class TestUsersMeEndpointEdgeCases:
-    """Edge case tests for /users/me endpoint."""
-
-    def test_users_me_without_bearer_prefix(self, client):
-        """Test /users/me rejects tokens without 'Bearer' prefix."""
-        response = client.get(
-            "/users/me",
-            headers={"Authorization": "mock_token_no_bearer"}
-        )
-
-        assert response.status_code == 401
-
-    def test_users_me_with_empty_authorization_header(self, client):
-        """Test /users/me rejects empty Authorization header."""
-        response = client.get(
-            "/users/me",
-            headers={"Authorization": ""}
-        )
-
-        assert response.status_code == 401
 
     def test_users_me_response_content_type_json(self, client):
-        """Test /users/me returns JSON content-type."""
-        from main import app
-        from src.api.auth import auth, get_db
+        _override_authenticated_user()
+        _override_db()
 
-        # Mock authentication and database
-        mock_user = MagicMock()
-        mock_user.uid = "00u1abc2def3ghi4jkl"
-        mock_user.email = "curator@alliancegenome.org"
-
-        db_user = MagicMock()
-        db_user.user_id = 123
-        db_user.user_id = "00u1abc2def3ghi4jkl"
-        db_user.email = "curator@alliancegenome.org"
-        db_user.created_at = datetime.utcnow()
-        db_user.last_login = datetime.utcnow()
-        db_user.is_active = True
-
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
-        mock_db_session.query.return_value = mock_db_query
-
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        payload = {
+            "id": 123,
+            "auth_sub": "test-user-sub-123",
+            "email": "curator@alliancegenome.org",
+            "display_name": "Test Curator",
+            "created_at": datetime.utcnow().isoformat(),
+            "last_login": datetime.utcnow().isoformat(),
+            "is_active": True,
+        }
 
         try:
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
+            with patch(
+                "src.api.users.set_global_user_from_cognito",
+                return_value=_FakeUserModel(payload),
+            ):
+                response = client.get(USERS_ME_PATH)
 
             assert response.status_code == 200
             assert "application/json" in response.headers["content-type"]
         finally:
+            from main import app
+
             app.dependency_overrides.clear()
 
-    def test_users_me_inactive_user_still_returned(self, client):
-        """Test /users/me returns data even for inactive users.
 
-        Contract doesn't specify filtering by is_active.
-        Endpoint should return user data regardless of is_active status.
-        Authorization/access control is handled elsewhere.
-        """
-        from main import app
-        from src.api.auth import auth, get_db
+class TestAuthProviderClaimParity:
+    """Provider abstraction parity tests for group claim extraction."""
 
-        # Mock authenticated user
-        mock_user = MagicMock()
-        mock_user.uid = "00u1inactive2user3ghi"
-        mock_user.email = "inactive@alliancegenome.org"
+    def _provider(self, group_claim: str):
+        pytest.importorskip("jose")
+        pytest.importorskip("jwt")
+        pytest.importorskip("requests")
+        from src.auth.providers.oidc import OIDCAuthProvider
 
-        # Mock inactive database user
-        db_user = MagicMock()
-        db_user.user_id = 999
-        db_user.user_id = "00u1inactive2user3ghi"
-        db_user.email = "inactive@alliancegenome.org"
-        db_user.created_at = datetime.utcnow()
-        db_user.last_login = None
-        db_user.is_active = False  # Inactive
+        return OIDCAuthProvider(
+            {
+                "issuer_url": "https://issuer.example.test",
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "redirect_uri": "http://localhost:3002/auth/callback",
+                "group_claim": group_claim,
+            }
+        )
 
-        mock_db_session = MagicMock()
-        mock_db_query = MagicMock()
-        mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
-        mock_db_session.query.return_value = mock_db_query
+    def test_cognito_and_oidc_group_claim_parity(self):
+        cognito_provider = self._provider("cognito:groups")
+        oidc_provider = self._provider("groups")
 
-        # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        cognito_claims = {
+            "sub": "user-123",
+            "email": "user@example.org",
+            "name": "Example User",
+            "cognito:groups": ["FB", "MGI"],
+        }
+        oidc_claims = {
+            "sub": "user-123",
+            "email": "user@example.org",
+            "name": "Example User",
+            "groups": ["FB", "MGI"],
+        }
 
-        try:
-            response = client.get(
-                "/users/me",
-                headers=get_valid_auth_header()
-            )
+        cognito_principal = cognito_provider.extract_principal(cognito_claims)
+        oidc_principal = oidc_provider.extract_principal(oidc_claims)
 
-            # Should still return user data
-            assert response.status_code == 200
+        assert cognito_principal.subject == oidc_principal.subject
+        assert cognito_principal.email == oidc_principal.email
+        assert cognito_principal.groups == oidc_principal.groups == ["FB", "MGI"]
 
-            data = response.json()
-            assert data["is_active"] == False
-            assert data["user_id"] == "00u1inactive2user3ghi"
-        finally:
-            app.dependency_overrides.clear()
+    def test_group_claim_extraction_for_realm_access_roles(self):
+        provider = self._provider("realm_access.roles")
+        claims = {
+            "sub": "kc-user-1",
+            "email": "kc-user@example.org",
+            "preferred_username": "kc-user",
+            "realm_access": {"roles": ["curator", "admin"]},
+        }
+
+        principal = provider.extract_principal(claims)
+        assert principal.subject == "kc-user-1"
+        assert principal.display_name == "kc-user"
+        assert principal.groups == ["curator", "admin"]

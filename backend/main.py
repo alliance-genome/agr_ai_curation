@@ -521,14 +521,13 @@ async def health_check():
         health_status["services"]["weaviate"] = "disconnected"
         health_status["status"] = "degraded"
 
-    # Check curation database connectivity
+    # Check curation database connectivity via resolver
     try:
-        from src.lib.database.agr_client import get_agr_db_client
-        # Test database connection by querying for a single gene
-        db_client = get_agr_db_client()
-        # Simple query to verify connection (limit 1 for speed)
-        db_client.get_genes_by_taxon('NCBITaxon:6239', limit=1)
-        health_status["services"]["curation_db"] = "connected"
+        from src.lib.database.curation_resolver import get_curation_resolver
+        curation_health = get_curation_resolver().get_health_status()
+        health_status["services"]["curation_db"] = curation_health["status"]
+        if curation_health["status"] not in ("connected", "not_configured"):
+            health_status["status"] = "degraded"
     except Exception as e:
         logger.error("Curation database health check failed: %s", e)
         health_status["services"]["curation_db"] = "disconnected"

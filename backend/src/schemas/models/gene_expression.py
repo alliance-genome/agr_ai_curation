@@ -19,7 +19,7 @@ class GeneExpressionEnvelope(StructuredMessageEnvelope):
     actor: str = Field(default="gene_expression_specialist", description="The gene expression curation agent")
     gene_symbol: str = Field(description="Gene symbol")
     gene_id: Optional[str] = Field(default=None, description="Gene database ID (e.g., 'WB:WBGene00001062', 'FB:FBgn0000001')")
-    organism: Optional[str] = Field(default=None, description="Organism (e.g., 'C. elegans', 'D. melanogaster', 'NCBITaxon:6239')")
+    organism: Optional[str] = Field(default=None, description="Organism (e.g., 'C. elegans', 'D. melanogaster', 'NCBITaxon:10090')")
     reagent: Reagent = Field(description="Reagent information used for expression pattern detection")
     expression_patterns: List[ExpressionPattern] = Field(description="List of expression pattern annotations with spatio-temporal pairing (labels only)")
     evidence: ExpressionEvidence = Field(description="Evidence supporting the expression patterns")

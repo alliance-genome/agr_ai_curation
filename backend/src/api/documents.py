@@ -21,7 +21,7 @@ import httpx
 
 from .auth import get_auth_dependency
 
-from ..services.user_service import set_global_user_from_cognito
+from ..services.user_service import principal_from_claims, provision_user
 from ..lib.weaviate_helpers import get_tenant_name
 
 from ..models.api_schemas import (
@@ -216,7 +216,7 @@ def verify_document_ownership(
     Requirements: FR-014 (cross-user access prevention with 403)
     """
     # Get database user
-    db_user = set_global_user_from_cognito(db, auth_user)
+    db_user = provision_user(db, principal_from_claims(auth_user))
 
     # Query document from PostgreSQL
     doc = db.query(ViewerPDFDocument).filter(
@@ -440,7 +440,7 @@ async def get_document_endpoint(
     session = SessionLocal()
     try:
         pg_doc = verify_document_ownership(session, document_id, user)
-        db_user = set_global_user_from_cognito(session, user)
+        db_user = provision_user(session, principal_from_claims(user))
     finally:
         session.close()
 
@@ -685,12 +685,12 @@ async def upload_document_endpoint(
 
         # T029: CRITICAL - Provision user and tenant BEFORE Weaviate operations
         # This ensures provision_weaviate_tenants() runs before create_document()
-        from src.services.user_service import set_global_user_from_cognito
+        from src.services.user_service import principal_from_claims, provision_user
 
         session = SessionLocal()
         try:
             # Ensure user exists in database and provision Weaviate tenants
-            db_user = set_global_user_from_cognito(session, user)
+            db_user = provision_user(session, principal_from_claims(user))
 
             # Check for duplicate file BEFORE creating Weaviate document
             # This prevents UUID mismatch between PostgreSQL and Weaviate
@@ -1065,7 +1065,7 @@ async def get_download_info(
         session = SessionLocal()
         try:
             # T031: Get database user for ownership verification (FR-014)
-            db_user = set_global_user_from_cognito(session, user)
+            db_user = provision_user(session, principal_from_claims(user))
 
             doc = session.query(ViewerPDFDocument).filter(
                 ViewerPDFDocument.id == uuid.UUID(document_id)
@@ -1173,7 +1173,7 @@ async def download_document_file(
         session = SessionLocal()
         try:
             # T031: Get database user for ownership verification (FR-014)
-            db_user = set_global_user_from_cognito(session, user)
+            db_user = provision_user(session, principal_from_claims(user))
 
             doc = session.query(ViewerPDFDocument).filter(
                 ViewerPDFDocument.id == uuid.UUID(document_id)

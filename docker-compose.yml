@@ -175,6 +175,9 @@ services:
       # External Database URLs (read-only access via SSH tunnel)
       - CURATION_DB_URL=${CURATION_DB_URL}
       - LITERATURE_DB_URL=${LITERATURE_DB_URL}
+      # Curation Database Credentials Configuration
+      - CURATION_DB_CREDENTIALS_SOURCE=${CURATION_DB_CREDENTIALS_SOURCE:-env}
+      - CURATION_DB_AWS_SECRET_ID=${CURATION_DB_AWS_SECRET_ID:-}
       # Chat History Configuration
       - CHAT_HISTORY_ENABLED=${CHAT_HISTORY_ENABLED:-true}
       - CHAT_MAX_HISTORY_EXCHANGES=${CHAT_MAX_HISTORY_EXCHANGES:-20}
@@ -188,6 +191,8 @@ services:
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
       # Tool failure alerts (reuses PROMPT_SUGGESTIONS_SNS_TOPIC_ARN)
       - TOOL_FAILURE_ALERTS_ENABLED=${TOOL_FAILURE_ALERTS_ENABLED:-false}
+      # Authentication Provider Configuration
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}
       # AWS Cognito Authentication Configuration
       - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}
@@ -195,6 +200,16 @@ services:
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET:-}
       - COGNITO_DOMAIN=${COGNITO_DOMAIN:-https://auth.alliancegenome.org}
       - COGNITO_REDIRECT_URI=${COGNITO_REDIRECT_URI:-http://localhost:3002/auth/callback}
+      # Generic OIDC Provider Configuration
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
+      - OIDC_GROUP_CLAIM=${OIDC_GROUP_CLAIM:-}
+      - OIDC_LOGOUT_URL=${OIDC_LOGOUT_URL:-}
+      - OIDC_LOGOUT_REDIRECT_PARAM=${OIDC_LOGOUT_REDIRECT_PARAM:-post_logout_redirect_uri}
+      # Session Configuration
       - SESSION_TIMEOUT_HOURS=${SESSION_TIMEOUT_HOURS:-24}
       - SECURE_COOKIES=${SECURE_COOKIES:-false}
       # API Key Authentication (for testing/monitoring with X-API-Key header)

@@ -99,6 +99,35 @@ _init_lock = threading.Lock()
 
 
 @dataclass
+class CredentialsConfig:
+    """Credentials configuration for database services.
+
+    Supports multiple credential sources:
+    - "env": Credentials from environment variables (CURATION_DB_URL, etc.)
+    - "aws_secrets": Credentials from AWS Secrets Manager
+    - "url": Credentials embedded in the service URL
+    """
+
+    source: str = "env"
+    aws_secret_id: str = ""
+    aws_profile: str = ""
+    aws_region: str = "us-east-1"
+
+    @classmethod
+    def from_yaml(cls, data: Optional[Dict[str, Any]]) -> Optional["CredentialsConfig"]:
+        """Create a CredentialsConfig from parsed YAML data, or None if not present."""
+        if not data:
+            return None
+
+        return cls(
+            source=_substitute_env_vars(data.get("source", "env")),
+            aws_secret_id=_substitute_env_vars(data.get("aws_secret_id", "")),
+            aws_profile=_substitute_env_vars(data.get("aws_profile", "")),
+            aws_region=_substitute_env_vars(data.get("aws_region", "us-east-1")),
+        )
+
+
+@dataclass
 class HealthCheck:
     """Health check configuration for a service."""
 
@@ -235,6 +264,7 @@ class ConnectionDefinition:
     health_check: HealthCheck = field(default_factory=HealthCheck)
     required: bool = False
     timeout_seconds: int = 10
+    credentials: Optional[CredentialsConfig] = None
     is_healthy: Optional[bool] = None
     last_error: Optional[str] = None
 
@@ -265,6 +295,7 @@ class ConnectionDefinition:
             health_check=HealthCheck.from_yaml(data.get("health_check")),
             required=data.get("required", False),
             timeout_seconds=data.get("timeout_seconds", 10),
+            credentials=CredentialsConfig.from_yaml(data.get("credentials")),
         )
 
 
@@ -582,13 +613,30 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
 
 
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
-    """Check Postgres health via connection test."""
+    """Check Postgres health via connection test.
+
+    For services with credentials config but no URL (e.g., curation_db using AWS
+    Secrets Manager), resolves the effective URL via CurationConnectionResolver.
+    """
+    url = conn.url
+
+    # If no URL but credentials are configured, try the curation resolver
+    if not url and conn.credentials:
+        try:
+            from src.lib.database.curation_resolver import get_curation_resolver
+            url = get_curation_resolver().get_connection_url()
+        except ImportError:
+            pass
+
+    if not url:
+        return False, "No connection URL configured"
+
     try:
         import asyncpg
 
         # Parse connection string or use URL directly
         # asyncpg can handle postgres:// URLs
-        url = conn.url.replace("postgresql://", "postgres://")
+        url = url.replace("postgresql://", "postgres://")
 
         try:
             conn_pg = await asyncpg.connect(url, timeout=conn.timeout_seconds)
@@ -604,7 +652,7 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Opti
             import psycopg2
             from urllib.parse import urlparse
 
-            parsed = urlparse(conn.url)
+            parsed = urlparse(url)
             pg_conn = psycopg2.connect(
                 host=parsed.hostname,
                 port=parsed.port or 5432,
