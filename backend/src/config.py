@@ -331,15 +331,28 @@ def is_cognito_configured() -> bool:
 
 
 def get_auth_provider() -> str:
-    """Get configured authentication provider type."""
-    return os.getenv("AUTH_PROVIDER", "cognito").strip().lower()
+    """Get configured authentication provider type.
+
+    AUTH_PROVIDER is required and must be explicit to avoid deployment bias.
+    """
+    provider = os.getenv("AUTH_PROVIDER", "").strip().lower()
+    if not provider:
+        raise ValueError(
+            "AUTH_PROVIDER must be set explicitly (one of: cognito, oidc, dev)"
+        )
+    if provider not in {"cognito", "oidc", "dev"}:
+        raise ValueError(
+            f"Invalid AUTH_PROVIDER '{provider}'. Expected one of: cognito, oidc, dev"
+        )
+    return provider
 
 
 def is_auth_configured() -> bool:
     """Check whether auth is configured for the selected provider."""
-    provider = get_auth_provider()
-    if provider == "dev":
+    if is_dev_mode():
         return True
+
+    provider = get_auth_provider()
     if provider == "cognito":
         return is_cognito_configured()
     if provider == "oidc":

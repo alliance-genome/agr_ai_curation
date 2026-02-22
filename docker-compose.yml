@@ -176,7 +176,7 @@ services:
       - CURATION_DB_URL=${CURATION_DB_URL}
       - LITERATURE_DB_URL=${LITERATURE_DB_URL}
       # Curation Database Credentials Configuration
-      - CURATION_DB_CREDENTIALS_SOURCE=${CURATION_DB_CREDENTIALS_SOURCE:-env}
+      - CURATION_DB_CREDENTIALS_SOURCE=${CURATION_DB_CREDENTIALS_SOURCE}
       - CURATION_DB_AWS_SECRET_ID=${CURATION_DB_AWS_SECRET_ID:-}
       # Chat History Configuration
       - CHAT_HISTORY_ENABLED=${CHAT_HISTORY_ENABLED:-true}
@@ -192,7 +192,7 @@ services:
       # Tool failure alerts (reuses PROMPT_SUGGESTIONS_SNS_TOPIC_ARN)
       - TOOL_FAILURE_ALERTS_ENABLED=${TOOL_FAILURE_ALERTS_ENABLED:-false}
       # Authentication Provider Configuration
-      - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}
+      - AUTH_PROVIDER=${AUTH_PROVIDER}
       # AWS Cognito Authentication Configuration
       - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}

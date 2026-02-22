@@ -617,11 +617,6 @@ class TestCurationResolver:
     def test_resolver_returns_none_when_not_configured(self, monkeypatch):
         """Resolver should return None when no curation DB is configured."""
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_HOST", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PORT", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_NAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_USERNAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PASSWORD", raising=False)
 
         resolver = CurationConnectionResolver()
 
@@ -639,46 +634,26 @@ class TestCurationResolver:
     def test_resolver_is_configured_false_when_not_set(self, monkeypatch):
         """is_configured() should return False when no DB config exists."""
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_HOST", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PORT", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_NAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_USERNAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PASSWORD", raising=False)
         resolver = CurationConnectionResolver()
 
         assert resolver.is_configured() is False
 
-    def test_resolver_uses_persistent_store_vars(self, monkeypatch):
-        """Resolver should build URL from PERSISTENT_STORE_DB_* vars."""
-        from urllib.parse import urlparse
-
+    def test_resolver_ignores_legacy_persistent_store_vars(self, monkeypatch):
+        """Legacy PERSISTENT_STORE_DB_* vars should not be used implicitly."""
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
-        db_user = "reader"
-        db_password = "test_db_password"
-        db_host = "dbhost"
-        db_port = "5433"
-        db_name = "curation"
-
-        monkeypatch.setenv("PERSISTENT_STORE_DB_HOST", db_host)
-        monkeypatch.setenv("PERSISTENT_STORE_DB_PORT", db_port)
-        monkeypatch.setenv("PERSISTENT_STORE_DB_NAME", db_name)
-        monkeypatch.setenv("PERSISTENT_STORE_DB_USERNAME", db_user)
-        monkeypatch.setenv("PERSISTENT_STORE_DB_PASSWORD", db_password)
+        monkeypatch.setenv("PERSISTENT_STORE_DB_HOST", "dbhost")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PORT", "5433")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_NAME", "curation")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_USERNAME", "reader")
+        monkeypatch.setenv("PERSISTENT_STORE_DB_PASSWORD", "test_db_password")
 
         resolver = CurationConnectionResolver()
         url = resolver.get_connection_url()
 
-        assert url is not None
-        parsed = urlparse(url)
-        assert parsed.scheme == "postgresql"
-        assert parsed.username == db_user
-        assert parsed.password == db_password
-        assert parsed.hostname == db_host
-        assert parsed.port == int(db_port)
-        assert parsed.path == f"/{db_name}"
+        assert url is None
 
-    def test_resolver_curation_url_takes_priority_over_persistent_store(self, monkeypatch):
-        """CURATION_DB_URL should take priority over PERSISTENT_STORE_DB_* vars."""
+    def test_resolver_uses_curation_url_even_if_legacy_env_present(self, monkeypatch):
+        """CURATION_DB_URL remains explicit override even if legacy env vars are set."""
         monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:5432/curation")
         monkeypatch.setenv("PERSISTENT_STORE_DB_HOST", "otherhost")
         monkeypatch.setenv("PERSISTENT_STORE_DB_PORT", "5433")
@@ -694,11 +669,6 @@ class TestCurationResolver:
     def test_resolver_health_status_not_configured(self, monkeypatch):
         """get_health_status() should report not_configured when DB is not set up."""
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_HOST", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PORT", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_NAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_USERNAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PASSWORD", raising=False)
         resolver = CurationConnectionResolver()
 
         status = resolver.get_health_status()
@@ -708,11 +678,6 @@ class TestCurationResolver:
     def test_resolver_get_db_client_returns_none_when_not_configured(self, monkeypatch):
         """get_db_client() should return None when no URL is configured."""
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_HOST", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PORT", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_NAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_USERNAME", raising=False)
-        monkeypatch.delenv("PERSISTENT_STORE_DB_PASSWORD", raising=False)
         resolver = CurationConnectionResolver()
 
         client = resolver.get_db_client()
@@ -739,3 +704,18 @@ class TestCurationResolver:
         r2 = get_curation_resolver()
 
         assert r1 is r2
+
+    def test_resolver_invalid_credentials_source_fails_fast(self, monkeypatch):
+        """Invalid curation_db credentials.source should raise a clear error."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        mock_conn = SimpleNamespace(
+            url="",
+            credentials=SimpleNamespace(source="invalid_source"),
+        )
+
+        with patch("src.lib.config.connections_loader.get_connection", return_value=mock_conn):
+            resolver = CurationConnectionResolver()
+            with pytest.raises(ValueError, match="Invalid curation_db credentials.source"):
+                resolver.get_connection_url()

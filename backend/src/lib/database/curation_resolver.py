@@ -6,8 +6,7 @@ directly or call get_aws_credentials() from individual modules.
 
 Credential resolution priority:
     1. CURATION_DB_URL env var (explicit override)
-    2. PERSISTENT_STORE_DB_* env vars (integration test compat)
-    3. credentials.source from connections.yaml
+    2. credentials.source from connections.yaml
        - "env": use CURATION_DB_URL (already checked above, so no-op)
        - "aws_secrets": fetch from AWS Secrets Manager
        - "url": use url field from connections.yaml directly
@@ -72,30 +71,10 @@ class CurationConnectionResolver:
             logger.debug("Using CURATION_DB_URL environment variable")
             return url
 
-        # Priority 2: PERSISTENT_STORE_DB_* env vars (integration test compat)
-        url = self._try_persistent_store_vars()
-        if url:
-            logger.debug("Using PERSISTENT_STORE_DB_* environment variables")
-            return url
-
-        # Priority 3: credentials.source from connections.yaml
+        # Priority 2: credentials.source from connections.yaml
         url = self._try_connections_config()
         if url:
             return url
-
-        return None
-
-    def _try_persistent_store_vars(self) -> Optional[str]:
-        """Build connection URL from PERSISTENT_STORE_DB_* env vars."""
-        host = os.getenv("PERSISTENT_STORE_DB_HOST")
-        port = os.getenv("PERSISTENT_STORE_DB_PORT")
-        name = os.getenv("PERSISTENT_STORE_DB_NAME")
-        user = os.getenv("PERSISTENT_STORE_DB_USERNAME")
-        password = os.getenv("PERSISTENT_STORE_DB_PASSWORD")
-
-        if host and port and name and user and password:
-            encoded_password = quote(password, safe="")
-            return f"postgresql://{user}:{encoded_password}@{host}:{port}/{name}"
 
         return None
 
@@ -125,11 +104,17 @@ class CurationConnectionResolver:
             # URL should have been set in the connection config
             return conn.url if conn.url else None
 
-        elif source == "aws_secrets":
+        if source == "aws_secrets":
             return self._fetch_aws_credentials(conn.credentials)
 
-        # source == "env" — already checked via CURATION_DB_URL above
-        return None
+        if source == "env":
+            # Explicit env mode requires CURATION_DB_URL.
+            return None
+
+        raise ValueError(
+            f"Invalid curation_db credentials.source '{source}'. "
+            "Expected one of: env, aws_secrets, url"
+        )
 
     def _fetch_aws_credentials(self, credentials) -> Optional[str]:
         """Fetch credentials from AWS Secrets Manager and build connection URL."""
@@ -151,11 +136,19 @@ class CurationConnectionResolver:
             response = client.get_secret_value(SecretId=credentials.aws_secret_id)
             secret = json.loads(response["SecretString"])
 
+            required_keys = ("username", "password", "host", "port", "dbname")
+            missing = [k for k in required_keys if not secret.get(k)]
+            if missing:
+                raise ValueError(
+                    "AWS Secrets Manager secret is missing required keys: "
+                    + ", ".join(sorted(missing))
+                )
+
             username = secret["username"]
             password = quote(secret["password"], safe="")
-            dbname = secret.get("dbname", "curation")
-            host = secret.get("host", "localhost")
-            port = secret.get("port", "5433")
+            dbname = str(secret["dbname"])
+            host = str(secret["host"])
+            port = str(secret["port"])
 
             logger.info(
                 "Retrieved curation DB credentials from AWS Secrets Manager: %s",
@@ -165,7 +158,9 @@ class CurationConnectionResolver:
 
         except Exception as e:
             logger.error("Failed to retrieve AWS Secrets Manager credentials: %s", e)
-            return None
+            raise ValueError(
+                "Failed to resolve curation DB credentials from AWS Secrets Manager"
+            ) from e
 
     def get_connection_url(self) -> Optional[str]:
         """Returns the resolved PostgreSQL connection URL, or None if not configured."""

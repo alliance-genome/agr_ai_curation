@@ -38,26 +38,6 @@ logger = logging.getLogger(__name__)
 GROUP_RULES_PATH = Path(__file__).parent
 
 
-# DEPRECATED: This hardcoded mapping is no longer used.
-# Provider-group mapping is now loaded from config/groups.yaml via groups_loader.
-# This dict is kept for backwards compatibility with any code that might reference it directly.
-# TODO: Remove in future version once all references are migrated.
-PROVIDER_GROUP_TO_GROUP: Dict[str, List[str]] = {
-    # MOD-specific curator groups
-    "mgi-curators": ["MGI"],
-    "flybase-curators": ["FB"],
-    "wormbase-curators": ["WB"],
-    "zfin-curators": ["ZFIN"],
-    "rgd-curators": ["RGD"],
-    "sgd-curators": ["SGD"],
-    "hgnc-curators": ["HGNC"],
-    # Alliance-wide groups (no default group, user chooses)
-    "alliance-admins": [],
-    "developers": [],  # Dev users can set via DEV_USER_GROUPS env var
-}
-COGNITO_GROUP_TO_GROUP = PROVIDER_GROUP_TO_GROUP
-
-
 # Canonical group ID normalization
 # Handles various ways users might specify group IDs
 GROUP_ID_ALIASES: Dict[str, str] = {

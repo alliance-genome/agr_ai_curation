@@ -9,7 +9,7 @@
 # =============================================================================
 
 identity_provider:
-  # Optional metadata about your identity provider
+  # Required identity provider metadata
   type: "oidc"
 
   # JWT claim used for group/role extraction

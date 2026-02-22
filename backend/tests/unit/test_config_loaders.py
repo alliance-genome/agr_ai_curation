@@ -1157,9 +1157,9 @@ class TestGroupsLoader:
         assert fb.species == "Drosophila melanogaster"
         assert fb.taxon == "NCBITaxon:7227"
 
-        # Check Cognito groups
-        assert "flybase-curators" in fb.cognito_groups
-        assert "flybase-admins" in fb.cognito_groups
+        # Check provider groups
+        assert "flybase-curators" in fb.provider_groups
+        assert "flybase-admins" in fb.provider_groups
 
     def test_cognito_to_group_mapping(self):
         """Test mapping Cognito groups to internal group IDs."""
@@ -1226,7 +1226,7 @@ class TestGroupsLoader:
         for group in groups_list:
             assert hasattr(group, "group_id")
             assert hasattr(group, "name")
-            assert hasattr(group, "cognito_groups")
+            assert hasattr(group, "provider_groups")
 
     def test_missing_groups_yaml_raises_error(self, tmp_path):
         """Missing groups.yaml should raise FileNotFoundError."""
@@ -1235,29 +1235,60 @@ class TestGroupsLoader:
         with pytest.raises(FileNotFoundError):
             load_groups(tmp_path / "nonexistent.yaml")
 
-    def test_empty_groups_yaml(self, tmp_path):
-        """Empty groups.yaml should return empty dict."""
+    def test_empty_groups_yaml_raises_error(self, tmp_path):
+        """Empty groups.yaml should fail fast."""
         from src.lib.config.groups_loader import load_groups
 
         # Create empty YAML file
         empty_yaml = tmp_path / "groups.yaml"
         empty_yaml.write_text("")
 
-        groups = load_groups(empty_yaml)
+        with pytest.raises(ValueError, match="Groups configuration is empty"):
+            load_groups(empty_yaml)
 
-        assert groups == {}
-
-    def test_groups_yaml_without_groups_key(self, tmp_path):
-        """YAML without 'groups' key should return empty dict."""
+    def test_groups_yaml_without_groups_key_raises_error(self, tmp_path):
+        """YAML without 'groups' key should fail fast."""
         from src.lib.config.groups_loader import load_groups
 
         # Create YAML without groups key
         yaml_file = tmp_path / "groups.yaml"
         yaml_file.write_text("some_other_key: value")
 
-        groups = load_groups(yaml_file)
+        with pytest.raises(ValueError, match="missing required top-level 'groups' key"):
+            load_groups(yaml_file)
 
-        assert groups == {}
+    def test_groups_yaml_without_identity_provider_raises_error(self, tmp_path):
+        """identity_provider metadata is required and should fail fast when missing."""
+        from src.lib.config.groups_loader import load_groups
+
+        yaml_file = tmp_path / "groups.yaml"
+        yaml_file.write_text(
+            "groups:\n"
+            "  FB:\n"
+            "    name: FlyBase\n"
+            "    provider_groups:\n"
+            "      - flybase-curators\n"
+        )
+
+        with pytest.raises(ValueError, match="missing required 'identity_provider' section"):
+            load_groups(yaml_file)
+
+    def test_group_without_provider_groups_raises_error(self, tmp_path):
+        """Each group must explicitly define provider_groups."""
+        from src.lib.config.groups_loader import load_groups
+
+        yaml_file = tmp_path / "groups.yaml"
+        yaml_file.write_text(
+            "identity_provider:\n"
+            "  type: oidc\n"
+            "  group_claim: groups\n"
+            "groups:\n"
+            "  FB:\n"
+            "    name: FlyBase\n"
+        )
+
+        with pytest.raises(ValueError, match="missing required 'provider_groups' field"):
+            load_groups(yaml_file)
 
     def test_force_reload(self):
         """force_reload should reload even if already initialized."""
@@ -1321,7 +1352,7 @@ class TestGroupDefinitionDataclass:
             "description": "Test description",
             "species": "Test species",
             "taxon": "NCBITaxon:12345",
-            "cognito_groups": ["test-curators", "test-admins"],
+            "provider_groups": ["test-curators", "test-admins"],
         }
 
         group = GroupDefinition.from_yaml("TEST", data)
@@ -1331,13 +1362,13 @@ class TestGroupDefinitionDataclass:
         assert group.description == "Test description"
         assert group.species == "Test species"
         assert group.taxon == "NCBITaxon:12345"
-        assert group.cognito_groups == ["test-curators", "test-admins"]
+        assert group.provider_groups == ["test-curators", "test-admins"]
 
     def test_from_yaml_with_minimal_fields(self):
         """GroupDefinition.from_yaml should handle minimal fields."""
         from src.lib.config.groups_loader import GroupDefinition
 
-        data = {"name": "Minimal Group"}
+        data = {"name": "Minimal Group", "provider_groups": []}
 
         group = GroupDefinition.from_yaml("MIN", data)
 
@@ -1346,13 +1377,13 @@ class TestGroupDefinitionDataclass:
         assert group.description == ""
         assert group.species is None
         assert group.taxon is None
-        assert group.cognito_groups == []
+        assert group.provider_groups == []
 
     def test_from_yaml_uses_group_id_as_default_name(self):
         """GroupDefinition.from_yaml should use group_id as default name."""
         from src.lib.config.groups_loader import GroupDefinition
 
-        data = {}  # No name provided
+        data = {"provider_groups": []}  # No name provided
 
         group = GroupDefinition.from_yaml("XYZ", data)
 

@@ -125,8 +125,7 @@ services:
   #
   # Credential resolution priority:
   #   1. CURATION_DB_URL env var (full connection string)
-  #   2. PERSISTENT_STORE_DB_* env vars (integration test compat)
-  #   3. credentials.source config below (env/aws_secrets/url)
+  #   2. credentials.source config below (env/aws_secrets/url)
   curation_db:
     description: "AGR Curation PostgreSQL database (direct connection)"
     url: "${CURATION_DB_URL:-}"
@@ -137,7 +136,7 @@ services:
     required: false
     timeout_seconds: 10
     credentials:
-      source: "${CURATION_DB_CREDENTIALS_SOURCE:-env}"  # "env", "aws_secrets", or "url"
+      source: "env"  # "env", "aws_secrets", or "url"
       aws_secret_id: "${CURATION_DB_AWS_SECRET_ID:-ai-curation/db/curation-readonly}"
       aws_profile: "${AWS_PROFILE:-}"
       aws_region: "${AWS_REGION:-us-east-1}"

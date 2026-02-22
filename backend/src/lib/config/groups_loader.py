@@ -34,10 +34,6 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IDENTITY_PROVIDER_TYPE = "cognito"
-DEFAULT_GROUP_CLAIM = "cognito:groups"
-
-
 def _find_project_root() -> Optional[Path]:
     """Find project root by looking for pyproject.toml or docker-compose.yml."""
     current = Path(__file__).resolve()
@@ -105,7 +101,15 @@ class GroupDefinition:
     @classmethod
     def from_yaml(cls, group_id: str, data: Dict[str, Any]) -> "GroupDefinition":
         """Create a GroupDefinition from parsed YAML data."""
-        provider_groups = data.get("provider_groups", data.get("cognito_groups", []))
+        if "provider_groups" not in data:
+            raise ValueError(
+                f"Group '{group_id}' is missing required 'provider_groups' field"
+            )
+        provider_groups = data.get("provider_groups")
+        if not isinstance(provider_groups, list):
+            raise ValueError(
+                f"Group '{group_id}' field 'provider_groups' must be a list"
+            )
         return cls(
             group_id=group_id,
             name=data.get("name", group_id),
@@ -119,8 +123,8 @@ class GroupDefinition:
 _group_registry: Dict[str, GroupDefinition] = {}
 _provider_to_group: Dict[str, str] = {}
 _valid_group_ids: List[str] = []
-_identity_provider_type: str = DEFAULT_IDENTITY_PROVIDER_TYPE
-_group_claim_key: str = DEFAULT_GROUP_CLAIM
+_identity_provider_type: Optional[str] = None
+_group_claim_key: Optional[str] = None
 _initialized: bool = False
 
 
@@ -152,19 +156,34 @@ def load_groups(
         with open(groups_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-        if not data or "groups" not in data:
-            logger.warning("No groups defined in %s", groups_path)
-            _group_registry = {}
-            _provider_to_group = {}
-            _valid_group_ids = []
-            _identity_provider_type = DEFAULT_IDENTITY_PROVIDER_TYPE
-            _group_claim_key = DEFAULT_GROUP_CLAIM
-            _initialized = True
-            return _group_registry
+        if not data:
+            raise ValueError(
+                f"Groups configuration is empty: {groups_path}. "
+                "Define identity_provider and groups explicitly."
+            )
+        if "groups" not in data:
+            raise ValueError(
+                f"Groups configuration missing required top-level 'groups' key: {groups_path}"
+            )
+        identity_provider = data.get("identity_provider")
+        if not isinstance(identity_provider, dict):
+            raise ValueError(
+                f"Groups configuration missing required 'identity_provider' section: {groups_path}"
+            )
 
-        identity_provider = data.get("identity_provider", {}) or {}
-        _identity_provider_type = identity_provider.get("type", DEFAULT_IDENTITY_PROVIDER_TYPE)
-        _group_claim_key = identity_provider.get("group_claim", DEFAULT_GROUP_CLAIM)
+        provider_type = str(identity_provider.get("type", "")).strip()
+        group_claim = str(identity_provider.get("group_claim", "")).strip()
+        if not provider_type:
+            raise ValueError(
+                f"Groups configuration requires identity_provider.type: {groups_path}"
+            )
+        if not group_claim:
+            raise ValueError(
+                f"Groups configuration requires identity_provider.group_claim: {groups_path}"
+            )
+
+        _identity_provider_type = provider_type
+        _group_claim_key = group_claim
 
         _group_registry = {}
         _provider_to_group = {}
@@ -261,6 +280,8 @@ def get_identity_provider_type() -> str:
     """Return configured identity provider type."""
     if not _initialized:
         load_groups()
+    if not _identity_provider_type:
+        raise RuntimeError("Group configuration not initialized with identity provider type")
     return _identity_provider_type
 
 
@@ -268,6 +289,8 @@ def get_group_claim_key() -> str:
     """Return configured JWT claim name for group membership."""
     if not _initialized:
         load_groups()
+    if not _group_claim_key:
+        raise RuntimeError("Group configuration not initialized with group claim key")
     return _group_claim_key
 
 
@@ -309,6 +332,6 @@ def reset_cache() -> None:
     _group_registry = {}
     _provider_to_group = {}
     _valid_group_ids = []
-    _identity_provider_type = DEFAULT_IDENTITY_PROVIDER_TYPE
-    _group_claim_key = DEFAULT_GROUP_CLAIM
+    _identity_provider_type = None
+    _group_claim_key = None
     _initialized = False
