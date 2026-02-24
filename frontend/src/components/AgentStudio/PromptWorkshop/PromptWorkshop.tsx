@@ -1151,6 +1151,16 @@ function PromptWorkshop({
     setStatus('Opened model-selection discussion with Claude')
   }
 
+  const handleDiscussPromptChangesWithClaude = () => {
+    const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
+    const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
+    const modPart = selectedModId ? `Selected MOD: ${selectedModId}` : 'Selected MOD: none'
+    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n\nAgent ID: ${targetId}\n${modPart}\n\n[Request ID: ${Date.now()}]`
+
+    onVerifyRequest?.(message)
+    setStatus('Opened system-prompt discussion with Claude')
+  }
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Toolbar>
@@ -1507,7 +1517,14 @@ function PromptWorkshop({
 
           {/* ── Section 2: System Prompt ── */}
           <SectionCard elevation={0}>
-            <SectionHeader>System Prompt</SectionHeader>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
+              <SectionHeader sx={{ mb: 0 }}>System Prompt</SectionHeader>
+              {onVerifyRequest && (
+                <Button size="small" variant="outlined" onClick={handleDiscussPromptChangesWithClaude}>
+                  Discuss prompt changes with Claude
+                </Button>
+              )}
+            </Stack>
             <TextField
               fullWidth
               multiline

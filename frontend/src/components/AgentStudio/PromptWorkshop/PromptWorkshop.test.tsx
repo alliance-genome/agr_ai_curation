@@ -478,4 +478,19 @@ describe('PromptWorkshop', () => {
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me choose the best model settings')
   })
+
+  it('opens a system-prompt discussion request with Claude', async () => {
+    const onVerifyRequest = vi.fn()
+
+    render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+
+    expect(onVerifyRequest).toHaveBeenCalledTimes(1)
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
+  })
 })
