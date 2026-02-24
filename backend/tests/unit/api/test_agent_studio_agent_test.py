@@ -241,6 +241,8 @@ class TestAgentWorkshopSystemPrompt:
         assert "Draft attached tools: search_document, read_section, read_subsection, agr_curation_query" in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
         assert "ask for permission in plain language" in system_prompt
+        assert "distilled OpenAI-style prompt playbook" in system_prompt
+        assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
         assert "<workshop_prompt_draft>" in system_prompt
         assert "<workshop_selected_mod_prompt mod=\"WB\">" in system_prompt
         assert "WB MOD DRAFT CONTENT" in system_prompt
