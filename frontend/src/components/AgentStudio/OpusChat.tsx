@@ -174,6 +174,25 @@ function buildAddedLineDiff(currentPrompt: string, proposedPrompt: string): Prop
   })
 }
 
+function buildRemovedLineDiff(currentPrompt: string, proposedPrompt: string): ProposedLineDiff[] {
+  const currentLines = currentPrompt.replace(/\r\n/g, '\n').split('\n')
+  const proposedLines = proposedPrompt.replace(/\r\n/g, '\n').split('\n')
+
+  const proposedLineCounts = new Map<string, number>()
+  for (const line of proposedLines) {
+    proposedLineCounts.set(line, (proposedLineCounts.get(line) || 0) + 1)
+  }
+
+  return currentLines.flatMap((line) => {
+    const existingCount = proposedLineCounts.get(line) || 0
+    if (existingCount > 0) {
+      proposedLineCounts.set(line, existingCount - 1)
+      return []
+    }
+    return [{ line, added: false }]
+  })
+}
+
 function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string {
   const summaryText = proposal.summary?.trim()
     ? proposal.summary.trim()
@@ -247,9 +266,17 @@ function OpusChat({
     () => buildAddedLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
     [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
   )
+  const removedLineDiff = useMemo(
+    () => buildRemovedLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
+    [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
+  )
   const addedLineCount = useMemo(
     () => proposedLineDiff.filter((entry) => entry.added).length,
     [proposedLineDiff]
+  )
+  const removedLineCount = useMemo(
+    () => removedLineDiff.length,
+    [removedLineDiff]
   )
 
   // Handle tool events from Opus - add tool calls to the current assistant message
@@ -1211,6 +1238,11 @@ Claude is responding...
           <Alert severity="success" sx={{ mb: 1.5 }}>
             Proposed additions are highlighted in green ({addedLineCount} line{addedLineCount === 1 ? '' : 's'}).
           </Alert>
+          {removedLineCount > 0 && (
+            <Alert severity="warning" sx={{ mb: 1.5 }}>
+              Proposed removals are highlighted in red with strikethrough ({removedLineCount} line{removedLineCount === 1 ? '' : 's'}).
+            </Alert>
+          )}
           <Box
             sx={{
               border: (theme) => `1px solid ${theme.palette.divider}`,
@@ -1240,6 +1272,44 @@ Claude is responding...
               </Box>
             ))}
           </Box>
+          {removedLineCount > 0 && (
+            <Box sx={{ mt: 1.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                Removed lines
+              </Typography>
+              <Box
+                sx={{
+                  border: (theme) => `1px solid ${theme.palette.divider}`,
+                  borderRadius: 1,
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  bgcolor: 'background.default',
+                  px: 1,
+                  py: 1,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  fontSize: '0.8rem',
+                }}
+              >
+                {removedLineDiff.map((entry, idx) => (
+                  <Box
+                    key={`removed-line-${idx}`}
+                    component="div"
+                    sx={{
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      bgcolor: (theme) => alpha(theme.palette.error.main, 0.16),
+                      color: 'error.main',
+                      textDecoration: 'line-through',
+                      px: 0.5,
+                      borderRadius: 0.5,
+                    }}
+                  >
+                    {entry.line || ' '}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCancelPromptUpdate} color="inherit">

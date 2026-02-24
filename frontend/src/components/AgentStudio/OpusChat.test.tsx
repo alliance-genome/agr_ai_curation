@@ -303,4 +303,48 @@ describe('OpusChat', () => {
       'Please run a post-apply review of my Agent Workshop draft'
     )
   })
+
+  it('shows removed lines in red/strikethrough preview when proposal deletes content', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield {
+        type: 'TOOL_RESULT',
+        tool_name: 'update_workshop_prompt_draft',
+        result: {
+          success: true,
+          pending_user_approval: true,
+          apply_mode: 'targeted_edit',
+          proposed_prompt: 'Line A',
+          change_summary: 'Removed Line B.',
+        },
+      }
+      yield { type: 'DONE' }
+    })
+
+    const context: ChatContext = {
+      active_tab: 'agent_workshop',
+      agent_workshop: {
+        prompt_draft: 'Line A\nLine B',
+      },
+    }
+
+    render(<OpusChat context={context} onApplyWorkshopPromptUpdate={vi.fn()} />)
+
+    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
+    fireEvent.change(input, { target: { value: 'Remove one line.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+    })
+
+    expect(screen.getByText(/Proposed removals are highlighted in red with strikethrough/)).toBeInTheDocument()
+    expect(screen.getByText('Removed lines')).toBeInTheDocument()
+    expect(screen.getByText('Line B')).toBeInTheDocument()
+  })
 })
