@@ -30,6 +30,7 @@ def sample_pdf(tmp_path: Path) -> Path:
 @pytest.mark.asyncio
 async def test_process_pdf_document_success(orchestrator, sample_pdf):
     document_id = "doc-123"
+    orchestrator._sync_sql_document_status = AsyncMock()
 
     with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [{"text": "Foo"}],
@@ -52,6 +53,8 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
         ProcessingStage.CHUNKING,
         ProcessingStage.STORING,
     ]
+    orchestrator._sync_sql_document_status.assert_any_await(document_id, status="processing")
+    orchestrator._sync_sql_document_status.assert_any_await(document_id, status="completed")
 
     mock_parser.assert_awaited_once()
     mock_chunk.assert_awaited_once()
@@ -75,12 +78,19 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
 
 @pytest.mark.asyncio
 async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf):
+    orchestrator._sync_sql_document_status = AsyncMock()
+
     with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(side_effect=RuntimeError("boom"))):
         result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_user", validate_first=False)
 
     assert result.success is False
     assert ProcessingStage.PARSING not in result.stages_completed
     assert "boom" in result.error
+    orchestrator._sync_sql_document_status.assert_any_await(
+        "doc-1",
+        status="failed",
+        error_message="boom",
+    )
 
 
 def test_validate_pipeline_requirements(orchestrator):

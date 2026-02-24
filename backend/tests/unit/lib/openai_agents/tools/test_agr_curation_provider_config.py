@@ -8,7 +8,7 @@ from src.lib.openai_agents.tools import agr_curation
 def test_non_provider_method_does_not_require_mapping(monkeypatch):
     """Methods that do not fan out by provider should not fail on missing map."""
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {})
-    monkeypatch.setattr(agr_curation, "_PROVIDER_MAPPING_LOAD_ERROR", "missing file")
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", "missing file")
 
     result = agr_curation._ensure_provider_mappings("get_gene_by_id")
 
@@ -18,7 +18,7 @@ def test_non_provider_method_does_not_require_mapping(monkeypatch):
 def test_provider_method_requires_mapping(monkeypatch):
     """Provider-fanout methods should return a clear error when map is missing."""
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {})
-    monkeypatch.setattr(agr_curation, "_PROVIDER_MAPPING_LOAD_ERROR", "missing file")
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", "missing file")
 
     result = agr_curation._ensure_provider_mappings("search_genes")
 
@@ -31,7 +31,7 @@ def test_provider_method_requires_mapping(monkeypatch):
 def test_provider_method_succeeds_when_mapping_present(monkeypatch):
     """Provider-fanout methods should proceed when mapping is available."""
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
-    monkeypatch.setattr(agr_curation, "_PROVIDER_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
 
     result = agr_curation._ensure_provider_mappings("search_alleles")
 
@@ -70,14 +70,20 @@ def _unwrap_function_tool(tool):
     return found
 
 
-def test_module_load_fallback_on_missing_provider_file(monkeypatch):
-    """Module should not crash when provider config path is invalid at import time."""
-    monkeypatch.setenv("PROVIDERS_CONFIG_PATH", "/tmp/does-not-exist-providers.yaml")
+def test_module_load_fallback_on_missing_groups_file(monkeypatch):
+    """Module should not crash when groups config path is invalid at import time."""
+    from src.lib.config import groups_loader as gl_module
+
+    monkeypatch.setenv("GROUPS_CONFIG_PATH", "/tmp/does-not-exist-groups.yaml")
+    gl_module.reset_cache()
+    # Force DEFAULT_GROUPS_PATH to update for the reload
+    monkeypatch.setattr(gl_module, "DEFAULT_GROUPS_PATH", gl_module._get_default_groups_path())
     reloaded = importlib.reload(agr_curation)
 
     assert reloaded.PROVIDER_TO_TAXON == {}
-    assert reloaded._PROVIDER_MAPPING_LOAD_ERROR is not None
-    monkeypatch.delenv("PROVIDERS_CONFIG_PATH", raising=False)
+    assert reloaded._GROUP_MAPPING_LOAD_ERROR is not None
+    monkeypatch.delenv("GROUPS_CONFIG_PATH", raising=False)
+    gl_module.reset_cache()
     importlib.reload(agr_curation)
 
 
@@ -108,7 +114,7 @@ def test_query_returns_mapping_error_for_provider_methods(monkeypatch):
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {})
-    monkeypatch.setattr(agr_curation, "_PROVIDER_MAPPING_LOAD_ERROR", "missing providers.yaml")
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", "missing groups.yaml")
 
     result = query_fn(method="search_genes", gene_symbol="abc")
 

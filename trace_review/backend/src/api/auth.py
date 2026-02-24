@@ -1,8 +1,13 @@
 """
-Authentication API endpoints with AWS Cognito OAuth2 support
+Authentication API endpoints for Trace Review.
 
-Implements OAuth2 Authorization Code flow with PKCE for secure authentication.
-Falls back to dev mode bypass when COGNITO is not configured or DEV_MODE=true.
+This service currently keeps an in-repo auth module because Trace Review and the
+main backend both use a top-level `src` package layout, which makes direct
+runtime imports from `backend/src/auth` ambiguous in isolated service runs.
+
+Trace Review auth is currently Cognito-only. Multi-provider abstraction sharing
+with the main backend is planned future work after auth is extracted into a
+separate importable package.
 """
 import os
 import logging
@@ -130,7 +135,7 @@ async def _get_user_from_cookie_impl(
         )
 
     # Get token from cookie
-    token = request.cookies.get("cognito_token")
+    token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
     if not token:
         raise HTTPException(
             status_code=401,
@@ -361,7 +366,7 @@ async def callback(
 
         # Set httpOnly cookie with ID token (expires in 24 hours)
         redirect_response.set_cookie(
-            key="cognito_token",
+            key="auth_token",
             value=id_token,
             httponly=True,
             secure=secure_cookies,
@@ -407,6 +412,7 @@ async def logout(request: Request) -> RedirectResponse:
         redirect_response = RedirectResponse(url=frontend_url, status_code=302)
 
     # Clear authentication cookie
+    redirect_response.delete_cookie(key="auth_token")
     redirect_response.delete_cookie(key="cognito_token")
 
     logger.info("User logged out")

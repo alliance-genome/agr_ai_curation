@@ -6,20 +6,22 @@ This document lists all specialized agents available in the AI Curation System a
 
 The AI Curation System uses multiple specialized agents, each designed to answer specific types of biological questions. A supervisor agent coordinates these specialists to provide comprehensive answers.
 
+All agents are defined in configuration files (YAML) and stored in the database. This means agents can be updated and new agents can be added without changing application code. You can browse agent configurations in the **Agent Browser** within Agent Studio, and create your own custom agents in the **Agent Workshop**.
+
 ## Specialist Agents
 
 | Agent Name | Data Source | What It Does | Example Questions |
 |-----------|-------------|--------------|-------------------|
-| **Gene Expression Curation Agent** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
+| **Gene Expression Extractor** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
 | **Ontology Mapping Agent** | AGR Curation Database | Maps human-readable labels to official ontology term IDs across 45+ ontology types (see [Supported Ontology Types](#supported-ontology-types) below). | "Map 'linker cell' to WBbt term" "Find CURIE for 'L3 larval stage'" "What is the term ID for 'nucleus'?" |
 | **Disease Ontology Agent** | Disease Ontology (DOID) | Searches disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
-| **Gene Curation Agent** | AGR Curation Database | Queries curated gene data including symbols, names, IDs, genomic locations, and cross-references (NCBI, UniProt, Ensembl). | "What genes are on chromosome 2?" "Show me gene symbols for WBGene00001345" "What is the genomic location of dpy-5?" |
-| **Allele Curation Agent** | AGR Curation Database | Queries curated allele data including symbols, variant types, references, and associated genes. | "What alleles are associated with gene X?" "Show me variant information for allele Y" "What references support allele Z?" |
+| **Gene Validation Agent** | AGR Curation Database | Validates gene identifiers against the Alliance Curation Database. Supports lookup by symbol, name, ID, or cross-reference. | "Look up the gene daf-16" "Validate these genes: daf-16, lin-3, unc-54" "Show me gene symbols for WBGene00001345" |
+| **Allele Validation Agent** | AGR Curation Database | Validates allele/variant identifiers against the Alliance Curation Database. Supports lookup by symbol, ID, or gene association. | "Find all Ulk1 alleles in mouse" "Look up these alleles: e1370, n765, tm1234" "Tell me about MGI:3689906" |
 | **Chemical Ontology Agent** | ChEBI (EBI) | Searches chemical compounds, their properties, classifications, and relationships. | "What is cytidine?" "Show me chemical properties of aspirin" "Find compounds related to glucose" |
-| **Gene Ontology Agent** | QuickGO (EBI) | Searches GO terms, definitions, hierarchies (parent/child terms), and relationships. | "What is GO:0008150?" "Show me child terms of DNA repair" "What does biological process mean?" |
-| **GO Annotations Agent** | GO Consortium | Retrieves gene GO annotations with evidence codes (IDA, IMP, IEA, etc.). | "What GO terms are annotated to gene X?" "Show me annotations with IDA evidence" "What biological processes involve this gene?" |
-| **Alliance Orthologs Agent** | Alliance Genome | Finds cross-species orthology relationships with confidence scores. | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
-| **PDF Specialist Agent** | Uploaded Papers | Searches across your uploaded research papers to find relevant information. | "What does paper X say about gene regulation?" "Find information about disease Y in the uploaded papers" "Summarize methods from document Z" |
+| **GO Term Lookup Agent** | QuickGO (EBI) | Searches GO terms, definitions, hierarchies (parent/child terms), and relationships. | "What is GO:0008150?" "Show me child terms of DNA repair" "What does biological process mean?" |
+| **Gene GO Annotations Agent** | GO Consortium | Retrieves gene GO annotations with evidence codes (IDA, IMP, IEA, etc.). | "What GO terms are annotated to gene X?" "Show me annotations with IDA evidence" "What biological processes involve this gene?" |
+| **Ortholog Lookup Agent** | Alliance Genome | Finds cross-species orthology relationships with confidence scores. | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
+| **PDF Extraction Agent** | Uploaded Papers | Extracts text, tables, and data from uploaded PDF documents using semantic search and section-based retrieval. | "What does paper X say about gene regulation?" "Extract the gene expression table from results section" "Read the Methods section" |
 | **Supervisor Agent** | Routes to Specialists | Coordinates other agents - analyzes your question and sends it to the right specialist(s). | Handles all questions by delegating to specialist agents. |
 
 ## Output Formatter Agents
@@ -134,15 +136,17 @@ When you request ontology mappings, the agent:
 3. **Specialists retrieve data** - Each specialist queries its specific data source
 4. **Response is synthesized** - Results are combined into a comprehensive answer
 
-## Custom Agents (Prompt Workshop)
+## Custom Agents (Agent Workshop)
 
-You can create your own customized versions of any system agent using the **Prompt Workshop** in Agent Studio. Custom agents let you:
+You can create your own customized versions of any system agent using the **Agent Workshop** in Agent Studio. Custom agents let you:
 
-- Clone a system agent's prompt and modify the instructions for your specific needs
-- Add per-MOD prompt overrides and version history with revert support
+- Start from a template, from scratch, or by cloning an existing custom agent
+- Edit instructions, choose a model, and attach tools from the tool library
+- Add per-MOD prompt overrides with version history and revert support
+- Share custom agents with your project or keep them private
 - Use custom agents in Curation Flows alongside system agents
 
-See **[Agent Studio](AGENT_STUDIO.md)** for details on the Prompt Workshop.
+See **[Agent Studio](AGENT_STUDIO.md)** for details on Agent Workshop.
 
 ## Suggestions for New Agents
 

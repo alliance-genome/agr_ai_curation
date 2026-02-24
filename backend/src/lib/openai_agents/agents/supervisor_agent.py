@@ -19,8 +19,8 @@ Advanced features used:
 - Streaming tool wrappers: Specialists run with event capture for audit visibility
 
 DYNAMIC AGENT DISCOVERY:
-Specialist agents are discovered from YAML config files via get_supervisor_tools().
-Factory functions are registered in AGENT_FACTORIES mapping agent_id to callable.
+Specialist agents are discovered from unified `agents` table records where
+`visibility='system'` and `supervisor_enabled=true`.
 """
 
 import asyncio
@@ -38,50 +38,12 @@ from ..streaming_tools import run_specialist_with_events
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
 
-# Config-driven architecture imports
-from src.lib.config import get_supervisor_tools
-
 # Note: Answer model not used here - supervisor streams plain text for better UX
 
 logger = logging.getLogger(__name__)
 
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
-
-
-# =============================================================================
-# AGENT FACTORY REGISTRY
-# =============================================================================
-# Factory functions are discovered dynamically using convention-based discovery.
-# No hardcoded mappings required - add a new agent folder and it's automatically
-# available if it follows the naming convention:
-#   - Module: {folder_name}_agent.py
-#   - Factory: create_{folder_name}_agent
-#
-# See src/lib/config/agent_factory.py for the discovery implementation.
-# =============================================================================
-
-def _get_agent_factory(agent_id: str) -> Optional[Callable]:
-    """
-    Get the factory function for an agent by its agent_id.
-
-    Uses convention-based discovery from agent_factory module.
-    Factory functions follow the naming pattern:
-    - Module: src.lib.openai_agents.agents.{folder_name}_agent
-    - Function: create_{folder_name}_agent
-
-    Args:
-        agent_id: The agent identifier (e.g., "gene_validation", "pdf_extraction")
-
-    Returns:
-        Factory function or None if not found
-    """
-    from src.lib.config.agent_factory import get_factory_by_agent_id
-
-    factory = get_factory_by_agent_id(agent_id)
-    if factory is None:
-        logger.warning("No factory found for agent: %s", agent_id)
-    return factory
 
 
 def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[str, Any]]:
@@ -189,6 +151,7 @@ def _build_model_settings(
     model: str,
     temperature: Optional[float] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
+    provider_override: Optional[str] = None,
 ) -> Optional[ModelSettings]:
     """
     Build ModelSettings with optional reasoning for models that support it.
@@ -214,7 +177,7 @@ def _build_model_settings(
     Returns:
         ModelSettings instance or None if no settings needed
     """
-    from ..config import supports_reasoning, supports_temperature, is_gemini_provider, get_model_for_agent
+    from ..config import supports_reasoning, supports_temperature, resolve_model_provider
 
     # Build reasoning config for models that support it
     reasoning = None
@@ -224,8 +187,14 @@ def _build_model_settings(
     # GPT-5 models don't support temperature parameter, others do
     effective_temperature = temperature if supports_temperature(model) else None
 
-    # Gemini doesn't support parallel tool calls
-    parallel_tool_calls = False if is_gemini_provider() else True
+    # Provider-level capability gates (configured in providers.yaml)
+    model_provider = resolve_model_provider(model, provider_override)
+    from src.lib.config.providers_loader import get_provider
+
+    provider_def = get_provider(model_provider)
+    if provider_def is None:
+        raise ValueError(f"Unknown provider_id: {model_provider}")
+    parallel_tool_calls = bool(provider_def.supports_parallel_tool_calls)
 
     # Only create ModelSettings if we have something to set
     if reasoning is not None or effective_temperature is not None or not parallel_tool_calls:
@@ -240,25 +209,19 @@ def _build_model_settings(
 
 def get_supervisor_agent_tools() -> List[str]:
     """
-    Get list of tool names for supervisor from YAML config files.
-
-    Uses the config-driven get_supervisor_tools() to discover enabled agents.
-
-    Returns tool names for agents that have supervisor_routing.enabled=True.
-    Tool names are generated as ask_{folder}_specialist.
+    Get list of tool names for supervisor-enabled system agents.
     """
-    tools = get_supervisor_tools()
+    tools = _get_supervisor_specialist_specs()
     return [t["tool_name"] for t in tools]
 
 
 def generate_routing_table() -> str:
     """
-    Build supervisor routing table from YAML config files.
+    Build supervisor routing table from unified agent records.
 
     Returns markdown table with tool names and descriptions.
-    Tool metadata comes from agent.yaml supervisor_routing sections.
     """
-    tools = get_supervisor_tools()
+    tools = _get_supervisor_specialist_specs()
 
     rows = ["| Tool | When to Use |", "|------|-------------|"]
 
@@ -271,6 +234,50 @@ def generate_routing_table() -> str:
     return "\n".join(rows)
 
 
+def _get_supervisor_specialist_specs() -> List[Dict[str, Any]]:
+    """Load supervisor-enabled system agents from unified DB records."""
+    from src.models.sql.agent import Agent as AgentRecord
+    from src.models.sql.database import SessionLocal
+    from src.lib.agent_studio.catalog_service import get_agent_metadata
+
+    db = SessionLocal()
+    try:
+        rows = db.query(AgentRecord).filter(
+            AgentRecord.visibility == "system",
+            AgentRecord.is_active == True,  # noqa: E712
+            AgentRecord.supervisor_enabled == True,  # noqa: E712
+        ).order_by(AgentRecord.agent_key.asc()).all()
+    finally:
+        db.close()
+
+    specs: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            metadata = get_agent_metadata(row.agent_key)
+            requires_document = bool(metadata.get("requires_document", False))
+        except Exception:
+            logger.exception(
+                "Failed to resolve metadata for supervisor specialist '%s'",
+                row.agent_key,
+            )
+            continue
+
+        specs.append(
+            {
+                "agent_key": row.agent_key,
+                "name": row.name,
+                "description": row.supervisor_description or row.description or f"Ask {row.name}",
+                "tool_name": f"ask_{row.agent_key.replace('-', '_')}_specialist",
+                "requires_document": requires_document,
+                "group_rules_enabled": bool(row.group_rules_enabled),
+                "batchable": bool(row.supervisor_batchable),
+                "batching_entity": row.supervisor_batching_entity,
+            }
+        )
+
+    return specs
+
+
 def _create_dynamic_specialist_tools(
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -281,10 +288,7 @@ def _create_dynamic_specialist_tools(
     active_groups: Optional[List[str]] = None,
 ) -> List[Callable]:
     """
-    Dynamically create specialist tools based on discovered agent configs.
-
-    Uses get_supervisor_tools() to discover enabled agents and creates
-    streaming tool wrappers for each one.
+    Dynamically create specialist tools based on unified agent records.
 
     Args:
         document_id: UUID of loaded document (for document-dependent agents)
@@ -298,15 +302,14 @@ def _create_dynamic_specialist_tools(
     Returns:
         List of function_tool decorated callables
     """
-    from src.lib.config import get_agent_by_folder
+    from src.lib.agent_studio.catalog_service import get_agent_by_id
 
-    tools_metadata = get_supervisor_tools()
+    tools_metadata = _get_supervisor_specialist_specs()
     specialist_tools = []
 
     for tool_meta in tools_metadata:
         tool_name = tool_meta["tool_name"]
-        agent_id = tool_meta["agent_id"]
-        folder_name = tool_meta["folder_name"]
+        agent_key = tool_meta["agent_key"]
         description = tool_meta["description"]
         requires_document = tool_meta.get("requires_document", False)
         group_rules_enabled = tool_meta.get("group_rules_enabled", False)
@@ -316,18 +319,10 @@ def _create_dynamic_specialist_tools(
             logger.debug("Skipping %s - requires document but none loaded", tool_name)
             continue
 
-        # Get factory function
-        factory = _get_agent_factory(agent_id)
-        if factory is None:
-            logger.warning("No factory found for agent: %s", agent_id)
-            continue
-
-        # Build factory kwargs based on agent requirements
-        factory_kwargs = {}
-
-        # Document-dependent agents
+        # Build runtime kwargs for unified agent builder
+        agent_kwargs: Dict[str, Any] = {}
         if requires_document:
-            factory_kwargs.update({
+            agent_kwargs.update({
                 "document_id": document_id,
                 "user_id": user_id,
                 "document_name": document_name,
@@ -338,19 +333,17 @@ def _create_dynamic_specialist_tools(
 
         # Group-aware agents (MODs, institutions, teams, etc.)
         if group_rules_enabled and active_groups:
-            factory_kwargs["active_groups"] = active_groups
+            agent_kwargs["active_groups"] = active_groups
 
         try:
-            # Create the agent instance
-            agent = factory(**factory_kwargs)
+            # Create the agent instance from unified spec.
+            agent = get_agent_by_id(agent_key, **agent_kwargs)
 
-            # Get agent definition for display name (optional lookup)
-            agent_def = get_agent_by_folder(folder_name)
-            if agent_def:
-                specialist_name = agent_def.name.replace(" Agent", "").replace(" Validation", "")
-            else:
-                # Fallback: derive from folder name
-                specialist_name = folder_name.replace("_", " ").title()
+            specialist_name = (
+                str(tool_meta.get("name") or agent.name or agent_key)
+                .replace(" Agent", "")
+                .replace(" Validation", "")
+            )
 
             streaming_tool = _create_streaming_tool(
                 agent=agent,
@@ -363,7 +356,7 @@ def _create_dynamic_specialist_tools(
             logger.info("Created dynamic tool: %s", tool_name)
 
         except Exception as e:
-            logger.error("Failed to create tool %s: %s", tool_name, e)
+            logger.error("Failed to create tool %s for %s: %s", tool_name, agent_key, e)
             continue
 
     # Warn if no specialist tools were created
@@ -386,8 +379,8 @@ def create_supervisor_agent(
     Create a Supervisor agent with dynamically discovered specialist tools.
 
     DYNAMIC AGENT DISCOVERY:
-    Specialist tools are discovered from YAML config files (alliance_agents/*/agent.yaml)
-    via get_supervisor_tools(). Only agents with supervisor_routing.enabled=True are included.
+    Specialist tools are discovered from unified `agents` table records where
+    `visibility='system'` and `supervisor_enabled=true`.
     Document-dependent agents are filtered out if no document is loaded.
 
     Each specialist runs in isolation with its own context window.
@@ -413,21 +406,29 @@ def create_supervisor_agent(
     Returns:
         An Agent instance configured as a supervisor with specialist tools
     """
-    from ..config import get_agent_config, log_agent_config, get_model_for_agent
+    from ..config import (
+        get_agent_config,
+        log_agent_config,
+        get_model_for_agent,
+        resolve_model_provider,
+    )
     route_start = time.monotonic()
 
     # Get supervisor config from registry + environment
     config = get_agent_config("supervisor")
     log_agent_config("Supervisor", config)
 
-    # Get the model (returns LitellmModel for Gemini, string for OpenAI)
-    model = get_model_for_agent(config.model)
+    model_provider = resolve_model_provider(config.model)
+
+    # Get the model (returns LitellmModel for Gemini/Groq, string for OpenAI)
+    model = get_model_for_agent(config.model, provider_override=model_provider)
 
     # Build model settings for supervisor
     supervisor_settings = _build_model_settings(
         model=config.model,
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
+        provider_override=model_provider,
     )
 
     # Configure guardrails if enabled
@@ -457,7 +458,7 @@ def create_supervisor_agent(
     # =========================================================================
     # DYNAMIC SPECIALIST TOOL CREATION
     # =========================================================================
-    # Discover enabled agents from YAML configs and create streaming tool wrappers.
+    # Discover enabled agents from unified records and create streaming tool wrappers.
     # Document-dependent agents are automatically filtered if no document is loaded.
     # MOD-specific rules are injected for agents with group_rules_enabled=True.
     # =========================================================================
@@ -605,9 +606,9 @@ The tool returns file information including a download URL that will render as a
     set_pending_prompts(supervisor.name, prompts_used)
 
     # Log supervisor configuration to Langfuse for trace visibility
-    from ..langfuse_client import log_agent_config
+    from ..langfuse_client import log_agent_config as log_agent_config_to_langfuse
     tool_names = [getattr(t, 'name', str(t)) for t in specialist_tools]
-    log_agent_config(
+    log_agent_config_to_langfuse(
         agent_name="Query Supervisor",
         instructions=instructions,
         model=config.model,

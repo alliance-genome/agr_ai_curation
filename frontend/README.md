@@ -4,30 +4,52 @@
 
 React-based frontend application built with Vite, Material-UI, and TypeScript. Provides user interfaces for:
 - AI chat interactions with OpenAI Agents
+- **Agent Studio** - Browse agents, inspect prompts, chat with Claude, and submit suggestions
+- **Agent Workshop** - Clone agents, customize prompts, select models/tools, and test against live documents
+- **Visual Flow Builder** - Drag-and-drop workflow creation by chaining agents
 - Document management and processing
-- Vector database control panel
-- Real-time streaming responses
+- Real-time streaming responses with audit transparency
 
 ## Architecture
 
 ```
 frontend/
 ├── src/
-│   ├── components/         # React components
-│   │   ├── Chat/          # Chat interface components
-│   │   ├── Documents/     # Document management UI
-│   │   └── Common/        # Shared components
-│   ├── hooks/             # Custom React hooks
-│   ├── services/          # API service layer
-│   ├── types/             # TypeScript type definitions
-│   ├── utils/             # Utility functions
-│   └── App.tsx            # Main application component
-├── public/                # Static assets
-├── nginx.conf            # Nginx configuration for production
-├── Dockerfile            # Multi-stage build configuration
-├── package.json          # Dependencies and scripts
-├── vite.config.ts        # Vite configuration
-└── tsconfig.json         # TypeScript configuration
+│   ├── components/
+│   │   ├── AgentStudio/           # Agent Studio feature (see below)
+│   │   │   ├── AgentBrowser.tsx         # Searchable agent catalog with subcategory grouping
+│   │   │   ├── AgentDetailsPanel.tsx    # Overview, guidance, and prompt tabs for agents
+│   │   │   ├── OpusChat.tsx             # Claude chat with tool support (suggestions, prompt edits)
+│   │   │   ├── SuggestionDialog.tsx     # Manual prompt improvement submission
+│   │   │   ├── ToolDetailsDialog.tsx    # Tool inspection dialog
+│   │   │   ├── TraceContextPanel.tsx    # Trace context display from curation sessions
+│   │   │   ├── FlowBuilder/            # Visual workflow builder (React Flow)
+│   │   │   │   ├── FlowBuilder.tsx      # Main flow canvas
+│   │   │   │   ├── FlowNode.tsx         # Draggable agent nodes
+│   │   │   │   ├── AgentPalette.tsx     # Agent palette for drag-and-drop
+│   │   │   │   ├── NodeEditor.tsx       # Per-node configuration panel
+│   │   │   │   └── TaskInputEditor.tsx  # Task instruction editor for input nodes
+│   │   │   └── PromptWorkshop/         # Agent Workshop (custom agent creation)
+│   │   │       └── PromptWorkshop.tsx   # Full-featured prompt editor with model/tool selection
+│   │   ├── Chat/              # Chat interface components
+│   │   ├── Documents/         # Document management UI
+│   │   └── Common/            # Shared components
+│   ├── contexts/              # React contexts (e.g., AgentMetadataContext)
+│   ├── hooks/                 # Custom React hooks
+│   ├── pages/
+│   │   └── AgentStudioPage.tsx  # Two-panel Agent Studio layout
+│   ├── services/
+│   │   └── agentStudioService.ts  # Agent Studio API client (catalog, custom agents, tools, flows, chat)
+│   ├── types/
+│   │   └── promptExplorer.ts  # TypeScript types mirroring backend models
+│   ├── utils/                 # Utility functions
+│   └── App.tsx                # Main application component
+├── public/                    # Static assets
+├── nginx.conf                 # Nginx configuration for production
+├── Dockerfile                 # Multi-stage build configuration
+├── package.json               # Dependencies and scripts
+├── vite.config.ts             # Vite configuration
+└── tsconfig.json              # TypeScript configuration
 ```
 
 ## Technology Stack
@@ -41,6 +63,8 @@ frontend/
 - **Material-UI (MUI)** - Component library
 - **MUI X Data Grid Pro** - Advanced data tables
 - **@emotion** - CSS-in-JS styling
+- **react-resizable-panels** - Resizable split panes (Agent Studio layout)
+- **React Flow** - Node-based flow editor (Flow Builder)
 
 ### State & Data
 - **React Query (TanStack Query)** - Server state management
@@ -117,21 +141,41 @@ Nginx handles API proxying in production:
 
 ### API Service Layer
 
+The primary API client for Agent Studio features is `agentStudioService.ts`. It covers:
+
+| Endpoint Group | Key Functions | Description |
+|---------------|---------------|-------------|
+| Catalog | `fetchPromptCatalog`, `refreshPromptCatalog` | Agent catalog with categories and prompts |
+| Custom Agents | `createCustomAgent`, `updateCustomAgent`, `cloneAgentToWorkshop` | Agent Workshop CRUD |
+| Agent Versions | `listCustomAgentVersions`, `revertCustomAgentVersion` | Version history and rollback |
+| Agent Sharing | `setCustomAgentVisibility` | Private / project visibility toggle |
+| Agent Testing | `streamCustomAgentTest`, `streamAgentTest` | Streaming SSE test execution |
+| Models & Tools | `fetchModelOptions`, `fetchToolLibrary`, `fetchAgentTemplates` | Model catalog and tool library |
+| Tool Ideas | `submitToolIdeaRequest`, `listToolIdeaRequests` | Tool feature requests |
+| Opus Chat | `streamOpusChat` | Streaming Claude conversation with tool support |
+| Suggestions | `submitSuggestion` | Manual prompt improvement submissions |
+| Flows | `listFlows`, `createFlow`, `updateFlow`, `deleteFlow` | Flow CRUD |
+| Tools | `fetchToolDetails`, `fetchAllTools` | Tool inspection |
+| Traces | `fetchTraceContext` | Trace context for debugging |
+
 ```typescript
-// Example API service
-import { apiClient } from '@/services/api';
+// Example: Fetch agent catalog
+import { fetchPromptCatalog } from '@/services/agentStudioService'
+const catalog = await fetchPromptCatalog()
 
-// Chat API
-const response = await apiClient.post('/api/chat', {
-  message: 'Hello, AI!'
-});
+// Example: Stream a custom agent test
+import { streamCustomAgentTest } from '@/services/agentStudioService'
+for await (const event of streamCustomAgentTest(agentId, { input: 'query' })) {
+  // Handle streaming SSE events
+}
 
-// Streaming API
-const eventSource = new EventSource('/api/chat/stream');
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // Handle streaming response
-};
+// Example: Stream Opus chat
+import { streamOpusChat } from '@/services/agentStudioService'
+for await (const event of streamOpusChat(messages, context)) {
+  if (event.type === 'TEXT_DELTA') {
+    // Append text to chat display
+  }
+}
 ```
 
 ## Component Structure
@@ -144,6 +188,28 @@ eventSource.onmessage = (event) => {
 - **ProcessingStatus** - Real-time processing status
 - **SettingsPanel** - Configuration and settings
 - **AuditPanel** - Real-time AI agent activity monitoring (see dedicated section below)
+
+### Agent Studio Components
+
+The Agent Studio page (`AgentStudioPage.tsx`) uses a two-panel layout with resizable panes:
+
+**Left panel: OpusChat** - Chat with Claude for guidance on prompts, agent behavior, flow verification, and prompt editing. Supports tool use for submitting suggestions and applying prompt changes to the Agent Workshop.
+
+**Right panel: Tabbed interface** with three tabs:
+
+1. **Agents tab** (`AgentBrowser.tsx`) - Searchable agent catalog organized by subcategory (System, Input, PDF Extraction, Data Validation, Output, Custom). Each agent can be inspected in `AgentDetailsPanel.tsx` which provides Overview, Guidance, and Prompts tabs. Agents can be discussed with Claude or cloned to the Agent Workshop.
+
+2. **Flows tab** (`FlowBuilder/`) - Drag-and-drop visual workflow builder. Curators drag agents from the `AgentPalette` onto a canvas, connect them with edges, and configure each node with custom instructions. Flows can be verified by Claude for structural correctness.
+
+3. **Agent Workshop tab** (`PromptWorkshop/PromptWorkshop.tsx`) - Full-featured custom agent editor. Curators can:
+   - Clone any system agent as a starting point or create from scratch
+   - Edit the agent prompt with a diff view against the parent template
+   - Select an LLM model from the model catalog (`config/models.yaml`) with reasoning level controls
+   - Attach or remove tools from the tool library (`config/tool_policy_defaults.yaml`)
+   - Test the custom agent against the active document with streaming results
+   - Share custom agents with the project or keep them private
+   - View version history and revert to previous versions
+   - Submit tool idea requests when a needed tool does not exist
 
 ### Shared Components
 

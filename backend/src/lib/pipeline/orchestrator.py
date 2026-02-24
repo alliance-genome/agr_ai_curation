@@ -1,16 +1,11 @@
 """Main pipeline orchestrator for document processing."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 import logging
-import os
-import asyncio
 import time
-from contextlib import suppress
-
-import httpx
 
 from src.models.pipeline import ProcessingStage
 from .tracker import PipelineTracker
@@ -110,23 +105,22 @@ class DocumentPipelineOrchestrator:
 
             from .docling_parser import parse_pdf_document
 
-            monitor_task = None
-            try:
-                monitor_task = asyncio.create_task(
-                    self._monitor_docling_progress(document_id)
+            async def _track_parser_progress(message: str) -> None:
+                await self.tracker.track_pipeline_progress(
+                    document_id,
+                    ProcessingStage.PARSING,
+                    message=message,
                 )
-            except Exception as monitor_error:  # pragma: no cover - monitor failure shouldn't break pipeline
-                logger.debug("Docling progress monitor not started: %s", monitor_error)
 
-            try:
-                parse_start = time.monotonic()
-                # T032: Pass user_id to enable user-specific file storage (FR-012)
-                parse_result = await parse_pdf_document(file_path, document_id, user_id, extraction_strategy)
-            finally:
-                if monitor_task:
-                    monitor_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await monitor_task
+            parse_start = time.monotonic()
+            # T032: Pass user_id to enable user-specific file storage (FR-012)
+            parse_result = await parse_pdf_document(
+                file_path,
+                document_id,
+                user_id,
+                extraction_strategy,
+                progress_callback=_track_parser_progress,
+            )
 
             # Extract elements and file paths from the result
             elements = parse_result["elements"]
@@ -269,48 +263,6 @@ class DocumentPipelineOrchestrator:
 
         return checks
 
-    async def _monitor_docling_progress(self, document_id: str) -> None:
-        """Poll Docling service for job progress and update tracker while parsing."""
-
-        service_url = os.getenv("DOCLING_SERVICE_URL", "http://docling-internal.alliancegenome.org:8000").rstrip("/")
-        status_url = f"{service_url}/status/{document_id}"
-        start_time = datetime.now()
-
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            while True:
-                progress_message = "Docling parsing in progress"
-                try:
-                    response = await client.get(status_url)
-                    if response.status_code == 200:
-                        payload = response.json()
-                        progress = payload.get("progress")
-                        status = payload.get("status", "processing")
-                        if isinstance(progress, (int, float)):
-                            progress_message = f"Extracting content from PDF... {progress}%"
-                        else:
-                            progress_message = "Extracting content from PDF..."
-                    elif response.status_code == 404:
-                        progress_message = "Extracting PDF content (this may take 1-2 minutes, please wait)..."
-                    else:
-                        progress_message = "Extracting PDF content (this may take 1-2 minutes, please wait)..."
-                except Exception as exc:  # pragma: no cover - network hiccups are non-fatal
-                    progress_message = "Extracting PDF content (this may take 1-2 minutes, please wait)..."
-                    logger.debug("Docling progress poll failed: %s", exc)
-
-                # Add elapsed time as heartbeat indicator (cleaner format)
-                elapsed = int((datetime.now() - start_time).total_seconds())
-                message = f"{progress_message} ({elapsed}s)"
-                try:
-                    await self.tracker.track_pipeline_progress(
-                        document_id,
-                        ProcessingStage.PARSING,
-                        message=message
-                    )
-                except Exception:  # pragma: no cover - tracker failures should not abort parsing
-                    logger.debug("Failed to update docling progress", exc_info=True)
-
-                await asyncio.sleep(2)
-
     async def retry_stage(
         self,
         document_id: str,
@@ -366,11 +318,71 @@ class DocumentPipelineOrchestrator:
             ProcessingStage.STORING: "Storing in Weaviate database...",
             ProcessingStage.COMPLETED: "Processing completed successfully"
         }
+        sql_status = None
+        if stage in {
+            ProcessingStage.PARSING,
+            ProcessingStage.CHUNKING,
+            ProcessingStage.EMBEDDING,
+            ProcessingStage.STORING,
+        }:
+            sql_status = "processing"
+        elif stage == ProcessingStage.COMPLETED:
+            sql_status = "completed"
+
+        if sql_status:
+            await self._sync_sql_document_status(document_id, status=sql_status)
+
         await self.tracker.track_pipeline_progress(
             document_id,
             stage,
             message=messages.get(stage, f"Processing {stage.value}...")
         )
+
+    async def _sync_sql_document_status(
+        self,
+        document_id: str,
+        *,
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Persist pipeline status fields in PostgreSQL for PDF viewer and ops visibility."""
+        from src.models.sql.database import SessionLocal
+        from src.models.sql.pdf_document import PDFDocument
+        from uuid import UUID
+
+        now = datetime.now(timezone.utc)
+        session = SessionLocal()
+        try:
+            doc = session.query(PDFDocument).filter(PDFDocument.id == UUID(document_id)).first()
+            if not doc:
+                logger.warning("Could not find SQL document row to update status: %s", document_id)
+                return
+
+            doc.status = status
+
+            if status == "processing":
+                if doc.processing_started_at is None:
+                    doc.processing_started_at = now
+                doc.processing_completed_at = None
+                doc.error_message = None
+            elif status == "completed":
+                if doc.processing_started_at is None:
+                    doc.processing_started_at = now
+                doc.processing_completed_at = now
+                doc.error_message = None
+            elif status == "failed":
+                if doc.processing_started_at is None:
+                    doc.processing_started_at = now
+                doc.processing_completed_at = now
+                doc.error_message = (error_message or "Pipeline failed")[:1000]
+
+            session.commit()
+            logger.info("Updated SQL document status for %s to %s", document_id, status)
+        except Exception as e:
+            logger.error("Error updating SQL status for document %s: %s", document_id, e)
+            session.rollback()
+        finally:
+            session.close()
 
     async def _update_file_paths(self, document_id: str, docling_json_path: str, processed_json_path: str):
         """Update file paths in the database."""
@@ -416,6 +428,12 @@ class DocumentPipelineOrchestrator:
 
     async def _handle_failure(self, document_id: str, error: Exception):
         """Handle pipeline failure."""
+        await self._sync_sql_document_status(
+            document_id,
+            status="failed",
+            error_message=str(error),
+        )
+
         try:
             from src.lib.weaviate_client.documents import update_document_status_detailed
             await update_document_status_detailed(document_id, self._current_user_id, embedding_status="failed")

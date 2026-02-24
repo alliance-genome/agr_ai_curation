@@ -3,7 +3,9 @@
 ## Overview
 
 Unified FastAPI backend serving both AI Chat and Weaviate Control Panel APIs. This service provides:
-- AI-powered chat functionality using OpenAI Agents SDK
+- AI-powered chat functionality using OpenAI Agents SDK with config-driven agents
+- Agent Workshop for browsing, customizing, and managing agents
+- Multi-provider LLM support (OpenAI, Gemini, Groq) via pluggable provider architecture
 - Vector database management via Weaviate
 - PDF document processing and chunking
 - OpenTelemetry tracing with Langfuse
@@ -13,23 +15,72 @@ Unified FastAPI backend serving both AI Chat and Weaviate Control Panel APIs. Th
 ```
 backend/
 ├── src/
-│   ├── api/                    # API endpoints
-│   │   ├── chat.py             # AI chat endpoints
-│   │   ├── documents.py        # Document management
-│   │   ├── chunks.py           # Document chunking
-│   │   ├── processing.py       # PDF processing
-│   │   ├── schema.py           # Schema management
-│   │   ├── settings.py         # Settings endpoints
-│   │   ├── strategies.py       # Processing strategies
-│   │   └── health.py           # Health checks
-│   ├── lib/                    # Core libraries
-│   │   ├── weaviate_client/    # Weaviate integration
-│   │   └── pipeline/           # Processing pipeline
-│   └── models/                 # Data models
-├── tests/                      # Test suite
-├── main.py                     # FastAPI application
-├── requirements.txt            # Python dependencies
-└── Dockerfile                  # Container definition
+│   ├── api/                        # API endpoints
+│   │   ├── chat.py                 # AI chat endpoints
+│   │   ├── agent_studio.py         # Agent Studio (catalog, Opus chat, traces)
+│   │   ├── agent_studio_custom.py  # Custom agent CRUD endpoints
+│   │   ├── documents.py            # Document management
+│   │   ├── chunks.py               # Document chunking
+│   │   ├── batch.py                # Batch processing endpoints
+│   │   ├── flows.py                # Curation flow endpoints
+│   │   ├── processing.py           # PDF processing
+│   │   ├── schema.py               # Schema management
+│   │   ├── settings.py             # Settings endpoints
+│   │   ├── strategies.py           # Processing strategies
+│   │   └── health.py               # Health checks
+│   ├── lib/                        # Core libraries
+│   │   ├── agent_studio/           # Agent Studio services
+│   │   │   ├── agent_service.py    # Unified agent CRUD and visibility
+│   │   │   ├── catalog_service.py  # Prompt catalog builder
+│   │   │   ├── registry_builder.py # YAML-to-registry bridge
+│   │   │   ├── tool_policy_service.py  # Tool library policy cache
+│   │   │   └── tool_idea_service.py    # Tool idea request workflow
+│   │   ├── config/                 # Configuration loaders
+│   │   │   ├── agent_loader.py     # Loads agent.yaml files
+│   │   │   ├── models_loader.py    # Loads config/models.yaml
+│   │   │   ├── providers_loader.py # Loads config/providers.yaml
+│   │   │   ├── provider_validation.py  # Cross-validates providers and models
+│   │   │   ├── schema_discovery.py # Discovers schema.py files
+│   │   │   ├── groups_loader.py    # Loads groups.yaml
+│   │   │   └── connections_loader.py   # Loads connections.yaml
+│   │   ├── openai_agents/          # OpenAI Agents SDK integration
+│   │   │   └── agents/
+│   │   │       └── supervisor_agent.py # Supervisor (routes to config-driven agents)
+│   │   ├── batch/                  # Batch processing engine
+│   │   ├── flows/                  # Curation flow executor
+│   │   ├── weaviate_client/        # Weaviate integration
+│   │   └── pipeline/               # Processing pipeline
+│   └── models/                     # Data models
+│       └── sql/
+│           ├── agent.py            # Agent, Project, ProjectMember tables
+│           ├── tool_policy.py      # ToolPolicy table
+│           ├── tool_idea_request.py # ToolIdeaRequest table
+│           ├── custom_agent.py     # Legacy custom agent (compatibility)
+│           └── ...
+├── alembic/                        # Database migrations
+├── tests/                          # Test suite
+├── main.py                         # FastAPI application
+├── requirements.txt                # Python dependencies
+└── Dockerfile                      # Container definition
+```
+
+### Config Directory (project root)
+
+Agent definitions and LLM provider configuration live outside the backend in the
+project-level `config/` directory, which is mounted read-only into the container:
+
+```
+config/
+├── agents/                  # Agent definitions (loaded at startup)
+│   ├── supervisor/          # Core supervisor agent
+│   ├── gene/                # Gene validation agent
+│   ├── disease/             # Disease validation agent
+│   └── [your_agent]/        # Custom agents
+├── models.yaml              # LLM model catalog (curator-selectable models)
+├── providers.yaml           # LLM provider definitions (OpenAI, Gemini, Groq)
+├── groups.yaml              # Group/Cognito mapping
+├── connections.yaml         # External service connections
+└── tool_policy_defaults.yaml # Default tool visibility policies
 ```
 
 ## API Endpoints
@@ -38,6 +89,16 @@ backend/
 - `POST /api/chat` - Send a message and get a response
 - `POST /api/chat/stream` - Stream responses via Server-Sent Events
 - `GET /api/chat/status` - Check chat service status
+
+### Agent Studio (`/api/agent-studio`)
+- `GET /api/agent-studio/catalog` - Get all agent prompts organized by category
+- `POST /api/agent-studio/chat` - Stream a conversation with Opus
+- `GET /api/agent-studio/trace/{trace_id}/context` - Get enriched trace context
+- `POST /api/agent-studio/suggestion` - Submit a prompt suggestion
+- `GET /api/agent-studio/custom-agents` - List user's custom agents
+- `POST /api/agent-studio/custom-agents` - Create a custom agent
+- `PUT /api/agent-studio/custom-agents/{id}` - Update a custom agent
+- `DELETE /api/agent-studio/custom-agents/{id}` - Delete a custom agent
 
 ### Weaviate Control Panel (`/weaviate`)
 - `GET /weaviate/documents` - List all documents
@@ -58,6 +119,17 @@ backend/
 
 ### Required
 - `OPENAI_API_KEY` - OpenAI API key for AI agents
+- `DATABASE_URL` - PostgreSQL connection string
+
+### LLM Providers (set per provider in use)
+- `OPENAI_API_KEY` - OpenAI API key (required, also used by default runner)
+- `GEMINI_API_KEY` - Google Gemini API key (optional, for Gemini provider)
+- `GROQ_API_KEY` - Groq API key (optional, for Groq provider)
+- `LLM_PROVIDER_STRICT_MODE` - Fail startup if required provider keys missing (default: `true`)
+
+### Config Paths (optional)
+- `MODELS_CONFIG_PATH` - Override path to `models.yaml` (default: auto-detected)
+- `PROVIDERS_CONFIG_PATH` - Override path to `providers.yaml` (default: auto-detected)
 
 ### Optional
 - `LANGFUSE_PUBLIC_KEY` - Langfuse public key for tracing
@@ -68,6 +140,7 @@ backend/
 - `PDF_STORAGE_PATH` - Path for PDF storage (default: `/app/pdf_storage`)
 - `UNSTRUCTURED_API_URL` - Unstructured API URL for PDF processing
 - `UNSTRUCTURED_API_KEY` - Unstructured API key
+- `TOOL_POLICY_CACHE_TTL_SECONDS` - Tool policy cache lifetime (default: `30`)
 - `DEBUG` - Enable debug mode (default: `false`)
 
 ## Development Setup
@@ -140,16 +213,48 @@ The backend integrates with Langfuse for distributed tracing of agent operations
 
 View traces at: `http://localhost:3000` (when Langfuse is running)
 
+## Agent Architecture
+
+Agents are defined entirely in YAML configuration files under `config/agents/`. The 16
+hardcoded Python agent files that previously lived in `backend/src/lib/openai_agents/agents/`
+have been replaced by this config-driven approach. The old `agent_factory.py` has also been
+removed.
+
+At startup the backend:
+
+1. Loads agent definitions from `config/agents/*/agent.yaml` (via `agent_loader.py`)
+2. Loads the LLM model catalog from `config/models.yaml` (via `models_loader.py`)
+3. Loads LLM provider definitions from `config/providers.yaml` (via `providers_loader.py`)
+4. Cross-validates that every model references a known provider and that required API keys
+   are present (via `provider_validation.py`)
+5. Seeds the unified `agents` table in PostgreSQL from the YAML definitions
+6. Builds the supervisor agent dynamically from the loaded registry
+
+The only remaining Python agent file is `supervisor_agent.py`, which is constructed at
+runtime from the loaded agent registry rather than containing hardcoded routing logic.
+
+Custom agents created through the Agent Workshop UI are stored directly in the `agents`
+database table with `visibility = 'private'` or `'project'`, while system agents loaded
+from YAML have `visibility = 'system'`.
+
+See [CONFIG_DRIVEN_ARCHITECTURE.md](../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) for
+the full guide on adding agents, configuring providers, and managing tool policies.
+
 ## Dependencies
 
 ### Core
 - **FastAPI** - Web framework
 - **Uvicorn** - ASGI server
 - **Pydantic** - Data validation
+- **SQLAlchemy** - ORM and database access
+- **Alembic** - Database migrations
+- **PyYAML** - YAML configuration loading
 
 ### AI & Chat
 - **OpenAI Agents SDK** - AI agent framework
-- **OpenAI** - LLM provider
+- **OpenAI** - LLM provider (native driver)
+- **LiteLLM** - Multi-provider LLM gateway (Gemini, Groq)
+- **Anthropic** - Opus chat in Agent Studio
 - **Langfuse** - Observability
 - **OpenInference** - Instrumentation
 
@@ -166,6 +271,11 @@ The backend runs on port 8000 inside the container. The Dockerfile includes:
 - OCR dependencies (Tesseract)
 - PDF processing tools (Poppler)
 - Health check endpoint
+
+The `config/` directory from the project root is mounted read-only into the container at
+`/app/config`, providing access to `models.yaml`, `providers.yaml`, agent definitions, and
+other runtime configuration. Alembic migrations run automatically on container startup
+(`alembic upgrade head`) before the application starts.
 
 ## Troubleshooting
 

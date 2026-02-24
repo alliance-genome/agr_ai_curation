@@ -147,7 +147,7 @@ After completing a batch, click **"Start New Batch"** to reset the page. Then na
 Here's a complete example of batch processing gene expression data:
 
 1. **Build a Curation Flow** ([see guide](CURATION_FLOWS.md))
-   - PDF Agent → Gene Expression Agent → CSV Formatter
+   - PDF Extraction Agent → Gene Expression Extractor → CSV Formatter
    - Save it with a name like "Gene Expression Extraction"
 
 2. **Upload Documents**

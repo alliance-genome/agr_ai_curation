@@ -6,7 +6,6 @@ import pytest
 
 from src.models.sql.prompts import PromptTemplate
 from src.lib.agent_studio import catalog_service
-from src.lib.agent_studio.custom_agent_service import CustomAgentRuntimeInfo
 from src.lib.prompts.context import get_prompt_override
 
 
@@ -89,36 +88,35 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
     assert agent.mod_rules["FB"].content == "fb rules"
 
 
-def test_get_agent_by_id_resolves_custom_agent_with_mod_rules_disabled(monkeypatch):
-    """Custom agent should resolve via parent factory and force active_groups=[] when disabled."""
-    custom_id = "ca_11111111-2222-3333-4444-555555555555"
+def test_get_agent_by_id_requires_unified_agents_table(monkeypatch):
+    """Runtime creation should fail fast when no unified agent record exists."""
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_db_agent_row",
+        lambda _agent_id, _kwargs: None,
+    )
 
-    def _parent_factory(active_groups=None):
-        return {"active_groups": active_groups}
+    with pytest.raises(ValueError, match="unified agents table"):
+        catalog_service.get_agent_by_id("gene")
+    assert get_prompt_override() is None
 
-    monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", {
-        "gene": {
-            "name": "Gene Specialist",
-            "description": "Curate genes",
-            "category": "Validation",
-            "factory": _parent_factory,
-            "required_params": [],
-        }
-    })
 
-    from src.lib.agent_studio import custom_agent_service
-    monkeypatch.setattr(custom_agent_service, "get_custom_agent_runtime_info", lambda _agent_id: CustomAgentRuntimeInfo(
-        custom_agent_uuid=uuid.UUID("11111111-2222-3333-4444-555555555555"),
-        custom_agent_id=custom_id,
-        parent_agent_key="gene",
-        display_name="Doug's Gene Agent",
-        custom_prompt="Custom prompt",
-        mod_prompt_overrides={},
-        include_mod_rules=False,
-        requires_document=False,
-        parent_exists=True,
-    ))
+def test_get_agent_by_id_builds_from_unified_agent_record(monkeypatch):
+    """Runtime creation should use DB-backed unified agent rows only."""
+    fake_row = type("FakeAgentRow", (), {"agent_key": "gene"})()
+    built_agent = object()
 
-    result = catalog_service.get_agent_by_id(custom_id, active_groups=["WB"])
-    assert result["active_groups"] == []
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_db_agent_row",
+        lambda _agent_id, _kwargs: fake_row,
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_create_db_agent",
+        lambda _row, **_kwargs: built_agent,
+    )
+
+    result = catalog_service.get_agent_by_id("gene", active_groups=["WB"])
+    assert result is built_agent
     assert get_prompt_override() is None

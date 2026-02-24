@@ -2,14 +2,14 @@
 Registry Builder - Builds AGENT_REGISTRY from YAML configurations.
 
 This module provides the bridge between config-driven agent definitions
-and the AGENT_REGISTRY used by catalog_service.py.
+and AGENT_REGISTRY metadata used by catalog_service.py.
 
 YAML files (config/agents/*/agent.yaml) are the source of truth.
 This module builds the registry dynamically at startup.
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.lib.config.agent_loader import (
     AgentDefinition,
@@ -18,8 +18,6 @@ from src.lib.config.agent_loader import (
     get_agent_definition,
     get_agent_by_folder,
 )
-from src.lib.config.agent_factory import get_agent_factory
-
 logger = logging.getLogger(__name__)
 
 
@@ -555,14 +553,12 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
 
 def _agent_definition_to_registry_entry(
     agent_def: AgentDefinition,
-    factory: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """
     Convert an AgentDefinition to an AGENT_REGISTRY entry.
 
     Args:
         agent_def: AgentDefinition from YAML
-        factory: Factory function (from convention-based discovery)
 
     Returns:
         Dictionary in AGENT_REGISTRY format
@@ -588,7 +584,7 @@ def _agent_definition_to_registry_entry(
         "subcategory": agent_def.subcategory,
         "has_mod_rules": agent_def.group_rules_enabled,
         "tools": agent_def.tools,
-        "factory": factory,
+        "factory": None,
         "requires_document": agent_def.requires_document,
         "required_params": agent_def.required_params,
         "batch_capabilities": agent_def.batch_capabilities,
@@ -611,8 +607,7 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
     Build AGENT_REGISTRY from YAML configurations.
 
     Loads all agent definitions from config/agents/*/agent.yaml and
-    converts them to AGENT_REGISTRY format. Uses convention-based
-    factory discovery for agent creation.
+    converts them to AGENT_REGISTRY metadata entries.
 
     Returns:
         Dictionary mapping agent_id to registry entry
@@ -654,17 +649,7 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
 
     # Convert each agent definition to registry format
     for agent_id, agent_def in agent_defs.items():
-        # Get factory via convention-based discovery
-        factory = get_agent_factory(agent_def.folder_name)
-
-        if factory is None:
-            logger.warning(
-                f"No factory found for agent {agent_id} "
-                f"(folder: {agent_def.folder_name}). "
-                "Agent will be display-only."
-            )
-
-        entry = _agent_definition_to_registry_entry(agent_def, factory)
+        entry = _agent_definition_to_registry_entry(agent_def)
         registry[agent_id] = entry
 
         # Also add folder_name as an alias for backwards compatibility
@@ -673,14 +658,12 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
             registry[agent_def.folder_name] = entry
 
         logger.debug(
-            f"Added to registry: {agent_id} "
-            f"(folder={agent_def.folder_name}, factory={'present' if factory else 'missing'})"
+            "Added to registry: %s (folder=%s)",
+            agent_id,
+            agent_def.folder_name,
         )
 
-    logger.info(
-        f"Built AGENT_REGISTRY with {len(registry)} entries "
-        f"({sum(1 for e in registry.values() if e.get('factory'))} with factories)"
-    )
+    logger.info("Built AGENT_REGISTRY with %s entries", len(registry))
 
     return registry
 
@@ -723,7 +706,4 @@ def get_registry_entry(agent_id: str) -> Optional[Dict[str, Any]]:
     if agent_def is None:
         return None
 
-    # Get factory
-    factory = get_agent_factory(agent_def.folder_name)
-
-    return _agent_definition_to_registry_entry(agent_def, factory)
+    return _agent_definition_to_registry_entry(agent_def)

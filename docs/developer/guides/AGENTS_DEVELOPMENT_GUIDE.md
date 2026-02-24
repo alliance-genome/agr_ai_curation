@@ -1,27 +1,30 @@
-# Adding New Agents to the Multi-Agent System
+# Agent Development Guide
 
-This guide explains how to add and maintain specialist agents inside the AGR AI Curation Platform. The platform runs a multi-service stack (FastAPI backend + React Agent Studio + Langfuse + Postgres + Weaviate) so every agent change must stay in sync with the runtime environment, database-backed prompts, and the developer tooling described below.
+Comprehensive reference for the AGR AI Curation multi-agent architecture. Covers the full lifecycle from agent definition through runtime execution, including the unified database model, dynamic supervisor discovery, tool bindings, prompt management, and observability.
 
-> **Last Updated:** January 26, 2026 (OpenAI Agents SDK stack with database prompts & Agent Studio flows)
+> **Last Updated:** February 2026 (Unified agents table, dynamic supervisor discovery, YAML + DB architecture)
 
 ---
 
 ## Table of Contents
 
 1. [Quick Start: Environment & CLI](#quick-start-environment--cli)
-   1. [Local stack & data access](#local-stack--data-access)
-   2. [CLI scaffolding tool](#cli-scaffolding-tool)
 2. [Architecture Overview](#architecture-overview)
 3. [Critical Patterns (Read First)](#critical-patterns-read-first)
-4. [Step-by-Step Guide](#step-by-step-guide)
-5. [Complete Checklist](#complete-checklist)
-6. [Key Patterns & Gotchas](#key-patterns--gotchas)
-7. [Multi-Provider Support](#multi-provider-support)
-8. [Database-Backed Prompts](#database-backed-prompts)
-9. [Advanced Topics](#advanced-topics)
-10. [Current Specialists & Tools](#current-specialists--tools)
-11. [Troubleshooting](#troubleshooting)
-12. [Resources](#resources)
+4. [Agent Lifecycle](#agent-lifecycle)
+5. [Unified Agents Table](#unified-agents-table)
+6. [YAML Configuration](#yaml-configuration)
+7. [Tool System](#tool-system)
+8. [Prompt Management](#prompt-management)
+9. [Supervisor and Routing](#supervisor-and-routing)
+10. [Multi-Provider Support](#multi-provider-support)
+11. [Output Schemas](#output-schemas)
+12. [Frontend Integration](#frontend-integration)
+13. [Configuration & Environment Variables](#configuration--environment-variables)
+14. [Testing & Validation](#testing--validation)
+15. [Current Agents & Tools](#current-agents--tools)
+16. [Troubleshooting](#troubleshooting)
+17. [Resources](#resources)
 
 ---
 
@@ -29,538 +32,489 @@ This guide explains how to add and maintain specialist agents inside the AGR AI 
 
 ### Local stack & data access
 
-- **Environment file** – Run `make setup` once. This copies `.env.example` to `~/.agr_ai_curation/.env` (600 permissions) so secrets stay outside git.
-- **Start everything** – `make dev` (foreground) or `make dev-detached`. Services come up on:
+- **Environment file** -- Run `make setup` once. This copies `.env.example` to `~/.agr_ai_curation/.env` (600 permissions) so secrets stay outside git.
+- **Start everything** -- `make dev` (foreground) or `make dev-detached`. Services come up on:
   - Backend FastAPI: `http://localhost:8000`
   - Agent Studio (React): `http://localhost:3002/agent-studio` (set `DEV_MODE=true` in your env to bypass Cognito locally)
   - Langfuse: `http://localhost:3000`
   - Trace Review API (optional): `http://localhost:8001`
-- **Data services** – `docker compose` brings up Postgres (AI curation DB + prompt tables) on `localhost:5434`, Redis, Weaviate, ClickHouse, MinIO, and Langfuse worker. Use `docker compose logs -f backend` to watch agent telemetry.
-- **Prompts live in Postgres** – Inspect with `docker compose exec postgres psql -U postgres ai_curation -c "select agent_name, prompt_type, version, is_active from prompt_templates order by updated_at desc limit 20;"`.
-- **Agent Studio entry points** – Prompt Explorer (catalog, prompt history, group rules), Flows tab (visual builder), Trace context panel (pulls Langfuse + prompt execution logs) all read from the backend's catalog and prompt cache.
-
-### CLI scaffolding tool
-
-`scripts/create_agent.py` generates new agent files, registry entries, and prompt stubs with live validation against the real registries.
-
-```bash
-# Preview (no files touched)
-python3 scripts/create_agent.py my_new_agent \
-  --name "My New Agent" \
-  --description "Validates my data" \
-  --category "Validation" \
-  --tools "agr_curation_query,save_csv_file" \
-  --icon "🧪" \
-  --dry-run
-
-# Create with confirmation prompt
-docker compose exec backend python scripts/create_agent.py my_new_agent \
-  --name "My New Agent" \
-  --description "Validates my data" \
-  --category "Validation" \
-  --tools "agr_curation_query" \
-  --icon "🧪"
-```
-
-**Flags you will actually use**
-
-| Flag | Purpose |
-|------|---------|
-| `--tools` | Comma-separated tool IDs validated against `TOOL_REGISTRY` (see `catalog_service.py`). |
-| `--subcategory` | Optional Flow Builder grouping label. |
-| `--icon` | Emoji for Agent Studio (stored with the registry metadata). |
-| `--requires-document` | Adds `document_id` & `user_id` to `required_params` for PDF-aware agents. |
-| `--create-prompt` | Prints a ready-to-run Python snippet that inserts the initial prompt via `PromptService`. |
-| `--force` | Allows unknown tools (you must add them to `TOOL_REGISTRY` later). |
-| `--yes / -y` | Skip the interactive confirmation. |
-
-**What the CLI edits**
-1. `backend/src/lib/openai_agents/agents/{agent_id}_agent.py` – scaffolded factory using the database prompt cache and Langfuse logging.
-2. `backend/src/lib/openai_agents/agents/__init__.py` – import + `__all__` export.
-3. `backend/src/lib/agent_studio/catalog_service.py` – adds the `AGENT_REGISTRY` entry (including frontend + supervisor metadata) and wires the factory import.
+- **Data services** -- `docker compose` brings up Postgres (AI curation DB + prompt tables + unified agents table) on `localhost:5434`, Redis, Weaviate, ClickHouse, MinIO, and Langfuse worker. Use `docker compose logs -f backend` to watch agent telemetry.
+- **Inspect agents** -- `docker compose exec postgres psql -U postgres ai_curation -c "SELECT agent_key, name, visibility, supervisor_enabled, is_active FROM agents ORDER BY agent_key;"`.
+- **Inspect prompts** -- `docker compose exec postgres psql -U postgres ai_curation -c "SELECT agent_name, prompt_type, version, is_active FROM prompt_templates ORDER BY updated_at DESC LIMIT 20;"`.
 
 ---
 
 ## Architecture Overview
 
-1. **Frontend (Agent Studio)** – React (Vite) UI served through Nginx (`frontend` container). Provides Prompt Explorer, Flow Builder, Opus 4.5 chat, Langfuse trace context, and a palette of registry-driven agents.
-2. **Backend (FastAPI)** – `backend/src/main.py` hosts OpenAI Agents chat endpoints, Agent Studio APIs, admin prompt management, and document ingestion endpoints. Startup tasks initialize the prompt cache and Langfuse client.
-3. **OpenAI Agents SDK layer** – Lives in `backend/src/lib/openai_agents`. Key modules:
-   - `agents/` – Supervisor + specialist factories (OpenAI Agents SDK `Agent` objects only). No HTTP/glue here.
-   - `config.py` – Resolves per-agent settings via env overrides and registry defaults.
-   - `models.py` – Structured output envelopes shared by all specialists.
-   - `runner.py` – Streaming execution + Langfuse instrumentation + prompt logging.
-   - `streaming_tools.py` – Wraps specialists as streaming tools with audit events and batching nudges.
-   - `tools/` – `@function_tool` implementations (AGR database, SQL, Weaviate search, REST API wrappers, file outputs, etc.).
-4. **Prompt Catalog & Flow services** – `backend/src/lib/agent_studio/` loads prompt metadata from the database, exposes `/api/agent-studio` endpoints, and registers flow-editing tools for Opus.
-5. **Databases**
-   - **Postgres (`postgres` service)** – Application DB + `prompt_templates` + `prompt_execution_log` tables + flow definitions.
-   - **Alliance data sources** – `agr_curation_query` uses the AGR curation database via `CURATION_DB_URL`; disease agent also uses direct SQL (`curation_db_sql`). Keep VPN tunnels up when hitting internal DBs.
-6. **Observability** – Langfuse (web + worker + ClickHouse + MinIO + Redis) captures traces. `langfuse_client.py` queues agent configs until the trace exists; `runner.py` flushes them.
-7. **Agent Studio Trace Review** – Optional `trace_review_backend` container (host network) pulls Langfuse traces across VPN for the Trace Review UI.
+The system uses a **config-driven, database-backed** architecture where YAML files define the initial state and the database is the runtime authority.
+
+### Key Components
+
+1. **YAML Config Layer** (`config/agents/*/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions. Read at startup by `registry_builder.py` for UI metadata and by Alembic migrations for database seeding.
+
+2. **Unified Agents Table** (`agents` in Postgres) -- Single table for both system agents (seeded from YAML) and custom agents (created via UI). Contains all runtime fields: instructions, model settings, tool IDs, output schema key, group rules config, supervisor routing, and visibility.
+
+3. **Catalog Service** (`backend/src/lib/agent_studio/catalog_service.py`) -- Central runtime factory. `get_agent_by_id()` reads a row from the `agents` table and builds a live OpenAI Agents SDK `Agent` object with resolved tools, injected group rules, document context, and output schema.
+
+4. **Registry Builder** (`backend/src/lib/agent_studio/registry_builder.py`) -- Builds `AGENT_REGISTRY` from YAML at import time. Provides metadata for the Agent Studio UI (categories, icons, documentation) without touching the database.
+
+5. **Supervisor Agent** (`backend/src/lib/openai_agents/agents/supervisor_agent.py`) -- Dynamically discovers supervisor-enabled agents from the `agents` table and creates streaming tool wrappers. No hardcoded specialist imports.
+
+6. **Agent Service** (`backend/src/lib/agent_studio/agent_service.py`) -- Database access layer for agent CRUD. Handles visibility rules (system/private/project), user scoping, and execution spec materialization.
+
+7. **Config Loaders** (`backend/src/lib/config/`) -- Thread-safe loaders for agents, schemas, groups, connections, models, and providers. All support `force_reload` for cache invalidation.
+
+8. **Tool Bindings** (`TOOL_BINDINGS` in `catalog_service.py`) -- Declarative mapping from tool IDs to runtime resolver functions. Each binding declares its required execution context (document_id, database_url, etc.).
+
+### Data Flow
+
+```
+config/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI metadata)
+                     └──→ Alembic migration ──→ agents table (runtime authority)
+                                                      │
+                                                      ▼
+                                              get_agent_by_id()
+                                                      │
+                                      ┌───────────────┼───────────────┐
+                                      ▼               ▼               ▼
+                              resolve_tools()   build_runtime    resolve_output
+                              (TOOL_BINDINGS)   _instructions()   _schema()
+                                      │               │               │
+                                      ▼               ▼               ▼
+                                  Agent(tools=..., instructions=..., output_type=...)
+```
 
 ---
 
 ## Critical Patterns (Read First)
 
-1. **Prompt cache or bust** – Every specialist must fetch prompts via `src/lib/prompts/cache.get_prompt()` and register them with `set_pending_prompts()`. Runtime systems never touch disk files for prompts.
-2. **Registry-driven config** – Use `get_agent_config(agent_id)` inside factories. If you need different defaults, set `"config_defaults"` in the agent’s `AGENT_REGISTRY` entry instead of creating bespoke config functions.
-3. **Context via closures, not params** – API layers set `trace_id`, `session_id`, and `curator_id` using `src/lib/context`. Tools should capture context either when the tool is created (most cases) or right before use (file outputs). Do **not** add these as function parameters.
-4. **Envelope outputs with safe defaults** – Output models (`*ResultEnvelope`) must allow empty responses: every field either `Optional[...] = None` or `Field(default_factory=list, ...)`. Missing defaults → Agents can’t emit structured output when nothing is found.
-5. **Structured-output enforcement** – Call `inject_structured_output_instruction()` when your agent returns structured data. This injects the “CRITICAL: ALWAYS PRODUCE …” block so the SDK retries instead of silently finishing with `final_output=None`.
-6. **Streaming tools** – Specialists should be wrapped with `_create_streaming_tool()` so tool calls become audit events, batching nudges work, and prompts are logged only when the specialist actually runs.
-7. **Langfuse logging** – Each factory must call `log_agent_config()` with instructions, model settings, and tool list *before* returning the `Agent`. The runner flushes queued configs into the trace once OpenAI Agents emits the trace ID.
-8. **Prompt execution logging** – Factory: `set_pending_prompts(agent.name, prompts_used)`. Runner: `commit_pending_prompts()` when the specialist actually executes, then `PromptService.log_all_used_prompts()` writes to `prompt_execution_log`.
-9. **Tool docstrings are UX** – `function_tool` docstrings become the tool description for the LLM and appear in Agent Studio’s Tool Inspector. Describe inputs/outputs crisply and keep return types JSON serializable (dicts or Pydantic models).
+1. **Database is runtime authority** -- The `agents` table is what `get_agent_by_id()` reads at runtime. YAML files are only read during migrations and for UI metadata. Editing a YAML file alone will not change agent behavior until the database row is updated.
+
+2. **No hardcoded agent files** -- Individual Python agent files (`gene_agent.py`, `disease_agent.py`, etc.) have been removed. All agents are built generically by `_create_db_agent()` in `catalog_service.py` from database rows.
+
+3. **Dynamic supervisor discovery** -- The supervisor queries the `agents` table for `visibility='system'` + `supervisor_enabled=true` records and creates streaming tools dynamically. No imports or explicit wiring needed.
+
+4. **Tool bindings are declarative** -- Tools are resolved via `TOOL_BINDINGS` in `catalog_service.py`. Each entry declares a resolver function and required execution context. The `resolve_tools()` function materializes tool instances at runtime.
+
+5. **Prompt cache for group rules** -- Base prompts come from the `agents.instructions` column. Group rules come from the `prompt_templates` table via the prompt cache. `_inject_group_rules_with_overrides()` merges them at runtime.
+
+6. **Envelope outputs with safe defaults** -- Output models (`*Envelope`) must allow empty responses: every field either `Optional[...] = None` or `Field(default_factory=list, ...)`. Missing defaults cause structured output failures.
+
+7. **Structured-output enforcement** -- `inject_structured_output_instruction()` is called automatically by `_build_runtime_instructions()` when `output_schema_key` is set. This injects the "CRITICAL: ALWAYS PRODUCE ..." block.
+
+8. **Context via closures, not params** -- API layers set `trace_id`, `session_id`, and `curator_id` using `src/lib/context`. Tools should capture context either when the tool is created or right before use. Do **not** add these as function parameters.
+
+9. **Streaming tools for audit** -- Specialists are wrapped with `_create_streaming_tool()` so tool calls become audit events, batching nudges work, and prompts are logged only when the specialist actually runs.
 
 ---
 
-## Step-by-Step Guide
+## Agent Lifecycle
 
-### Step 1: Define output models (single + envelope)
+### System Agents (YAML-defined)
 
-File: `backend/src/lib/openai_agents/models.py`
+1. Developer creates `config/agents/my_agent/agent.yaml` and `prompt.yaml`
+2. An Alembic migration reads the YAML and inserts a row into `agents` with `visibility='system'`
+3. At backend startup, `registry_builder.py` reads the YAML to build `AGENT_REGISTRY` for UI metadata
+4. The prompt cache loads active prompts from `prompt_templates` for group rule injection
+5. When the supervisor is created, it queries the `agents` table and builds streaming tools for each enabled agent
+6. When a user query matches the agent's routing description, the supervisor calls the streaming tool
+7. `get_agent_by_id()` builds a fresh `Agent` instance from the DB row with resolved tools, injected group rules, and output schema
 
-```python
-class MyAgentResult(BaseModel):
-    """Single result."""
-    primary_id: str = Field(..., description="Alliance-style CURIE")
-    label: Optional[str] = Field(None, description="Human-readable label")
-    synonyms: List[str] = Field(default_factory=list, description="Alternative labels")
-    provenance: Optional[str] = Field(None, description="How we located this record")
+### Custom Agents (UI-created)
 
+1. Curator creates an agent via the Agent Studio UI
+2. A row is inserted into `agents` with `visibility='private'` and `supervisor_enabled=false`
+3. The agent is immediately available for flow execution and direct invocation
+4. No YAML files, no migrations, no code changes required
 
-class MyAgentResultEnvelope(BaseModel):
-    """Always return this wrapper."""
-    results: List[MyAgentResult] = Field(default_factory=list, description="Zero or more results")
-    query_summary: Optional[str] = Field(None, description="What we searched for")
-    not_found: List[str] = Field(default_factory=list, description="Identifiers with no matches")
-    warnings: List[str] = Field(default_factory=list, description="Soft validation issues")
+---
+
+## Unified Agents Table
+
+The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
+
+### Key Columns
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `agent_key` | String(100) | Unique identifier, used as lookup key |
+| `name` | String(255) | Display name |
+| `instructions` | Text | Full prompt text |
+| `model_id` | String(100) | LLM model identifier (e.g., `gpt-4o`) |
+| `model_temperature` | Float | Temperature setting |
+| `model_reasoning` | String(20) | Reasoning effort level |
+| `tool_ids` | JSONB | List of tool IDs (e.g., `["agr_curation_query"]`) |
+| `output_schema_key` | String(100) | Pydantic class name from `models.py` |
+| `group_rules_enabled` | Boolean | Whether to inject group-specific rules |
+| `group_rules_component` | String(100) | Prompt cache key for group rule lookup |
+| `mod_prompt_overrides` | JSONB | Per-group prompt overrides (custom agents) |
+| `visibility` | String(20) | `system`, `private`, or `project` |
+| `user_id` | Integer | Owner (NULL for system agents) |
+| `project_id` | UUID | Project scope (for `project` visibility) |
+| `supervisor_enabled` | Boolean | Whether the supervisor can route to this agent |
+| `supervisor_description` | Text | Routing hint for the supervisor |
+| `supervisor_batchable` | Boolean | Whether batching nudges apply |
+| `show_in_palette` | Boolean | Whether to show in Flow Builder palette |
+| `is_active` | Boolean | Soft delete flag |
+
+### Visibility Rules
+
+- **system**: Visible to all users. Created from YAML via migration.
+- **private**: Visible only to the owner (`user_id`). Created via Agent Studio.
+- **project**: Visible to all members of the associated project. Created via Agent Studio.
+
+---
+
+## YAML Configuration
+
+### agent.yaml Reference
+
+See the `config/agents/_examples/basic_agent/agent.yaml` template for all fields. Key sections:
+
+- **Basic info**: `agent_id`, `name`, `description`, `category`, `subcategory`
+- **Supervisor routing**: `supervisor_routing.enabled`, `.description`, `.batchable`, `.batching_entity`
+- **Tools**: List of tool IDs that map to `TOOL_BINDINGS`
+- **Output schema**: Class name from `backend/src/lib/openai_agents/models.py`
+- **Model config**: `model`, `temperature`, `reasoning` (supports `${ENV_VAR:-default}` syntax)
+- **Frontend**: `icon`, `show_in_palette`
+- **Group rules**: `group_rules_enabled`
+
+### prompt.yaml Reference
+
+```yaml
+agent_id: my_agent
+content: |
+  [Full prompt text with markdown formatting]
 ```
 
-Rules:
-- Every field has a description (the model feeds the structured output instructions).
-- Never use `Field(...)` in envelopes; defaults are mandatory.
-- Keep names snake_case; prefer flat structures unless you absolutely need nested objects.
+The prompt content is seeded into the `prompt_templates` table by the Alembic migration. At runtime, the prompt is stored directly in the `agents.instructions` column. Group rules are fetched from the prompt cache and injected dynamically.
 
-### Step 2: Plan configuration
+### Group Rules
 
-- Inside the factory call `config = get_agent_config("my_agent")`.
-- Set defaults inside `AGENT_REGISTRY["my_agent"]["config_defaults"]`:
+Group rules are YAML files under `config/agents/my_agent/group_rules/`. Each file has:
+
+```yaml
+group_id: FB          # Must match config/groups.yaml
+content: |
+  [Organization-specific instructions]
+```
+
+These are seeded into `prompt_templates` with `prompt_type='group_rules'` and injected into the agent's instructions at runtime when the user belongs to that group.
+
+---
+
+## Tool System
+
+### Available Tools
+
+Tools are Python functions decorated with `@function_tool` in `backend/src/lib/openai_agents/tools/`. Each tool that agents can reference must have a `TOOL_BINDINGS` entry in `catalog_service.py`.
+
+| Tool ID | Category | Description |
+|---------|----------|-------------|
+| `agr_curation_query` | Database | Multi-method AGR curation DB access (genes, alleles, anatomy, life stages, GO terms) |
+| `curation_db_sql` | Database | Parameterized SQL against curation DB (disease ontology) |
+| `search_document` | PDF | Weaviate hybrid search over uploaded PDFs |
+| `read_section` | PDF | Read full text of a document section |
+| `read_subsection` | PDF | Read full text of a subsection |
+| `alliance_api_call` | API | Alliance REST API (orthology) |
+| `chebi_api_call` | API | ChEBI chemical database API |
+| `quickgo_api_call` | API | QuickGO Gene Ontology API |
+| `go_api_call` | API | GO Consortium annotations API |
+| `save_csv_file` | Output | Persist data as downloadable CSV |
+| `save_tsv_file` | Output | Persist data as downloadable TSV |
+| `save_json_file` | Output | Persist data as downloadable JSON |
+
+### Tool Bindings
+
+Each tool has a binding in `TOOL_BINDINGS` that declares:
+
+- **`binding`**: `"static"` (no context needed) or `"context_factory"` (needs runtime context)
+- **`required_context`**: List of execution context fields needed (e.g., `["document_id", "user_id"]`)
+- **`resolver`**: Function that returns the tool instance
 
 ```python
-"config_defaults": {
-    "model": "gpt-5-mini",
-    "reasoning": "low",
-    "temperature": 0.2,
-    "tool_choice": "auto",
+TOOL_BINDINGS = {
+    "agr_curation_query": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_agr_curation_tool,
+    },
+    "search_document": {
+        "binding": "context_factory",
+        "required_context": ["document_id", "user_id"],
+        "resolver": _resolve_search_document_tool,
+    },
 }
 ```
 
-This makes `AGENT_MY_AGENT_MODEL`, `AGENT_MY_AGENT_REASONING`, etc. optional overrides via the env. No code changes required when toggling providers.
+### Adding a New Tool Binding
 
-### Step 3: Choose or create tools
+When adding a new tool that agents reference:
 
-**Built-in tools** (see `TOOL_REGISTRY` in `catalog_service.py`):
+1. Create the tool in `backend/src/lib/openai_agents/tools/` (see [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md))
+2. Add a resolver function in `catalog_service.py`
+3. Add the binding to `TOOL_BINDINGS`
+4. Optionally add to `TOOL_REGISTRY` for UI documentation
 
-| Tool ID | Module | Highlights |
-|---------|--------|------------|
-| `agr_curation_query` | `backend/src/lib/openai_agents/tools/agr_curation.py` | Primary access to AGR curation DB for genes, alleles, anatomy, life stages, GO terms. Returns `AgrQueryResult`. |
-| `curation_db_sql` | `backend/src/lib/openai_agents/tools/sql_query.py` (bound in `disease_agent`) | Direct read-only SQL access for ontology/disease lookups (requires `CURATION_DB_URL`). |
-| `search_document` / `read_section` / `read_subsection` | `tools/weaviate_search.py` | Weaviate hybrid search + deterministic section readers (document-aware agents). |
-| `create_rest_api_tool` | `tools/rest_api.py` | Generates domain-restricted REST callers (used for ChEBI, QuickGO, etc.). |
-| `create_sql_query_tool` | `tools/sql_query.py` | Creates a named SQL read tool for any database URL. |
-| `create_csv_tool` / `create_tsv_tool` / `create_json_tool` | `tools/file_output_tools.py` | Persist structured data and return download metadata (uses context vars at invocation time to capture trace/session/user). |
+### Tool Resolution at Runtime
 
-When creating a brand new tool:
-1. Generate scaffolding with `python3 scripts/create_tool.py my_tool --name "..." --description "..." --params "query:str" --return-type "MyToolResult"`.
-2. Add it to `backend/src/lib/openai_agents/tools/` and export it in `tools/__init__.py` if it should be importable by other modules.
-3. Document it inside `TOOL_REGISTRY` so Agent Studio, the CLI, and diagnostic tools understand the parameters and usage.
+When `get_agent_by_id()` builds an agent, it calls `resolve_tools()` which:
 
-Guidelines:
-- Use `@function_tool`. Sync functions are fine for CPU-bound tasks; use `async` when hitting network IO.
-- Return `dict` or `BaseModel`; the SDK will JSON-serialize automatically.
-- Handle errors gently (return `status="error"` JSON instead of raising) so LLMs can self-correct.
-- Capture context via closures or at invocation (see `file_output_tools`). Do **not** add `trace_id` parameters.
+1. Reads the `tool_ids` JSONB array from the agent's DB row
+2. Canonicalizes method-level aliases back to parent tool IDs
+3. Looks up each tool in `TOOL_BINDINGS`
+4. Validates that required execution context is present
+5. Calls the resolver function to get the tool instance
 
-### Step 4: Build the factory
+---
 
-File: `backend/src/lib/openai_agents/agents/my_agent.py`
+## Prompt Management
 
-```python
-"""My Agent."""
-import logging
-from typing import List, Optional
+### Prompt Sources
 
-from agents import Agent
+- **System agent instructions**: Stored in `agents.instructions` column, seeded from `prompt.yaml` during migration
+- **Group rules**: Stored in `prompt_templates` table with `prompt_type='group_rules'`, accessed via the prompt cache
+- **Custom agent instructions**: Written directly to `agents.instructions` by the Agent Studio UI
 
-from src.lib.prompts.cache import get_prompt
-from src.lib.prompts.context import set_pending_prompts
-from ..config import build_model_settings, get_agent_config, get_model_for_agent
-from ..langfuse_client import log_agent_config as log_to_langfuse
-from ..models import MyAgentResultEnvelope
-from ..prompt_utils import inject_structured_output_instruction
+### Prompt Cache
 
-logger = logging.getLogger(__name__)
+The prompt cache (`backend/src/lib/prompts/cache.py`) loads active prompts from `prompt_templates` at startup. Group rules are fetched from this cache during agent construction.
 
-
-def create_my_agent(active_groups: Optional[List[str]] = None) -> Agent:
-    from ..tools.agr_curation import agr_curation_query
-
-    config = get_agent_config("my_agent")
-
-    base_prompt = get_prompt("my_agent", "system")
-    prompts_used = [base_prompt]
-    instructions = inject_structured_output_instruction(
-        base_prompt.content,
-        output_type=MyAgentResultEnvelope,
-    )
-
-    if active_groups:
-        try:
-            from config.group_rules import inject_group_rules
-            instructions = inject_group_rules(
-                base_prompt=instructions,
-                group_ids=active_groups,
-                component_type="agents",
-                component_name="my_agent",
-                prompts_out=prompts_used,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Group rule injection failed: %s", exc)
-
-    model = get_model_for_agent(config.model)
-    model_settings = build_model_settings(
-        model=config.model,
-        temperature=config.temperature,
-        reasoning_effort=config.reasoning,
-        tool_choice=config.tool_choice,
-        parallel_tool_calls=True,
-    )
-
-    log_to_langfuse(
-        agent_name="My Agent Specialist",
-        instructions=instructions,
-        model=config.model,
-        tools=["agr_curation_query"],
-        model_settings={
-            "temperature": config.temperature,
-            "reasoning": config.reasoning,
-            "tool_choice": config.tool_choice,
-            "prompt_version": base_prompt.version,
-            "active_groups": active_groups,
-        },
-    )
-
-    agent = Agent(
-        name="My Agent Specialist",
-        instructions=instructions,
-        model=model,
-        model_settings=model_settings,
-        tools=[agr_curation_query],
-        output_type=MyAgentResultEnvelope,
-    )
-
-    set_pending_prompts(agent.name, prompts_used)
-    return agent
+```bash
+# Refresh cache after editing prompts
+curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
 ```
 
-### Step 4b: Prompts in the database
+### Editing Prompts
 
-Pick one of these options:
-
-1. **Admin API** (recommended for iterative work)
+**For system agents** -- Update via the Admin API:
 
 ```bash
 curl -X POST http://localhost:8000/api/admin/prompts \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <dev token if DEV_MODE=false>' \
   -d '{
-    "agent_name": "my_agent",
+    "agent_name": "gene",
     "prompt_type": "system",
-    "content": "You are the My Agent Specialist...",
-    "change_notes": "Initial version",
+    "content": "Updated prompt text...",
+    "change_notes": "Improved search strategy",
     "activate": true
   }'
 
-# Refresh in-memory cache after writing
-docker compose exec backend curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
-```
-
-Make sure `ADMIN_EMAILS` in your `.env` includes your login so the admin endpoints authorize you.
-
-2. **PromptService helper** (non-interactive pipelines)
-
-```bash
-docker compose exec backend python - <<'PY'
-from src.models.sql.database import SessionLocal
-from src.lib.prompts.service import PromptService
-
-db = SessionLocal()
-svc = PromptService(db)
-prompt = svc.create_version(
-    agent_name="my_agent",
-    content="You are the My Agent Specialist...",
-    prompt_type="system",
-    created_by="dev@example.org",
-    change_notes="Initial",
-    activate=True,
-)
-db.commit()
-print("Created", prompt.id)
-PY
-
-# Refresh cache afterwards
+# Refresh cache
 curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
 ```
 
-3. **Alembic migration** – still an option for one-off seeding, but favor the API so prompt revisions stay out of code deployments.
+**For custom agents** -- Edit through the Agent Studio UI, which updates `agents.instructions` directly.
 
-The prompt history (all versions + group rules) shows up automatically inside Agent Studio → Prompt Explorer once the cache refresh completes.
+### Prompt Execution Logging
 
-### Step 5: Wire exports & registry entries
-
-1. `agents/__init__.py` – import your factory and append to `__all__`.
-2. `backend/src/lib/agent_studio/catalog_service.py`
-   - Add the factory import near the top.
-   - Create the `AGENT_REGISTRY["my_agent"]` entry:
-
-```python
-"my_agent": {
-    "name": "My Agent",
-    "description": "Validates ...",
-    "category": "Validation",
-    "subcategory": "Data Validation",
-    "has_group_rules": True,
-    "tools": ["agr_curation_query"],
-    "factory": create_my_agent,
-    "requires_document": False,
-    "required_params": [],
-    "batch_capabilities": [],
-    "config_defaults": {
-        "model": "gpt-5-mini",
-        "reasoning": "low",
-        "temperature": 0.2,
-    },
-    "frontend": {
-        "icon": "🧪",
-        "show_in_palette": True,
-    },
-    "supervisor": {
-        "enabled": True,
-        "tool_name": "ask_my_agent_specialist",
-        "tool_description": "Ask the My Agent Specialist ...",
-    },
-    "batching": {
-        "entity": "items",
-        "example": 'ask_my_agent_specialist("Check: foo, bar, baz")',
-    },
-    "documentation": {
-        "summary": "Two-sentence curator summary",
-        "capabilities": [
-            {
-                "name": "Exact identifier lookup",
-                "description": "...",
-                "example_query": "",
-                "example_result": "",
-            }
-        ],
-        "data_sources": [
-            {
-                "name": "Alliance Curation DB",
-                "description": "",
-                "species_supported": ["WB", "FB"],
-            }
-        ],
-        "limitations": ["Needs validated symbols"]
-    },
-},
-```
-
-3. **Tool metadata** – if you added a brand new tool, also register it inside `TOOL_REGISTRY` (document parameters + allowed domains) so the CLI, Agent Studio Tool Inspector, and diagnostics stay consistent.
-
-### Step 6: Register with the supervisor
-
-File: `backend/src/lib/openai_agents/agents/supervisor_agent.py`
-
-1. Import the factory inside `create_supervisor_agent()`.
-2. Instantiate your specialist right next to similar agents.
-3. Wrap it with `_create_streaming_tool(...)`:
-
-```python
-my_agent = create_my_agent(active_groups=active_groups)
-specialist_tools.append(_create_streaming_tool(
-    agent=my_agent,
-    tool_name="ask_my_agent_specialist",
-    tool_description="Ask the My Agent Specialist about ...",
-    specialist_name="My Agent Specialist",
-))
-```
-
-4. Update `SUPERVISOR_INSTRUCTIONS` (markdown table) so routing has clear triggers.
-5. If your agent can make repeated batched lookups, keep the `batching` entry in the registry—`streaming_tools.get_batching_config()` reads it automatically and nudges the supervisor after three sequential calls.
-
-### Step 7: Frontend surfacing
-
-No hard-coded icon map anymore. Agent Studio fetches metadata via `GET /api/agent-studio/registry/metadata`, so once the registry entry contains `frontend.icon`, the Flow Builder palette, trace badges, and Tool Inspector all pick it up automatically.
-
-To verify:
-1. Start the stack (`make dev`), log into Agent Studio, and open the Agents tab. Use the search box to locate your agent; confirm the description, icon, and category look correct.
-2. Use the Prompt Explorer to ensure the base prompt and any group rules show up (and include version metadata from the DB).
-
-### Step 8: Configuration & environment variables
-
-1. **Local overrides** – add optional settings to `~/.agr_ai_curation/.env`:
-
-```bash
-# My Agent overrides
-AGENT_MY_AGENT_MODEL=gpt-5-mini
-AGENT_MY_AGENT_REASONING=low
-# AGENT_MY_AGENT_TEMPERATURE=0.2
-# AGENT_MY_AGENT_TOOL_CHOICE=auto
-```
-
-2. **docker-compose** – environment variables are already passed through for every `AGENT_*` value, so you usually don’t need to edit `docker-compose.yml` unless the agent needs a brand-new service or secret.
-3. **Production (EC2)** – `.env` on the server is not deployed automatically. SSH in, edit `/home/ubuntu/ai_curation_prototype/.env`, restart the backend (`docker compose up -d backend --build`), rerun migrations if needed, and refresh the prompt cache.
-4. **External databases** – if a tool needs Alliance DB access, ensure `CURATION_DB_URL` / `LITERATURE_DB_URL` env vars point to your SSH tunnel endpoints (`host.docker.internal` + forwarded port) before hitting them.
-
-### Step 9: Test + validate
-
-1. **Static checks**
-   - `python scripts/validate_registry.py`
-   - `python scripts/validate_current_agents.py`
-   - `pytest backend/tests/unit/test_routing_consistency.py` (ensures every registry entry is reachable)
-2. **Runtime**
-   - `docker compose up -d backend --build` (or `make rebuild-backend`).
-   - Refresh prompt cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh`.
-   - Hit `POST /api/agent-studio/catalog/refresh` so the Prompt Explorer sees the new agent.
-   - Chat via Agent Studio or `curl http://localhost:8000/api/chat` and confirm the supervisor tool shows up (watch `docker compose logs backend | grep my_agent`).
-   - Inspect Langfuse for the new agent name, prompt versions, and structured output payload.
-   - Save a flow in the Flow Builder with your agent to ensure `get_agent_by_id()` resolves all required params.
-3. **Trace Review** – Run `make trace-review` if you need the dedicated trace analysis backend for debugging streaming transcripts.
+When a specialist agent runs, `commit_pending_prompts()` records which prompt versions were used in `prompt_execution_log`. This provides an audit trail for prompt changes.
 
 ---
 
-## Complete Checklist
+## Supervisor and Routing
 
-### Foundation
-- [ ] Output model + envelope added to `backend/src/lib/openai_agents/models.py` (with defaults and descriptions).
-- [ ] `inject_structured_output_instruction()` called when applicable.
+### Dynamic Agent Discovery
 
-### Tooling
-- [ ] Reuse existing tools or create a new one via `scripts/create_tool.py` and `TOOL_REGISTRY` docs.
-- [ ] Tool gracefully handles errors and returns JSON-serializable shapes.
+The supervisor no longer hardcodes specialist imports. Instead, `_create_dynamic_specialist_tools()` in `supervisor_agent.py`:
 
-### Factory
-- [ ] Uses `get_agent_config`, `get_prompt`, `set_pending_prompts`, `build_model_settings`, and `log_agent_config`.
-- [ ] Supports optional `active_groups` with `inject_group_rules`.
-- [ ] Registers the correct `output_type` (envelope) and any output guardrails if needed.
+1. Queries `agents` table: `visibility='system'` AND `supervisor_enabled=true` AND `is_active=true`
+2. For each row, calls `get_agent_by_id()` to build a runtime `Agent` instance
+3. Wraps each agent with `_create_streaming_tool()` for audit visibility
+4. Document-dependent agents are skipped if no document is loaded
 
-### Registry + supervisor + frontend
-- [ ] Factory exported in `agents/__init__.py`.
-- [ ] `AGENT_REGISTRY` entry includes `frontend`, `supervisor`, `batching`, `config_defaults`, and optional `documentation` for Prompt Explorer.
-- [ ] Supervisor imports + `_create_streaming_tool` wrapper added.
-- [ ] `SUPERVISOR_INSTRUCTIONS` table updated.
+### Routing Table
 
-### Prompts
-- [ ] Prompt inserted via Admin API or PromptService and activated.
-- [ ] `POST /api/admin/prompts/cache/refresh` run after insertion.
-- [ ] Agent Studio Prompt Explorer shows the new prompt + version metadata.
+The supervisor's routing instructions include a dynamically generated markdown table from `generate_routing_table()`:
 
-### Config & deployment
-- [ ] Local `.env` updated if the agent needs overrides or new secrets.
-- [ ] Production `.env` + Docker restart plan documented (manual step!).
-- [ ] Any new DB connections or HTTP allowlists captured in runbooks.
+```
+| Tool | When to Use |
+|------|-------------|
+| ask_gene_specialist | Use for validating genes against the database... |
+| ask_allele_specialist | Use for validating allele/variant identifiers... |
+```
 
-### Validation
-- [ ] `scripts/validate_registry.py` + `scripts/validate_current_agents.py` pass.
-- [ ] `make dev` → local chat run hits the agent and emits Langfuse traces.
-- [ ] Flow Builder palette lists the agent under the right category.
-- [ ] Batch nudge triggered (if configured) after ≥3 consecutive calls.
-- [ ] Unit/integration tests updated if applicable.
+This table is built from `supervisor_description` fields in the `agents` table.
 
----
+### Batching
 
-## Key Patterns & Gotchas
-
-- **Prompt cache lifecycle** – `backend/src/lib/prompts/cache.initialize()` runs once at startup. If you edit prompts directly in the DB, nothing changes until you call the cache refresh endpoint or restart the backend.
-- **Prompt execution logging** – Only log prompts for agents that *actually run*. That’s why we store them via `set_pending_prompts()` and let `run_specialist_with_events()` call `commit_pending_prompts()`.
-- **Batching nudges** – Don’t edit `BATCHING_NUDGE_CONFIG` unless absolutely necessary; attach `"batching"` metadata to the registry entry and the runtime automatically learns the tool name and sample string.
-- **Document-aware agents** – `pdf` and `gene_expression` factories expect `document_id` + `user_id`. Set `"requires_document": True` and list the params under `required_params` so `get_agent_by_id()` knows what to forward.
-- **Flow Builder compatibility** – Flows call `get_agent_by_id()` with a superset of kwargs. If your factory needs new kwargs, update `required_params` and make sure Flow Builder can capture them (usually by adding custom node fields in the frontend).
-- **Tool guardrails** – Use `ToolCallTracker` + `create_tool_required_output_guardrail()` when your agent must call a tool before responding (PDF specialist already does this). Guardrails live in `backend/src/lib/openai_agents/guardrails.py`.
-- **Langfuse queue** – `log_agent_config()` only queues metadata. Don’t expect to see it instantly in Langfuse until the trace exists and `flush_agent_configs()` runs.
-- **Context capture timing** – Most tools capture context on creation (when the agent is instantiated). File-output tools are the exception—they take context at invocation because trace IDs don’t exist yet during agent creation.
-- **Tunneled DBs** – `CURATION_DB_URL` and friends often reference `host.docker.internal:<forwarded-port>`. Keep your SSH tunnel alive before running tests that touch AGR data.
+Agents with `supervisor_batchable=true` and `supervisor_batching_entity` set will receive batching nudges from the supervisor after multiple sequential calls.
 
 ---
 
 ## Multi-Provider Support
 
-`LLM_PROVIDER` (default `openai`) selects the backend implementation.
+### Model Catalog
 
-| Provider | Models | Notes |
-|----------|--------|-------|
-| `openai` | `gpt-5`, `gpt-5-mini`, `gpt-4o` | Reasoning enabled; temperature ignored on GPT-5. Requires `OPENAI_API_KEY`. |
-| `gemini` | `gemini-3-pro-preview` | Uses LiteLLM compatibility layer (`LitellmModel`). `build_model_settings()` disables parallel tool calls. Requires `GEMINI_API_KEY` and sets `base_url` to Google’s OpenAI-compatible endpoint. |
+Models are defined in `config/models.yaml` and loaded by `backend/src/lib/config/models_loader.py`. The catalog provides:
 
-`build_model_settings()` automatically maps reasoning levels and disables unsupported parameters. Use registry `config_defaults` for per-agent tuning; override with env vars as needed.
+- Model selection UI for curators (via Agent Studio)
+- Capability metadata (reasoning support, temperature support)
+- Provider routing (OpenAI, Groq, etc.)
 
----
+### Provider Configuration
 
-## Database-Backed Prompts
+Providers are defined in `config/providers.yaml` and loaded by `backend/src/lib/config/providers_loader.py`. Each provider declares:
 
-- **Tables** – `prompt_templates` (versioned prompts) + `prompt_execution_log` (audit trail). Schemas are defined in `backend/src/models/sql/prompts.py`.
-- **PromptService** – Located in `backend/src/lib/prompts/service.py`. Handles creating versions, activating them, logging usage, and refreshing the cache.
-- **Admin API** – `backend/src/api/admin/prompts.py` exposes `GET /api/admin/prompts`, `POST` to create versions, `POST /cache/refresh`, etc. Authorization uses `ADMIN_EMAILS` + Cognito unless `DEV_MODE=true` and no admins are set.
-- **Prompt Catalog** – `PromptCatalogService` (singleton) merges the database prompts with `AGENT_REGISTRY` metadata so Agent Studio displays categories, documentation, and MOD rules.
-- **Group rules** – Stored in the same table with `prompt_type="group_rules"`. `inject_group_rules()` fetches them via the cache. Legacy YAML files under `backend/config/group_rules/agents/*` document the intended rules but the live source of truth is the database entry.
-- **Manual inspection** – `docker compose exec postgres psql -U postgres ai_curation -c "select agent_name, prompt_type, mod_id, version, is_active from prompt_templates where agent_name='my_agent' order by version;"`
+- API endpoint and authentication
+- Capability flags (parallel tool calls, reasoning support)
+- Model-to-provider mapping
 
----
+### Per-Agent Model Override
 
-## Advanced Topics
+Set environment variables to override an agent's default model:
 
-- **Structured output injection** – `backend/src/lib/openai_agents/prompt_utils.py` contains `inject_structured_output_instruction()` plus document-context helpers (`format_document_context_for_prompt`, `fetch_document_hierarchy_sync`). Use them to append standardized instructions without copying boilerplate.
-- **Document context** – PDF-aware agents should fetch document hierarchy + abstract via `fetch_document_hierarchy_sync()` and append the formatted context so the LLM knows what sections exist.
-- **Live audit events** – `streaming_tools.run_specialist_with_events()` emits `TOOL_START`, `TOOL_COMPLETE`, `SPECIALIST_SUMMARY`, etc., into either a live queue (for streaming UI) or the request-scoped buffer. Hook additional UI features into `_live_event_list` with care.
-- **Flow tools** – `backend/src/lib/agent_studio/flow_tools.py` registers create/validate/get_template tools for Opus. They rely on `set_workflow_user_context()` to know which user is editing a flow. If your agent needs new flow inputs, update the Flow Builder node config + flow validation accordingly.
-- **Langfuse flushing** – Call `flush_langfuse()` at request teardown (already done in the runner) to avoid missing spans when the app exits quickly.
-- **Max turns** – `AGENT_MAX_TURNS` (default 20) limits specialist inner loops. Override via env if a specialist requires more tool calls.
+```bash
+AGENT_GENE_MODEL=gpt-5.2-mini
+AGENT_SUPERVISOR_MODEL=gpt-5.2
+AGENT_PDF_MODEL=gpt-5.2
+```
 
 ---
 
-## Current Specialists & Tools
+## Output Schemas
 
-### Agents (`AGENT_REGISTRY` excerpt)
+All output schemas live in `backend/src/lib/openai_agents/models.py`. The `output_schema_key` in the `agents` table maps to a class name in this module.
 
-| Agent ID | Category → Subcategory | File | Notes |
-|----------|-----------------------|------|-------|
-| `task_input` | Input → Input | N/A | Virtual node for flow instructions. |
-| `supervisor` | Routing → System | `agents/supervisor_agent.py` | Routes chat queries and exposes streaming tool wrappers. |
-| `pdf` | Extraction → PDF Extraction | `openai_agents/pdf_agent.py` | Document-aware specialist (search/read tools, guardrail enforced). |
-| `gene_expression` | Extraction → PDF Extraction | `agents/gene_expression_agent.py` | Pulls expression annotations from PDFs. |
-| `gene` | Validation → Data Validation | `agents/gene_agent.py` | AGR gene validation. |
-| `allele` | Validation → Data Validation | `agents/allele_agent.py` | AGR allele validation with fullname attribution heuristics. |
-| `disease` | Validation → Data Validation | `agents/disease_agent.py` | DOID mapping via `curation_db_sql`. |
-| `chemical` | Validation → Data Validation | `agents/chemical_agent.py` | ChEBI API wrapper. |
-| `gene_ontology` | Validation → Data Validation | `agents/gene_ontology_agent.py` | QuickGO term lookup. |
-| `go_annotations` | Validation → Data Validation | `agents/go_annotations_agent.py` | QuickGO annotations search. |
-| `orthologs` | Validation → Data Validation | `agents/orthologs_agent.py` | Alliance orthology API. |
-| `ontology_mapping` | Validation → Data Validation | `agents/ontology_mapping_agent.py` | Maps free-text to anatomy/life-stage terms via AGR search. |
-| `chat_output` | Output → Output | `agents/chat_output_agent.py` | Final answer formatting. |
-| `csv_formatter` / `tsv_formatter` / `json_formatter` | Output → Output | `agents/*_formatter_agent.py` | File output specialists calling file-output tools. |
+### Rules
 
-### Tools (`TOOL_REGISTRY` highlights)
+- Every field has a `description` (feeds structured output instructions)
+- Never use `Field(...)` in envelopes; defaults are mandatory
+- Keep names snake_case; prefer flat structures
+- The catalog service calls `_resolve_output_schema()` to look up the class by name
 
-- `agr_curation_query` – Multi-method AGR access (genes, alleles, anatomy, life stages, GO terms, species catalogs).
-- `search_document`, `read_section`, `read_subsection` – Weaviate hybrid search + deterministic readers for PDF content.
-- `curation_db_sql` – Parameterized SQL query tool bound to the AGR curation database.
-- `alliance_api_call`, `chebi_api_call`, `quickgo_api_call`, `go_api_call` – REST wrappers with domain allowlists.
-- `save_csv_file`, `save_tsv_file`, `save_json_file` – Persist structured agent outputs and return download metadata.
-- `transfer_to_*` tools – Supervisor-only control tools (not exposed to Flow Builder).
+### Current Schemas
 
-Run `python scripts/validate_registry.py --show-tools` (see script help) if you need a printable dump of current tool metadata.
+| Schema | Used By |
+|--------|---------|
+| `GeneValidationEnvelope` | Gene agent |
+| `AlleleValidationEnvelope` | Allele agent |
+| `DiseaseResultEnvelope` | Disease agent |
+| `ChemicalResultEnvelope` | Chemical agent |
+| `GeneOntologyResultEnvelope` | Gene ontology agent |
+| `GOAnnotationResultEnvelope` | GO annotations agent |
+| `OrthologResultEnvelope` | Orthologs agent |
+| `OntologyMappingResultEnvelope` | Ontology mapping agent |
+
+---
+
+## Frontend Integration
+
+No hardcoded icon maps or agent lists. Agent Studio fetches metadata dynamically:
+
+- `GET /api/agent-studio/registry/metadata` -- Returns `AGENT_REGISTRY` data (built from YAML)
+- `GET /api/agent-studio/catalog` -- Returns prompt catalog with version info
+- Agent creation/editing via `POST /api/agent-studio/agents`
+
+The Flow Builder palette, trace badges, and Tool Inspector all derive from registry metadata.
+
+---
+
+## Configuration & Environment Variables
+
+### Per-Agent Overrides
+
+```bash
+AGENT_MY_AGENT_MODEL=gpt-5.2-mini
+AGENT_MY_AGENT_REASONING=low
+AGENT_MY_AGENT_TEMPERATURE=0.2
+```
+
+### Global Settings
+
+```bash
+OPENAI_API_KEY=sk-...
+LLM_PROVIDER=openai
+AGENT_MAX_TURNS=20
+```
+
+### Database Connections
+
+```bash
+CURATION_DB_URL=postgresql://user:pass@host:port/db
+DATABASE_URL=postgresql://user:pass@host:port/ai_curation
+```
+
+### Docker Compose
+
+Environment variables are passed through for every `AGENT_*` value, so you usually don't need to edit `docker-compose.yml` unless the agent needs a brand-new service or secret.
+
+---
+
+## Testing & Validation
+
+### Static Checks
+
+```bash
+# Validate YAML syntax
+python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"
+
+# Run unit tests
+docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+  python -m pytest tests/unit/ -v
+```
+
+### Runtime Checks
+
+```bash
+# Rebuild backend
+docker compose up -d backend --build
+
+# Refresh prompt cache
+curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
+
+# Chat via Agent Studio and confirm routing
+docker compose logs backend | grep my_agent
+
+# Inspect Langfuse for traces
+# http://localhost:3000
+```
+
+### Database Inspection
+
+```bash
+# Check agent exists and is active
+docker compose exec postgres psql -U postgres ai_curation -c \
+  "SELECT agent_key, name, supervisor_enabled, is_active FROM agents WHERE agent_key = 'my_agent';"
+
+# Check prompts
+docker compose exec postgres psql -U postgres ai_curation -c \
+  "SELECT agent_name, prompt_type, version, is_active FROM prompt_templates WHERE agent_name = 'my_agent';"
+```
+
+---
+
+## Current Agents & Tools
+
+### System Agents
+
+| Agent Key | Category | Description |
+|-----------|----------|-------------|
+| `supervisor` | Routing | Routes chat queries to specialist tools |
+| `pdf` | Extraction | Document extraction with hybrid search |
+| `gene_expression` | Extraction | Gene expression annotation from PDFs |
+| `gene` | Validation | Gene symbol/ID validation against AGR |
+| `allele` | Validation | Allele/variant validation against AGR |
+| `disease` | Validation | Disease Ontology (DOID) mapping |
+| `chemical` | Validation | ChEBI chemical compound lookup |
+| `gene_ontology` | Validation | GO term lookup via QuickGO |
+| `go_annotations` | Validation | GO annotations via GO Consortium API |
+| `orthologs` | Validation | Cross-species ortholog lookup |
+| `ontology_mapping` | Validation | Free-text to ontology term mapping |
+| `chat_output` | Output | Final answer formatting |
+| `csv_formatter` | Output | CSV file output |
+| `tsv_formatter` | Output | TSV file output |
+| `json_formatter` | Output | JSON file output |
+
+### Tools
+
+See the `TOOL_REGISTRY` and `TOOL_BINDINGS` in `catalog_service.py` for the complete list. Key tools:
+
+- `agr_curation_query` -- Multi-method AGR database access
+- `search_document`, `read_section`, `read_subsection` -- Weaviate PDF search
+- `curation_db_sql` -- Direct SQL for disease ontology
+- REST API wrappers: `alliance_api_call`, `chebi_api_call`, `quickgo_api_call`, `go_api_call`
+- File output: `save_csv_file`, `save_tsv_file`, `save_json_file`
 
 ---
 
@@ -568,30 +522,32 @@ Run `python scripts/validate_registry.py --show-tools` (see script help) if you 
 
 | Symptom | Checks |
 |---------|--------|
-| Agent never appears in palette | `AGENT_REGISTRY` entry missing `frontend.show_in_palette=True`? Did you run `POST /api/agent-studio/catalog/refresh`? Any React caching (hard refresh Agent Studio). |
-| Supervisor never routes to your agent | Ensure `_create_streaming_tool` block is added, the supervisor instructions table mentions your tool, and `tool_description` has clear triggers. Inspect logs: `docker compose logs backend | grep ask_my_agent_specialist`. |
-| Prompt changes not reflected | Did you call `POST /api/admin/prompts/cache/refresh`? Confirm new version is `is_active=true` in `prompt_templates`. Restart backend if cache fails to refresh (check logs for `Prompt cache initialized`). |
-| Structured output parsing failed | Recheck envelope defaults, run `inject_structured_output_instruction`, and confirm `output_type` references the envelope not the single result. Langfuse trace will include `SPECIALIST_RETRY` events if retries happened. |
-| Tool never executes | If `tool_choice="required"`, ensure the instructions explicitly tell the LLM to call it. For optional tools, verify docstring + guardrails encourage usage. Batching nudges only fire when the registry’s `batching` entry exists. |
-| SQL/AGR connection errors | Confirm tunnels/environment variables. Use `docker compose exec backend python - <<'PY'` to open the same SQLAlchemy engine your tool uses. |
-| Flow execution errors | `get_agent_by_id()` raises `MissingRequiredParamError` if `required_params` are missing. Update Flow Builder node schema (frontend) to capture new inputs. |
-| Langfuse missing agent configs | Ensure `log_agent_config` is called *before* `Agent` is returned, and that the backend has valid Langfuse credentials (`LANGFUSE_HOST`, etc.). |
-| Trace Review empty | Service needs Langfuse credentials—including local fallback if you’re not on VPN. Run `make trace-review` with `TRACE_REVIEW_*` overrides in `.env`. |
+| Agent not in supervisor | `supervisor_enabled=true` in DB? `is_active=true`? `visibility='system'`? |
+| Agent not in Flow Builder palette | `show_in_palette=true` in DB? Agent in `AGENT_REGISTRY`? |
+| "Unknown agent_id" error | Agent row missing from `agents` table. Run migration or insert manually. |
+| "Unknown tool binding" error | Tool not in `TOOL_BINDINGS`. Add resolver + binding entry in `catalog_service.py`. |
+| Schema not found | `output_schema_key` doesn't match a class in `models.py`. Check exact spelling. |
+| Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh`. For `agents.instructions`, restart backend. |
+| Group rules not injected | `group_rules_enabled=true`? `group_rules_component` set? Active group rule prompt in `prompt_templates`? |
+| Tool errors at runtime | Check `TOOL_BINDINGS.required_context` -- missing `document_id` or `database_url`? |
+| Supervisor routing failures | Improve `supervisor_description` in DB. Check logs: `docker compose logs backend \| grep ask_my_agent` |
+| Langfuse missing traces | Verify Langfuse credentials in `.env`. Check `LANGFUSE_HOST`, `LANGFUSE_SECRET_KEY`. |
 
 ---
 
 ## Resources
 
-- `README.md` (repo root) – platform overview and entry points.
-- `Makefile` – `dev`, `dev-build`, `rebuild-backend`, `trace-review`, `test-*` commands.
-- `docs/developer/README.md` – map of available developer docs.
-- `scripts/README.md` – agent & tool CLI docs, validation utilities, maintenance scripts.
-- `backend/src/lib/openai_agents/` – canonical source for every agent, model, tool, and runner helper.
-- `backend/src/lib/agent_studio/` – prompt catalog service, flow tools, suggestion service, trace context.
-- `backend/src/lib/prompts/` – cache + service + execution logging APIs.
-- `docs/plans/2026-01-24-agent-simplification.md` – rationale behind the registry simplification.
+- `README.md` (repo root) -- Platform overview and entry points
+- `Makefile` -- `dev`, `dev-build`, `rebuild-backend`, `trace-review`, `test-*` commands
+- `docs/developer/README.md` -- Map of available developer docs
+- `scripts/README.md` -- Utility scripts documentation
+- `backend/src/lib/agent_studio/catalog_service.py` -- Central agent factory and tool resolution
+- `backend/src/lib/agent_studio/registry_builder.py` -- YAML-to-registry conversion
+- `backend/src/lib/agent_studio/agent_service.py` -- Database agent CRUD
+- `backend/src/models/sql/agent.py` -- Unified agent SQL model
+- `backend/src/lib/openai_agents/agents/supervisor_agent.py` -- Dynamic supervisor with tool discovery
+- `backend/src/lib/config/` -- All configuration loaders
+- `config/models.yaml` -- Model catalog
+- `config/agents/` -- Agent YAML definitions
 - Langfuse docs: https://langfuse.com/docs
 - OpenAI Agents SDK: https://github.com/openai/openai-agents-python
-- LiteLLM docs (Gemini adapter): https://docs.litellm.ai/
-
-Keep this guide updated whenever the stack changes (new services, new registries, or different tooling). Treat the `AGENT_REGISTRY` + prompt database as the source of truth—Agent Studio, CLI tooling, and Flow Builder all derive their behavior from those two places.

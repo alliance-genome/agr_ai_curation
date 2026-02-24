@@ -10,19 +10,21 @@ and includes both base prompts and MOD-specific rules.
 **Database-backed**: All prompts now come from the prompt_templates table
 via src.lib.prompts.cache. File parsing has been removed.
 
-**Agent Registry**: Also provides agent instantiation for flow execution.
-The registry maps agent IDs to factory functions with parameter metadata.
+**Agent Registry**: Also provides metadata for flow execution and UI views.
+Runtime instantiation resolves directly from unified DB-backed agent records.
 """
 
-import inspect
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+import re
+from dataclasses import dataclass
 
 from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 
-# Config-driven registry builder (loads from YAML + convention-based factory discovery)
+# Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry, AGENT_DOCUMENTATION
 
 from .models import (
@@ -36,13 +38,6 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class MissingRequiredParamError(ValueError):
-    """Raised when a required parameter is missing for an agent factory."""
-    pass
-
-
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
     """Resolve a registry agent ID/alias to canonical prompt cache key (folder name)."""
     if registry_agent_id == "task_input":
@@ -323,7 +318,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "name": "Alliance Orthology API",
         "description": "Query the Alliance of Genome Resources API for orthology relationships.",
         "category": "API",
-        "source_file": "backend/src/lib/openai_agents/agents/orthologs_agent.py",
+        "source_file": "backend/src/lib/openai_agents/tools/rest_api.py",
         "documentation": {
             "summary": "Queries orthology relationships between genes across species using the Alliance of Genome Resources API.",
             "parameters": [
@@ -439,7 +434,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "name": "Curation Database SQL",
         "description": "Query the Alliance Curation Database for disease ontology information.",
         "category": "Database",
-        "source_file": "backend/src/lib/openai_agents/agents/disease_agent.py",
+        "source_file": "backend/src/lib/openai_agents/tools/sql_query.py",
         "documentation": {
             "summary": "Executes SQL queries against the Alliance Curation Database to look up Disease Ontology (DOID) terms and relationships.",
             "parameters": [
@@ -460,7 +455,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "name": "ChEBI API",
         "description": "Query the ChEBI API for chemical compound identifiers.",
         "category": "API",
-        "source_file": "backend/src/lib/openai_agents/agents/chemical_agent.py",
+        "source_file": "backend/src/lib/openai_agents/tools/rest_api.py",
         "documentation": {
             "summary": "Queries the ChEBI API at EBI to look up chemical compound identifiers and ontology information.",
             "parameters": [
@@ -499,7 +494,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "name": "QuickGO API",
         "description": "Query the QuickGO API for Gene Ontology term information.",
         "category": "API",
-        "source_file": "backend/src/lib/openai_agents/agents/gene_ontology_agent.py",
+        "source_file": "backend/src/lib/openai_agents/tools/rest_api.py",
         "documentation": {
             "summary": "Queries the QuickGO API to retrieve Gene Ontology (GO) term details including names, definitions, and relationships.",
             "parameters": [
@@ -538,7 +533,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "name": "GO Annotations API",
         "description": "Query the QuickGO API for Gene Ontology annotations.",
         "category": "API",
-        "source_file": "backend/src/lib/openai_agents/agents/go_annotations_agent.py",
+        "source_file": "backend/src/lib/openai_agents/tools/rest_api.py",
         "documentation": {
             "summary": "Queries the QuickGO API to retrieve GO annotations for genes, including evidence codes and qualifiers.",
             "parameters": [
@@ -881,6 +876,269 @@ def _generate_method_tool_entries() -> Dict[str, Dict[str, Any]]:
 METHOD_TOOL_ENTRIES = _generate_method_tool_entries()
 
 
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    """Context used to resolve runtime tool factories deterministically."""
+
+    document_id: Optional[str] = None
+    user_id: Optional[str] = None
+    database_url: Optional[str] = None
+    tool_tracker: Optional[Any] = None
+
+
+def _resolve_agr_curation_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.agr_curation import agr_curation_query
+
+    return agr_curation_query
+
+
+def _resolve_search_document_tool(context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.weaviate_search import create_search_tool
+
+    return create_search_tool(
+        document_id=context.document_id,
+        user_id=context.user_id,
+        tracker=context.tool_tracker,
+    )
+
+
+def _resolve_read_section_tool(context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.weaviate_search import create_read_section_tool
+
+    return create_read_section_tool(
+        document_id=context.document_id,
+        user_id=context.user_id,
+        tracker=context.tool_tracker,
+    )
+
+
+def _resolve_read_subsection_tool(context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.weaviate_search import create_read_subsection_tool
+
+    return create_read_subsection_tool(
+        document_id=context.document_id,
+        user_id=context.user_id,
+        tracker=context.tool_tracker,
+    )
+
+
+def _resolve_curation_db_sql_tool(context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.sql_query import create_sql_query_tool
+
+    return create_sql_query_tool(context.database_url, tool_name="curation_db_sql")
+
+
+def _resolve_chebi_api_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
+
+    return create_rest_api_tool(
+        allowed_domains=["ebi.ac.uk", "www.ebi.ac.uk"],
+        tool_name="chebi_api_call",
+        tool_description="Query ChEBI chemical database API (ebi.ac.uk only)",
+    )
+
+
+def _resolve_quickgo_api_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
+
+    return create_rest_api_tool(
+        allowed_domains=["ebi.ac.uk", "www.ebi.ac.uk"],
+        tool_name="quickgo_api_call",
+        tool_description=(
+            "Query QuickGO Gene Ontology API for GO terms, hierarchy, and relationships "
+            "(ebi.ac.uk only)"
+        ),
+    )
+
+
+def _resolve_go_api_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
+
+    return create_rest_api_tool(
+        allowed_domains=["geneontology.org", "api.geneontology.org"],
+        tool_name="go_api_call",
+        tool_description=(
+            "Query Gene Ontology API for gene annotations with evidence codes "
+            "(geneontology.org only)"
+        ),
+    )
+
+
+def _resolve_alliance_api_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
+
+    return create_rest_api_tool(
+        allowed_domains=["alliancegenome.org", "www.alliancegenome.org"],
+        tool_name="alliance_api_call",
+        tool_description=(
+            "Query Alliance of Genome Resources API for orthology data "
+            "(alliancegenome.org only)"
+        ),
+    )
+
+
+def _resolve_save_csv_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.file_output_tools import create_csv_tool
+
+    return create_csv_tool()
+
+
+def _resolve_save_tsv_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.file_output_tools import create_tsv_tool
+
+    return create_tsv_tool()
+
+
+def _resolve_save_json_tool(_context: ToolExecutionContext) -> Any:
+    from src.lib.openai_agents.tools.file_output_tools import create_json_tool
+
+    return create_json_tool()
+
+
+# Declarative runtime bindings used by the unified agent builder.
+TOOL_BINDINGS: Dict[str, Dict[str, Any]] = {
+    "agr_curation_query": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_agr_curation_tool,
+    },
+    "search_document": {
+        "binding": "context_factory",
+        "required_context": ["document_id", "user_id"],
+        "resolver": _resolve_search_document_tool,
+    },
+    "read_section": {
+        "binding": "context_factory",
+        "required_context": ["document_id", "user_id"],
+        "resolver": _resolve_read_section_tool,
+    },
+    "read_subsection": {
+        "binding": "context_factory",
+        "required_context": ["document_id", "user_id"],
+        "resolver": _resolve_read_subsection_tool,
+    },
+    "curation_db_sql": {
+        "binding": "context_factory",
+        "required_context": ["database_url"],
+        "resolver": _resolve_curation_db_sql_tool,
+    },
+    "chebi_api_call": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_chebi_api_tool,
+    },
+    "quickgo_api_call": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_quickgo_api_tool,
+    },
+    "go_api_call": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_go_api_tool,
+    },
+    "alliance_api_call": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_alliance_api_tool,
+    },
+    "save_csv_file": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_save_csv_tool,
+    },
+    "save_tsv_file": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_save_tsv_tool,
+    },
+    "save_json_file": {
+        "binding": "static",
+        "required_context": [],
+        "resolver": _resolve_save_json_tool,
+    },
+}
+
+
+def _canonicalize_tool_id(tool_id: str) -> str:
+    """Map method-level tool aliases back to concrete runtime tool IDs."""
+    method_entry = METHOD_TOOL_ENTRIES.get(tool_id)
+    parent_tool = method_entry.get("parent_tool") if method_entry else None
+    if isinstance(parent_tool, str) and parent_tool:
+        return parent_tool
+    return tool_id
+
+
+def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) -> List[Any]:
+    """Resolve DB tool IDs to runtime tool instances using explicit binding metadata."""
+    resolved_tools: List[Any] = []
+    seen_tool_ids: set[str] = set()
+
+    for raw_tool_id in tool_ids:
+        tool_id = _canonicalize_tool_id(raw_tool_id)
+        if tool_id in seen_tool_ids:
+            continue
+        seen_tool_ids.add(tool_id)
+
+        binding = TOOL_BINDINGS.get(tool_id)
+        if binding is None:
+            raise ValueError(f"Unknown tool binding '{tool_id}'")
+
+        required_context = list(binding.get("required_context", []))
+        missing_context = [
+            key for key in required_context if getattr(execution_context, key, None) in (None, "")
+        ]
+        if missing_context:
+            missing_text = ", ".join(missing_context)
+            raise ValueError(
+                f"Tool '{tool_id}' requires execution context: {missing_text}"
+            )
+
+        resolver = binding.get("resolver")
+        if not callable(resolver):
+            raise ValueError(f"Tool '{tool_id}' has invalid binding resolver")
+
+        instance = resolver(execution_context)
+        if instance is None:
+            raise ValueError(f"Tool '{tool_id}' resolver returned no tool instance")
+
+        resolved_tools.append(instance)
+
+    return resolved_tools
+
+
+_DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
+_FORMATTER_TOOL_IDS = {"save_csv_file", "save_tsv_file", "save_json_file"}
+
+
+def _canonical_tool_ids(tool_ids: List[str]) -> List[str]:
+    """Canonicalize and de-duplicate tool IDs while preserving order."""
+    canonical: List[str] = []
+    seen: set[str] = set()
+    for raw_tool_id in tool_ids:
+        tool_id = _canonicalize_tool_id(raw_tool_id)
+        if tool_id in seen:
+            continue
+        seen.add(tool_id)
+        canonical.append(tool_id)
+    return canonical
+
+
+def _required_context_for_tool_ids(tool_ids: List[str]) -> List[str]:
+    """Collect required execution-context keys implied by tool bindings."""
+    required: set[str] = set()
+    for tool_id in _canonical_tool_ids(tool_ids):
+        binding = TOOL_BINDINGS.get(tool_id)
+        if binding:
+            required.update(binding.get("required_context", []))
+    return sorted(required)
+
+
+def _uses_document_tools(tool_ids: List[str]) -> bool:
+    """Whether a tool set requires document-scoped context."""
+    return bool(set(_canonical_tool_ids(tool_ids)) & _DOCUMENT_TOOL_IDS)
+
+
 def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
     """
     Expand multi-method tools into their individual method names for an agent.
@@ -1051,8 +1309,8 @@ def _build_catalog() -> PromptCatalog:
         agent_prompts = prompts_by_agent.get(agent_id, {})
         system_prompt = agent_prompts.get("system")
 
-        # Special case: non-agent entries (like task_input) don't need database prompts
-        if config.get("factory") is None:
+        # Special case: non-agent entries (task_input) don't need database prompts
+        if agent_id == "task_input":
             # Resolve show_in_palette from frontend config (defaults to True)
             frontend_config = config.get("frontend", {})
             show_in_palette = frontend_config.get("show_in_palette", True)
@@ -1240,105 +1498,340 @@ def get_prompt_catalog() -> PromptCatalogService:
 # Agent Factory Functions (for Flow Execution)
 # =============================================================================
 
-def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
-    """Create an agent by ID, passing only the parameters each factory accepts.
+_REASONING_LEVEL_PATTERN = re.compile(r"^(minimal|low|medium|high)$")
 
-    This function provides a unified interface for flow execution while
-    respecting the varying signatures of existing agent factories.
 
-    Args:
-        agent_id: Catalog ID (e.g., 'pdf', 'gene', 'disease')
-        **kwargs: All available context. Common parameters include:
-            - document_id: For document-aware agents (pdf, gene_expression)
-            - user_id: For Weaviate tenant isolation
-            - document_name, sections, hierarchy, abstract: PDF context
-            - active_groups: List of active group IDs (e.g., ['SGD', 'MGI'])
-            - format_type: For formatter agent
+def _coerce_db_user_id(raw_user_id: Any) -> Optional[int]:
+    """Best-effort conversion for runtime user IDs passed via kwargs."""
+    if isinstance(raw_user_id, int):
+        return raw_user_id
+    if isinstance(raw_user_id, str):
+        stripped = raw_user_id.strip()
+        if stripped.isdigit():
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
 
-    Returns:
-        Configured Agent instance
 
-    Raises:
-        ValueError: If agent_id is not in the registry
-        MissingRequiredParamError: If required parameters are missing
+def _build_tool_execution_context(
+    kwargs: Dict[str, Any],
+    *,
+    tool_tracker: Optional[Any] = None,
+) -> ToolExecutionContext:
+    """Build tool-resolution context from runtime kwargs + environment."""
+    raw_user_id = kwargs.get("user_id")
+    user_id = str(raw_user_id) if raw_user_id not in (None, "") else None
 
-    Example:
-        # Flow executor passes all available context
-        context = {
-            "document_id": "doc123",
-            "user_id": "user456",
-            "active_groups": ["SGD", "MGI"],
-        }
+    raw_document_id = kwargs.get("document_id")
+    document_id = str(raw_document_id) if raw_document_id not in (None, "") else None
 
-        # Registry filters to only what each factory needs:
-        gene_agent = get_agent_by_id("gene", **context)
-        # -> create_gene_agent(active_groups=["SGD", "MGI"])
+    raw_database_url = kwargs.get("database_url")
+    if isinstance(raw_database_url, str) and raw_database_url.strip():
+        database_url = raw_database_url.strip()
+    else:
+        env_database_url = os.getenv("CURATION_DB_URL", "").strip()
+        database_url = env_database_url or None
 
-        disease_agent = get_agent_by_id("disease", **context)
-        # -> create_disease_agent()  # No params needed
-    """
-    if agent_id.startswith("ca_"):
-        from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
-        from src.lib.prompts.context import PromptOverride, set_prompt_override, clear_prompt_override
+    return ToolExecutionContext(
+        document_id=document_id,
+        user_id=user_id,
+        database_url=database_url,
+        tool_tracker=tool_tracker,
+    )
 
-        runtime_info = get_custom_agent_runtime_info(agent_id)
-        if not runtime_info:
-            raise ValueError(f"Unknown custom agent_id: {agent_id}")
-        if not runtime_info.parent_exists:
+
+def _inject_group_rules_with_overrides(
+    *,
+    base_prompt: str,
+    group_ids: List[str],
+    component_name: str,
+    mod_overrides: Optional[Dict[str, str]] = None,
+    injection_marker: str = "## GROUP-SPECIFIC RULES",
+) -> str:
+    """Inject group rules using DB overrides first, then cached rule prompts."""
+    from src.lib.prompts.cache import get_prompt_optional
+
+    normalized_groups: List[str] = []
+    for raw_group in group_ids:
+        group_id = str(raw_group or "").strip().upper()
+        if group_id and group_id not in normalized_groups:
+            normalized_groups.append(group_id)
+    if not normalized_groups:
+        return base_prompt
+
+    normalized_overrides: Dict[str, str] = {}
+    for raw_group, raw_content in (mod_overrides or {}).items():
+        group_id = str(raw_group or "").strip().upper()
+        content = str(raw_content or "").strip()
+        if group_id and content:
+            normalized_overrides[group_id] = content
+
+    collected_groups: List[str] = []
+    collected_content: List[str] = []
+
+    for group_id in normalized_groups:
+        override_content = normalized_overrides.get(group_id)
+        if override_content:
+            collected_groups.append(group_id)
+            collected_content.append(override_content)
+            continue
+
+        rule_prompt = get_prompt_optional(
+            component_name,
+            prompt_type="group_rules",
+            group_id=group_id,
+        ) or get_prompt_optional(
+            component_name,
+            prompt_type="mod_rules",
+            group_id=group_id,
+        )
+        if rule_prompt:
+            collected_groups.append(group_id)
+            collected_content.append(rule_prompt.content)
+
+    if not collected_content:
+        logger.warning(
+            "[CatalogService] No group rules found for %s/%s",
+            component_name,
+            normalized_groups,
+        )
+        return base_prompt
+
+    group_list = ", ".join(collected_groups)
+    formatted_rules = "\n".join(collected_content)
+    injection_block = f"""
+{injection_marker}
+
+The following rules are specific to the organization group(s) you are working with: {group_list}
+Apply these rules when searching for and interpreting results.
+
+{formatted_rules}
+
+## END GROUP-SPECIFIC RULES
+"""
+    if injection_marker in base_prompt:
+        return base_prompt.replace(injection_marker, injection_block)
+    return base_prompt + "\n" + injection_block
+
+
+def _build_runtime_instructions(
+    db_agent: Any,
+    runtime_kwargs: Dict[str, Any],
+    *,
+    output_schema: Optional[Any],
+    canonical_tool_ids: List[str],
+) -> str:
+    """Build final instructions from DB spec + runtime context injections."""
+    from src.lib.openai_agents.prompt_utils import (
+        format_document_context_for_prompt,
+        inject_structured_output_instruction,
+    )
+
+    instructions = str(getattr(db_agent, "instructions", "") or "")
+
+    # Inject group-specific rules when configured and requested at runtime.
+    active_groups = list(runtime_kwargs.get("active_groups", []) or [])
+    if bool(getattr(db_agent, "group_rules_enabled", False)) and active_groups:
+        component_name = (
+            getattr(db_agent, "group_rules_component", None)
+            or getattr(db_agent, "template_source", None)
+            or db_agent.agent_key
+        )
+        try:
+            instructions = _inject_group_rules_with_overrides(
+                base_prompt=instructions,
+                group_ids=active_groups,
+                component_name=component_name,
+                mod_overrides=dict(getattr(db_agent, "mod_prompt_overrides", {}) or {}),
+            )
+        except Exception:
+            logger.exception(
+                "[CatalogService] Failed group-rules injection for '%s'",
+                db_agent.agent_key,
+            )
             raise ValueError(
-                f"Custom agent '{agent_id}' cannot run because parent agent "
-                f"'{runtime_info.parent_agent_key}' is unavailable"
+                f"Failed group-rules injection for agent '{db_agent.agent_key}'"
             )
 
-        parent_kwargs = dict(kwargs)
-        if not runtime_info.include_mod_rules:
-            parent_kwargs["active_groups"] = []
+    # Inject document structure context for document-aware tools.
+    if bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS):
+        context_text, _structure_info = format_document_context_for_prompt(
+            hierarchy=runtime_kwargs.get("hierarchy"),
+            sections=runtime_kwargs.get("sections"),
+            abstract=runtime_kwargs.get("abstract"),
+        )
+        if context_text:
+            instructions += context_text
 
-        set_prompt_override(PromptOverride(
-            content=runtime_info.custom_prompt,
-            agent_name=runtime_info.parent_agent_key,
-            custom_agent_id=str(runtime_info.custom_agent_uuid),
-            mod_overrides=runtime_info.mod_prompt_overrides,
-        ))
-        try:
-            return get_agent_by_id(runtime_info.parent_agent_key, **parent_kwargs)
-        finally:
-            clear_prompt_override()
+        document_name = runtime_kwargs.get("document_name")
+        if document_name:
+            instructions = (
+                f'You are helping the user with the document: "{document_name}"\n\n'
+                + instructions
+            )
 
-    entry = AGENT_REGISTRY.get(agent_id)
-    if not entry:
-        valid_ids = list(AGENT_REGISTRY.keys())
-        raise ValueError(f"Unknown agent_id: {agent_id}. Valid IDs: {valid_ids}")
+    # Reinforce structured-output generation when output schema is configured.
+    if output_schema is not None:
+        instructions = inject_structured_output_instruction(
+            instructions,
+            output_type=output_schema,
+        )
 
-    # Special case: non-agent entries (like task_input) don't have factories
-    factory = entry.get("factory")
-    if factory is None:
+    return instructions
+
+
+def _resolve_output_schema(schema_key: str) -> Optional[Any]:
+    """Resolve output schema class by name from shared OpenAI agent models."""
+    try:
+        from src.lib.openai_agents import models as agent_models
+    except Exception:
+        return None
+
+    schema = getattr(agent_models, schema_key, None)
+    if schema is None:
+        return None
+    return schema
+
+
+def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
+    """Create an agent from a row in the unified agents table."""
+    from src.lib.openai_agents.guardrails import (
+        ToolCallTracker,
+        create_tool_required_output_guardrail,
+    )
+    from src.lib.openai_agents.config import (
+        get_model_for_agent,
+        build_model_settings,
+        resolve_model_provider,
+    )
+
+    runtime_kwargs = dict(kwargs)
+    requested_tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
+    canonical_tool_ids = _canonical_tool_ids(requested_tool_ids)
+
+    # Resolve output schema override when present.
+    output_schema_key = getattr(db_agent, "output_schema_key", None)
+    output_schema: Optional[Any] = None
+    if output_schema_key:
+        output_schema = _resolve_output_schema(output_schema_key)
+        if output_schema is None:
+            raise ValueError(
+                f"Unknown output schema '{output_schema_key}' for agent '{db_agent.agent_key}'"
+            )
+
+    # Resolve tools from explicit binding metadata (no runtime fallbacks).
+    output_guardrails: List[Any] = []
+    if requested_tool_ids:
+        tool_tracker: Optional[ToolCallTracker] = None
+        if bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS):
+            tool_tracker = ToolCallTracker()
+            output_guardrails.append(
+                create_tool_required_output_guardrail(
+                    tracker=tool_tracker,
+                    minimum_calls=1,
+                    error_message=(
+                        "You must search or read the document before answering. "
+                        "Use search_document, read_section, or read_subsection first."
+                    ),
+                )
+            )
+        execution_context = _build_tool_execution_context(
+            runtime_kwargs,
+            tool_tracker=tool_tracker,
+        )
+        tools = resolve_tools(requested_tool_ids, execution_context)
+    else:
+        tools = []
+
+    instructions = _build_runtime_instructions(
+        db_agent=db_agent,
+        runtime_kwargs=runtime_kwargs,
+        output_schema=output_schema,
+        canonical_tool_ids=canonical_tool_ids,
+    )
+
+    reasoning_effort = db_agent.model_reasoning
+    if isinstance(reasoning_effort, str) and not _REASONING_LEVEL_PATTERN.match(reasoning_effort):
+        logger.warning(
+            "[CatalogService] Ignoring invalid reasoning level '%s' for agent '%s'",
+            reasoning_effort,
+            db_agent.agent_key,
+        )
+        reasoning_effort = None
+
+    if bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS):
+        reasoning_effort = None
+
+    model_provider = resolve_model_provider(db_agent.model_id)
+
+    model_settings = build_model_settings(
+        model=db_agent.model_id,
+        temperature=db_agent.model_temperature,
+        reasoning_effort=reasoning_effort,
+        tool_choice="auto" if tools else None,
+        parallel_tool_calls=not bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS),
+        verbosity="low"
+        if (output_schema is None and bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS))
+        else None,
+        provider_override=model_provider,
+    )
+
+    return Agent(
+        name=db_agent.name,
+        instructions=instructions,
+        model=get_model_for_agent(db_agent.model_id, provider_override=model_provider),
+        model_settings=model_settings,
+        tools=tools,
+        output_type=output_schema,
+        output_guardrails=output_guardrails,
+    )
+
+
+def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
+    """Look up an active agent row by key from the unified agents table."""
+    from src.models.sql.database import SessionLocal
+    from src.lib.agent_studio.agent_service import get_agent_by_key
+
+    db_user_id = _coerce_db_user_id(kwargs.get("db_user_id"))
+    if db_user_id is None:
+        db_user_id = _coerce_db_user_id(kwargs.get("user_id"))
+
+    db = SessionLocal()
+    try:
+        return get_agent_by_key(db, agent_id, user_id=db_user_id)
+    except Exception:
+        logger.exception("[CatalogService] Failed DB lookup for agent '%s'", agent_id)
+        return None
+    finally:
+        db.close()
+
+
+def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
+    """Create an agent by ID using the unified agents table only."""
+    db_agent = _get_db_agent_row(agent_id, kwargs)
+    if db_agent is None:
         raise ValueError(
-            f"Agent '{agent_id}' is not an executable agent (no factory). "
-            "This entry is for display purposes only (e.g., flow input nodes)."
+            f"Unknown agent_id: {agent_id}. "
+            "Agent must exist in the unified agents table."
         )
 
-    # Validate required parameters before calling factory
-    required_params = entry.get("required_params", [])
-    missing = [p for p in required_params if p not in kwargs or kwargs[p] is None]
-    if missing:
-        raise MissingRequiredParamError(
-            f"Agent '{agent_id}' requires: {', '.join(missing)}"
+    built = _create_db_agent(db_agent, **kwargs)
+    if built is None:
+        raise ValueError(
+            f"Agent '{agent_id}' exists but could not be built from unified spec. "
+            "Check unified runtime spec fields."
         )
 
-    # Introspect factory signature to filter kwargs
-    sig = inspect.signature(factory)
-    valid_params = set(sig.parameters.keys())
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
-
-    return factory(**filtered_kwargs)
+    return built
 
 
-def get_agent_metadata(agent_id: str) -> Dict[str, Any]:
-    """Get metadata about an agent (display name, requirements, etc.).
+def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
+    """Get metadata about a unified agent (display name, requirements, etc.).
 
     Args:
-        agent_id: Catalog ID (e.g., 'pdf', 'gene', 'disease')
+        agent_id: Unified agent key from `agents.agent_key`.
 
     Returns:
         Dictionary with agent metadata:
@@ -1348,38 +1841,65 @@ def get_agent_metadata(agent_id: str) -> Dict[str, Any]:
             - required_params: List of required parameter names
 
     Raises:
-        ValueError: If agent_id is not in the registry
+        ValueError: If agent_id is not found in the unified agents table
     """
-    if agent_id.startswith("ca_"):
-        from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
-
-        runtime_info = get_custom_agent_runtime_info(agent_id)
-        if not runtime_info:
-            raise ValueError(f"Unknown agent_id: {agent_id}")
+    db_agent = _get_db_agent_row(agent_id, dict(kwargs))
+    if db_agent is not None:
+        tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
+        required_params = _required_context_for_tool_ids(tool_ids)
+        requires_document = "document_id" in required_params
         return {
             "agent_id": agent_id,
-            "display_name": runtime_info.display_name,
-            "requires_document": runtime_info.requires_document,
-            "required_params": ["document_id"] if runtime_info.requires_document else [],
+            "display_name": db_agent.name,
+            "description": db_agent.description,
+            "requires_document": requires_document,
+            "required_params": required_params,
         }
 
-    entry = AGENT_REGISTRY.get(agent_id)
-    if not entry:
-        raise ValueError(f"Unknown agent_id: {agent_id}")
-    return {
-        "agent_id": agent_id,
-        "display_name": entry["name"],
-        "requires_document": entry.get("requires_document", False),
-        "required_params": entry.get("required_params", []),
-    }
+    if agent_id == "task_input":
+        return {
+            "agent_id": agent_id,
+            "display_name": "Initial Instructions",
+            "description": "Define the curator's task that starts the flow",
+            "requires_document": False,
+            "required_params": [],
+        }
+
+    raise ValueError(
+        f"Unknown agent_id: {agent_id}. "
+        "Agent metadata is only available for unified agents table records."
+    )
 
 
-def list_available_agents() -> List[Dict[str, Any]]:
-    """List all available agents with their metadata.
+def list_available_agents(db_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """List active unified agents with metadata.
 
-    Returns:
-        List of agent metadata dictionaries, one per agent in the registry.
-        Each dictionary contains: agent_id, display_name, requires_document,
-        required_params.
+    Args:
+        db_user_id: Optional DB user ID to apply private/project visibility.
+            When omitted, only system agents are returned.
     """
-    return [get_agent_metadata(agent_id) for agent_id in AGENT_REGISTRY]
+    from src.models.sql.agent import Agent as AgentRecord
+    from src.models.sql.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        keys = [
+            row[0]
+            for row in db.query(AgentRecord.agent_key).filter(
+                AgentRecord.is_active == True  # noqa: E712
+            ).all()
+        ]
+    finally:
+        db.close()
+
+    metadata_kwargs: Dict[str, Any] = {}
+    if db_user_id is not None:
+        metadata_kwargs["db_user_id"] = db_user_id
+
+    visible: List[Dict[str, Any]] = []
+    for agent_id in keys:
+        try:
+            visible.append(get_agent_metadata(agent_id, **metadata_kwargs))
+        except ValueError:
+            continue
+    return visible

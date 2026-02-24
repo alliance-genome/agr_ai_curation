@@ -1,4 +1,4 @@
-"""Custom agent CRUD API endpoints for Prompt Workshop."""
+"""Custom agent CRUD API endpoints for Agent Workshop."""
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -44,17 +44,27 @@ router = APIRouter(prefix="/api/agent-studio/custom-agents")
 class CreateCustomAgentRequest(BaseModel):
     """Create request for custom agent."""
 
-    parent_agent_id: str = Field(..., min_length=1, max_length=100)
+    model_config = ConfigDict(extra="forbid")
+
+    template_source: Optional[str] = Field(None, min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
     mod_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
     include_mod_rules: bool = True
+    model_id: Optional[str] = Field(None, min_length=1, max_length=100)
+    model_temperature: Optional[float] = None
+    model_reasoning: Optional[str] = Field(None, max_length=20)
+    tool_ids: Optional[List[str]] = None
+    output_schema_key: Optional[str] = Field(None, max_length=100)
+    category: Optional[str] = Field(None, max_length=100)
 
 
 class UpdateCustomAgentRequest(BaseModel):
     """Update request for custom agent."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
@@ -62,8 +72,12 @@ class UpdateCustomAgentRequest(BaseModel):
     description: Optional[str] = None
     icon: Optional[str] = Field(None, max_length=10)
     include_mod_rules: Optional[bool] = None
+    model_id: Optional[str] = Field(None, min_length=1, max_length=100)
+    model_temperature: Optional[float] = None
+    model_reasoning: Optional[str] = Field(None, max_length=20)
+    tool_ids: Optional[List[str]] = None
+    output_schema_key: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
-    rebase_parent_hash: Optional[bool] = None
 
 
 class TestCustomAgentRequest(BaseModel):
@@ -81,16 +95,23 @@ class CustomAgentResponse(BaseModel):
     id: str
     agent_id: str
     user_id: int
-    parent_agent_key: str
+    template_source: Optional[str] = None
     name: str
     description: Optional[str] = None
     custom_prompt: str
     mod_prompt_overrides: Dict[str, str] = Field(default_factory=dict)
     icon: str
     include_mod_rules: bool
+    model_id: str
+    model_temperature: float
+    model_reasoning: Optional[str] = None
+    tool_ids: List[str] = Field(default_factory=list)
+    output_schema_key: Optional[str] = None
+    visibility: str
+    project_id: Optional[str] = None
     parent_prompt_hash: Optional[str] = None
     current_parent_prompt_hash: Optional[str] = None
-    parent_prompt_stale: bool
+    parent_prompt_stale: bool = False
     parent_exists: bool
     is_active: bool
     created_at: datetime
@@ -144,43 +165,56 @@ async def create_custom_agent_endpoint(
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CustomAgentResponse:
-    """Create custom agent by cloning a parent agent prompt."""
+    """Create custom agent from template or explicit model/tool settings."""
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = create_custom_agent(
             db=db,
             user_id=db_user.id,
-            parent_agent_id=request.parent_agent_id,
+            template_source=request.template_source,
             name=request.name,
             custom_prompt=request.custom_prompt,
             mod_prompt_overrides=request.mod_prompt_overrides,
             description=request.description,
             icon=request.icon,
             include_mod_rules=request.include_mod_rules,
+            model_id=request.model_id,
+            model_temperature=request.model_temperature,
+            model_reasoning=request.model_reasoning,
+            tool_ids=request.tool_ids,
+            output_schema_key=request.output_schema_key,
+            category=request.category,
         )
         db.commit()
         db.refresh(custom_agent)
         return _as_response_payload(custom_agent)
     except ValueError as exc:
         db.rollback()
+        if "already exists" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc))
         raise HTTPException(status_code=400, detail=str(exc))
     except IntegrityError as exc:
         db.rollback()
-        if "uq_custom_agents_active" in str(exc.orig):
+        error_text = str(exc.orig)
+        if (
+            "uq_custom_agents_active" in error_text
+            or "uq_agents_active_custom_name_per_user" in error_text
+            or "duplicate key value violates unique constraint" in error_text
+        ):
             raise HTTPException(status_code=409, detail="A custom agent with this name already exists")
         raise HTTPException(status_code=500, detail="Database error while creating custom agent")
 
 
 @router.get("", response_model=ListCustomAgentsResponse)
 async def list_custom_agents_endpoint(
-    parent_agent_id: Optional[str] = Query(None, description="Optional parent agent filter"),
+    template_source: Optional[str] = Query(None, description="Optional template source filter"),
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ListCustomAgentsResponse:
     """List active custom agents for current user."""
     db_user = set_global_user_from_cognito(db, user)
     try:
-        agents = list_custom_agents_for_user(db, db_user.id, parent_agent_id=parent_agent_id)
+        agents = list_custom_agents_for_user(db, db_user.id, template_source=template_source)
         return ListCustomAgentsResponse(
             custom_agents=[_as_response_payload(agent) for agent in agents],
             total=len(agents),
@@ -226,8 +260,12 @@ async def update_custom_agent_endpoint(
             description=request.description,
             icon=request.icon,
             include_mod_rules=request.include_mod_rules,
+            model_id=request.model_id,
+            model_temperature=request.model_temperature,
+            model_reasoning=request.model_reasoning,
+            tool_ids=request.tool_ids,
+            output_schema_key=request.output_schema_key,
             notes=request.notes,
-            rebase_parent_hash=bool(request.rebase_parent_hash),
         )
         db.commit()
         db.refresh(custom_agent)
@@ -238,9 +276,19 @@ async def update_custom_agent_endpoint(
     except CustomAgentAccessError as exc:
         db.rollback()
         raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        db.rollback()
+        if "already exists" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
     except IntegrityError as exc:
         db.rollback()
-        if "uq_custom_agents_active" in str(exc.orig):
+        error_text = str(exc.orig)
+        if (
+            "uq_custom_agents_active" in error_text
+            or "uq_agents_active_custom_name_per_user" in error_text
+            or "duplicate key value violates unique constraint" in error_text
+        ):
             raise HTTPException(status_code=409, detail="A custom agent with this name already exists")
         raise HTTPException(status_code=500, detail="Database error while updating custom agent")
 
@@ -332,14 +380,6 @@ async def test_custom_agent_endpoint(
     runtime_info = get_custom_agent_runtime_info(make_custom_agent_id(custom_agent.id), db=db)
     if not runtime_info:
         raise HTTPException(status_code=404, detail="Custom agent is not available")
-    if not runtime_info.parent_exists:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Parent agent '{runtime_info.parent_agent_key}' is unavailable. "
-                "This custom agent cannot be executed."
-            ),
-        )
     if runtime_info.requires_document and not request.document_id:
         raise HTTPException(
             status_code=400,
@@ -359,6 +399,7 @@ async def test_custom_agent_endpoint(
     try:
         agent = get_agent_by_id(
             make_custom_agent_id(custom_agent.id),
+            db_user_id=db_user.id,
             document_id=request.document_id,
             user_id=str(user_sub),
             active_groups=active_groups,

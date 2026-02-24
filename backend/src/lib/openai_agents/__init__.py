@@ -21,14 +21,12 @@ Tools:
 - Weaviate hybrid search (for PDF content)
 """
 
-from .pdf_agent import create_pdf_agent
 from .runner import run_agent_streamed
 from .agents import create_supervisor_agent
 
 __all__ = [
     # Main entry point
     "run_agent_streamed",
-    # Agent factories
-    "create_pdf_agent",
+    # Supervisor entry point
     "create_supervisor_agent",
 ]

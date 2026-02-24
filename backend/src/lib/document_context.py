@@ -16,8 +16,8 @@ Usage:
     # Fetch with caching (single Weaviate query per document)
     doc_ctx = DocumentContext.fetch(document_id, user_id, document_name)
 
-    # Pass to agent factories
-    agent = create_pdf_agent(**doc_ctx.to_agent_kwargs())
+    # Pass to unified agent builder kwargs
+    kwargs = doc_ctx.to_agent_kwargs()
 """
 
 import logging
@@ -122,10 +122,10 @@ class DocumentContext:
         )
 
     def to_agent_kwargs(self) -> Dict[str, Any]:
-        """Convert to kwargs dict for agent factory functions.
+        """Convert to kwargs dict for unified agent builder calls.
 
-        Returns a dictionary suitable for passing to agent factories like
-        create_pdf_agent() or create_gene_expression_agent().
+        Returns a dictionary suitable for passing to get_agent_by_id(...)
+        for document-aware agents.
 
         Returns:
             Dict with document_id, user_id, document_name, hierarchy,

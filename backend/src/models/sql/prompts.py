@@ -119,7 +119,7 @@ class PromptExecutionLog(Base):
         UUID(as_uuid=True), ForeignKey("prompt_templates.id"), nullable=True
     )
     custom_agent_id = Column(
-        UUID(as_uuid=True), ForeignKey("custom_agents.id"), nullable=True
+        UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True
     )
     agent_name = Column(String(100), nullable=False)  # Denormalized for easy querying
     prompt_type = Column(String(50), nullable=False)  # 'system' or 'group_rules'

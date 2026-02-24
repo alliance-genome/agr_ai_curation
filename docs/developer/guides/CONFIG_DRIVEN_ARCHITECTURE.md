@@ -2,7 +2,7 @@
 
 This guide explains the config-driven architecture for AGR AI Curation, where **YAML is the source of truth** and the database serves as a runtime cache populated at startup.
 
-> **Last Updated:** January 30, 2026 (Config-driven architecture with YAML-based agents)
+> **Last Updated:** February 24, 2026 (Added LLM provider/model config system, unified agents table, tool policies)
 
 ---
 
@@ -12,14 +12,16 @@ This guide explains the config-driven architecture for AGR AI Curation, where **
 2. [Directory Structure](#directory-structure)
 3. [Core Concepts](#core-concepts)
 4. [Configuration Files](#configuration-files)
-5. [Adding a New Agent](#adding-a-new-agent)
-6. [Adding a New Tool](#adding-a-new-tool)
-7. [Configuring Groups](#configuring-groups)
-8. [Adding External Connections](#adding-external-connections)
-9. [Deployment](#deployment)
-10. [Environment Variables](#environment-variables)
-11. [Testing](#testing)
-12. [Troubleshooting](#troubleshooting)
+5. [LLM Provider Configuration](#llm-provider-configuration)
+6. [Unified Agents Table](#unified-agents-table)
+7. [Adding a New Agent](#adding-a-new-agent)
+8. [Adding a New Tool](#adding-a-new-tool)
+9. [Configuring Groups](#configuring-groups)
+10. [Adding External Connections](#adding-external-connections)
+11. [Deployment](#deployment)
+12. [Environment Variables](#environment-variables)
+13. [Testing](#testing)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -48,41 +50,59 @@ The config-driven architecture separates the **base product** (reusable by any o
 
 ```
 agr_ai_curation/
-├── config/                          # Runtime configuration (source of truth)
-│   ├── README.md                    # Configuration overview
-│   ├── groups.yaml                  # Group/Cognito mapping (copy from .example)
-│   ├── groups.yaml.example          # Template for groups
-│   ├── connections.yaml             # External service connections (copy from .example)
-│   ├── connections.yaml.example     # Template for connections
-│   └── agents/                      # Agent definitions (loaded at runtime)
-│       ├── README.md                # Agent configuration guide
-│       ├── _examples/               # Template agents (not loaded)
-│       │   └── basic_agent/         # Example agent structure
-│       ├── supervisor/              # Core supervisor agent
-│       ├── gene/                    # Gene validation agent
-│       ├── disease/                 # Disease validation agent
-│       └── [your_agent]/            # Your custom agents
+├── config/                              # Runtime configuration (source of truth)
+│   ├── README.md                        # Configuration overview
+│   ├── models.yaml                      # LLM model catalog (curator-selectable)
+│   ├── providers.yaml                   # LLM provider definitions
+│   ├── tool_policy_defaults.yaml        # Default tool visibility policies
+│   ├── groups.yaml                      # Group/Cognito mapping (copy from .example)
+│   ├── groups.yaml.example              # Template for groups
+│   ├── connections.yaml                 # External service connections (copy from .example)
+│   ├── connections.yaml.example         # Template for connections
+│   └── agents/                          # Agent definitions (loaded at runtime)
+│       ├── README.md                    # Agent configuration guide
+│       ├── _examples/                   # Template agents (not loaded)
+│       │   └── basic_agent/             # Example agent structure
+│       ├── supervisor/                  # Core supervisor agent
+│       ├── gene/                        # Gene validation agent
+│       ├── disease/                     # Disease validation agent
+│       └── [your_agent]/                # Your custom agents
 │
-├── alliance_agents/                 # Alliance-specific agents (development source)
-│   ├── README.md                    # Alliance agents documentation
-│   ├── gene/                        # Gene agent source
-│   ├── allele/                      # Allele agent source
-│   └── ...                          # Other Alliance agents
+├── alliance_agents/                     # Alliance-specific agents (development source)
+│   ├── README.md                        # Alliance agents documentation
+│   ├── gene/                            # Gene agent source
+│   ├── allele/                          # Allele agent source
+│   └── ...                              # Other Alliance agents
 │
 ├── backend/
-│   ├── src/lib/config/              # Configuration loaders
-│   │   ├── __init__.py              # Public API exports
-│   │   ├── agent_loader.py          # Loads agent.yaml files
-│   │   ├── schema_discovery.py      # Discovers schema.py files
-│   │   ├── groups_loader.py         # Loads groups.yaml
-│   │   └── connections_loader.py    # Loads connections.yaml
+│   ├── src/lib/config/                  # Configuration loaders
+│   │   ├── __init__.py                  # Public API exports
+│   │   ├── agent_loader.py              # Loads agent.yaml files
+│   │   ├── models_loader.py             # Loads config/models.yaml
+│   │   ├── providers_loader.py          # Loads config/providers.yaml
+│   │   ├── provider_validation.py       # Cross-validates providers + models
+│   │   ├── schema_discovery.py          # Discovers schema.py files
+│   │   ├── groups_loader.py             # Loads groups.yaml
+│   │   └── connections_loader.py        # Loads connections.yaml
 │   │
-│   └── tools/                       # Tool implementations
-│       ├── core/                    # Base tools (ship with product)
-│       └── custom/                  # Organization-specific tools
+│   ├── src/lib/agent_studio/            # Agent Workshop services
+│   │   ├── agent_service.py             # Unified agent CRUD + visibility
+│   │   ├── catalog_service.py           # Prompt catalog builder
+│   │   ├── registry_builder.py          # YAML-to-registry bridge
+│   │   ├── tool_policy_service.py       # Tool library policy cache
+│   │   └── tool_idea_service.py         # Tool idea request workflow
+│   │
+│   ├── src/models/sql/                  # Database models
+│   │   ├── agent.py                     # Agent, Project, ProjectMember tables
+│   │   ├── tool_policy.py              # ToolPolicy table
+│   │   └── tool_idea_request.py        # ToolIdeaRequest table
+│   │
+│   └── tools/                           # Tool implementations
+│       ├── core/                        # Base tools (ship with product)
+│       └── custom/                      # Organization-specific tools
 │
 └── scripts/
-    └── deploy_alliance.sh           # Syncs alliance_agents/ to config/agents/
+    └── deploy_alliance.sh               # Syncs alliance_agents/ to config/agents/
 ```
 
 ---
@@ -110,9 +130,14 @@ At system startup:
 
 1. `connections.yaml` is loaded to establish service connections
 2. `groups.yaml` is loaded for authentication mapping
-3. Agent folders in `config/agents/` are discovered and loaded
-4. Group rules are associated with agents based on group_id matching
-5. Schemas are dynamically imported from `schema.py` files
+3. `providers.yaml` is loaded to define available LLM backends
+4. `models.yaml` is loaded to define curator-selectable models
+5. Provider runtime contracts are validated (cross-checks providers, models, and API keys)
+6. Agent folders in `config/agents/` are discovered and loaded
+7. Group rules are associated with agents based on group_id matching
+8. Schemas are dynamically imported from `schema.py` files
+9. System agents are seeded into the unified `agents` database table
+10. Tool policies are loaded from the `tool_policies` table
 
 ### Thread Safety
 
@@ -239,6 +264,265 @@ rules: |
   - Check both current symbols and synonyms
   - Include CG numbers as alternative identifiers
 ```
+
+---
+
+## LLM Provider Configuration
+
+The LLM provider system uses two YAML files to separate **what models are available** from **how to reach each provider backend**.
+
+### models.yaml
+
+Defines the catalog of models that curators can select in the UI. Each entry declares capabilities, guidance text, and which provider handles it.
+
+Located at: `config/models.yaml`
+
+```yaml
+models:
+  - model_id: gpt-5.2-mini
+    name: GPT-5.2 Mini
+    provider: openai                    # Must match a key in providers.yaml
+    description: Fast default model for day-to-day drafting and light extraction.
+    guidance: Start here for most tasks.
+    default: true                       # Exactly one model should be default
+    supports_reasoning: false
+    supports_temperature: false
+    recommended_for:
+      - Interactive drafting and quick iterations
+      - Routine extraction and formatting
+    avoid_for:
+      - Deep multi-step adjudication with conflicting evidence
+
+  - model_id: gpt-5.2
+    name: GPT-5.2
+    provider: openai
+    description: Highest-quality model for complex reasoning.
+    supports_reasoning: true
+    reasoning_options: [low, medium, high]
+    default_reasoning: medium
+    reasoning_descriptions:
+      low: Fastest mode. Good for quick checks.
+      medium: Recommended default for curation.
+      high: Deepest reasoning. Use sparingly.
+
+  - model_id: openai/gpt-oss-120b
+    name: GPT-OSS 120B
+    provider: groq                      # Routed through Groq via LiteLLM
+    description: Ultra-fast open-weight model on Groq.
+    supports_reasoning: false
+    supports_temperature: true
+```
+
+#### Model Definition Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `model_id` | Yes | Unique identifier passed to the LLM API |
+| `name` | No | Human-readable display name (defaults to model_id) |
+| `provider` | No | Provider key from providers.yaml (defaults to `openai`) |
+| `description` | No | Short description for the UI |
+| `guidance` | No | Curator-facing usage guidance |
+| `default` | No | Whether this is the default model (`true`/`false`) |
+| `curator_visible` | No | Show in curator model picker (default: `true`) |
+| `supports_reasoning` | No | Whether the model supports reasoning levels |
+| `supports_temperature` | No | Whether the model supports temperature control |
+| `reasoning_options` | No | List of reasoning levels (e.g., `[low, medium, high]`) |
+| `default_reasoning` | No | Default reasoning level (must be in `reasoning_options`) |
+| `reasoning_descriptions` | No | Map of reasoning level to description text |
+| `recommended_for` | No | List of use cases where the model excels |
+| `avoid_for` | No | List of use cases where another model is preferred |
+
+### providers.yaml
+
+Defines how to reach each LLM backend. Supports two driver types: `openai_native` for direct OpenAI API access and `litellm` for third-party providers routed through LiteLLM.
+
+Located at: `config/providers.yaml`
+
+```yaml
+providers:
+  openai:
+    driver: openai_native               # Direct OpenAI Agents SDK
+    api_key_env: OPENAI_API_KEY          # Env var holding the API key
+    base_url_env: OPENAI_BASE_URL        # Optional env var for base URL override
+    default_base_url: ""                 # Empty = use OpenAI default
+    api_mode: responses                  # "responses" or "chat_completions"
+    default_for_runner: true             # Exactly one provider must be true
+    supports:
+      parallel_tool_calls: true
+
+  gemini:
+    driver: litellm                      # Route through LiteLLM
+    api_key_env: GEMINI_API_KEY
+    base_url_env: GEMINI_BASE_URL
+    default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    litellm_prefix: gemini               # Required for litellm driver
+    drop_params: true                    # Drop unsupported params for this provider
+    supports:
+      parallel_tool_calls: false
+
+  groq:
+    driver: litellm
+    api_key_env: GROQ_API_KEY
+    base_url_env: GROQ_BASE_URL
+    default_base_url: "https://api.groq.com/openai/v1"
+    litellm_prefix: groq
+    drop_params: true
+    supports:
+      parallel_tool_calls: true
+```
+
+#### Provider Definition Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `driver` | Yes | `openai_native` or `litellm` |
+| `api_key_env` | Yes | Name of the environment variable holding the API key |
+| `base_url_env` | No | Env var for base URL override |
+| `default_base_url` | No | Fallback base URL when env var is not set |
+| `litellm_prefix` | Conditional | Required when `driver: litellm` (e.g., `gemini`, `groq`) |
+| `drop_params` | No | Drop unsupported params for non-OpenAI providers (default: true for litellm) |
+| `api_mode` | No | `responses` or `chat_completions` (default: `responses`) |
+| `default_for_runner` | No | Whether this provider is the default runner (exactly one must be `true`) |
+| `supports.parallel_tool_calls` | No | Whether parallel tool calls are supported (default: `true`) |
+
+### Provider Validation
+
+At startup, `provider_validation.py` cross-validates the loaded providers and models:
+
+- Every model's `provider` field must reference a key defined in `providers.yaml`
+- Providers used by at least one model (or marked `default_for_runner`) must have their API key set in the environment
+- Exactly one provider must have `default_for_runner: true`
+
+The validation runs in **strict mode** by default (`LLM_PROVIDER_STRICT_MODE=true`), which causes the backend to fail fast on startup if any required API key is missing. Set `LLM_PROVIDER_STRICT_MODE=false` to downgrade missing keys to warnings instead of errors.
+
+```python
+from src.lib.config import validate_and_cache_provider_runtime_contracts
+
+# Runs at startup; raises RuntimeError if validation fails in strict mode
+report = validate_and_cache_provider_runtime_contracts()
+
+# Later, retrieve the cached report
+from src.lib.config import get_startup_provider_validation_report
+report = get_startup_provider_validation_report()
+```
+
+### Adding a New LLM Provider
+
+1. Add the provider definition to `config/providers.yaml`:
+
+```yaml
+providers:
+  # ... existing providers ...
+
+  my_provider:
+    driver: litellm
+    api_key_env: MY_PROVIDER_API_KEY
+    default_base_url: "https://api.myprovider.com/v1"
+    litellm_prefix: my_provider
+    drop_params: true
+    supports:
+      parallel_tool_calls: true
+```
+
+2. Add models that use the provider to `config/models.yaml`:
+
+```yaml
+models:
+  # ... existing models ...
+
+  - model_id: my-model-7b
+    name: My Model 7B
+    provider: my_provider
+    description: Fast model from My Provider.
+    supports_reasoning: false
+    supports_temperature: true
+```
+
+3. Set the API key in your environment:
+
+```bash
+export MY_PROVIDER_API_KEY=your-key-here
+```
+
+4. Restart the backend. The provider validation will confirm the new provider is reachable.
+
+---
+
+## Unified Agents Table
+
+All agents (system and custom) are stored in a single `agents` PostgreSQL table. This replaces the previous architecture where system agents were hardcoded Python files and custom agents lived in a separate `custom_agents` table.
+
+### Agent Visibility Model
+
+Each agent row has a `visibility` field controlling who can see and use it:
+
+| Visibility | Scope | Created By |
+|------------|-------|------------|
+| `system` | Visible to all users | Seeded from YAML at startup |
+| `private` | Visible only to the owner | Created via Agent Workshop UI |
+| `project` | Visible to project members | Shared within a project |
+
+### Database Schema (key columns)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `agent_key` | String(100) | Unique identifier (e.g., `gene_validation`) |
+| `user_id` | Integer | Owner (NULL for system agents) |
+| `name` | String(255) | Display name |
+| `instructions` | Text | Full prompt text |
+| `model_id` | String(100) | LLM model identifier (from models.yaml) |
+| `model_temperature` | Float | Temperature setting |
+| `model_reasoning` | String(20) | Reasoning level (low/medium/high or NULL) |
+| `tool_ids` | JSONB | List of tool keys the agent can use |
+| `output_schema_key` | String(100) | Pydantic schema class name |
+| `visibility` | String(20) | `private`, `project`, or `system` |
+| `project_id` | UUID | Project scope (for `project` visibility) |
+| `supervisor_enabled` | Boolean | Whether supervisor can route to this agent |
+| `show_in_palette` | Boolean | Whether to show in the Flow Builder palette |
+| `is_active` | Boolean | Soft-delete flag |
+
+### Supporting Tables
+
+- **`projects`** - Sharing boundaries for agent visibility
+- **`project_members`** - Membership mapping (user to project, with role)
+- **`tool_policies`** - Runtime policy controls for each tool (visibility, attach/execute permissions)
+- **`tool_idea_requests`** - Curator-submitted requests for new tool capabilities
+
+### Agent Service
+
+The `agent_service.py` module provides the data access layer:
+
+```python
+from src.lib.agent_studio.agent_service import (
+    list_agents_visible_to_user,
+    get_agent_by_key,
+    agent_to_execution_spec,
+)
+
+# List all agents a user can see (system + their private + project agents)
+agents = list_agents_visible_to_user(db, user_id=42)
+
+# Get a specific agent with visibility enforcement
+agent = get_agent_by_key(db, agent_key="gene_validation", user_id=42)
+
+# Convert to runtime execution spec
+spec = agent_to_execution_spec(agent)
+```
+
+### Database Migrations
+
+The unified agents schema was introduced through a series of Alembic migrations:
+
+1. `u3v4w5x6y7z8` - Create `agents` and `projects` tables
+2. `v4w5x6y7z8a9` - Seed system agents from YAML into the `agents` table
+3. `w5x6y7z8a9b0` - Point custom agent foreign keys to the new `agents` table
+4. `x6y7z8a9b0c1` - Drop the legacy `custom_agents` table
+5. `y7z8a9b0c1d2` - Add unique index for active custom agent names per user
+6. `z8a9b0c1d2e3` - Create `tool_policies` table
+7. `a9b0c1d2e3f4` - Create `tool_idea_requests` table
+
+Migrations run automatically on container startup via `alembic upgrade head`.
 
 ---
 
@@ -633,18 +917,33 @@ DB_PORT=5432
 DB_NAME=ai_curation
 DB_USER=postgres
 DB_PASSWORD=secret
+DATABASE_URL=postgresql://postgres:secret@localhost:5432/ai_curation
 
-# OpenAI
-OPENAI_API_KEY=sk-...
+# LLM Provider API Keys
+OPENAI_API_KEY=sk-...              # Required (default runner provider)
+GEMINI_API_KEY=...                 # Optional (for Gemini provider)
+GROQ_API_KEY=gsk_...               # Optional (for Groq provider)
+
+# LLM Provider Base URL Overrides (optional)
 OPENAI_BASE_URL=https://api.openai.com/v1
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+GROQ_BASE_URL=https://api.groq.com/openai/v1
 
-# Per-agent model overrides
+# Provider Validation
+LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (default: true)
+
+# Per-agent model overrides (in agent.yaml via ${VAR:-default})
 AGENT_GENE_MODEL=gpt-4o
 AGENT_SUPERVISOR_MODEL=gpt-4o
 
 # Config paths (optional, defaults to config/)
 CONFIG_PATH=/app/config
+MODELS_CONFIG_PATH=/app/config/models.yaml
+PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
 ALLIANCE_AGENTS_PATH=/app/alliance_agents
+
+# Tool policy cache
+TOOL_POLICY_CACHE_TTL_SECONDS=30   # How long to cache tool policies (default: 30)
 ```
 
 ### Security
@@ -680,6 +979,20 @@ docker compose exec backend python -c "from src.lib.config import load_groups; p
 
 # Check connections configuration
 docker compose exec backend python -c "from src.lib.config import load_connections; print(load_connections())"
+
+# Check models.yaml is valid
+docker compose exec backend python -c "from src.lib.config import load_models; print(load_models())"
+
+# Check providers.yaml is valid
+docker compose exec backend python -c "from src.lib.config import load_providers; print(load_providers())"
+
+# Run full provider/model cross-validation report
+docker compose exec backend python -c "
+from src.lib.config import build_provider_runtime_report
+import json
+report = build_provider_runtime_report(strict_mode=False)
+print(json.dumps(report, indent=2))
+"
 ```
 
 ### Test Deployment Script
@@ -718,6 +1031,16 @@ docker compose exec backend python -c "from src.lib.config import load_connectio
 | Literal `${VAR}` appears | Check for typos in syntax |
 | Default not used | Correct syntax is `${VAR:-default}` with `:-` |
 
+### LLM Provider Issues
+
+| Symptom | Check |
+|---------|-------|
+| Startup crash with "LLM provider validation failed" | Required API key env var is not set. Check `providers.yaml` for which env var is expected. |
+| Model references unknown provider | The `provider` field in `models.yaml` doesn't match a key in `providers.yaml`. |
+| "must define exactly one provider with default_for_runner=true" | Check `providers.yaml` - exactly one provider needs `default_for_runner: true`. |
+| LiteLLM provider not routing correctly | Verify `litellm_prefix` is set and `drop_params: true` for non-OpenAI providers. |
+| Provider validation warnings but no errors | Set `LLM_PROVIDER_STRICT_MODE=false` if unused providers missing keys is acceptable. |
+
 ### Health Checks Failing
 
 | Symptom | Check |
@@ -725,6 +1048,14 @@ docker compose exec backend python -c "from src.lib.config import load_connectio
 | Database unhealthy | Connection string correct? Port open? |
 | API unhealthy | API key valid? Rate limited? |
 | Timeout errors | Increase `timeout_seconds` in health_check |
+
+### Unified Agents Table Issues
+
+| Symptom | Check |
+|---------|-------|
+| System agents missing after restart | Check `alembic upgrade head` ran successfully in startup logs. |
+| Custom agent not visible | Verify the agent's `visibility` and `is_active` flags; check user's project membership. |
+| Duplicate agent_key error | Agent keys must be unique. Check for conflicts between YAML-defined and custom agents. |
 
 ---
 

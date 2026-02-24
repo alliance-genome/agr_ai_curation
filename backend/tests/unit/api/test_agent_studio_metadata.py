@@ -101,11 +101,13 @@ class TestGetRegistryMetadata:
 
         fake_custom = SimpleNamespace(
             id="11111111-2222-3333-4444-555555555555",
+            user_id=123,
             parent_agent_key="gene",
+            category="Validation",
             name="Doug's Gene Agent",
             icon="🔧",
         )
-        monkeypatch.setattr(api_module, "list_custom_agents_for_user", lambda _db, _uid: [fake_custom])
+        monkeypatch.setattr(api_module, "list_custom_agents_visible_to_user", lambda _db, _uid: [fake_custom])
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -165,7 +167,11 @@ class TestGetRegistryMetadata:
 
         fake_custom = SimpleNamespace(
             id="11111111-2222-3333-4444-555555555555",
+            user_id=123,
             parent_agent_key="gene",
+            template_source="gene",
+            category="Validation",
+            tool_ids=["agr_curation_query"],
             name="Doug's Gene Agent",
             description="Custom prompt variant",
             custom_prompt="Custom prompt text",
@@ -185,7 +191,7 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "list_custom_agents_for_user",
+            "list_custom_agents_visible_to_user",
             lambda _db, _uid: [fake_custom],
         )
 
@@ -201,6 +207,68 @@ class TestGetRegistryMetadata:
         assert custom.subcategory == "My Custom Agents"
         assert custom.has_mod_rules is True
         assert custom.mod_rules["WB"].content == "Custom WB Rules"
+
+    def test_merge_custom_agents_marks_project_shared_agents(self, monkeypatch):
+        """Catalog augmentation should label non-owner custom agents as shared."""
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+
+        base_catalog = PromptCatalog(
+            categories=[
+                AgentPrompts(
+                    category="Validation",
+                    agents=[
+                        PromptInfo(
+                            agent_id="gene",
+                            agent_name="Gene Specialist",
+                            description="Curate genes",
+                            base_prompt="Base prompt",
+                            source_file="database",
+                            has_mod_rules=False,
+                            mod_rules={},
+                            tools=[],
+                            subcategory="Data Validation",
+                        )
+                    ],
+                )
+            ],
+            total_agents=1,
+            available_mods=[],
+        )
+
+        shared_custom = SimpleNamespace(
+            id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            user_id=999,
+            template_source="gene",
+            category="Validation",
+            tool_ids=[],
+            name="Shared Gene Agent",
+            description="Shared",
+            custom_prompt="Custom prompt text",
+            mod_prompt_overrides={},
+            created_at=None,
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [shared_custom],
+        )
+
+        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+            base_catalog,
+            {"sub": "test-sub"},
+            SimpleNamespace(query=lambda *_args, **_kwargs: None),
+        )
+
+        all_agents = [a for c in catalog.categories for a in c.agents]
+        custom = next(a for a in all_agents if a.agent_name == "Shared Gene Agent")
+        assert custom.subcategory == "Shared Agents"
 
     def test_get_prompt_preview_system_agent(self, monkeypatch):
         """Prompt preview should return base prompt for system agent without mod_id."""

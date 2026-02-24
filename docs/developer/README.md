@@ -16,27 +16,28 @@ Documentation for the AI Curation Platform developers.
 
 Start here for new developers:
 
-1. **[CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md)** - Overview of the YAML-based configuration system
-2. **[ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md)** - Step-by-step guide to create a new agent
-3. **[ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md)** - How to add tools that agents can use
+1. **[CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md)** -- Overview of the YAML + database architecture
+2. **[ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md)** -- Step-by-step guide to create a new agent (YAML or UI)
+3. **[ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md)** -- How to add tools that agents can use
+4. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent architecture reference
 
 ### Developer Guides
 
 | Guide | Description |
 |-------|-------------|
-| [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide - YAML source of truth, loaders, deployment |
-| [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Create agents with agent.yaml, prompt.yaml, schema.py |
-| [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add Python tools for database/API access |
-| [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Legacy guide - comprehensive but pre-dates config-driven architecture |
+| [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide -- YAML source of truth, database runtime, loaders, deployment |
+| [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Create agents via YAML config or Agent Studio UI -- no Python agent files needed |
+| [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add Python tools with `@function_tool` and register tool bindings |
+| [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
 
 ### API Reference
 
-- **[API_USAGE.md](api/API_USAGE.md)** - Complete HTTP reference with streaming, auth, and workflows
+- **[API_USAGE.md](api/API_USAGE.md)** -- Complete HTTP reference with streaming, auth, and workflows
 
 ### Trace Analysis
 
-- **[TRACE_REVIEW_API.md](traces/TRACE_REVIEW_API.md)** - Trace review service API documentation
-- **[TRACE_REVIEW_SPECIFICATION.md](traces/TRACE_REVIEW_SPECIFICATION.md)** - Trace review system specification
+- **[TRACE_REVIEW_API.md](traces/TRACE_REVIEW_API.md)** -- Trace review service API documentation
+- **[TRACE_REVIEW_SPECIFICATION.md](traces/TRACE_REVIEW_SPECIFICATION.md)** -- Trace review system specification
 
 ## Configuration Reference
 
@@ -46,6 +47,7 @@ For configuration files, see:
 |------|-------------|
 | [config/README.md](../../config/README.md) | Configuration directory overview |
 | [config/agents/README.md](../../config/agents/README.md) | Agent configuration reference |
+| [config/models.yaml](../../config/models.yaml) | Model catalog (curator-selectable LLMs) |
 | [config/groups.yaml.example](../../config/groups.yaml.example) | Group/Cognito mapping template |
 | [config/connections.yaml.example](../../config/connections.yaml.example) | External connections template |
 
@@ -53,34 +55,38 @@ For configuration files, see:
 
 ### Add a New Agent
 
+Agents are defined via YAML config and stored in the unified `agents` database table. No Python agent files are needed.
+
 ```bash
 # Copy template
 cp -r config/agents/_examples/basic_agent config/agents/my_agent
 
 # Edit files
-# - config/agents/my_agent/agent.yaml
-# - config/agents/my_agent/prompt.yaml
-# - config/agents/my_agent/schema.py
+# - config/agents/my_agent/agent.yaml    (agent definition)
+# - config/agents/my_agent/prompt.yaml   (instructions)
 
-# Restart backend
+# Seed into database (via migration or manual insert)
+# Then restart backend
 docker compose restart backend
 ```
 
-See [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) for details.
+See [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) for details. Custom agents can also be created directly via the Agent Studio UI without any file changes.
 
 ### Add a New Tool
 
 ```bash
 # Create tool file
-# backend/tools/custom/my_tool.py
+# backend/src/lib/openai_agents/tools/my_tool.py
 
-# Export in __init__.py
-# backend/tools/custom/__init__.py
-# backend/tools/__init__.py
+# Register tool binding in catalog_service.py
+# Add to TOOL_BINDINGS dict
 
 # Reference in agent.yaml
 # tools:
 #   - my_tool
+
+# Restart backend
+docker compose restart backend
 ```
 
 See [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) for details.
@@ -106,25 +112,39 @@ cp config/connections.yaml.example config/connections.yaml
 
 ## Architecture Overview
 
-The system uses a **config-driven architecture** where:
+The system uses a **config-driven, database-backed architecture** where:
 
-1. **YAML is source of truth** - All configuration in YAML files
-2. **Database is runtime cache** - YAML loaded at startup
-3. **Self-contained agents** - Each agent is a folder with all its config
-4. **Thread-safe loaders** - Configuration loaded once, cached
+1. **YAML defines initial state** -- Agent metadata, prompts, and group rules in `config/agents/`
+2. **Database is runtime authority** -- The unified `agents` table stores all agent records (system + custom)
+3. **Dynamic discovery** -- The supervisor queries the database for enabled agents and builds streaming tools at runtime
+4. **Declarative tool bindings** -- Tools are resolved via `TOOL_BINDINGS` with explicit context requirements
+5. **No hardcoded agent files** -- All 16 original Python agent files have been replaced by generic construction from database rows
 
 ```
-config/
-├── groups.yaml           # Group/Cognito mapping
-├── connections.yaml      # External service connections
-└── agents/               # Agent definitions
-    ├── supervisor/       # Core routing agent
-    ├── gene/             # Gene validation agent
-    └── [your_agent]/     # Your custom agents
-        ├── agent.yaml    # Agent definition
-        ├── prompt.yaml   # Instructions
-        ├── schema.py     # Output format
-        └── group_rules/  # Org-specific behavior
+config/agents/          # YAML source of truth (system agents)
+  supervisor/
+  gene/
+  disease/
+  [your_agent]/
+    agent.yaml          # Agent definition
+    prompt.yaml         # Instructions
+    group_rules/        # Org-specific behavior
+
+          |
+          | Alembic migration seeds into:
+          v
+
+agents table            # Unified database (runtime authority)
+  (system agents from YAML + custom agents from UI)
+
+          |
+          | get_agent_by_id() reads from DB
+          v
+
+Runtime Agent           # OpenAI Agents SDK Agent instance
+  (tools resolved via TOOL_BINDINGS)
+  (group rules injected from prompt cache)
+  (output schema resolved from models.py)
 ```
 
-See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) for the complete guide.
+See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) and [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) for the complete reference.

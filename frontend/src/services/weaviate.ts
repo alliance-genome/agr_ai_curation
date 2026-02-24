@@ -140,8 +140,8 @@ export interface DocumentDetailData {
   schemaVersion?: string;
 }
 
-export interface DoclingHealthStatus {
-  status: 'healthy' | 'degraded' | 'unreachable' | 'unknown';
+export interface PdfExtractionHealthStatus {
+  status: 'healthy' | 'degraded' | 'unreachable' | 'misconfigured' | 'unknown';
   service_url: string;
   last_checked?: string;
   response_code?: number;
@@ -445,17 +445,17 @@ export const fetchApi = async <T>(
   }
 };
 
-const fetchDoclingHealth = async (): Promise<DoclingHealthStatus> => {
-  const response = await fetch(`${API_BASE_URL}/documents/docling-health`, {
+const fetchPdfExtractionHealth = async (): Promise<PdfExtractionHealthStatus> => {
+  const response = await fetch(`${API_BASE_URL}/documents/pdf-extraction-health`, {
     credentials: 'include', // Include httpOnly cookies for authentication
   });
   if (!response.ok) {
-    throw new Error('Failed to fetch Docling service health');
+    throw new Error('Failed to fetch PDF extraction service health');
   }
 
-  const data = (await response.json()) as DoclingHealthStatus;
+  const data = (await response.json()) as PdfExtractionHealthStatus;
   return {
-    status: (data?.status as DoclingHealthStatus['status']) ?? 'unknown',
+    status: (data?.status as PdfExtractionHealthStatus['status']) ?? 'unknown',
     service_url: data?.service_url ?? '',
     last_checked: data?.last_checked,
     response_code: data?.response_code,
@@ -464,12 +464,12 @@ const fetchDoclingHealth = async (): Promise<DoclingHealthStatus> => {
   };
 };
 
-export const useDoclingHealth = (
-  options?: UseQueryOptions<DoclingHealthStatus>
+export const usePdfExtractionHealth = (
+  options?: UseQueryOptions<PdfExtractionHealthStatus>
 ) =>
-  useQuery<DoclingHealthStatus>({
-    queryKey: ['docling-health'],
-    queryFn: fetchDoclingHealth,
+  useQuery<PdfExtractionHealthStatus>({
+    queryKey: ['pdf-extraction-health'],
+    queryFn: fetchPdfExtractionHealth,
     refetchInterval: 60_000,
     retry: false,
     ...options,

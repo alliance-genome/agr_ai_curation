@@ -25,11 +25,15 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 from agents import Agent
 
 from src.models.sql.curation_flow import CurationFlow
-from src.lib.agent_studio.catalog_service import get_agent_by_id, AGENT_REGISTRY
+from src.lib.agent_studio.catalog_service import (
+    get_agent_by_id,
+    get_agent_metadata,
+)
 from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
+    resolve_model_provider,
 )
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
@@ -47,30 +51,26 @@ def _tool_safe_agent_id(agent_id: str) -> str:
     return agent_id.replace("-", "_")
 
 
-def _resolve_flow_agent_entry(agent_id: str) -> Optional[Dict[str, Any]]:
-    """Resolve system/custom agent_id to execution metadata."""
-    entry = AGENT_REGISTRY.get(agent_id)
-    if entry:
-        return entry
-
-    if not agent_id.startswith("ca_"):
+def _resolve_flow_agent_entry(
+    agent_id: str,
+    *,
+    db_user_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Resolve agent_id to execution metadata from unified agent records."""
+    try:
+        metadata_kwargs: Dict[str, Any] = {}
+        if db_user_id is not None:
+            metadata_kwargs["db_user_id"] = db_user_id
+        metadata = get_agent_metadata(agent_id, **metadata_kwargs)
+    except ValueError:
         return None
 
-    from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
-
-    runtime_info = get_custom_agent_runtime_info(agent_id)
-    if not runtime_info:
-        return None
-
-    parent_entry = AGENT_REGISTRY.get(runtime_info.parent_agent_key)
-    if not parent_entry:
-        return None
-
-    merged = dict(parent_entry)
-    merged["name"] = runtime_info.display_name
-    merged["parent_agent_key"] = runtime_info.parent_agent_key
-    merged["custom_agent_id"] = runtime_info.custom_agent_id
-    return merged
+    return {
+        "name": metadata.get("display_name", agent_id),
+        "description": metadata.get("description") or "",
+        "requires_document": metadata.get("requires_document", False),
+        "required_params": metadata.get("required_params", []),
+    }
 
 
 def is_agent_in_flow(flow: CurationFlow, agent_id: str) -> bool:
@@ -158,7 +158,11 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     return counts
 
 
-def flow_requires_document(flow: CurationFlow) -> bool:
+def flow_requires_document(
+    flow: CurationFlow,
+    *,
+    db_user_id: Optional[int] = None,
+) -> bool:
     """Check if any agent in the flow requires a document.
 
     Used to determine whether to include document guidance in supervisor
@@ -172,7 +176,7 @@ def flow_requires_document(flow: CurationFlow) -> bool:
         True if any agent in the flow requires a document, False otherwise
     """
     for agent_id in get_flow_agent_ids(flow):
-        entry = _resolve_flow_agent_entry(agent_id)
+        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
         if entry and entry.get("requires_document", False):
             return True
     return False
@@ -182,6 +186,7 @@ def get_all_agent_tools(
     flow: CurationFlow,
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
@@ -205,6 +210,7 @@ def get_all_agent_tools(
         flow: The curation flow defining which agents are active
         document_id: For document-aware agents
         user_id: For tenant isolation (Cognito subject ID)
+        db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database agents
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
@@ -242,6 +248,8 @@ def get_all_agent_tools(
         context["document_id"] = document_id
         context["user_id"] = user_id
     context["active_groups"] = active_groups or []
+    if db_user_id is not None:
+        context["db_user_id"] = db_user_id
 
     # Create one tool per node (not per unique agent_id)
     # This ensures each step gets its own agent instance with its own custom_instructions
@@ -261,7 +269,7 @@ def get_all_agent_tools(
             logger.warning("[Flow Executor] Node is missing agent_id, skipping")
             continue
 
-        entry = _resolve_flow_agent_entry(agent_id)
+        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
         if not entry:
             logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
             continue
@@ -339,8 +347,8 @@ def build_supervisor_instructions(
     flows that lack task_input nodes (where the prompt doesn't mention documents).
 
     When available_tools is provided, steps whose tools were not created
-    (e.g., requires_document but no document, missing registry entry, or agent
-    factory error) are marked as [unavailable] and their tool references are
+    (e.g., requires_document but no document, missing unified-agent metadata, or
+    agent build error) are marked as [unavailable] and their tool references are
     suppressed. This prevents the supervisor from trying to call non-existent tools.
 
     Args:
@@ -506,6 +514,7 @@ def create_flow_supervisor(
     flow: CurationFlow,
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
@@ -519,6 +528,7 @@ def create_flow_supervisor(
         flow: The CurationFlow defining the workflow
         document_id: Optional document for PDF-aware agents
         user_id: Cognito subject ID for Weaviate tenant isolation
+        db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database queries
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
@@ -528,13 +538,15 @@ def create_flow_supervisor(
     """
     # Get supervisor config (model, temperature, reasoning)
     config = get_agent_config("supervisor")
+    model_provider = resolve_model_provider(config.model)
 
     # Build model configuration
-    model = get_model_for_agent(config.model)
+    model = get_model_for_agent(config.model, provider_override=model_provider)
     model_settings = build_model_settings(
         model=config.model,
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
+        provider_override=model_provider,
     )
 
     # Get all tools with flow-based is_enabled
@@ -545,6 +557,7 @@ def create_flow_supervisor(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
+        db_user_id=db_user_id,
         document_name=document_name,
         active_groups=active_groups,
         doc_context=doc_context,
@@ -558,13 +571,16 @@ def create_flow_supervisor(
         )
         raise ValueError(
             f"Flow '{flow.name}' has {step_count} step(s) but no agent tools could be created. "
-            f"Check that agents are in the registry and required documents are provided."
+            f"Check that all agent IDs resolve in the unified agents table and required documents are provided."
         )
 
     # Determine if document guidance should be included in system instructions
     # Only include when: 1) a document is provided AND 2) the flow has document-requiring agents
     # This prevents confusing the supervisor by mentioning documents when no PDF tools exist
-    has_document = bool(document_id) and flow_requires_document(flow)
+    has_document = bool(document_id) and flow_requires_document(
+        flow,
+        db_user_id=db_user_id,
+    )
 
     # Build supervisor instructions with document awareness if applicable
     # Pass created_tool_names so instructions only reference tools that exist
@@ -596,6 +612,7 @@ async def execute_flow(
     flow: CurationFlow,
     user_id: str,
     session_id: str,
+    db_user_id: Optional[int] = None,
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
     user_query: Optional[str] = None,
@@ -612,6 +629,7 @@ async def execute_flow(
         flow: The CurationFlow to execute
         user_id: Cognito subject ID for Weaviate tenant isolation
         session_id: Session ID for tracing (Langfuse)
+        db_user_id: Database user ID for private/project agent visibility checks
         document_id: Optional document for PDF-aware agents
         document_name: Optional name of the document for Langfuse metadata
         user_query: Optional user-provided query/context
@@ -643,6 +661,7 @@ async def execute_flow(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
+        db_user_id=db_user_id,
         document_name=document_name,
         active_groups=active_groups,
         doc_context=doc_context,

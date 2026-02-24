@@ -660,6 +660,7 @@ async def execute_flow_endpoint(
                 flow=flow,
                 user_id=user_id,
                 session_id=current_session_id,
+                db_user_id=db_user.id,
                 document_id=str(request.document_id) if request.document_id else None,
                 document_name=document_name,
                 user_query=request.user_query,

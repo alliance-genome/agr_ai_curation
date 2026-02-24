@@ -1,0 +1,108 @@
+tool_policies:
+  agr_curation_query:
+    display_name: AGR Curation Query
+    description: Query Alliance curation data for genes, alleles, and ontology terms.
+    category: Database
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  search_document:
+    display_name: Search Document
+    description: Semantic search over the active document.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  read_section:
+    display_name: Read Section
+    description: Read a specific section from the active document.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  read_subsection:
+    display_name: Read Subsection
+    description: Read a specific subsection from the active document.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  curation_db_sql:
+    display_name: Curation DB SQL
+    description: Direct SQL access to curation database (advanced/developer tool).
+    category: Database
+    curator_visible: false
+    allow_attach: false
+    allow_execute: false
+    config: {}
+
+  chebi_api_call:
+    display_name: ChEBI API
+    description: Query ChEBI ontology term data from external API.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  quickgo_api_call:
+    display_name: QuickGO API
+    description: Query Gene Ontology annotation data via QuickGO.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  go_api_call:
+    display_name: GO API
+    description: Query Gene Ontology term hierarchy and metadata.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  alliance_api_call:
+    display_name: Alliance API
+    description: Query Alliance public API endpoints.
+    category: External API
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  save_csv_file:
+    display_name: Save CSV File
+    description: Persist structured output as CSV.
+    category: Output
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  save_tsv_file:
+    display_name: Save TSV File
+    description: Persist structured output as TSV.
+    category: Output
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
+  save_json_file:
+    display_name: Save JSON File
+    description: Persist structured output as JSON.
+    category: Output
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}

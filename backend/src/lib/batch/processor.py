@@ -216,6 +216,7 @@ def _process_single_document(
                 document_id=str(batch_doc.document_id),
                 cognito_sub=cognito_sub,
                 batch_id=str(batch.id),
+                db_user_id=batch.user_id,
             )
         )
 
@@ -251,6 +252,7 @@ async def _execute_flow_for_document(
     document_id: str,
     cognito_sub: str,
     batch_id: str,
+    db_user_id: Optional[int] = None,
 ) -> Optional[str]:
     """Execute a flow on a single document and extract the result file path.
 
@@ -293,6 +295,7 @@ async def _execute_flow_for_document(
             flow=flow,
             user_id=cognito_sub,  # Cognito subject ID for Weaviate tenant
             session_id=session_id,
+            db_user_id=db_user_id,
             document_id=document_id,
             document_name=None,  # Will be fetched by DocumentContext
             user_query=None,  # Use task_instructions from flow

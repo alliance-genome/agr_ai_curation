@@ -159,11 +159,11 @@ class FlowContextDefinition(BaseModel):
     edges: List[FlowEdgeContext] = Field(default_factory=list)
 
 
-class PromptWorkshopContext(BaseModel):
-    """Prompt Workshop context passed to Opus chat."""
+class AgentWorkshopContext(BaseModel):
+    """Agent Workshop context passed to Opus chat."""
 
-    parent_agent_id: Optional[str] = None
-    parent_agent_name: Optional[str] = None
+    template_source: Optional[str] = None
+    template_name: Optional[str] = None
     custom_agent_id: Optional[str] = None
     custom_agent_name: Optional[str] = None
     include_mod_rules: Optional[bool] = None
@@ -172,8 +172,11 @@ class PromptWorkshopContext(BaseModel):
     selected_mod_prompt_draft: Optional[str] = None
     mod_prompt_override_count: Optional[int] = None
     has_mod_prompt_overrides: Optional[bool] = None
-    parent_prompt_stale: Optional[bool] = None
-    parent_exists: Optional[bool] = None
+    template_prompt_stale: Optional[bool] = None
+    template_exists: Optional[bool] = None
+    draft_tool_ids: Optional[List[str]] = None
+    draft_model_id: Optional[str] = None
+    draft_model_reasoning: Optional[str] = None
 
 
 class ChatContext(BaseModel):
@@ -197,7 +200,7 @@ class ChatContext(BaseModel):
     # Flow context (when on Flows tab)
     active_tab: Optional[str] = Field(
         None,
-        description="Which tab is active: 'agents', 'flows', or 'prompt_workshop'"
+        description="Which tab is active: 'agents', 'flows', or 'agent_workshop'"
     )
     flow_name: Optional[str] = Field(
         None,
@@ -207,9 +210,9 @@ class ChatContext(BaseModel):
         None,
         description="Current flow definition being edited"
     )
-    prompt_workshop: Optional[PromptWorkshopContext] = Field(
+    agent_workshop: Optional[AgentWorkshopContext] = Field(
         None,
-        description="Current Prompt Workshop state when active tab is prompt_workshop",
+        description="Current Agent Workshop state when active tab is agent_workshop",
     )
 
 

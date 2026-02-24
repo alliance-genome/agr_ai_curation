@@ -52,6 +52,56 @@ class ConnectionsHealthResponse(BaseModel):
     services: Dict[str, ServiceHealthResponse]
 
 
+class LLMProviderHealthItem(BaseModel):
+    """Runtime readiness for one configured LLM provider."""
+
+    provider_id: str
+    driver: str
+    api_mode: str
+    api_key_env: str
+    api_key_present: bool
+    base_url_env: Optional[str]
+    base_url_configured: bool
+    default_for_runner: bool
+    mapped_model_ids: List[str]
+    mapped_curator_visible_model_ids: List[str]
+    supports_parallel_tool_calls: bool
+    readiness: str  # "ready" | "missing_api_key" | "unused"
+
+
+class LLMModelHealthItem(BaseModel):
+    """Model-to-provider mapping status for one configured model."""
+
+    model_id: str
+    provider_id: str
+    provider_exists: bool
+    curator_visible: bool
+
+
+class LLMProviderHealthSummary(BaseModel):
+    """Summary counts for LLM provider diagnostics."""
+
+    provider_count: int
+    model_count: int
+    ready_provider_count: int
+    missing_key_provider_count: int
+    mapped_model_count: int
+
+
+class LLMProvidersHealthResponse(BaseModel):
+    """Health/diagnostics report for LLM provider + model configuration."""
+
+    status: str  # "healthy" | "degraded" | "unhealthy"
+    strict_mode: bool
+    validated_at: str
+    errors: List[str]
+    warnings: List[str]
+    providers: List[LLMProviderHealthItem]
+    models: List[LLMModelHealthItem]
+    summary: LLMProviderHealthSummary
+    startup_report: Optional[Dict[str, Any]] = None
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -174,4 +224,40 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
         required=conn.required,
         is_healthy=conn.is_healthy,
         last_error=sanitize_error_message(conn.last_error),  # Sanitize error messages
+    )
+
+
+@router.get(
+    "/llm-providers",
+    response_model=LLMProvidersHealthResponse,
+    summary="Check LLM provider/model health",
+    description="""
+    Validates `config/providers.yaml` and `config/models.yaml` runtime contracts and
+    reports provider readiness (API key/env availability, model mappings).
+
+    This endpoint is read-only and safe for diagnostics:
+    - It never returns secret values.
+    - It reports env var names and presence booleans only.
+    """,
+)
+async def check_llm_providers() -> LLMProvidersHealthResponse:
+    """Check health and configuration status for LLM providers/models."""
+    from src.lib.config.provider_validation import (
+        build_provider_runtime_report,
+        get_startup_provider_validation_report,
+    )
+
+    report = build_provider_runtime_report()
+    startup_report = get_startup_provider_validation_report()
+
+    return LLMProvidersHealthResponse(
+        status=report["status"],
+        strict_mode=report["strict_mode"],
+        validated_at=report["validated_at"],
+        errors=report["errors"],
+        warnings=report["warnings"],
+        providers=[LLMProviderHealthItem(**row) for row in report["providers"]],
+        models=[LLMModelHealthItem(**row) for row in report["models"]],
+        summary=LLMProviderHealthSummary(**report["summary"]),
+        startup_report=startup_report,
     )

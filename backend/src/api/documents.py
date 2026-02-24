@@ -62,6 +62,41 @@ router = APIRouter(prefix="/weaviate")
 pipeline_tracker = PipelineTracker()
 
 
+_PROCESSING_STATUS_VALUES = {status.value for status in ProcessingStatus}
+_PIPELINE_STAGE_TO_PROCESSING_STATUS = {
+    ProcessingStage.PENDING.value: ProcessingStatus.PENDING.value,
+    ProcessingStage.UPLOAD.value: ProcessingStatus.PROCESSING.value,
+    ProcessingStage.PARSING.value: ProcessingStatus.PARSING.value,
+    ProcessingStage.CHUNKING.value: ProcessingStatus.CHUNKING.value,
+    ProcessingStage.EMBEDDING.value: ProcessingStatus.EMBEDDING.value,
+    ProcessingStage.STORING.value: ProcessingStatus.STORING.value,
+    ProcessingStage.COMPLETED.value: ProcessingStatus.COMPLETED.value,
+    ProcessingStage.FAILED.value: ProcessingStatus.FAILED.value,
+}
+
+
+def _normalize_processing_status(value: Any) -> str:
+    """Normalize processing status to known API enum values."""
+    status_str = str(value or "").strip().lower()
+    if status_str in _PROCESSING_STATUS_VALUES:
+        return status_str
+    return ProcessingStatus.PENDING.value
+
+
+def _effective_processing_status(raw_document_status: Any, pipeline_status: Any) -> str:
+    """Compute effective status with pipeline tracker precedence when present."""
+    effective = _normalize_processing_status(raw_document_status)
+    if not pipeline_status:
+        return effective
+
+    stage = getattr(pipeline_status, "current_stage", None)
+    stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or "").strip().lower()
+    mapped = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value)
+    if mapped:
+        return mapped
+    return effective
+
+
 async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
     """Clean up phantom documents - records in PostgreSQL that don't exist in Weaviate.
 
@@ -376,15 +411,23 @@ async def list_documents_endpoint(
         )
 
 
-@router.get("/documents/docling-health")
-async def get_docling_health():
-    """Report health status for the Docling parsing service."""
+@router.get("/documents/pdf-extraction-health")
+async def get_pdf_extraction_health():
+    """Report health status for the PDF extraction service."""
 
-    service_url = os.getenv("DOCLING_SERVICE_URL", "http://docling-internal.alliancegenome.org:8000").rstrip("/")
-    health_endpoint = f"{service_url}/health"
+    service_url = os.getenv("PDF_EXTRACTION_SERVICE_URL", "").rstrip("/")
     checked_at = datetime.utcnow().isoformat() + "Z"
 
-    timeout_seconds = float(os.getenv("DOCLING_HEALTH_TIMEOUT", "5"))
+    if not service_url:
+        return {
+            "status": "misconfigured",
+            "service_url": "",
+            "last_checked": checked_at,
+            "error": "PDF_EXTRACTION_SERVICE_URL is not configured",
+        }
+
+    health_endpoint = f"{service_url}/api/v1/health"
+    timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -395,11 +438,11 @@ async def get_docling_health():
         except ValueError:
             payload = None
 
-        is_healthy = (
-            response.status_code == 200
-            and isinstance(payload, dict)
-            and str(payload.get("status", "")).lower() == "healthy"
-        )
+        status_value = str((payload or {}).get("status", "")).lower()
+        proxy_value = str((payload or {}).get("proxy", "")).lower()
+        is_healthy = response.status_code == 200 and status_value in {"healthy", "ok", "up"}
+        if response.status_code == 200 and proxy_value == "ok":
+            is_healthy = True
 
         status = "healthy" if is_healthy else "degraded"
 
@@ -412,7 +455,7 @@ async def get_docling_health():
         }
 
     except httpx.RequestError as exc:
-        logger.warning("Docling health check failed: %s", exc)
+        logger.warning("PDF extraction health check failed: %s", exc)
         return {
             "status": "unreachable",
             "service_url": service_url,
@@ -881,12 +924,14 @@ async def get_document_processing_status(
 
         # Get pipeline status
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+        raw_processing_status = document["document"].get("processing_status", ProcessingStatus.PENDING.value)
+        processing_status = _effective_processing_status(raw_processing_status, pipeline_status)
 
         return {
             "document_id": document_id,
-            "processing_status": document["document"].get("processing_status", "pending"),
+            "processing_status": processing_status,
             "embedding_status": document["document"].get("embedding_status", "pending"),
-            "pipeline_status": pipeline_status.dict() if pipeline_status else None,
+            "pipeline_status": pipeline_status.model_dump() if pipeline_status else None,
             "chunk_count": document.get("total_chunks", 0),
             "vector_count": document["document"].get("vector_count", 0)
         }

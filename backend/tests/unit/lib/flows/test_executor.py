@@ -1,5 +1,4 @@
 """Tests for flow executor custom_instructions wiring."""
-import uuid
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -7,11 +6,11 @@ from agents import Agent, ModelSettings
 
 from src.lib.flows.executor import (
     _count_agent_ids,
+    flow_requires_document,
     get_all_agent_tools,
     build_supervisor_instructions,
     create_flow_supervisor,
 )
-from src.lib.agent_studio.custom_agent_service import CustomAgentRuntimeInfo
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +117,88 @@ MOCK_REGISTRY = {
 }
 
 
+def _metadata_from_registry(
+    agent_id: str,
+    registry: dict[str, dict[str, object]] = MOCK_REGISTRY,
+):
+    """Build get_agent_metadata-like payload from simple registry fixtures."""
+    entry = registry.get(agent_id)
+    if entry is None:
+        raise ValueError(f"Unknown agent_id: {agent_id}")
+    requires_document = bool(entry.get("requires_document", False))
+    return {
+        "agent_id": agent_id,
+        "display_name": entry.get("name", agent_id),
+        "description": entry.get("description", ""),
+        "requires_document": requires_document,
+        "required_params": ["document_id", "user_id"] if requires_document else [],
+    }
+
+
+@pytest.fixture(autouse=True)
+def _mock_executor_agent_metadata(monkeypatch):
+    """Default test metadata source for flow agents under test."""
+    monkeypatch.setattr(
+        "src.lib.flows.executor.get_agent_metadata",
+        lambda agent_id: _metadata_from_registry(agent_id),
+    )
+
+
+class TestDbUserIdPropagation:
+    """Tests that DB user identity is forwarded through flow runtime resolution."""
+
+    def test_flow_requires_document_forwards_db_user_id_to_metadata(self, monkeypatch):
+        observed = []
+
+        def _metadata(agent_id, **kwargs):
+            observed.append(kwargs.get("db_user_id"))
+            return {
+                "agent_id": agent_id,
+                "display_name": "PDF Specialist",
+                "description": "Reads documents",
+                "requires_document": True,
+                "required_params": ["document_id", "user_id"],
+            }
+
+        monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
+
+        flow = _make_flow([_agent_node("n1", "pdf")])
+        assert flow_requires_document(flow, db_user_id=42) is True
+        assert observed == [42]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_get_all_agent_tools_forwards_db_user_id(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        observed = []
+
+        def _metadata(agent_id, **kwargs):
+            observed.append(kwargs.get("db_user_id"))
+            return {
+                "agent_id": agent_id,
+                "display_name": "Gene Specialist",
+                "description": "Curate genes",
+                "requires_document": False,
+                "required_params": [],
+            }
+
+        monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([_agent_node("n1", "gene")])
+        get_all_agent_tools(flow, db_user_id=77)
+
+        assert observed == [77]
+        assert mock_get_agent.call_args.kwargs.get("db_user_id") == 77
+
+
 class TestGetAllAgentToolsCustomInstructions:
     """Tests that get_all_agent_tools prepends per-node custom_instructions."""
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_custom_instructions_prepended(self, mock_get_agent, mock_streaming):
         """Agent instructions should have custom instructions prepended."""
         base_prompt = "You are the gene specialist."
@@ -149,7 +224,6 @@ class TestGetAllAgentToolsCustomInstructions:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_no_custom_instructions_unchanged(self, mock_get_agent, mock_streaming):
         """Agent instructions should be unchanged when no custom_instructions."""
         base_prompt = "You are the gene specialist."
@@ -166,7 +240,6 @@ class TestGetAllAgentToolsCustomInstructions:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_custom_instructions_only_affects_target_agent(self, mock_get_agent, mock_streaming):
         """Custom instructions for gene should not affect disease agent."""
         gene_agent = MagicMock(spec=Agent)
@@ -190,7 +263,6 @@ class TestGetAllAgentToolsCustomInstructions:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_custom_instructions_with_none_base(self, mock_get_agent, mock_streaming):
         """Should handle agent.instructions being None gracefully."""
         mock_agent = MagicMock(spec=Agent)
@@ -209,7 +281,6 @@ class TestGetAllAgentToolsCustomInstructions:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_empty_custom_instructions_unchanged(self, mock_get_agent, mock_streaming):
         """Empty/whitespace custom instructions should not modify agent."""
         base_prompt = "You are the gene specialist."
@@ -235,7 +306,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_duplicate_agents_get_separate_tools(self, mock_get_agent, mock_streaming):
         """Same agent_id in two steps should create two separate tools."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -257,7 +327,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_duplicate_agents_different_custom_instructions(self, mock_get_agent, mock_streaming):
         """Each step gets its own custom instructions, not merged."""
         agents_created = []
@@ -288,7 +357,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_duplicate_agent_one_with_custom_one_without(self, mock_get_agent, mock_streaming):
         """Only the step with custom instructions should be modified."""
         agents_created = []
@@ -315,7 +383,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_single_agent_keeps_simple_tool_name(self, mock_get_agent, mock_streaming):
         """Non-duplicate agents should keep the simple ask_{id}_specialist name."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -335,7 +402,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_step_numbering_accounts_for_task_input(self, mock_get_agent, mock_streaming):
         """Step numbers should skip task_input nodes."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -447,7 +513,6 @@ class TestGetAllAgentToolsCreatedNames:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_returns_created_tool_names(self, mock_get_agent, mock_streaming):
         """Should return set of tool names that were actually created."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -465,9 +530,8 @@ class TestGetAllAgentToolsCreatedNames:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_skipped_agent_not_in_created_names(self, mock_get_agent, mock_streaming):
-        """Agent skipped due to missing registry entry should not be in created_names."""
+        """Agent skipped due to missing metadata should not be in created_names."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -483,12 +547,24 @@ class TestGetAllAgentToolsCreatedNames:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", {
-        **MOCK_REGISTRY,
-        "pdf": {"name": "PDF Specialist", "description": "Read PDFs", "requires_document": True},
-    })
-    def test_requires_document_skipped_without_doc(self, mock_get_agent, mock_streaming):
+    def test_requires_document_skipped_without_doc(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
         """Agent requiring document should be skipped when no document_id provided."""
+        monkeypatch.setattr(
+            "src.lib.flows.executor.get_agent_metadata",
+            lambda agent_id: _metadata_from_registry(
+                agent_id,
+                {
+                    **MOCK_REGISTRY,
+                    "pdf": {
+                        "name": "PDF Specialist",
+                        "description": "Read PDFs",
+                        "requires_document": True,
+                    },
+                },
+            ),
+        )
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -506,7 +582,6 @@ class TestGetAllAgentToolsCreatedNames:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_agent_factory_exception_skipped(self, mock_get_agent, mock_streaming):
         """Agent that throws during creation should be skipped."""
         def raise_for_disease(aid, **kw):
@@ -529,12 +604,24 @@ class TestGetAllAgentToolsCreatedNames:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", {
-        **MOCK_REGISTRY,
-        "pdf": {"name": "PDF Specialist", "description": "Read PDFs", "requires_document": True},
-    })
-    def test_duplicate_with_one_skipped_names(self, mock_get_agent, mock_streaming):
+    def test_duplicate_with_one_skipped_names(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
         """Duplicate agent_id where one step is skipped should only include created tool."""
+        monkeypatch.setattr(
+            "src.lib.flows.executor.get_agent_metadata",
+            lambda agent_id: _metadata_from_registry(
+                agent_id,
+                {
+                    **MOCK_REGISTRY,
+                    "pdf": {
+                        "name": "PDF Specialist",
+                        "description": "Read PDFs",
+                        "requires_document": True,
+                    },
+                },
+            ),
+        )
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -552,26 +639,21 @@ class TestGetAllAgentToolsCreatedNames:
         assert "ask_pdf_step1_specialist" not in created_names
         assert "ask_pdf_step3_specialist" not in created_names
 
-    @patch("src.lib.agent_studio.custom_agent_service.get_custom_agent_runtime_info")
+    @patch("src.lib.flows.executor.get_agent_metadata")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_custom_agent_tool_names_are_sanitized(
-        self, mock_get_agent, mock_streaming, mock_runtime_info
+        self, mock_get_agent, mock_streaming, mock_get_agent_metadata
     ):
         """Custom agent IDs with hyphens should be normalized for tool naming."""
         custom_id = "ca_11111111-2222-3333-4444-555555555555"
-        mock_runtime_info.return_value = CustomAgentRuntimeInfo(
-            custom_agent_uuid=uuid.UUID("11111111-2222-3333-4444-555555555555"),
-            custom_agent_id=custom_id,
-            parent_agent_key="gene",
-            display_name="Doug's Gene Agent",
-            custom_prompt="Custom prompt",
-            mod_prompt_overrides={},
-            include_mod_rules=True,
-            requires_document=False,
-            parent_exists=True,
-        )
+        mock_get_agent_metadata.return_value = {
+            "agent_id": custom_id,
+            "display_name": "Doug's Gene Agent",
+            "description": "Custom gene agent",
+            "requires_document": False,
+            "required_params": [],
+        }
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -685,7 +767,6 @@ class TestBackwardCompatibility:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_flow_without_custom_instructions_unchanged(self, mock_get_agent, mock_streaming):
         """A flow with no custom_instructions should produce identical agent tools."""
         base_prompt = "You are the gene specialist."
@@ -737,13 +818,29 @@ class TestCreateFlowSupervisorNoTools:
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", {
-        "pdf": {"name": "PDF Specialist", "description": "Read PDFs", "requires_document": True},
-    })
     def test_raises_when_no_tools_created(
-        self, mock_get_agent, mock_streaming, mock_config, mock_model, mock_settings
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
     ):
         """Should raise ValueError when all steps are skipped."""
+        monkeypatch.setattr(
+            "src.lib.flows.executor.get_agent_metadata",
+            lambda agent_id: _metadata_from_registry(
+                agent_id,
+                {
+                    "pdf": {
+                        "name": "PDF Specialist",
+                        "description": "Read PDFs",
+                        "requires_document": True,
+                    }
+                },
+            ),
+        )
         mock_config.return_value = MagicMock(model="gpt-4o", temperature=0.0, reasoning=None)
 
         flow = _make_flow([
@@ -760,7 +857,6 @@ class TestCreateFlowSupervisorNoTools:
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    @patch("src.lib.flows.executor.AGENT_REGISTRY", MOCK_REGISTRY)
     def test_does_not_raise_when_tools_created(
         self, mock_get_agent, mock_streaming, mock_config, mock_model, mock_settings
     ):

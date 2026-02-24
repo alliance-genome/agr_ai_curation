@@ -20,6 +20,8 @@ import {
   Tooltip,
   TextField,
   InputAdornment,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
@@ -36,7 +38,7 @@ import { fetchPromptCatalog } from '@/services/agentStudioService'
 import logger from '@/services/logger'
 
 // Define the display order for subcategories
-const SUBCATEGORY_ORDER = ['Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents']
+const SUBCATEGORY_ORDER = ['Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents', 'Shared Agents']
 
 const PaletteContainer = styled(Paper)(({ theme }) => ({
   backgroundColor: alpha(theme.palette.background.paper, 0.95),
@@ -118,6 +120,7 @@ const DragHandle = styled(Box)(({ theme }) => ({
 
 // localStorage key for subcategory collapse state
 const SUBCATEGORY_STATE_KEY = 'agent-palette-subcategories'
+type PaletteFilter = 'all' | 'shared'
 
 function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPaletteProps) {
   // Get agent icons from registry metadata
@@ -127,6 +130,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [paletteFilter, setPaletteFilter] = useState<PaletteFilter>('all')
   const metadataRefreshKeyRef = useRef('')
 
   // Track which subcategories are expanded (default: all expanded)
@@ -191,18 +195,33 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
     loadAgents()
   }, [])
 
-  // Filter agents based on search query
+  const filterCounts = useMemo(() => {
+    const shared = agents.filter((agent) => agent.subcategory === 'Shared Agents').length
+    return {
+      all: agents.length,
+      shared,
+    }
+  }, [agents])
+
+  const tabFilteredAgents = useMemo(() => {
+    if (paletteFilter === 'shared') {
+      return agents.filter((agent) => agent.subcategory === 'Shared Agents')
+    }
+    return agents
+  }, [agents, paletteFilter])
+
+  // Filter agents based on tab + search query
   const filteredAgents = useMemo(() => {
-    if (!searchQuery.trim()) return agents
+    if (!searchQuery.trim()) return tabFilteredAgents
 
     const query = searchQuery.toLowerCase()
-    return agents.filter((agent) => {
+    return tabFilteredAgents.filter((agent) => {
       const matchesName = agent.agent_name.toLowerCase().includes(query)
       const matchesDescription = agent.description.toLowerCase().includes(query)
       const matchesTools = agent.tools?.some((t) => t.toLowerCase().includes(query)) || false
       return matchesName || matchesDescription || matchesTools
     })
-  }, [agents, searchQuery])
+  }, [searchQuery, tabFilteredAgents])
 
   // Group filtered agents by subcategory in the defined order
   const agentsBySubcategory = useMemo(() => {
@@ -300,6 +319,15 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
       {!isCollapsed && (
         <>
           <SearchBox>
+            <Tabs
+              value={paletteFilter}
+              onChange={(_event, nextValue) => setPaletteFilter(nextValue as PaletteFilter)}
+              variant="fullWidth"
+              sx={{ minHeight: 30, mb: 1 }}
+            >
+              <Tab value="all" label={`All (${filterCounts.all})`} sx={{ minHeight: 30, textTransform: 'none' }} />
+              <Tab value="shared" label={`Shared (${filterCounts.shared})`} sx={{ minHeight: 30, textTransform: 'none' }} />
+            </Tabs>
             <TextField
               fullWidth
               size="small"
@@ -408,7 +436,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
           {!loading && !error && searchQuery && filteredAgents.length === 0 && (
             <Box sx={{ p: 1.5, textAlign: 'center' }}>
               <Typography variant="caption" color="text.secondary">
-                No agents match "{searchQuery}"
+                No agents match: {searchQuery}
               </Typography>
             </Box>
           )}

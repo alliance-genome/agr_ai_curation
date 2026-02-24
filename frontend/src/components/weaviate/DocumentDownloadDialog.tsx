@@ -78,8 +78,8 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
         },
         {
           type: 'docling_json',
-          label: 'Raw Docling JSON',
-          description: 'Raw extraction output from Docling service',
+          label: 'Raw Extraction JSON',
+          description: 'Raw output from the PDF extraction service',
           icon: <Code color="primary" />,
           available: data.docling_json_available || false,
           size: data.docling_json_size,

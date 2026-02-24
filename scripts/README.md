@@ -9,12 +9,14 @@ scripts/
 ├── create_agent.py              # Agent scaffolding CLI (see Agents Development Guide)
 ├── validate_registry.py         # Validate AGENT_REGISTRY consistency
 ├── validate_current_agents.py   # Validate all agents can be instantiated
+├── tool_idea_triage.py          # Developer triage CLI for Agent Workshop tool requests
 ├── extract_identifier_prefixes.py  # Extract ID prefixes from Alliance API
-├── refresh_prefixes_on_start.sh # Auto-refresh prefixes on container start
+├── refresh_prefixes_on_start.sh # Best-effort identifier prefix refresh (startup + manual)
 ├── maintenance_mode.sh          # Toggle maintenance mode banner
 │
 ├── testing/
 │   └── run-tests.sh             # Docker Compose test runner
+│   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
@@ -153,11 +155,48 @@ Instantiates all registered agents to verify they can be created without errors.
 docker compose exec backend python scripts/validate_current_agents.py
 ```
 
+### tool_idea_triage.py
+
+Developer triage queue for Agent Workshop `tool_idea_requests`.
+
+Preferred execution path (Docker backend container):
+
+```bash
+# Show open queue (submitted/reviewed/in_progress)
+docker compose exec backend python /app/scripts/tool_idea_triage.py queue --limit 25
+
+# List only completed requests
+docker compose exec backend python /app/scripts/tool_idea_triage.py list --status completed
+
+# Update a request status + notes
+docker compose exec backend python /app/scripts/tool_idea_triage.py update <request_uuid> \
+  --status reviewed \
+  --notes "Confirmed scope; estimating implementation."
+
+# Mark request completed and link resulting tool key
+docker compose exec backend python /app/scripts/tool_idea_triage.py update <request_uuid> \
+  --status completed \
+  --resulting-tool-key go_relationship_enrichment
+```
+
+Alternative execution path (host machine):
+- Requires the backend Python dependencies installed in your local venv.
+
+```bash
+python scripts/tool_idea_triage.py queue --limit 25
+```
+
 ## Infrastructure Scripts
 
 ### refresh_prefixes_on_start.sh
 
-Called automatically on backend container startup. Fetches current identifier prefixes from the Alliance API and caches them for the prefix validation tools.
+Best-effort helper to refresh identifier prefixes for CURIE validation.
+This runs on backend container startup and can also be invoked manually.
+
+```bash
+# Manual run via dedicated compose profile
+make prefix-refresh
+```
 
 ### maintenance_mode.sh
 
@@ -176,7 +215,7 @@ Toggles maintenance mode which displays a banner in the UI warning users that th
 
 ### extract_identifier_prefixes.py
 
-Extracts valid identifier prefixes from the Alliance of Genome Resources API. Used to populate the prefix validation cache.
+Extracts valid identifier prefixes from curation-database SQL queries. Used to populate the prefix validation cache.
 
 ```bash
 docker compose exec backend python scripts/extract_identifier_prefixes.py
@@ -202,6 +241,30 @@ Docker Compose test runner following the Unified Docker Compose Standard.
 ```
 
 **Note:** For comprehensive testing documentation, see `TESTING_TODO.md` in the project root.
+
+### testing/llm_provider_smoke_local.sh
+
+Runs the local LLM provider smoke preflight checks and writes evidence JSON.
+
+Checks:
+- `/health`
+- `/api/admin/health/llm-providers`
+- `/api/agent-studio/models`
+- derived structural check that provider-health `errors` is empty
+
+```bash
+# Run directly (defaults to http://localhost:8000)
+./scripts/testing/llm_provider_smoke_local.sh
+
+# Run against a custom backend URL
+./scripts/testing/llm_provider_smoke_local.sh http://localhost:18000
+
+# Or via Make target (sources ~/.agr_ai_curation/.env and ensures backend is up)
+make smoke-llm-local
+```
+
+Outputs:
+- `file_outputs/temp/llm_provider_smoke_local_<timestamp>.json`
 
 ## Code Analysis Utilities
 

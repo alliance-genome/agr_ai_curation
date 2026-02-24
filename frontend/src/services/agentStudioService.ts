@@ -14,6 +14,11 @@ import type {
   SuggestionSubmission,
   SuggestionResponse,
   ToolInfo,
+  ModelOption,
+  ToolLibraryItem,
+  AgentTemplate,
+  ToolIdeaRequest,
+  ToolIdeaConversationEntry,
 } from '@/types/promptExplorer'
 
 const BASE_URL = '/api/agent-studio'
@@ -125,17 +130,23 @@ export async function fetchPromptPreview(
 }
 
 // =============================================================================
-// Custom Agent API (Prompt Workshop)
+// Custom Agent API (Agent Workshop)
 // =============================================================================
 
 export interface CreateCustomAgentRequest {
-  parent_agent_id: string
+  template_source?: string
   name: string
   custom_prompt?: string
   mod_prompt_overrides?: Record<string, string>
   description?: string
   icon?: string
   include_mod_rules?: boolean
+  model_id?: string
+  model_temperature?: number
+  model_reasoning?: string
+  tool_ids?: string[]
+  output_schema_key?: string
+  category?: string
 }
 
 export interface UpdateCustomAgentRequest {
@@ -145,8 +156,26 @@ export interface UpdateCustomAgentRequest {
   description?: string
   icon?: string
   include_mod_rules?: boolean
+  model_id?: string
+  model_temperature?: number
+  model_reasoning?: string
+  tool_ids?: string[]
+  output_schema_key?: string
   notes?: string
-  rebase_parent_hash?: boolean
+}
+
+export interface CloneAgentRequest {
+  name?: string
+}
+
+export interface ShareCustomAgentRequest {
+  visibility: 'private' | 'project'
+}
+
+export interface CreateToolIdeaRequest {
+  title: string
+  description: string
+  opus_conversation?: ToolIdeaConversationEntry[]
 }
 
 export interface CustomAgentTestRequest {
@@ -170,10 +199,76 @@ export interface ListCustomAgentsResponse {
   total: number
 }
 
-export async function listCustomAgents(parentAgentId?: string): Promise<ListCustomAgentsResponse> {
+export interface ModelsResponse {
+  models: ModelOption[]
+}
+
+export interface ToolLibraryResponse {
+  tools: ToolLibraryItem[]
+}
+
+export interface AgentTemplatesResponse {
+  templates: AgentTemplate[]
+}
+
+export interface ToolIdeasResponse {
+  tool_ideas: ToolIdeaRequest[]
+  total: number
+}
+
+export async function fetchModelOptions(): Promise<ModelOption[]> {
+  const response = await fetch(`${BASE_URL}/models`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch model options: ${response.status}`)
+  }
+  const data: ModelsResponse = await response.json()
+  return data.models
+}
+
+export async function fetchToolLibrary(): Promise<ToolLibraryItem[]> {
+  const response = await fetch(`${BASE_URL}/tools/library`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tool library: ${response.status}`)
+  }
+  const data: ToolLibraryResponse = await response.json()
+  return data.tools
+}
+
+export async function fetchAgentTemplates(): Promise<AgentTemplate[]> {
+  const response = await fetch(`${BASE_URL}/agents/templates`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch agent templates: ${response.status}`)
+  }
+  const data: AgentTemplatesResponse = await response.json()
+  return data.templates
+}
+
+export async function submitToolIdeaRequest(
+  request: CreateToolIdeaRequest
+): Promise<ToolIdeaRequest> {
+  const response = await fetch(`${BASE_URL}/tool-ideas`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to submit tool idea request: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function listToolIdeaRequests(): Promise<ToolIdeasResponse> {
+  const response = await fetch(`${BASE_URL}/tool-ideas`)
+  if (!response.ok) {
+    throw new Error(`Failed to list tool idea requests: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function listCustomAgents(templateSource?: string): Promise<ListCustomAgentsResponse> {
   const params = new URLSearchParams()
-  if (parentAgentId) {
-    params.set('parent_agent_id', parentAgentId)
+  if (templateSource) {
+    params.set('template_source', templateSource)
   }
   const query = params.toString() ? `?${params.toString()}` : ''
   const response = await fetch(`${BASE_URL}/custom-agents${query}`)
@@ -227,6 +322,43 @@ export async function deleteCustomAgent(customAgentId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to delete custom agent: ${response.status}`)
   }
+}
+
+export async function cloneAgentToWorkshop(
+  sourceAgentId: string,
+  request: CloneAgentRequest = {}
+): Promise<CustomAgent> {
+  const response = await fetch(
+    `${BASE_URL}/agents/${encodeURIComponent(sourceAgentId)}/clone`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to clone agent: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function setCustomAgentVisibility(
+  agentId: string,
+  visibility: 'private' | 'project'
+): Promise<CustomAgent> {
+  const payload: ShareCustomAgentRequest = { visibility }
+  const response = await fetch(
+    `${BASE_URL}/agents/${encodeURIComponent(agentId)}/share`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to update custom agent visibility: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function listCustomAgentVersions(customAgentId: string): Promise<CustomAgentVersion[]> {

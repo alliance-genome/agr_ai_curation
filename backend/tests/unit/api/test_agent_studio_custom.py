@@ -1,12 +1,14 @@
 """Tests for custom-agent API endpoints."""
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 import uuid
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 
 class TestCustomAgentTestEndpoint:
@@ -131,3 +133,202 @@ class TestCustomAgentTestEndpoint:
         assert '"delta": "hello"' in stream_text
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
+
+
+def _custom_agent_payload(template_source: str = "gene") -> dict:
+    return {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "agent_id": "ca_11111111-1111-1111-1111-111111111111",
+        "user_id": 1,
+        "template_source": template_source,
+        "name": "My Agent",
+        "description": "Desc",
+        "custom_prompt": "Prompt",
+        "mod_prompt_overrides": {},
+        "icon": "🔧",
+        "include_mod_rules": True,
+        "model_id": "gpt-4o",
+        "model_temperature": 0.1,
+        "model_reasoning": None,
+        "tool_ids": ["agr_curation_query"],
+        "output_schema_key": None,
+        "visibility": "private",
+        "project_id": None,
+        "parent_prompt_hash": None,
+        "current_parent_prompt_hash": None,
+        "parent_prompt_stale": False,
+        "parent_exists": True,
+        "is_active": True,
+        "created_at": datetime(2026, 2, 23, tzinfo=UTC),
+        "updated_at": datetime(2026, 2, 23, tzinfo=UTC),
+    }
+
+
+class TestCustomAgentCrudContract:
+    """Unit tests for create/list contract shape and template-source filtering."""
+
+    def test_create_endpoint_uses_template_source_only(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        observed_kwargs = {}
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+
+        def _fake_create_custom_agent(**kwargs):
+            observed_kwargs.update(kwargs)
+            return SimpleNamespace()
+
+        monkeypatch.setattr(api_module, "create_custom_agent", _fake_create_custom_agent)
+        monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
+
+        db = SimpleNamespace(
+            commit=lambda: None,
+            refresh=lambda _obj: None,
+            rollback=lambda: None,
+        )
+
+        response = asyncio.run(
+            api_module.create_custom_agent_endpoint(
+                request=api_module.CreateCustomAgentRequest(
+                    template_source="gene",
+                    name="My Agent",
+                    custom_prompt="Prompt",
+                    model_id="gpt-4o",
+                ),
+                user={"sub": "auth-sub"},
+                db=db,
+            )
+        )
+
+        assert observed_kwargs["template_source"] == "gene"
+        assert "parent_agent_id" not in observed_kwargs
+        assert response.template_source == "gene"
+        assert "parent_agent_key" not in response.model_dump()
+
+    def test_create_request_rejects_unknown_legacy_fields(self):
+        import src.api.agent_studio_custom as api_module
+
+        with pytest.raises(ValidationError):
+            api_module.CreateCustomAgentRequest(
+                template_source="gene",
+                name="My Agent",
+                parent_agent_id="gene",  # legacy field should be rejected
+            )
+
+    def test_create_endpoint_returns_400_for_unknown_model(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "create_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError("Unknown model_id: not-real")),
+        )
+
+        db = SimpleNamespace(
+            commit=lambda: None,
+            refresh=lambda _obj: None,
+            rollback=lambda: None,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.create_custom_agent_endpoint(
+                    request=api_module.CreateCustomAgentRequest(
+                        name="My Agent",
+                        custom_prompt="Prompt",
+                        model_id="not-real",
+                    ),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "Unknown model_id" in str(exc_info.value.detail)
+
+    def test_list_endpoint_filters_by_template_source_only(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        observed = {}
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+
+        def _fake_list_custom_agents_for_user(_db, user_id, template_source=None):
+            observed["user_id"] = user_id
+            observed["template_source"] = template_source
+            return [SimpleNamespace()]
+
+        monkeypatch.setattr(api_module, "list_custom_agents_for_user", _fake_list_custom_agents_for_user)
+        monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
+
+        response = asyncio.run(
+            api_module.list_custom_agents_endpoint(
+                template_source="gene",
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert observed == {"user_id": 1, "template_source": "gene"}
+        assert response.total == 1
+        assert response.custom_agents[0].template_source == "gene"
+        assert "parent_agent_key" not in response.custom_agents[0].model_dump()
+
+    def test_test_endpoint_does_not_block_when_parent_missing(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        custom_agent_id = uuid.uuid4()
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: SimpleNamespace(id=custom_agent_id),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_runtime_info",
+            lambda _aid, db=None: SimpleNamespace(
+                parent_exists=False,
+                requires_document=False,
+                parent_agent_key="missing_template",
+            ),
+        )
+        monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-parentless"}}
+            yield {
+                "type": "RUN_FINISHED",
+                "data": {"response": "ok", "trace_id": "trace-parentless"},
+            }
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _fake_run_agent_streamed)
+
+        response = asyncio.run(
+            api_module.test_custom_agent_endpoint(
+                custom_agent_id=custom_agent_id,
+                request=api_module.TestCustomAgentRequest(input="test query"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert isinstance(response, StreamingResponse)

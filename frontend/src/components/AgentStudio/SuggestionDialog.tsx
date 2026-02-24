@@ -85,8 +85,8 @@ function SuggestionDialog({
   const selectedAgentId = context.selected_agent_id || selectedAgent?.agent_id
   const selectedAgentName =
     selectedAgent?.agent_name
-    || context.prompt_workshop?.custom_agent_name
-    || context.prompt_workshop?.parent_agent_name
+    || context.agent_workshop?.custom_agent_name
+    || context.agent_workshop?.template_name
     || context.selected_agent_id
 
   const handleSubmit = async () => {
