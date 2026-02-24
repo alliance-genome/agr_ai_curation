@@ -1,44 +1,32 @@
 # =============================================================================
-# MOD PROVIDER CONFIGURATION
+# LLM PROVIDER CONFIGURATION
 # =============================================================================
-# Maps MOD abbreviations to NCBI Taxon IDs and species names.
-# Add or remove providers here when deploying for different MODs.
+# Defines runtime LLM provider adapters used by agent execution.
+# Each provider maps to a driver (openai_native or litellm) and references
+# environment variables for API keys and base URLs.
 #
-# Used by: agr_curation_query tool (PROVIDER_TO_TAXON mapping)
+# Exactly one provider must set default_for_runner: true.
+# API key values are NEVER stored here — only env var names.
+#
+# Used by: providers_loader.py, config.py (agent model resolution)
 # =============================================================================
 
 providers:
-  WB:
-    taxon_id: "NCBITaxon:6239"
-    species: "Caenorhabditis elegans"
-    name: "WormBase"
+  openai:
+    driver: openai_native
+    api_key_env: OPENAI_API_KEY
+    base_url_env: OPENAI_BASE_URL
+    api_mode: responses
+    default_for_runner: true
+    supports:
+      parallel_tool_calls: true
 
-  FB:
-    taxon_id: "NCBITaxon:7227"
-    species: "Drosophila melanogaster"
-    name: "FlyBase"
-
-  MGI:
-    taxon_id: "NCBITaxon:10090"
-    species: "Mus musculus"
-    name: "Mouse Genome Informatics"
-
-  RGD:
-    taxon_id: "NCBITaxon:10116"
-    species: "Rattus norvegicus"
-    name: "Rat Genome Database"
-
-  ZFIN:
-    taxon_id: "NCBITaxon:7955"
-    species: "Danio rerio"
-    name: "Zebrafish Information Network"
-
-  SGD:
-    taxon_id: "NCBITaxon:559292"
-    species: "Saccharomyces cerevisiae"
-    name: "Saccharomyces Genome Database"
-
-  HGNC:
-    taxon_id: "NCBITaxon:9606"
-    species: "Homo sapiens"
-    name: "HUGO Gene Nomenclature Committee"
+  groq:
+    driver: litellm
+    api_key_env: GROQ_API_KEY
+    base_url_env: GROQ_BASE_URL
+    default_base_url: https://api.groq.com/openai/v1
+    litellm_prefix: openai
+    drop_params: true
+    supports:
+      parallel_tool_calls: true

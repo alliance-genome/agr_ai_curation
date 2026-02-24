@@ -243,11 +243,11 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
         return None
 
     msg = (
-        "Provider mappings are unavailable. Ensure config/providers.yaml is present "
-        "or set PROVIDERS_CONFIG_PATH."
+        "Provider mappings are unavailable. Ensure config/groups.yaml is present "
+        "and defines groups with taxon IDs."
     )
-    if _PROVIDER_MAPPING_LOAD_ERROR:
-        msg += f" Load error: {_PROVIDER_MAPPING_LOAD_ERROR}"
+    if _GROUP_MAPPING_LOAD_ERROR:
+        msg += f" Load error: {_GROUP_MAPPING_LOAD_ERROR}"
     return _err(msg)
 
 
