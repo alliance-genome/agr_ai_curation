@@ -12,6 +12,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 backend/venv/
 backend/extraction_venv/
 .hfenv/
@@ -52,9 +53,8 @@ pg_data/
 pdf_storage/
 
 # File Outputs (generated CSV, TSV, JSON exports)
-file_outputs/outputs/**
-file_outputs/temp/**
-!file_outputs/**/.gitkeep
+file_outputs/
+!file_outputs/.gitkeep
 
 # Logs
 *.log
