@@ -255,6 +255,26 @@ class TestAgentWorkshopSystemPrompt:
 
         assert "update_workshop_prompt_draft" in tool_names
 
+    def test_get_all_opus_tools_excludes_flow_tools_outside_flows_tab(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        tools = api_module._get_all_opus_tools(ChatContext(active_tab="agent_workshop"))
+        tool_names = {tool.get("name") for tool in tools}
+
+        assert "get_current_flow" not in tool_names
+        assert "get_available_agents" not in tool_names
+
+    def test_get_all_opus_tools_includes_flow_tools_on_flows_tab(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
+        tool_names = {tool.get("name") for tool in tools}
+
+        assert "get_current_flow" in tool_names
+        assert "get_available_agents" in tool_names
+
     def test_handle_update_workshop_prompt_tool_returns_proposal_with_approval_gate(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
@@ -283,6 +303,23 @@ class TestAgentWorkshopSystemPrompt:
         assert result["apply_mode"] == "replace"
         assert result["proposed_prompt"] == "You are a strict gene expression extraction assistant."
         assert result["change_summary"] == "Tightened extraction and citation requirements."
+
+    def test_handle_tool_call_blocks_flow_tools_outside_flows_tab(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="get_current_flow",
+                tool_input={},
+                context=ChatContext(active_tab="agent_workshop"),
+                user_email="dev@example.org",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is False
+        assert "Flow tools are only available on the Flows tab" in result["error"]
 
     def test_handle_update_workshop_prompt_tool_rejects_non_workshop_context(self):
         from src.api import agent_studio as api_module

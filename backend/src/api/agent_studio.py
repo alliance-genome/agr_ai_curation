@@ -1212,7 +1212,7 @@ GET_DOCKER_LOGS_TOOL = {
 }
 
 
-def _get_all_opus_tools() -> List[dict]:
+def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
     """
     Get all tools available to Opus in Anthropic format.
 
@@ -1240,9 +1240,22 @@ def _get_all_opus_tools() -> List[dict]:
         GET_DOCKER_LOGS_TOOL,
     ]
 
-    # Add diagnostic tools from registry
+    # Add diagnostic tools from registry.
+    # Flow tools are only exposed when the curator is actively on the Flows tab.
+    # This reduces accidental cross-context tool calls in Agent Workshop chats.
     registry = get_diagnostic_tools_registry()
-    diagnostic_tools = registry.get_anthropic_tools()
+    include_flow_tools = bool(context and context.active_tab == "flows")
+    diagnostic_tools = []
+    for tool in registry.get_all_tools():
+        if tool.category == "flows" and not include_flow_tools:
+            continue
+        diagnostic_tools.append(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+        )
     tools.extend(diagnostic_tools)
     logger.debug('Loaded %s diagnostic tools for Opus', len(diagnostic_tools))
 
@@ -1736,6 +1749,12 @@ async def _handle_tool_call(
     tool_def = registry.get_tool(tool_name)
 
     if tool_def:
+        if tool_def.category == "flows" and (not context or context.active_tab != "flows"):
+            return {
+                "success": False,
+                "error": "Flow tools are only available on the Flows tab. Switch to Flows and open a flow to use this tool.",
+            }
+
         # Execute the diagnostic tool handler
         logger.debug('Executing diagnostic tool: %s', tool_name)
         try:
@@ -1853,7 +1872,7 @@ async def chat_with_opus(
                 "max_tokens": 16384,
                 "system": system_prompt,
                 "messages": current_messages,
-                "tools": _get_all_opus_tools(),
+                "tools": _get_all_opus_tools(request.context),
                 "output_config": {"effort": "medium"},
             }
             logger.info("Opus chat using effort='medium' for balanced quality/cost")
@@ -2844,6 +2863,8 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 6. after clear approval, call `update_workshop_prompt_draft`:
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
+7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
+8. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
 
 <workshop_prompt_draft>
 {draft_prompt}

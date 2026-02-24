@@ -5,7 +5,7 @@
  * Includes tool support for suggestion submission.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Box,
   Typography,
@@ -146,6 +146,41 @@ interface OpusChatProps {
   onApplyWorkshopPromptUpdate?: (proposal: WorkshopPromptUpdateProposal) => void
 }
 
+interface ProposedLineDiff {
+  line: string
+  added: boolean
+}
+
+function normalizePromptForComparison(value: string | undefined | null): string {
+  return (value || '').replace(/\r\n/g, '\n').trim()
+}
+
+function buildAddedLineDiff(currentPrompt: string, proposedPrompt: string): ProposedLineDiff[] {
+  const currentLines = currentPrompt.replace(/\r\n/g, '\n').split('\n')
+  const proposedLines = proposedPrompt.replace(/\r\n/g, '\n').split('\n')
+
+  const currentLineCounts = new Map<string, number>()
+  for (const line of currentLines) {
+    currentLineCounts.set(line, (currentLineCounts.get(line) || 0) + 1)
+  }
+
+  return proposedLines.map((line) => {
+    const existingCount = currentLineCounts.get(line) || 0
+    if (existingCount > 0) {
+      currentLineCounts.set(line, existingCount - 1)
+      return { line, added: false }
+    }
+    return { line, added: true }
+  })
+}
+
+function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string {
+  const summaryText = proposal.summary?.trim()
+    ? proposal.summary.trim()
+    : 'No summary provided.'
+  return `Please run a post-apply review of my Agent Workshop draft.\n\nChecklist:\n1. Confirm the intended update is present in the current workshop prompt draft.\n2. Flag any regressions, contradictions, or ambiguities introduced by the edit.\n3. Suggest one follow-up tweak only if it clearly improves behavior.\n\nApplied update summary: ${summaryText}`
+}
+
 function OpusChat({
   context,
   selectedAgent,
@@ -167,6 +202,8 @@ function OpusChat({
   const [submissionSent, setSubmissionSent] = useState(false)
   const [promptUpdateDialogOpen, setPromptUpdateDialogOpen] = useState(false)
   const [pendingPromptUpdate, setPendingPromptUpdate] = useState<WorkshopPromptUpdateProposal | null>(null)
+  const [awaitingAppliedPromptUpdate, setAwaitingAppliedPromptUpdate] = useState<WorkshopPromptUpdateProposal | null>(null)
+  const [queuedAutoReviewMessage, setQueuedAutoReviewMessage] = useState<string | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -198,6 +235,15 @@ function OpusChat({
   const verifyMessageSentRef = useRef<string | null>(null)
   // Track which discuss message was already sent to prevent duplicates
   const discussMessageSentRef = useRef<string | null>(null)
+  const currentWorkshopDraft = context?.agent_workshop?.prompt_draft || ''
+  const proposedLineDiff = useMemo(
+    () => buildAddedLineDiff(currentWorkshopDraft, pendingPromptUpdate?.prompt || ''),
+    [currentWorkshopDraft, pendingPromptUpdate?.prompt]
+  )
+  const addedLineCount = useMemo(
+    () => proposedLineDiff.filter((entry) => entry.added).length,
+    [proposedLineDiff]
+  )
 
   // Handle tool events from Opus - add tool calls to the current assistant message
   const handleToolEvent = useCallback((event: OpusChatEvent) => {
@@ -565,14 +611,16 @@ function OpusChat({
       return
     }
 
-    onApplyWorkshopPromptUpdate(pendingPromptUpdate)
+    const approvedProposal = pendingPromptUpdate
+    onApplyWorkshopPromptUpdate(approvedProposal)
+    setAwaitingAppliedPromptUpdate(approvedProposal)
     setPromptUpdateDialogOpen(false)
     setPendingPromptUpdate(null)
     setMessages((prev) => [
       ...prev,
       {
         role: 'system',
-        content: '✓ Prompt update applied to your Agent Workshop draft.',
+        content: '✓ Prompt update sent to your Agent Workshop draft. I will verify it and run an automatic quality review once the draft updates.',
         timestamp: new Date().toISOString(),
       },
     ])
@@ -582,6 +630,47 @@ function OpusChat({
     setPromptUpdateDialogOpen(false)
     setPendingPromptUpdate(null)
   }, [])
+
+  useEffect(() => {
+    if (!awaitingAppliedPromptUpdate) return
+    if (context?.active_tab !== 'agent_workshop') return
+    if (!context?.agent_workshop?.prompt_draft) return
+
+    const normalizedCurrent = normalizePromptForComparison(context.agent_workshop.prompt_draft)
+    const normalizedExpected = normalizePromptForComparison(awaitingAppliedPromptUpdate.prompt)
+    if (!normalizedCurrent || normalizedCurrent !== normalizedExpected) return
+
+    const autoReviewRequest = buildAutoReviewRequest(awaitingAppliedPromptUpdate)
+    setAwaitingAppliedPromptUpdate(null)
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'system',
+        content: '✓ Prompt update confirmed in the workshop draft. Starting an automatic post-apply review now.',
+        timestamp: new Date().toISOString(),
+      },
+    ])
+
+    if (isStreaming || !handleSendRef.current) {
+      setQueuedAutoReviewMessage(autoReviewRequest)
+      return
+    }
+    handleSendRef.current(autoReviewRequest)
+  }, [
+    awaitingAppliedPromptUpdate,
+    context?.active_tab,
+    context?.agent_workshop?.prompt_draft,
+    isStreaming,
+  ])
+
+  useEffect(() => {
+    if (!queuedAutoReviewMessage) return
+    if (isStreaming || !handleSendRef.current) return
+
+    const nextMessage = queuedAutoReviewMessage
+    setQueuedAutoReviewMessage(null)
+    handleSendRef.current(nextMessage)
+  }, [queuedAutoReviewMessage, isStreaming])
 
   // Quick action buttons - agent-related suggestions (shown when on agents tab)
   const promptQuickActions = [
@@ -1079,26 +1168,45 @@ Claude is responding...
         <DialogTitle>Apply Claude Prompt Update?</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 1.5 }}>
-            Claude generated a full replacement prompt for your Agent Workshop draft. Review below, then choose whether to apply it.
+            Claude generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your Agent Workshop draft. Review below, then choose whether to apply it.
           </DialogContentText>
           {pendingPromptUpdate?.summary && (
             <Alert severity="info" sx={{ mb: 1.5 }}>
               {pendingPromptUpdate.summary}
             </Alert>
           )}
-          <TextField
-            fullWidth
-            multiline
-            minRows={10}
-            value={pendingPromptUpdate?.prompt || ''}
-            InputProps={{ readOnly: true }}
+          <Alert severity="success" sx={{ mb: 1.5 }}>
+            Proposed additions are highlighted in green ({addedLineCount} line{addedLineCount === 1 ? '' : 's'}).
+          </Alert>
+          <Box
             sx={{
-              '& .MuiInputBase-root': {
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                fontSize: '0.8rem',
-              },
+              border: (theme) => `1px solid ${theme.palette.divider}`,
+              borderRadius: 1,
+              maxHeight: 420,
+              overflow: 'auto',
+              bgcolor: 'background.default',
+              px: 1,
+              py: 1,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: '0.8rem',
             }}
-          />
+          >
+            {proposedLineDiff.map((entry, idx) => (
+              <Box
+                key={`proposal-line-${idx}`}
+                component="div"
+                sx={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  bgcolor: entry.added ? (theme) => alpha(theme.palette.success.main, 0.16) : 'transparent',
+                  px: 0.5,
+                  borderRadius: 0.5,
+                }}
+              >
+                {entry.line || ' '}
+              </Box>
+            ))}
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCancelPromptUpdate} color="inherit">

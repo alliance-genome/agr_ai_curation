@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 
 import OpusChat from './OpusChat'
 import type { ChatContext } from '@/types/promptExplorer'
@@ -166,5 +167,77 @@ describe('OpusChat', () => {
         apply_mode: 'targeted_edit',
       })
     })
+  })
+
+  it('auto-runs a post-apply review after workshop draft update is confirmed', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: 'TOOL_RESULT',
+          tool_name: 'update_workshop_prompt_draft',
+          result: {
+            success: true,
+            pending_user_approval: true,
+            apply_mode: 'targeted_edit',
+            proposed_prompt: 'Line A\nLine B',
+            change_summary: 'Added Line B.',
+          },
+        }
+        yield { type: 'DONE' }
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'TEXT_DELTA', delta: 'Post-apply review completed.' }
+        yield { type: 'DONE' }
+      })
+
+    function Harness() {
+      const [context, setContext] = useState<ChatContext>({
+        active_tab: 'agent_workshop',
+        agent_workshop: {
+          prompt_draft: 'Line A',
+        },
+      })
+
+      return (
+        <OpusChat
+          context={context}
+          onApplyWorkshopPromptUpdate={(proposal) => {
+            setContext({
+              active_tab: 'agent_workshop',
+              agent_workshop: {
+                prompt_draft: proposal.prompt,
+              },
+            })
+          }}
+        />
+      )
+    }
+
+    render(<Harness />)
+
+    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
+    fireEvent.change(input, { target: { value: 'Please add one line.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+    })
+    expect(screen.getByText(/Proposed additions are highlighted in green/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2)
+    })
+    const autoReviewMessages = serviceMocks.streamOpusChat.mock.calls[1][0]
+    expect(autoReviewMessages[autoReviewMessages.length - 1].content).toContain(
+      'Please run a post-apply review of my Agent Workshop draft'
+    )
   })
 })
