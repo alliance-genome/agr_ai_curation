@@ -822,6 +822,36 @@ function PromptWorkshop({
       return
     }
 
+    const targetPrompt = incomingPromptUpdate.target_prompt === 'mod' ? 'mod' : 'main'
+    if (targetPrompt === 'mod') {
+      const targetModId = (incomingPromptUpdate.target_mod_id || selectedModId || '').trim().toUpperCase()
+      if (!targetModId) {
+        setError('Cannot apply MOD prompt update because no MOD is selected.')
+        return
+      }
+      if (availableModIds.length > 0 && !availableModIds.includes(targetModId)) {
+        setError(`Cannot apply MOD prompt update: ${targetModId} is not available for this template.`)
+        return
+      }
+
+      setModId(targetModId)
+      setModPromptOverrides((prev) => ({
+        ...prev,
+        [targetModId]: incomingPromptUpdate.prompt,
+      }))
+      setDebouncedModPromptOverrides((prev) => ({
+        ...prev,
+        [targetModId]: incomingPromptUpdate.prompt,
+      }))
+      setError(null)
+      setStatus(
+        incomingPromptUpdate.summary?.trim()
+          ? `Applied Claude MOD update (${targetModId}): ${incomingPromptUpdate.summary.trim()}`
+          : `Applied Claude prompt update to ${targetModId} MOD draft`
+      )
+      return
+    }
+
     setCustomPrompt(incomingPromptUpdate.prompt)
     setDebouncedPromptDraft(incomingPromptUpdate.prompt)
     setError(null)
@@ -830,7 +860,7 @@ function PromptWorkshop({
         ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
         : 'Applied Claude prompt update to the draft'
     )
-  }, [incomingPromptUpdate])
+  }, [incomingPromptUpdate, availableModIds, selectedModId])
 
   const handleNew = () => {
     if (selectedCustomAgent) {

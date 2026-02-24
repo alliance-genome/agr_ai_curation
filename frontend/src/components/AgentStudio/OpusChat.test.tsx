@@ -112,6 +112,7 @@ describe('OpusChat', () => {
         prompt: 'You are an expert curator. Return concise extracted evidence with citations.',
         summary: 'Rewrote instructions for stronger evidence grounding.',
         apply_mode: 'replace',
+        target_prompt: 'main',
       })
     })
   })
@@ -165,6 +166,68 @@ describe('OpusChat', () => {
         prompt: 'Prompt with small targeted improvements.',
         summary: 'Updated only the output-format section.',
         apply_mode: 'targeted_edit',
+        target_prompt: 'main',
+      })
+    })
+  })
+
+  it('routes MOD-target workshop prompt proposals to MOD apply path', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield {
+        type: 'TOOL_RESULT',
+        tool_name: 'update_workshop_prompt_draft',
+        result: {
+          success: true,
+          pending_user_approval: true,
+          apply_mode: 'replace',
+          target_prompt: 'mod',
+          target_mod_id: 'WB',
+          proposed_prompt: 'WB-specific override prompt text.',
+          change_summary: 'Tightened WB anatomy constraints.',
+        },
+      }
+      yield { type: 'DONE' }
+    })
+
+    const onApplyWorkshopPromptUpdate = vi.fn()
+    const context: ChatContext = {
+      active_tab: 'agent_workshop',
+      agent_workshop: {
+        selected_mod_id: 'WB',
+        selected_mod_prompt_draft: 'Old WB prompt',
+      },
+    }
+
+    render(
+      <OpusChat
+        context={context}
+        onApplyWorkshopPromptUpdate={onApplyWorkshopPromptUpdate}
+      />
+    )
+
+    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
+    fireEvent.change(input, { target: { value: 'Update only WB prompt.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
+
+    await waitFor(() => {
+      expect(onApplyWorkshopPromptUpdate).toHaveBeenCalledWith({
+        prompt: 'WB-specific override prompt text.',
+        summary: 'Tightened WB anatomy constraints.',
+        apply_mode: 'replace',
+        target_prompt: 'mod',
+        target_mod_id: 'WB',
       })
     })
   })

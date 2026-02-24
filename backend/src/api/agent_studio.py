@@ -963,12 +963,23 @@ UPDATE_WORKSHOP_PROMPT_TOOL = {
     "description": """Propose a prompt update for the current Agent Workshop draft.
 
 Use this when the curator asks you to rewrite, replace, or significantly refactor
-their current workshop prompt. This tool does NOT auto-apply or auto-save changes.
+their current workshop prompt (main prompt or selected MOD prompt). This tool does
+NOT auto-apply or auto-save changes.
 The UI will show the proposal and require explicit curator approval before applying.
 """,
     "input_schema": {
         "type": "object",
         "properties": {
+            "target_prompt": {
+                "type": "string",
+                "enum": ["main", "mod"],
+                "description": "Which workshop prompt to update. Use 'main' for the base system prompt and 'mod' for the selected MOD prompt override.",
+                "default": "main",
+            },
+            "target_mod_id": {
+                "type": "string",
+                "description": "Optional MOD ID when target_prompt='mod' (for example 'WB'). Must match the currently selected MOD in Agent Workshop.",
+            },
             "updated_prompt": {
                 "type": "string",
                 "description": "Complete replacement prompt text (required when apply_mode='replace').",
@@ -1738,6 +1749,34 @@ async def _handle_tool_call(
                 "error": "This tool is only available while the curator is on the Agent Workshop tab.",
             }
 
+        target_prompt = tool_input.get("target_prompt", "main")
+        if target_prompt not in {"main", "mod"}:
+            return {
+                "success": False,
+                "error": "Unsupported target_prompt. Must be 'main' or 'mod'.",
+            }
+
+        target_mod_id = ""
+        if target_prompt == "mod":
+            selected_mod_id = (context.agent_workshop.selected_mod_id or "").strip().upper()
+            raw_target_mod = tool_input.get("target_mod_id")
+            if raw_target_mod is not None and not isinstance(raw_target_mod, str):
+                return {
+                    "success": False,
+                    "error": "target_mod_id must be a string when provided.",
+                }
+            requested_mod_id = raw_target_mod.strip().upper() if isinstance(raw_target_mod, str) else ""
+            target_mod_id = requested_mod_id or selected_mod_id
+
+            if not target_mod_id or selected_mod_id != target_mod_id:
+                return {
+                    "success": False,
+                    "error": (
+                        "To edit a MOD prompt, select that MOD in Agent Workshop first "
+                        "and then retry this update."
+                    ),
+                }
+
         apply_mode = tool_input.get("apply_mode", "replace")
         if apply_mode not in {"replace", "targeted_edit"}:
             return {
@@ -1764,11 +1803,23 @@ async def _handle_tool_call(
                 }
             updated_prompt = candidate_prompt
         else:
-            base_prompt = context.agent_workshop.prompt_draft or ""
+            base_prompt = (
+                context.agent_workshop.selected_mod_prompt_draft
+                if target_prompt == "mod"
+                else context.agent_workshop.prompt_draft
+            ) or ""
             if not base_prompt.strip():
+                missing_target = (
+                    "selected MOD prompt"
+                    if target_prompt == "mod"
+                    else "workshop draft prompt"
+                )
                 return {
                     "success": False,
-                    "error": "No workshop draft prompt is available to edit. Provide updated_prompt with apply_mode='replace' instead.",
+                    "error": (
+                        f"No {missing_target} is available to edit. "
+                        "Provide updated_prompt with apply_mode='replace' instead."
+                    ),
                 }
             edits = tool_input.get("edits")
             if not isinstance(edits, list) or len(edits) == 0:
@@ -1799,6 +1850,8 @@ async def _handle_tool_call(
             "pending_user_approval": True,
             "apply_mode": apply_mode,
             "proposed_prompt": updated_prompt,
+            "target_prompt": target_prompt,
+            "target_mod_id": target_mod_id if target_prompt == "mod" else None,
             "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
             "applied_edits": applied_edits,
             "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
@@ -2805,6 +2858,8 @@ Include `token_info` in responses for budget management:
   - Use when: concrete improvement identified, curator agrees, sufficient detail available
 - **`update_workshop_prompt_draft`** - Propose updates for the Agent Workshop draft prompt.
   - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
+  - Set `target_prompt="main"` for base system prompt edits.
+  - Set `target_prompt="mod"` for MOD-specific edits to the currently selected MOD prompt (include `target_mod_id` for clarity).
   - For full rewrites: use `apply_mode="replace"` with `updated_prompt`.
   - For focused changes: use `apply_mode="targeted_edit"` with `edits` (`replace_text` or `replace_section`).
   - In casual discussion, proactively offer help like: "Want me to apply this as a targeted edit to the Output section?"
@@ -2936,6 +2991,8 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 4. proactively identify concrete prompt improvements during normal conversation and suggest them.
 5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
 6. after clear approval, call `update_workshop_prompt_draft`:
+   - set `target_prompt="main"` for general/global draft behavior changes,
+   - set `target_prompt="mod"` for MOD-specific wording/rules and include `target_mod_id`,
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
 7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
@@ -2949,6 +3006,9 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
    - for extraction/factual behavior, prioritize deterministic wording over creative language.
 10. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
+11. choose the right target for edits:
+   - use main prompt updates for behavior that should apply across all MODs,
+   - use MOD prompt updates only for organism/MOD-specific exceptions or conventions.
 
 <workshop_prompt_draft>
 {draft_prompt}

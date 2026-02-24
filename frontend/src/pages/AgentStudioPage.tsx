@@ -321,6 +321,8 @@ Agent ID: ${agentId}`
       prompt: proposal.prompt,
       summary: proposal.summary,
       apply_mode: proposal.apply_mode || 'replace',
+      target_prompt: proposal.target_prompt || 'main',
+      target_mod_id: proposal.target_mod_id,
     })
   }, [])
 

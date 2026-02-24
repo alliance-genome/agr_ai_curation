@@ -58,6 +58,37 @@ function buildCatalog(): PromptCatalog {
   }
 }
 
+function buildCatalogWithModRule(): PromptCatalog {
+  return {
+    categories: [
+      {
+        category: 'Validation',
+        agents: [
+          {
+            agent_id: 'gene',
+            agent_name: 'Gene Specialist',
+            description: 'Gene validation',
+            base_prompt: 'System base prompt',
+            source_file: 'database',
+            has_mod_rules: true,
+            mod_rules: {
+              WB: {
+                mod_id: 'WB',
+                content: 'WB template prompt',
+                source_file: 'database',
+              },
+            },
+            tools: ['agr_curation_query'],
+          },
+        ],
+      },
+    ],
+    total_agents: 1,
+    available_mods: ['WB'],
+    last_updated: '2026-02-23T00:00:00Z',
+  }
+}
+
 function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
   return {
     id: '11111111-1111-1111-1111-111111111111',
@@ -494,5 +525,42 @@ describe('PromptWorkshop', () => {
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
+  })
+
+  it('applies incoming MOD prompt updates from Opus approval into MOD overrides', async () => {
+    const onContextChange = vi.fn()
+    const { rerender } = render(
+      <PromptWorkshop
+        catalog={buildCatalogWithModRule()}
+        incomingPromptUpdate={null}
+        onContextChange={onContextChange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    rerender(
+      <PromptWorkshop
+        catalog={buildCatalogWithModRule()}
+        onContextChange={onContextChange}
+        incomingPromptUpdate={{
+          request_id: 2,
+          prompt: 'WB override from Claude',
+          summary: 'Updated WB-specific extraction guidance.',
+          apply_mode: 'replace',
+          target_prompt: 'mod',
+          target_mod_id: 'WB',
+        }}
+      />
+    )
+
+    await waitFor(() => {
+      const latestCall = onContextChange.mock.calls[onContextChange.mock.calls.length - 1]?.[0]
+      expect(latestCall?.selected_mod_id).toBe('WB')
+      expect(latestCall?.selected_mod_prompt_draft).toBe('WB override from Claude')
+    })
+    expect(screen.getByText('Applied Claude MOD update (WB): Updated WB-specific extraction guidance.')).toBeInTheDocument()
   })
 })

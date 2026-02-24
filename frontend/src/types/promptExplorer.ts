@@ -259,6 +259,8 @@ export interface WorkshopPromptUpdateProposal {
   prompt: string
   summary?: string
   apply_mode?: 'replace' | 'targeted_edit'
+  target_prompt?: 'main' | 'mod'
+  target_mod_id?: string
 }
 
 export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposal {
@@ -332,6 +334,8 @@ export interface ToolResult {
   pending_user_approval?: boolean
   apply_mode?: 'replace' | 'targeted_edit'
   proposed_prompt?: string
+  target_prompt?: 'main' | 'mod'
+  target_mod_id?: string
   change_summary?: string
   applied_edits?: string[]
   [key: string]: unknown

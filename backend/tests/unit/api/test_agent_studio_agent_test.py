@@ -309,6 +309,7 @@ class TestAgentWorkshopSystemPrompt:
         assert result["success"] is True
         assert result["pending_user_approval"] is True
         assert result["apply_mode"] == "replace"
+        assert result["target_prompt"] == "main"
         assert result["proposed_prompt"] == "You are a strict gene expression extraction assistant."
         assert result["change_summary"] == "Tightened extraction and citation requirements."
 
@@ -425,6 +426,75 @@ class TestAgentWorkshopSystemPrompt:
         assert "## Output" in result["proposed_prompt"]
         assert "Return JSON with evidence and citations." in result["proposed_prompt"]
         assert "Return concise bullet points." not in result["proposed_prompt"]
+
+    def test_handle_update_workshop_prompt_tool_supports_mod_targeted_edit(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                template_source="gene",
+                selected_mod_id="WB",
+                selected_mod_prompt_draft="Use WB IDs and anatomy terms.\n",
+            ),
+        )
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={
+                    "target_prompt": "mod",
+                    "target_mod_id": "WB",
+                    "apply_mode": "targeted_edit",
+                    "edits": [
+                        {
+                            "operation": "replace_text",
+                            "find_text": "WB IDs",
+                            "replacement_text": "WormBase IDs",
+                            "occurrence": "first",
+                        }
+                    ],
+                },
+                context=context,
+                user_email="dev@example.org",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is True
+        assert result["target_prompt"] == "mod"
+        assert result["target_mod_id"] == "WB"
+        assert "WormBase IDs" in result["proposed_prompt"]
+
+    def test_handle_update_workshop_prompt_tool_rejects_mod_target_without_selected_mod(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                template_source="gene",
+                selected_mod_id=None,
+                prompt_draft="Main prompt",
+            ),
+        )
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={
+                    "target_prompt": "mod",
+                    "updated_prompt": "WB-specific update",
+                },
+                context=context,
+                user_email="dev@example.org",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is False
+        assert "select that MOD in Agent Workshop first" in result["error"]
 
     def test_handle_update_workshop_prompt_tool_rejects_targeted_edit_without_edits(self):
         from src.api import agent_studio as api_module
