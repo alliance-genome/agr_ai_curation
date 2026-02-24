@@ -34,7 +34,7 @@ import UploadProgressDialog from './UploadProgressDialog';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
-import { DocumentSummary, fetchDocumentDetail, useDoclingHealth } from '../../services/weaviate';
+import { DocumentSummary, fetchDocumentDetail, usePdfExtractionHealth } from '../../services/weaviate';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -76,8 +76,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onTitleUpdate,
   filterBar,
 }) => {
-  const doclingHealthQuery = useDoclingHealth();
-  const doclingHealth = doclingHealthQuery.data;
+  const extractionHealthQuery = usePdfExtractionHealth();
+  const extractionHealth = extractionHealthQuery.data;
   const navigate = useNavigate();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -606,49 +606,49 @@ const DocumentList: React.FC<DocumentListProps> = ({
         justifyContent="space-between"
         sx={{ mb: 2 }}
       >
-        {doclingHealthQuery.isLoading ? (
+        {extractionHealthQuery.isLoading ? (
           <Alert severity="info" sx={{ flex: 1 }}>
-            Checking Docling service health…
+            Checking PDF extraction service health…
           </Alert>
-        ) : doclingHealthQuery.isError ? (
+        ) : extractionHealthQuery.isError ? (
           <Alert severity="error" sx={{ flex: 1 }}>
-            Unable to reach Docling service: {(doclingHealthQuery.error as Error).message}
+            Unable to reach PDF extraction service: {(extractionHealthQuery.error as Error).message}
           </Alert>
-        ) : doclingHealth ? (
+        ) : extractionHealth ? (
           <Alert
             severity={
-              doclingHealth.status === 'healthy'
+              extractionHealth.status === 'healthy'
                 ? 'success'
-                : doclingHealth.status === 'degraded'
+                : extractionHealth.status === 'degraded'
                   ? 'warning'
                   : 'error'
             }
             sx={{ flex: 1 }}
           >
-            Docling service ({doclingHealth.service_url}): {doclingHealth.status}
-            {doclingHealth.last_checked && (
+            PDF extraction service ({extractionHealth.service_url}): {extractionHealth.status}
+            {extractionHealth.last_checked && (
               <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                · Checked {new Date(doclingHealth.last_checked).toLocaleTimeString()}
+                · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
               </Typography>
             )}
-            {doclingHealth.error && doclingHealth.status !== 'healthy' && (
+            {extractionHealth.error && extractionHealth.status !== 'healthy' && (
               <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                ({doclingHealth.error})
+                ({extractionHealth.error})
               </Typography>
             )}
           </Alert>
         ) : (
           <Alert severity="warning" sx={{ flex: 1 }}>
-            Docling service status unavailable.
+            PDF extraction service status unavailable.
           </Alert>
         )}
 
         <Button
           size="small"
           variant="outlined"
-          onClick={() => doclingHealthQuery.refetch()}
-          disabled={doclingHealthQuery.isFetching}
-          startIcon={doclingHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
+          onClick={() => extractionHealthQuery.refetch()}
+          disabled={extractionHealthQuery.isFetching}
+          startIcon={extractionHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
         >
           Refresh Status
         </Button>

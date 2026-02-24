@@ -38,7 +38,8 @@ from .langfuse_client import (
     flush_agent_configs,
     clear_pending_configs
 )
-from .config import get_api_key, get_base_url, is_gemini_provider
+from src.lib.config.providers_loader import get_default_runner_provider
+from .config import get_api_key, get_base_url
 
 # Prompt context tracking for execution logging
 from src.lib.prompts.context import clear_prompt_context, commit_pending_prompts, get_used_prompts
@@ -54,17 +55,17 @@ logger = logging.getLogger(__name__)
 
 
 def _configure_api_mode():
-    """Configure the OpenAI API mode based on the provider.
-
-    Gemini's OpenAI compatibility layer only supports the Chat Completions API,
-    not the newer Responses API. When using Gemini, we must switch to chat_completions mode.
-    """
-    if is_gemini_provider():
+    """Configure OpenAI SDK API mode based on default runner provider."""
+    provider = get_default_runner_provider()
+    if provider.api_mode == "chat_completions":
         set_default_openai_api("chat_completions")
-        logger.info("Using chat_completions API mode for Gemini compatibility")
     else:
-        # OpenAI supports the Responses API (default)
-        logger.info("Using responses API mode (OpenAI default)")
+        set_default_openai_api("responses")
+    logger.info(
+        "Using %s API mode for default runner provider=%s",
+        provider.api_mode,
+        provider.provider_id,
+    )
 
 
 # Configure API mode at module load
@@ -72,27 +73,23 @@ _configure_api_mode()
 
 
 def _create_openai_client_kwargs() -> dict:
-    """Build kwargs for OpenAI client based on configured provider.
-
-    For Gemini, sets api_key and base_url for OpenAI compatibility mode.
-    For OpenAI, returns empty dict (uses defaults from environment).
-    """
+    """Build kwargs for OpenAI client based on default runner provider config."""
     kwargs = {}
 
-    api_key = get_api_key()
-    base_url = get_base_url()
+    default_provider = get_default_runner_provider()
+    api_key = get_api_key(default_provider.provider_id)
+    base_url = get_base_url(default_provider.provider_id)
 
     if api_key:
         kwargs["api_key"] = api_key
     if base_url:
         kwargs["base_url"] = base_url
 
-    provider = "gemini" if is_gemini_provider() else "openai"
     logger.info(
         "Using provider=%s base_url=%s",
-        provider,
+        default_provider.provider_id,
         base_url or "default",
-        extra={"provider": provider, "base_url": base_url or "default"},
+        extra={"provider": default_provider.provider_id, "base_url": base_url or "default"},
     )
 
     return kwargs
@@ -104,8 +101,8 @@ class SafeLangfuseAsyncOpenAI(LangfuseAsyncOpenAI):
     The OpenAI Agents SDK sometimes passes metadata=None, which Langfuse rejects.
     This wrapper ensures compatibility between the two libraries.
 
-    Supports both OpenAI and Gemini (via OpenAI compatibility mode) based on
-    the LLM_PROVIDER environment variable.
+    Supports providers configured as the default runner provider
+    in config/providers.yaml.
 
     Note: Trace context is handled automatically via OpenTelemetry context propagation.
     When used inside a start_as_current_span() context, all calls are automatically

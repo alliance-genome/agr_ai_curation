@@ -1,36 +1,44 @@
 # Adding a New Agent
 
-Step-by-step guide to adding a new agent to the AI Curation system using the config-driven architecture.
+Step-by-step guide to adding a new agent to the AI Curation system.
 
-> **Time**: 15-30 minutes
+> **Time**: 15-30 minutes for YAML-only agents, 5 minutes via Agent Studio UI
 > **Prerequisites**: Docker running, backend accessible
 
 ---
 
 ## Overview
 
-Agents are self-contained folders with YAML configuration and Python schema. No code changes required in the core system.
+Agents are defined through two complementary paths:
+
+1. **YAML config files** (system agents) -- Folders under `config/agents/` define agent metadata, prompts, and group rules. An Alembic migration seeds them into the unified `agents` database table at startup.
+2. **Agent Studio UI** (custom agents) -- Curators create personal or project-scoped agents through the browser. These are stored directly in the `agents` table with `visibility='private'` or `visibility='project'`.
+
+Both paths produce rows in the same `agents` table. At runtime, the supervisor discovers all active, supervisor-enabled agents from the database and creates streaming tool wrappers for them dynamically. **No Python agent files are needed.**
 
 ```
-my_agent/
-├── agent.yaml        # Agent definition
-├── prompt.yaml       # Instructions
-├── schema.py         # Output format
-└── group_rules/      # Optional: org-specific behavior
+config/agents/my_agent/        # YAML source of truth
+  agent.yaml                   # Agent definition and metadata
+  prompt.yaml                  # Base instructions
+  group_rules/                 # Optional: org-specific behavior
+    fb.yaml
+    wb.yaml
 ```
 
 ---
 
-## Step 1: Copy the Template
+## Path A: Add a System Agent via YAML
+
+System agents ship with the product and are visible to all users. They are seeded into the database from YAML during migrations.
+
+### Step 1: Copy the Template
 
 ```bash
 cd config/agents
 cp -r _examples/basic_agent my_agent
 ```
 
----
-
-## Step 2: Define Your Agent (agent.yaml)
+### Step 2: Define Your Agent (agent.yaml)
 
 Edit `my_agent/agent.yaml`:
 
@@ -44,18 +52,26 @@ name: "My Agent"
 # Brief description
 description: "Validates and processes [domain] data"
 
+# Category for UI grouping
+category: "Validation"
+subcategory: "Data Validation"
+
 # CRITICAL: Tells supervisor when to route to this agent
 # Be specific - vague descriptions cause routing errors
 supervisor_routing:
+  enabled: true
   description: "Use for validating [specific data type], querying [specific domain], or looking up [specific information]"
+  batchable: true
+  batching_entity: "items"
+  batching_instructions: >
+    When looking up multiple items, combine them into a single request.
+    Example: "Look up these items: foo, bar, baz"
 
-# Tools this agent can use (must exist in backend/tools/)
+# Tools this agent can use (must exist in TOOL_BINDINGS in catalog_service.py)
 tools:
-  - agr_curation_query    # Primary database access
-  # - alliance_api_call   # REST API calls
-  # - weaviate_search     # Document search
+  - agr_curation_query
 
-# Class name from schema.py
+# Output schema class name (from backend/src/lib/openai_agents/models.py)
 output_schema: MyAgentEnvelope
 
 # LLM settings (supports environment variables)
@@ -64,11 +80,21 @@ model_config:
   temperature: 0.1
   reasoning: "medium"
 
+# Execution requirements
+requires_document: false
+required_params: []
+batch_capabilities: []
+
+# Frontend display
+frontend:
+  icon: "🧪"
+  show_in_palette: true
+
 # Set true if different orgs need different behavior
 group_rules_enabled: false
 ```
 
-### Supervisor Routing Tips
+#### Supervisor Routing Tips
 
 | Good Description | Bad Description |
 |-----------------|-----------------|
@@ -78,7 +104,7 @@ group_rules_enabled: false
 
 ---
 
-## Step 3: Write the Prompt (prompt.yaml)
+### Step 3: Write the Prompt (prompt.yaml)
 
 Edit `my_agent/prompt.yaml`:
 
@@ -125,9 +151,13 @@ content: |
   - Only return items that exist in the database
   - Never fabricate or guess identifiers
   - Clearly distinguish between "not found" and "error"
+
+  ## GROUP-SPECIFIC RULES
+
+  [Group rules are automatically injected here at runtime if group_rules_enabled is true]
 ```
 
-### Prompt Writing Tips
+#### Prompt Writing Tips
 
 - Be specific about what the agent can and cannot do
 - Describe each tool and what it returns
@@ -137,35 +167,17 @@ content: |
 
 ---
 
-## Step 4: Define the Output Schema (schema.py)
+### Step 4: Define the Output Schema
 
-Edit `my_agent/schema.py`:
+Output schemas live in `backend/src/lib/openai_agents/models.py` (the shared models module):
 
 ```python
-"""Output schema for My Agent."""
-
-from pydantic import BaseModel, Field
-from typing import List, Optional
-
-
 class MyResult(BaseModel):
     """A single result item."""
-
-    # Required fields
     id: str = Field(description="Unique identifier (CURIE format)")
     name: str = Field(description="Human-readable name")
     valid: bool = Field(description="Whether the item was found/validated")
-
-    # Optional fields
-    species: Optional[str] = Field(
-        default=None,
-        description="Species (if applicable)"
-    )
-    source: Optional[str] = Field(
-        default=None,
-        description="Data source that provided this result"
-    )
-
+    species: Optional[str] = Field(default=None, description="Species (if applicable)")
 
 class MyAgentEnvelope(BaseModel):
     """
@@ -174,33 +186,27 @@ class MyAgentEnvelope(BaseModel):
     This is the class referenced in agent.yaml's output_schema field.
     All list fields MUST have default_factory to handle empty results.
     """
-
-    # Results found
     results: List[MyResult] = Field(
         default_factory=list,
         description="Successfully validated items"
     )
-
-    # Items not found
     not_found: List[str] = Field(
         default_factory=list,
         description="Identifiers that could not be found"
     )
-
-    # Warnings/issues
     warnings: List[str] = Field(
         default_factory=list,
         description="Non-fatal issues encountered"
     )
-
-    # Optional query info
     query_summary: Optional[str] = Field(
         default=None,
         description="Summary of what was searched"
     )
 ```
 
-### Schema Rules
+The `output_schema` value in `agent.yaml` must match the class name exactly. The catalog service resolves it from the shared models module at runtime.
+
+#### Schema Rules
 
 | Do | Don't |
 |-----|-------|
@@ -211,7 +217,7 @@ class MyAgentEnvelope(BaseModel):
 
 ---
 
-## Step 5: Add Group Rules (Optional)
+### Step 5: Add Group Rules (Optional)
 
 If different organizations need different behavior, create `my_agent/group_rules/`:
 
@@ -224,7 +230,7 @@ Create `my_agent/group_rules/fb.yaml` for FlyBase:
 ```yaml
 group_id: FB
 
-rules: |
+content: |
   ## FlyBase-Specific Rules
 
   When handling FlyBase data:
@@ -235,36 +241,63 @@ rules: |
 
 Create similar files for other groups (`wb.yaml`, `mgi.yaml`, etc.).
 
-**Important**: The filename (without `.yaml`) must match the `group_id` in `config/groups.yaml`.
+**Important**: The `group_id` must match a key in `config/groups.yaml`. Set `group_rules_enabled: true` in your `agent.yaml` to activate rule injection.
 
 ---
 
-## Step 6: Verify and Test
+### Step 6: Seed into the Database
 
-### Check YAML Syntax
+System agents are seeded via Alembic migration. The existing seed migration (`v4w5x6y7z8a9_seed_unified_agents.py`) reads `config/agents/*/agent.yaml` and `prompt.yaml` at migration time and inserts rows into the `agents` table with `visibility='system'`.
 
-```bash
-# Quick syntax check
-python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"
-python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/prompt.yaml'))"
-```
+For a **new** agent added after the initial migration, you have two options:
 
-### Check Schema Imports
+**Option A: Create a new Alembic migration** (recommended for production):
 
 ```bash
-# Schemas are dynamically discovered - just verify the Python file is valid
-python3 -m py_compile config/agents/my_agent/schema.py && echo "Schema syntax OK"
+docker compose exec backend alembic revision --autogenerate -m "seed_my_agent"
 ```
 
-### Restart Backend
+Then add seed logic similar to the existing seed migration.
+
+**Option B: Manual database insert** (quick iteration during development):
+
+```bash
+docker compose exec backend python - <<'PY'
+from src.models.sql.database import SessionLocal
+from src.models.sql.agent import Agent
+
+db = SessionLocal()
+# Read your YAML and insert -- or just restart with a fresh DB
+db.close()
+PY
+```
+
+After seeding, restart the backend to pick up the new agent:
 
 ```bash
 docker compose restart backend
 ```
 
-### Test in Chat
+---
 
-Open the Agent Studio and ask a question that should route to your agent:
+### Step 7: Verify and Test
+
+#### Check YAML Syntax
+
+```bash
+python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/prompt.yaml'))"
+```
+
+#### Restart Backend
+
+```bash
+docker compose restart backend
+```
+
+#### Test in Chat
+
+Open Agent Studio and ask a question that should route to your agent:
 
 > "Can you validate these [domain items]: item1, item2, item3"
 
@@ -276,67 +309,76 @@ docker compose logs backend | grep my_agent
 
 ---
 
-## Step 7: Refine
+### Step 8: Refine
 
 Based on testing:
 
-1. **Routing issues**: Improve `supervisor_routing.description`
-2. **Wrong output format**: Check schema matches what LLM returns
-3. **Missing tools**: Add tools to the `tools` list
-4. **Group-specific issues**: Add/update group rules
+1. **Routing issues** -- Improve `supervisor_routing.description` in `agent.yaml`
+2. **Wrong output format** -- Check schema matches what LLM returns
+3. **Missing tools** -- Add tools to the `tools` list (must have a `TOOL_BINDINGS` entry)
+4. **Group-specific issues** -- Add/update group rules
 
-No restart needed for prompt changes - just restart backend.
+After modifying prompts in the database, refresh the prompt cache:
+
+```bash
+curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh
+```
 
 ---
 
-## Complete Example: Disease Validation Agent
+## Path B: Add a Custom Agent via Agent Studio
 
-```yaml
-# agent.yaml
-agent_id: disease_validation
-name: "Disease Validation Agent"
-description: "Validates disease terms and maps to DO ontology"
+Custom agents are created through the Agent Studio UI and stored directly in the `agents` table without requiring any YAML files or code changes.
 
-supervisor_routing:
-  description: "Use for validating disease names, looking up DOID identifiers, or mapping text to Disease Ontology terms"
+### Step 1: Open Agent Studio
 
-tools:
-  - agr_curation_query
-  - curation_db_sql
+Navigate to Agent Studio in the browser and select the agent creation workflow.
 
-output_schema: DiseaseValidationEnvelope
+### Step 2: Fill in Agent Details
 
-model_config:
-  model: "${AGENT_DISEASE_MODEL:-gpt-4o}"
-  temperature: 0.0
-  reasoning: "low"
+Provide:
+- **Name** and **description**
+- **Instructions** (the prompt)
+- **Model** selection (from `config/models.yaml` catalog)
+- **Tools** to enable
+- **Visibility**: `private` (only you) or `project` (shared with team)
 
-group_rules_enabled: false
-```
+### Step 3: Save and Test
 
-```yaml
-# prompt.yaml
-agent_id: disease_validation
+The agent is immediately available. No restart needed. Custom agents with `supervisor_enabled=false` (the default for custom agents) are available in flows and direct execution but not in supervisor chat routing.
 
-content: |
-  You are a Disease Validation Specialist for the Alliance of Genome Resources.
+---
 
-  ## Your Role
+## How Agents Are Discovered at Runtime
 
-  Validate disease terms against the Disease Ontology (DO) and return structured results with DOID identifiers.
+Understanding the discovery flow helps with debugging:
 
-  ## Tools
+1. **Startup**: `registry_builder.py` reads all `config/agents/*/agent.yaml` files and builds `AGENT_REGISTRY` (metadata for the catalog UI)
+2. **Migration**: The seed migration reads the same YAML files and inserts rows into the `agents` table with `visibility='system'`
+3. **Supervisor creation**: `supervisor_agent.py` queries the `agents` table for rows where `visibility='system'` AND `supervisor_enabled=true` AND `is_active=true`
+4. **Tool wrapping**: For each discovered agent, `get_agent_by_id()` builds a runtime `Agent` instance from the database row (instructions, model, tools, schema) and wraps it as a streaming tool
+5. **Prompt injection**: Group rules and document context are injected into instructions at build time based on the agent's configuration
 
-  - **agr_curation_query**: Search the Alliance database for disease terms
-  - **curation_db_sql**: Direct SQL queries for complex lookups
+Key source files:
 
-  ## Instructions
+| File | Role |
+|------|------|
+| `backend/src/lib/agent_studio/catalog_service.py` | `get_agent_by_id()` builds agents from DB, `AGENT_REGISTRY` provides UI metadata |
+| `backend/src/lib/agent_studio/registry_builder.py` | Builds `AGENT_REGISTRY` from YAML at import time |
+| `backend/src/lib/agent_studio/agent_service.py` | `get_agent_by_key()` queries the `agents` table |
+| `backend/src/models/sql/agent.py` | `Agent` SQLAlchemy model (unified table) |
+| `backend/src/lib/openai_agents/agents/supervisor_agent.py` | Dynamic specialist discovery and streaming tool creation |
 
-  1. Parse disease names from the user's query
-  2. Search for exact and fuzzy matches
-  3. Return validated terms with DOIDs
-  4. List any terms that couldn't be matched
-```
+---
+
+## Complete Example: Gene Validation Agent
+
+The gene agent demonstrates the full pattern. See these files:
+
+- `config/agents/gene/agent.yaml` -- Agent definition with batching, group rules, and model config
+- `config/agents/gene/prompt.yaml` -- Detailed prompt with search strategies and output format
+- `config/agents/gene/group_rules/fb.yaml` -- FlyBase-specific rules
+- `config/agents/gene/group_rules/wb.yaml` -- WormBase-specific rules
 
 ---
 
@@ -344,17 +386,19 @@ content: |
 
 | Problem | Solution |
 |---------|----------|
-| Agent not appearing | Check folder name doesn't start with `_` |
-| "Schema not found" error | Verify `output_schema` matches class name exactly |
-| Supervisor not routing | Improve `supervisor_routing.description` |
-| Empty results | Check schema uses `default_factory=list` |
-| Tool errors | Verify tool exists and is exported |
+| Agent not appearing in UI | Check that the agent exists in the `agents` table with `is_active=true`. Run `docker compose exec postgres psql -U postgres ai_curation -c "SELECT agent_key, is_active, visibility FROM agents;"` |
+| Supervisor not routing to agent | Verify `supervisor_enabled=true` and `supervisor_description` is clear in the DB row. Check logs: `docker compose logs backend \| grep ask_my_agent` |
+| "Unknown agent_id" error | Agent not in the `agents` table. Run the seed migration or insert manually |
+| Schema not found | Verify `output_schema_key` matches a class name in `backend/src/lib/openai_agents/models.py` |
+| Tools not resolving | Tool must have a `TOOL_BINDINGS` entry in `catalog_service.py`. Check error: "Unknown tool binding" |
+| Group rules not injected | Check `group_rules_enabled=true` and `group_rules_component` points to a valid prompt cache key |
+| Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh` |
 
 ---
 
 ## See Also
 
-- [CONFIG_DRIVEN_ARCHITECTURE.md](./CONFIG_DRIVEN_ARCHITECTURE.md) - Full architecture guide
-- [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) - Adding custom tools
-- [config/agents/README.md](../../../config/agents/README.md) - Agent directory reference
-- [config/agents/_examples/](../../../config/agents/_examples/) - Template files
+- [CONFIG_DRIVEN_ARCHITECTURE.md](./CONFIG_DRIVEN_ARCHITECTURE.md) -- Full architecture guide
+- [AGENTS_DEVELOPMENT_GUIDE.md](./AGENTS_DEVELOPMENT_GUIDE.md) -- Comprehensive agent development reference
+- [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) -- Adding custom tools
+- [config/agents/_examples/](../../../config/agents/_examples/) -- Template files

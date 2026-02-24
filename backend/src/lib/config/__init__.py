@@ -68,13 +68,33 @@ from .connections_loader import (
     reset_cache as reset_connections_cache,
 )
 
-from .agent_factory import (
-    get_agent_factory,
-    get_factory_by_agent_id,
-    create_agent,
-    create_agent_by_id,
-    list_available_factories,
-    clear_factory_cache,
+from .models_loader import (
+    ModelDefinition,
+    load_models,
+    get_model,
+    get_default_model,
+    list_models as list_model_definitions,
+    is_initialized as is_models_initialized,
+    reset_cache as reset_models_cache,
+)
+
+from .providers_loader import (
+    ProviderDefinition,
+    load_providers,
+    get_provider,
+    get_default_runner_provider,
+    list_providers as list_provider_definitions,
+    is_initialized as is_providers_initialized,
+    reset_cache as reset_providers_cache,
+)
+
+from .provider_validation import (
+    get_provider_validation_strict_mode,
+    build_provider_runtime_report,
+    validate_provider_runtime_contracts,
+    validate_and_cache_provider_runtime_contracts,
+    get_startup_provider_validation_report,
+    reset_startup_provider_validation_report,
 )
 
 __all__ = [
@@ -127,11 +147,27 @@ __all__ = [
     "update_health_status",
     "is_connections_initialized",
     "reset_connections_cache",
-    # Agent factory
-    "get_agent_factory",
-    "get_factory_by_agent_id",
-    "create_agent",
-    "create_agent_by_id",
-    "list_available_factories",
-    "clear_factory_cache",
+    # Models loader
+    "ModelDefinition",
+    "load_models",
+    "get_model",
+    "get_default_model",
+    "list_model_definitions",
+    "is_models_initialized",
+    "reset_models_cache",
+    # Providers loader
+    "ProviderDefinition",
+    "load_providers",
+    "get_provider",
+    "get_default_runner_provider",
+    "list_provider_definitions",
+    "is_providers_initialized",
+    "reset_providers_cache",
+    # Provider validation
+    "get_provider_validation_strict_mode",
+    "build_provider_runtime_report",
+    "validate_provider_runtime_contracts",
+    "validate_and_cache_provider_runtime_contracts",
+    "get_startup_provider_validation_report",
+    "reset_startup_provider_validation_report",
 ]

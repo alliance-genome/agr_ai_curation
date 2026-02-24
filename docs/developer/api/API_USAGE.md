@@ -177,7 +177,7 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 | Processing | POST/GET | `/weaviate/documents/{id}/status`, `/progress/stream`, `/reprocess`, `/reembed` | Track pipeline or trigger re-processing. |
 | Chunks | GET | `/weaviate/documents/{id}/chunks` | Paginated chunk + provenance retrieval. |
 | Config | GET/PUT | `/weaviate/settings`, `/weaviate/schema`, `/weaviate/chunking-strategies` | Inspect/update embeddings & schema. |
-| Health | GET | `/weaviate/health`, `/weaviate/readiness`, `/weaviate/documents/docling-health` | Service readiness + Docling connectivity. |
+| Health | GET | `/weaviate/health`, `/weaviate/readiness`, `/weaviate/documents/pdf-extraction-health` | Service readiness + PDF extraction connectivity. |
 | Feedback | POST | `/api/feedback/submit` | Two-phase handler (fast ack + background Langfuse enrichment). |
 | Users/Auth | GET/POST | `/api/users/me`, `/api/auth/login|logout|callback` | Identity & tokens. |
 | PDF viewer | GET | `/api/pdf-viewer/documents*` | Metadata + signed viewer URLs (no auth in current build). |
@@ -343,11 +343,11 @@ curl -OJ http://localhost:8000/weaviate/documents/$DOC_ID/download/pdf
 ```
 Ownership is re-checked against PostgreSQL before any file is read from disk.
 
-### 6. Docling health probe
+### 6. PDF extraction health probe
 ```bash
-curl http://localhost:8000/weaviate/documents/docling-health | jq
+curl http://localhost:8000/weaviate/documents/pdf-extraction-health | jq
 ```
-Reports status, upstream HTTP code, and cached payload from the Docling service – essential when automating regression tests.
+Reports status, upstream HTTP code, and cached payload from the PDF extraction service.
 
 ---
 

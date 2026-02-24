@@ -7,6 +7,8 @@ Provides services for exploring and analyzing agent prompts:
 - OpusChatService: Stream Opus 4.5 conversations
 - Flow Tools: Create and manage curation flows via Opus
 """
+import logging
+import os
 
 from .models import (
     # Prompt catalog models
@@ -54,11 +56,20 @@ from .flow_tools import (
     FLOW_AGENT_IDS,
 )
 
+logger = logging.getLogger(__name__)
 
 # Register flow tools on module import
 # This makes create_flow, validate_flow, and get_flow_templates
 # available to Opus via the DiagnosticToolRegistry
-register_flow_tools()
+auto_register_flow_tools = (
+    os.getenv("AGENT_STUDIO_AUTO_REGISTER_FLOW_TOOLS", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+if auto_register_flow_tools:
+    try:
+        register_flow_tools()
+    except Exception:
+        logger.exception("Flow tool registration failed during agent_studio import")
 
 
 __all__ = [

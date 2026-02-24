@@ -1,19 +1,23 @@
-"""Custom agent service for Prompt Workshop CRUD and runtime resolution."""
+"""Custom agent service for Agent Workshop CRUD and runtime resolution."""
 
-import hashlib
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
-from src.models.sql.custom_agent import CustomAgent, CustomAgentVersion
+from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
+from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
+from src.lib.config.models_loader import get_model
+from src.models.sql.agent import Agent as CustomAgent, ProjectMember
+from src.models.sql.custom_agent import CustomAgentVersion
 from src.models.sql.database import SessionLocal
-from src.lib.prompts.cache import get_prompt, PromptNotFoundError
 
 
 CUSTOM_AGENT_PREFIX = "ca_"
+_DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
 
 
 class CustomAgentError(Exception):
@@ -42,11 +46,6 @@ def parse_custom_agent_id(agent_id: str) -> Optional[uuid.UUID]:
         return uuid.UUID(raw_uuid)
     except Exception:
         return None
-
-
-def compute_prompt_hash(prompt: str) -> str:
-    """Compute SHA-256 hash for staleness detection."""
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 def normalize_mod_prompt_overrides(
@@ -79,51 +78,198 @@ def _get_next_version(db: Session, custom_agent_uuid: uuid.UUID) -> int:
     return int(max_version or 0) + 1
 
 
-def _get_parent_base_prompt(parent_agent_key: str) -> str:
-    try:
-        return get_prompt(parent_agent_key, prompt_type="system").content
-    except PromptNotFoundError as exc:
-        raise ValueError(f"No base prompt found for parent agent '{parent_agent_key}'") from exc
+def _validate_requested_tool_ids(
+    db: Session,
+    tool_ids: Optional[List[str]],
+) -> Optional[List[str]]:
+    """Validate requested tool attachments against DB tool policies."""
+    if tool_ids is None:
+        return None
+
+    normalized = [str(tool_id).strip() for tool_id in tool_ids if str(tool_id).strip()]
+    if not normalized:
+        return []
+
+    policy_by_key = {
+        entry.tool_key: entry
+        for entry in get_tool_policy_cache().list_all(db)
+    }
+    unknown = sorted({tool_id for tool_id in normalized if tool_id not in policy_by_key})
+    if unknown:
+        raise ValueError(f"Unknown tool_ids: {', '.join(unknown)}")
+
+    disallowed = sorted(
+        {tool_id for tool_id in normalized if not policy_by_key[tool_id].allow_attach}
+    )
+    if disallowed:
+        raise ValueError(f"Tool(s) are not attachable: {', '.join(disallowed)}")
+
+    return normalized
 
 
-def resolve_parent_agent_key(parent_agent_id: str) -> str:
-    """Resolve incoming registry ID/alias to canonical prompt key."""
-    from src.lib.agent_studio.catalog_service import get_prompt_key_for_agent
+def _validate_model_id(model_id: str) -> str:
+    """Validate model selection against the configured model catalog."""
+    normalized = str(model_id or "").strip()
+    if not normalized:
+        raise ValueError("model_id is required")
+    model_def = get_model(normalized)
+    if model_def is None:
+        raise ValueError(f"Unknown model_id: {normalized}")
+    if not bool(getattr(model_def, "curator_visible", True)):
+        raise ValueError(f"Model is not selectable in Agent Workshop: {normalized}")
+    return normalized
 
-    return get_prompt_key_for_agent(parent_agent_id)
+
+def _resolve_system_template_agent(db: Session, template_source: str) -> CustomAgent:
+    """Resolve a system template by canonical unified `agent_key` only."""
+    raw_id = str(template_source or "").strip()
+    if not raw_id:
+        raise ValueError("template_source is required")
+
+    by_key = db.query(CustomAgent).filter(
+        CustomAgent.agent_key == raw_id,
+        CustomAgent.visibility == "system",
+        CustomAgent.is_active == True,  # noqa: E712
+    ).first()
+    if by_key:
+        return by_key
+
+    raise ValueError(f"No active system agent found for parent id '{raw_id}'")
+
+
+def _has_active_custom_name(db: Session, user_id: int, name: str) -> bool:
+    """Case-insensitive active-name check for a user's private/project custom agents."""
+    return db.query(CustomAgent).filter(
+        CustomAgent.user_id == user_id,
+        func.lower(CustomAgent.name) == name.lower(),
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.is_active == True,  # noqa: E712
+    ).first() is not None
+
+
+def _get_primary_project_id_for_user(db: Session, user_id: int) -> uuid.UUID:
+    """Resolve the first project membership for a user (v1 has one default project)."""
+    row = db.query(ProjectMember.project_id).filter(
+        ProjectMember.user_id == user_id,
+    ).order_by(ProjectMember.joined_at.asc()).first()
+    if not row:
+        raise ValueError("User is not assigned to any project")
+    return row[0]
+
+
+def _generate_clone_name(db: Session, user_id: int, source_name: str) -> str:
+    """Generate a non-colliding clone name for a user."""
+    base_name = (source_name or "Custom Agent").strip() or "Custom Agent"
+    candidate = f"{base_name} (Copy)"
+    if not _has_active_custom_name(db, user_id, candidate):
+        return candidate
+
+    suffix = 2
+    while True:
+        next_candidate = f"{base_name} (Copy {suffix})"
+        if not _has_active_custom_name(db, user_id, next_candidate):
+            return next_candidate
+        suffix += 1
 
 
 def create_custom_agent(
     db: Session,
     user_id: int,
-    parent_agent_id: str,
     name: str,
+    template_source: Optional[str] = None,
     custom_prompt: Optional[str] = None,
     mod_prompt_overrides: Optional[Dict[str, str]] = None,
     description: Optional[str] = None,
     icon: Optional[str] = None,
     include_mod_rules: bool = True,
+    model_id: Optional[str] = None,
+    tool_ids: Optional[List[str]] = None,
+    output_schema_key: Optional[str] = None,
+    category: Optional[str] = None,
+    model_temperature: Optional[float] = None,
+    model_reasoning: Optional[str] = None,
 ) -> CustomAgent:
-    """Create a new custom agent and write initial version snapshot."""
-    parent_agent_key = resolve_parent_agent_key(parent_agent_id)
-    parent_prompt = _get_parent_base_prompt(parent_agent_key)
+    """Create a new custom agent and seed version snapshot."""
+    selected_template_key = str(template_source or "").strip()
+    parent_defaults: Dict[str, Any] = {}
+    parent_prompt = ""
+    parent_agent_key: Optional[str] = None
+
+    if selected_template_key:
+        parent_template = _resolve_system_template_agent(db, selected_template_key)
+        parent_agent_key = parent_template.agent_key
+        parent_prompt = parent_template.instructions
+        parent_defaults = {
+            "model_id": parent_template.model_id,
+            "model_temperature": float(parent_template.model_temperature or 0.1),
+            "model_reasoning": parent_template.model_reasoning,
+            "tool_ids": list(parent_template.tool_ids or []),
+            "output_schema_key": parent_template.output_schema_key,
+            "category": parent_template.category,
+        }
+    else:
+        if not str(model_id or "").strip():
+            raise ValueError("model_id is required when template_source is not provided")
+        parent_defaults = {
+            "model_id": str(model_id).strip(),
+            "model_temperature": 0.1,
+            "model_reasoning": None,
+            "tool_ids": [],
+            "output_schema_key": None,
+            "category": "Custom",
+        }
 
     agent_prompt = custom_prompt if custom_prompt is not None else parent_prompt
     normalized_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
-    parent_hash = compute_prompt_hash(parent_prompt)
+    custom_uuid = uuid.uuid4()
+
+    effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
+
+    requested_tool_ids = _validate_requested_tool_ids(db, tool_ids)
 
     custom_agent = CustomAgent(
+        id=custom_uuid,
+        agent_key=make_custom_agent_id(custom_uuid),
         user_id=user_id,
-        parent_agent_key=parent_agent_key,
+        visibility="private",
         name=name,
         description=description,
-        custom_prompt=agent_prompt,
+        instructions=agent_prompt,
+        model_id=effective_model_id,
+        model_temperature=float(
+            model_temperature
+            if model_temperature is not None
+            else parent_defaults["model_temperature"]
+        ),
+        model_reasoning=model_reasoning if model_reasoning is not None else parent_defaults["model_reasoning"],
+        tool_ids=list(
+            requested_tool_ids
+            if requested_tool_ids is not None
+            else parent_defaults["tool_ids"]
+        ),
+        output_schema_key=output_schema_key if output_schema_key is not None else parent_defaults["output_schema_key"],
+        group_rules_enabled=include_mod_rules,
+        group_rules_component=parent_agent_key,
         mod_prompt_overrides=normalized_mod_overrides,
         icon=(icon or "\U0001F527"),
-        include_mod_rules=include_mod_rules,
-        parent_prompt_hash=parent_hash,
+        category=category if category is not None else parent_defaults["category"],
+        template_source=parent_agent_key,
+        supervisor_enabled=False,
+        supervisor_batchable=False,
+        show_in_palette=True,
+        version=1,
         is_active=True,
     )
+
+    existing_name = db.query(CustomAgent).filter(
+        CustomAgent.user_id == user_id,
+        CustomAgent.name == name,
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.is_active == True,  # noqa: E712
+    ).first()
+    if existing_name:
+        raise ValueError("A custom agent with this name already exists")
+
     db.add(custom_agent)
     db.flush()
 
@@ -149,30 +295,182 @@ def get_custom_agent_for_user(
     query = db.query(CustomAgent).filter(CustomAgent.id == custom_agent_uuid)
     if not include_inactive:
         query = query.filter(CustomAgent.is_active == True)  # noqa: E712
+    query = query.filter(
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.agent_key.like(f"{CUSTOM_AGENT_PREFIX}%"),
+    )
     custom_agent = query.first()
     if not custom_agent:
         raise CustomAgentNotFoundError(f"Custom agent '{custom_agent_uuid}' not found")
     if custom_agent.user_id != user_id:
-        raise CustomAgentAccessError("You do not have permission to access this custom agent")
+        raise CustomAgentAccessError(
+            "You do not have permission to access this custom agent"
+        )
+    return custom_agent
+
+
+def get_custom_agent_visible_to_user(
+    db: Session,
+    custom_agent_uuid: uuid.UUID,
+    user_id: int,
+    include_inactive: bool = False,
+) -> CustomAgent:
+    """Fetch custom agent visible to user (owner private + project-shared)."""
+    query = db.query(CustomAgent).filter(CustomAgent.id == custom_agent_uuid)
+    if not include_inactive:
+        query = query.filter(CustomAgent.is_active == True)  # noqa: E712
+    query = query.filter(
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.agent_key.like(f"{CUSTOM_AGENT_PREFIX}%"),
+    )
+    custom_agent = query.first()
+    if not custom_agent:
+        raise CustomAgentNotFoundError(f"Custom agent '{custom_agent_uuid}' not found")
+
+    if custom_agent.visibility == "private":
+        if custom_agent.user_id != user_id:
+            raise CustomAgentAccessError(
+                "You do not have permission to access this custom agent"
+            )
+        return custom_agent
+
+    project_ids = get_project_ids_for_user(db, user_id)
+    if not custom_agent.project_id or custom_agent.project_id not in project_ids:
+        raise CustomAgentAccessError(
+            "You do not have permission to access this custom agent"
+        )
     return custom_agent
 
 
 def list_custom_agents_for_user(
     db: Session,
     user_id: int,
-    parent_agent_id: Optional[str] = None,
+    template_source: Optional[str] = None,
 ) -> List[CustomAgent]:
-    """List active custom agents for a user, optionally filtered by parent."""
+    """List active custom agents for a user, optionally filtered by template source."""
     query = db.query(CustomAgent).filter(
         CustomAgent.user_id == user_id,
         CustomAgent.is_active == True,  # noqa: E712
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.agent_key.like(f"{CUSTOM_AGENT_PREFIX}%"),
     )
-    if parent_agent_id:
+    if template_source:
         query = query.filter(
-            CustomAgent.parent_agent_key == resolve_parent_agent_key(parent_agent_id)
+            CustomAgent.template_source == str(template_source).strip()
         )
 
-    return query.order_by(CustomAgent.updated_at.desc(), CustomAgent.created_at.desc()).all()
+    return query.order_by(
+        CustomAgent.updated_at.desc(),
+        CustomAgent.created_at.desc(),
+    ).all()
+
+
+def list_custom_agents_visible_to_user(
+    db: Session,
+    user_id: int,
+    template_source: Optional[str] = None,
+) -> List[CustomAgent]:
+    """List active custom agents visible to user (own + project-shared)."""
+    project_ids = list(get_project_ids_for_user(db, user_id))
+
+    visibility_filters = [
+        and_(CustomAgent.visibility == "private", CustomAgent.user_id == user_id),
+    ]
+    if project_ids:
+        visibility_filters.append(
+            and_(
+                CustomAgent.visibility == "project",
+                CustomAgent.project_id.in_(project_ids),
+            )
+        )
+
+    query = db.query(CustomAgent).filter(
+        CustomAgent.is_active == True,  # noqa: E712
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.agent_key.like(f"{CUSTOM_AGENT_PREFIX}%"),
+        or_(*visibility_filters),
+    )
+    if template_source:
+        query = query.filter(CustomAgent.template_source == str(template_source).strip())
+
+    return query.order_by(
+        CustomAgent.updated_at.desc(),
+        CustomAgent.created_at.desc(),
+    ).all()
+
+
+def set_custom_agent_visibility(
+    db: Session,
+    custom_agent: CustomAgent,
+    user_id: int,
+    visibility: str,
+) -> CustomAgent:
+    """Set owner-controlled visibility for a custom agent."""
+    if custom_agent.user_id != user_id:
+        raise CustomAgentAccessError(
+            "You do not have permission to modify this custom agent"
+        )
+
+    target_visibility = str(visibility or "").strip().lower()
+    if target_visibility not in {"private", "project"}:
+        raise ValueError("visibility must be 'private' or 'project'")
+
+    if target_visibility == "private":
+        custom_agent.visibility = "private"
+        custom_agent.project_id = None
+        custom_agent.shared_at = None
+        return custom_agent
+
+    project_id = _get_primary_project_id_for_user(db, user_id)
+    custom_agent.visibility = "project"
+    custom_agent.project_id = project_id
+    custom_agent.shared_at = datetime.now(timezone.utc)
+    return custom_agent
+
+
+def clone_visible_agent_for_user(
+    db: Session,
+    user_id: int,
+    source_agent_key: str,
+    name: Optional[str] = None,
+) -> CustomAgent:
+    """Clone any user-visible agent (system/private/project) into user's private space."""
+    source_key = str(source_agent_key or "").strip()
+    if not source_key:
+        raise ValueError("source_agent_id is required")
+
+    source_agent = get_agent_by_key(db, source_key, user_id=user_id)
+    if source_agent is None:
+        raise CustomAgentNotFoundError(f"Agent '{source_key}' not found")
+    if source_agent.visibility not in {"system", "private", "project"}:
+        raise ValueError("Only system/private/project agents can be cloned")
+
+    requested_name = str(name or "").strip()
+    clone_name = requested_name or _generate_clone_name(db, user_id, source_agent.name)
+    if _has_active_custom_name(db, user_id, clone_name):
+        raise ValueError("A custom agent with this name already exists")
+
+    template_source = str(source_agent.template_source or "").strip() or (
+        source_agent.agent_key if source_agent.visibility == "system" else None
+    )
+
+    return create_custom_agent(
+        db=db,
+        user_id=user_id,
+        name=clone_name,
+        template_source=template_source,
+        custom_prompt=source_agent.instructions,
+        mod_prompt_overrides=dict(source_agent.mod_prompt_overrides or {}),
+        description=source_agent.description,
+        icon=source_agent.icon,
+        include_mod_rules=bool(source_agent.group_rules_enabled),
+        model_id=source_agent.model_id,
+        tool_ids=list(source_agent.tool_ids or []),
+        output_schema_key=source_agent.output_schema_key,
+        category=source_agent.category,
+        model_temperature=source_agent.model_temperature,
+        model_reasoning=source_agent.model_reasoning,
+    )
 
 
 def update_custom_agent(
@@ -185,15 +483,35 @@ def update_custom_agent(
     icon: Optional[str] = None,
     include_mod_rules: Optional[bool] = None,
     notes: Optional[str] = None,
-    rebase_parent_hash: bool = False,
+    model_id: Optional[str] = None,
+    model_temperature: Optional[float] = None,
+    model_reasoning: Optional[str] = None,
+    tool_ids: Optional[List[str]] = None,
+    output_schema_key: Optional[str] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
-    current_mod_overrides = normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides)
+    if name is not None:
+        existing_name = db.query(CustomAgent).filter(
+            CustomAgent.user_id == custom_agent.user_id,
+            CustomAgent.name == name,
+            CustomAgent.id != custom_agent.id,
+            CustomAgent.visibility.in_(["private", "project"]),
+            CustomAgent.is_active == True,  # noqa: E712
+        ).first()
+        if existing_name:
+            raise ValueError("A custom agent with this name already exists")
+
+    current_mod_overrides = normalize_mod_prompt_overrides(
+        custom_agent.mod_prompt_overrides
+    )
     next_mod_overrides: Optional[Dict[str, str]] = None
     if mod_prompt_overrides is not None:
         next_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
 
-    prompt_changed = custom_prompt is not None and custom_prompt != custom_agent.custom_prompt
+    prompt_changed = (
+        custom_prompt is not None
+        and custom_prompt != custom_agent.custom_prompt
+    )
     mod_overrides_changed = (
         next_mod_overrides is not None
         and next_mod_overrides != current_mod_overrides
@@ -201,13 +519,15 @@ def update_custom_agent(
 
     if prompt_changed or mod_overrides_changed:
         next_version = _get_next_version(db, custom_agent.id)
-        db.add(CustomAgentVersion(
-            custom_agent_id=custom_agent.id,
-            version=next_version,
-            custom_prompt=custom_agent.custom_prompt,
-            mod_prompt_overrides=current_mod_overrides,
-            notes=notes or "Auto-snapshot before prompt update",
-        ))
+        db.add(
+            CustomAgentVersion(
+                custom_agent_id=custom_agent.id,
+                version=next_version,
+                custom_prompt=custom_agent.custom_prompt,
+                mod_prompt_overrides=current_mod_overrides,
+                notes=notes or "Auto-snapshot before prompt update",
+            )
+        )
 
     if prompt_changed:
         custom_agent.custom_prompt = custom_prompt
@@ -222,10 +542,20 @@ def update_custom_agent(
         custom_agent.icon = icon
     if include_mod_rules is not None:
         custom_agent.include_mod_rules = include_mod_rules
-    if rebase_parent_hash:
-        current_hash = get_current_parent_prompt_hash(custom_agent.parent_agent_key)
-        custom_agent.parent_prompt_hash = current_hash
+    if model_id is not None:
+        clean_model_id = _validate_model_id(model_id)
+        custom_agent.model_id = clean_model_id
+    if model_temperature is not None:
+        custom_agent.model_temperature = float(model_temperature)
+    if model_reasoning is not None:
+        custom_agent.model_reasoning = model_reasoning
+    if tool_ids is not None:
+        custom_agent.tool_ids = _validate_requested_tool_ids(db, tool_ids) or []
+    if output_schema_key is not None:
+        custom_agent.output_schema_key = output_schema_key
 
+    if prompt_changed or mod_overrides_changed:
+        custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
 
@@ -239,9 +569,12 @@ def list_custom_agent_versions(
     custom_agent_uuid: uuid.UUID,
 ) -> List[CustomAgentVersion]:
     """List versions newest-first."""
-    return db.query(CustomAgentVersion).filter(
-        CustomAgentVersion.custom_agent_id == custom_agent_uuid
-    ).order_by(CustomAgentVersion.version.desc()).all()
+    return (
+        db.query(CustomAgentVersion)
+        .filter(CustomAgentVersion.custom_agent_id == custom_agent_uuid)
+        .order_by(CustomAgentVersion.version.desc())
+        .all()
+    )
 
 
 def revert_custom_agent_to_version(
@@ -261,33 +594,24 @@ def revert_custom_agent_to_version(
         )
 
     snapshot_version = _get_next_version(db, custom_agent.id)
-    db.add(CustomAgentVersion(
-        custom_agent_id=custom_agent.id,
-        version=snapshot_version,
-        custom_prompt=custom_agent.custom_prompt,
-        mod_prompt_overrides=normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
-        notes=notes or f"Snapshot before revert to v{version}",
-    ))
+    db.add(
+        CustomAgentVersion(
+            custom_agent_id=custom_agent.id,
+            version=snapshot_version,
+            custom_prompt=custom_agent.custom_prompt,
+            mod_prompt_overrides=normalize_mod_prompt_overrides(
+                custom_agent.mod_prompt_overrides
+            ),
+            notes=notes or f"Snapshot before revert to v{version}",
+        )
+    )
 
     custom_agent.custom_prompt = target.custom_prompt
-    custom_agent.mod_prompt_overrides = normalize_mod_prompt_overrides(target.mod_prompt_overrides)
+    custom_agent.mod_prompt_overrides = normalize_mod_prompt_overrides(
+        target.mod_prompt_overrides
+    )
+    custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
-
-
-def get_current_parent_prompt_hash(parent_agent_key: str) -> Optional[str]:
-    """Get current parent base-prompt hash for staleness checks."""
-    try:
-        return compute_prompt_hash(_get_parent_base_prompt(parent_agent_key))
-    except (ValueError, RuntimeError):
-        return None
-
-
-def is_parent_agent_available(parent_agent_key: str) -> bool:
-    """Check if parent agent still exists and has executable factory."""
-    from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
-
-    entry = AGENT_REGISTRY.get(parent_agent_key)
-    return bool(entry and entry.get("factory") is not None)
 
 
 @dataclass
@@ -296,7 +620,6 @@ class CustomAgentRuntimeInfo:
 
     custom_agent_uuid: uuid.UUID
     custom_agent_id: str
-    parent_agent_key: str
     display_name: str
     custom_prompt: str
     mod_prompt_overrides: Dict[str, str]
@@ -309,7 +632,7 @@ def get_custom_agent_runtime_info(
     custom_agent_id: str,
     db: Optional[Session] = None,
 ) -> Optional[CustomAgentRuntimeInfo]:
-    """Resolve active custom agent to runtime info (for flow execution + tool naming)."""
+    """Resolve active custom agent to runtime info."""
     custom_uuid = parse_custom_agent_id(custom_agent_id)
     if not custom_uuid:
         return None
@@ -322,23 +645,26 @@ def get_custom_agent_runtime_info(
         custom_agent = db.query(CustomAgent).filter(
             CustomAgent.id == custom_uuid,
             CustomAgent.is_active == True,  # noqa: E712
+            CustomAgent.visibility.in_(["private", "project"]),
+            CustomAgent.agent_key == custom_agent_id,
         ).first()
         if not custom_agent:
             return None
 
-        from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
-
-        parent_entry = AGENT_REGISTRY.get(custom_agent.parent_agent_key)
-        parent_exists = bool(parent_entry and parent_entry.get("factory") is not None)
-        requires_document = bool(parent_entry and parent_entry.get("requires_document", False))
+        # Legacy compatibility field: custom agents are first-class and executable
+        # regardless of whether they originated from a template.
+        parent_exists = True
+        tool_ids = list(custom_agent.tool_ids or [])
+        requires_document = bool(set(tool_ids) & _DOCUMENT_TOOL_IDS)
 
         return CustomAgentRuntimeInfo(
             custom_agent_uuid=custom_agent.id,
             custom_agent_id=make_custom_agent_id(custom_agent.id),
-            parent_agent_key=custom_agent.parent_agent_key,
             display_name=custom_agent.name,
             custom_prompt=custom_agent.custom_prompt,
-            mod_prompt_overrides=normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
+            mod_prompt_overrides=normalize_mod_prompt_overrides(
+                custom_agent.mod_prompt_overrides
+            ),
             include_mod_rules=custom_agent.include_mod_rules,
             requires_document=requires_document,
             parent_exists=parent_exists,
@@ -350,28 +676,30 @@ def get_custom_agent_runtime_info(
 
 def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     """Serialize SQL model to API-friendly dict."""
-    current_hash = get_current_parent_prompt_hash(custom_agent.parent_agent_key)
-    parent_exists = is_parent_agent_available(custom_agent.parent_agent_key)
-    stale = (
-        current_hash is not None
-        and custom_agent.parent_prompt_hash is not None
-        and current_hash != custom_agent.parent_prompt_hash
-    )
+    # Legacy compatibility field: custom agents are first-class and executable
+    # regardless of whether they originated from a template.
+    parent_exists = True
 
     return {
         "id": str(custom_agent.id),
         "agent_id": make_custom_agent_id(custom_agent.id),
         "user_id": custom_agent.user_id,
-        "parent_agent_key": custom_agent.parent_agent_key,
+        "template_source": custom_agent.template_source,
         "name": custom_agent.name,
         "description": custom_agent.description,
         "custom_prompt": custom_agent.custom_prompt,
-        "mod_prompt_overrides": normalize_mod_prompt_overrides(custom_agent.mod_prompt_overrides),
+        "mod_prompt_overrides": normalize_mod_prompt_overrides(
+            custom_agent.mod_prompt_overrides
+        ),
         "icon": custom_agent.icon,
         "include_mod_rules": custom_agent.include_mod_rules,
-        "parent_prompt_hash": custom_agent.parent_prompt_hash,
-        "current_parent_prompt_hash": current_hash,
-        "parent_prompt_stale": stale,
+        "model_id": custom_agent.model_id,
+        "model_temperature": float(custom_agent.model_temperature or 0.1),
+        "model_reasoning": custom_agent.model_reasoning,
+        "tool_ids": list(custom_agent.tool_ids or []),
+        "output_schema_key": custom_agent.output_schema_key,
+        "visibility": custom_agent.visibility,
+        "project_id": str(custom_agent.project_id) if custom_agent.project_id else None,
         "parent_exists": parent_exists,
         "is_active": custom_agent.is_active,
         "created_at": custom_agent.created_at,

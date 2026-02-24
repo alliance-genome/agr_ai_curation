@@ -29,6 +29,8 @@ import {
   IconButton,
   TextField,
   InputAdornment,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import { styled } from '@mui/material/styles'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
@@ -46,7 +48,7 @@ import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
 
 // Define the display order for subcategories (matching Flow Builder)
 // System is added for Supervisor (not shown in Flow Builder)
-const SUBCATEGORY_ORDER = ['System', 'Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents']
+const SUBCATEGORY_ORDER = ['System', 'Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents', 'Shared Agents']
 
 // Map subcategories to their display icons
 const SubcategoryIcon: Record<string, JSX.Element> = {
@@ -56,6 +58,7 @@ const SubcategoryIcon: Record<string, JSX.Element> = {
   'Data Validation': <FactCheckIcon fontSize="small" />,
   Output: <OutputIcon fontSize="small" />,
   'My Custom Agents': <ScienceIcon fontSize="small" />,
+  'Shared Agents': <ScienceIcon fontSize="small" />,
 }
 
 const BrowserContainer = styled(Box)(({ theme }) => ({
@@ -118,6 +121,8 @@ interface AgentBrowserProps {
   onCloneToWorkshop?: (agentId: string) => void
 }
 
+type BrowserFilter = 'all' | 'shared' | 'templates'
+
 function AgentBrowser({
   catalog,
   selectedAgentId,
@@ -131,6 +136,7 @@ function AgentBrowser({
 }: AgentBrowserProps) {
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [browserFilter, setBrowserFilter] = useState<BrowserFilter>('all')
 
   // Flatten all agents from catalog
   const allAgents = useMemo(() => {
@@ -143,12 +149,32 @@ function AgentBrowser({
     return allAgents.find((a) => a.agent_id === selectedAgentId) || null
   }, [allAgents, selectedAgentId])
 
-  // Filter agents based on search query
+  const filterCounts = useMemo(() => {
+    const shared = allAgents.filter((agent) => agent.subcategory === 'Shared Agents').length
+    const templates = allAgents.filter((agent) => !agent.agent_id.startsWith('ca_')).length
+    return {
+      all: allAgents.length,
+      shared,
+      templates,
+    }
+  }, [allAgents])
+
+  const tabFilteredAgents = useMemo(() => {
+    if (browserFilter === 'shared') {
+      return allAgents.filter((agent) => agent.subcategory === 'Shared Agents')
+    }
+    if (browserFilter === 'templates') {
+      return allAgents.filter((agent) => !agent.agent_id.startsWith('ca_'))
+    }
+    return allAgents
+  }, [allAgents, browserFilter])
+
+  // Filter agents based on tab + search query
   const filteredAgents = useMemo(() => {
-    if (!searchQuery.trim()) return allAgents
+    if (!searchQuery.trim()) return tabFilteredAgents
 
     const query = searchQuery.toLowerCase()
-    return allAgents.filter((agent) => {
+    return tabFilteredAgents.filter((agent) => {
       // Match against name, description, tools, and documentation
       const matchesName = agent.agent_name.toLowerCase().includes(query)
       const matchesDescription = agent.description.toLowerCase().includes(query)
@@ -158,7 +184,7 @@ function AgentBrowser({
 
       return matchesName || matchesDescription || matchesTools || matchesDocSummary
     })
-  }, [allAgents, searchQuery])
+  }, [searchQuery, tabFilteredAgents])
 
   // Group filtered agents by subcategory in the defined order
   const agentsBySubcategory = useMemo(() => {
@@ -202,9 +228,9 @@ function AgentBrowser({
       const agent = allAgents.find((a) => a.agent_id === selectedAgentId)
       if (agent) {
         const subcategory = agent.subcategory || 'Other'
-        if (!expandedCategories.includes(subcategory)) {
-          setExpandedCategories((prev) => [...prev, subcategory])
-        }
+        setExpandedCategories((prev) => (
+          prev.includes(subcategory) ? prev : [...prev, subcategory]
+        ))
       }
     }
   }, [selectedAgentId, allAgents])
@@ -229,7 +255,7 @@ function AgentBrowser({
         </Typography>
         <Chip
           size="small"
-          label={`${filteredAgents.length}${searchQuery ? ` / ${allAgents.length}` : ''} agents`}
+          label={`${filteredAgents.length}${searchQuery ? ` / ${tabFilteredAgents.length}` : ''} agents`}
           variant="outlined"
         />
       </BrowserHeader>
@@ -237,6 +263,18 @@ function AgentBrowser({
       <ContentArea>
         {/* Agent List with Search */}
         <AgentListContainer>
+          <Box sx={{ px: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
+            <Tabs
+              value={browserFilter}
+              onChange={(_event, nextValue) => setBrowserFilter(nextValue as BrowserFilter)}
+              variant="fullWidth"
+              sx={{ minHeight: 34 }}
+            >
+              <Tab value="all" label={`All (${filterCounts.all})`} sx={{ minHeight: 34, textTransform: 'none' }} />
+              <Tab value="shared" label={`Shared (${filterCounts.shared})`} sx={{ minHeight: 34, textTransform: 'none' }} />
+              <Tab value="templates" label={`Templates (${filterCounts.templates})`} sx={{ minHeight: 34, textTransform: 'none' }} />
+            </Tabs>
+          </Box>
           <SearchBox>
             <TextField
               fullWidth
@@ -323,7 +361,7 @@ function AgentBrowser({
             {searchQuery && filteredAgents.length === 0 && (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography variant="body2" color="text.secondary">
-                  No agents match "{searchQuery}"
+                  No agents match: {searchQuery}
                 </Typography>
               </Box>
             )}

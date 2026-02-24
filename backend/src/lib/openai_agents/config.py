@@ -9,22 +9,14 @@ Environment variable naming convention:
 
 Example:
   AGENT_SUPERVISOR_MODEL=gpt-4o
-  AGENT_PDF_MODEL=gpt-5-mini
+  AGENT_PDF_MODEL=gpt-5.2-mini
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
 Provider Configuration:
-  LLM_PROVIDER=openai|gemini  (default: openai)
-  GEMINI_API_KEY=...  (required if LLM_PROVIDER=gemini)
-
-  When using Gemini, use:
-  - gemini-3-pro-preview (supports reasoning with "low" or "high" levels)
-
-  Gemini 3 requires LiteLLM for proper thought_signature handling during
-  function calling. The get_model_for_agent() function automatically
-  returns a LitellmModel when using Gemini.
-
-  Future: Anthropic Claude models may be added as a third provider option.
+  Providers are loaded from config/providers.yaml.
+  Models are loaded from config/models.yaml and map to provider IDs.
+  Unknown providers/models fail fast (no implicit fallback behavior).
 """
 
 import os
@@ -38,35 +30,97 @@ logger = logging.getLogger(__name__)
 # LLM Provider Configuration
 # =============================================================================
 
-# Gemini API endpoint for OpenAI compatibility mode
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-
-
 def get_llm_provider() -> str:
-    """Get the configured LLM provider (openai or gemini)."""
-    return os.getenv("LLM_PROVIDER", "openai").lower()
+    """Get the configured default runner provider from provider catalog."""
+    from src.lib.config.providers_loader import get_default_runner_provider
+
+    return get_default_runner_provider().provider_id
 
 
-def is_gemini_provider() -> bool:
-    """Check if Gemini is the configured provider."""
-    return get_llm_provider() == "gemini"
+def _normalize_provider_id(provider: Optional[str]) -> str:
+    """Normalize provider key formatting."""
+    return str(provider or "").strip().lower()
 
 
-def get_api_key() -> Optional[str]:
-    """Get the appropriate API key based on provider."""
-    if is_gemini_provider():
-        return os.getenv("GEMINI_API_KEY")
-    return os.getenv("OPENAI_API_KEY")
+def _get_provider_definition(provider_id: str):
+    """Return provider definition or raise a strict validation error."""
+    from src.lib.config.providers_loader import get_provider
+
+    provider = get_provider(provider_id)
+    if provider is None:
+        raise ValueError(f"Unknown provider_id: {provider_id}")
+    return provider
 
 
-def get_base_url() -> Optional[str]:
-    """Get the base URL for the LLM API. Returns None for OpenAI (uses default)."""
-    if is_gemini_provider():
-        return GEMINI_BASE_URL
-    return None  # OpenAI uses default URL
+def _resolve_provider_from_override(provider_override: Optional[str]) -> str:
+    """Resolve and validate provider override or return default runner provider."""
+    if provider_override:
+        provider_id = _normalize_provider_id(provider_override)
+        if not provider_id:
+            raise ValueError("provider_override must be non-empty when provided")
+        _get_provider_definition(provider_id)
+        return provider_id
+    return get_llm_provider()
 
 
-def get_model_for_agent(model_name: str) -> Union[str, "LitellmModel"]:
+def _get_model_definition(model_name: str):
+    """Return model definition from catalog or fail fast."""
+    from src.lib.config.models_loader import get_model
+
+    model_id = str(model_name or "").strip()
+    if not model_id:
+        raise ValueError("model_name is required")
+    model_def = get_model(model_id)
+    if model_def is None:
+        raise ValueError(f"Unknown model_id: {model_id}")
+    return model_def
+
+
+def is_gemini_provider(provider: Optional[str] = None) -> bool:
+    """Check if the provider resolves to Gemini."""
+    return _resolve_provider_from_override(provider) == "gemini"
+
+
+def is_groq_provider(provider: Optional[str] = None) -> bool:
+    """Check if the provider resolves to Groq."""
+    return _resolve_provider_from_override(provider) == "groq"
+
+
+def resolve_model_provider(model_name: str, provider_override: Optional[str] = None) -> str:
+    """Resolve provider for model with strict catalog validation."""
+    if provider_override:
+        return _resolve_provider_from_override(provider_override)
+
+    model_def = _get_model_definition(model_name)
+    provider_id = _normalize_provider_id(model_def.provider)
+    if not provider_id:
+        raise ValueError(f"Model '{model_name}' has empty provider in models.yaml")
+    _get_provider_definition(provider_id)
+    return provider_id
+
+
+def get_api_key(provider_override: Optional[str] = None) -> Optional[str]:
+    """Get API key for a specific provider (or default runner provider)."""
+    provider_id = _resolve_provider_from_override(provider_override)
+    provider = _get_provider_definition(provider_id)
+    return os.getenv(provider.api_key_env)
+
+
+def get_base_url(provider_override: Optional[str] = None) -> Optional[str]:
+    """Get base URL for a specific provider (or default runner provider)."""
+    provider_id = _resolve_provider_from_override(provider_override)
+    provider = _get_provider_definition(provider_id)
+    if provider.base_url_env:
+        env_value = os.getenv(provider.base_url_env)
+        if env_value:
+            return env_value
+    return provider.default_base_url or None
+
+
+def get_model_for_agent(
+    model_name: str,
+    provider_override: Optional[str] = None,
+) -> Union[str, "LitellmModel"]:
     """Get the appropriate model object for an agent.
 
     For OpenAI provider: returns model name string (SDK handles it directly)
@@ -81,27 +135,43 @@ def get_model_for_agent(model_name: str) -> Union[str, "LitellmModel"]:
     Returns:
         Model name string for OpenAI, or LitellmModel instance for Gemini
     """
-    if is_gemini_provider():
-        # Import here to avoid circular imports and only when needed
+    provider_id = resolve_model_provider(model_name, provider_override)
+    provider = _get_provider_definition(provider_id)
+
+    if provider.driver == "openai_native":
+        return model_name
+
+    if provider.driver == "litellm":
         from agents.extensions.models.litellm_model import LitellmModel
         import litellm
 
-        # Drop unsupported params like parallel_tool_calls for Gemini
-        # See: https://docs.litellm.ai/docs/completion/drop_params
-        litellm.drop_params = True
+        litellm.drop_params = bool(provider.drop_params)
 
-        api_key = get_api_key()
+        api_key = get_api_key(provider.provider_id)
         if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable not set")
+            raise ValueError(f"{provider.api_key_env} environment variable not set")
 
-        # LiteLLM uses "gemini/" prefix for Google AI Studio models
-        litellm_model_name = f"gemini/{model_name}"
+        litellm_model_name = model_name
+        prefix = str(provider.litellm_prefix or "").strip()
+        if prefix and not model_name.startswith(f"{prefix}/"):
+            litellm_model_name = f"{prefix}/{model_name}"
 
-        logger.info('[LiteLLM] Creating model for Gemini: %s (drop_params=True)', litellm_model_name)
-        return LitellmModel(model=litellm_model_name, api_key=api_key)
+        base_url = get_base_url(provider.provider_id)
+        logger.info(
+            "[LiteLLM] Creating model for %s: %s (drop_params=%s)",
+            provider.provider_id,
+            litellm_model_name,
+            provider.drop_params,
+        )
+        return LitellmModel(
+            model=litellm_model_name,
+            base_url=base_url,
+            api_key=api_key,
+        )
 
-    # OpenAI - just return the model name string
-    return model_name
+    raise ValueError(
+        f"Provider '{provider.provider_id}' has unsupported driver '{provider.driver}'"
+    )
 
 
 def is_gemini_model(model: str) -> bool:
@@ -127,18 +197,8 @@ def supports_reasoning(model: str) -> bool:
 
     Future: Anthropic Claude models may be added here.
     """
-    # All our supported models use reasoning
-    # GPT-5 series
-    if model.startswith("gpt-5"):
-        return True
-
-    # Gemini 3 Pro Preview
-    if model.startswith("gemini-3"):
-        return True
-
-    # Fallback for any unknown models - assume they support reasoning
-    # since we only use reasoning-capable models
-    return True
+    model_def = _get_model_definition(model)
+    return bool(model_def.supports_reasoning)
 
 
 def supports_temperature(model: str) -> bool:
@@ -147,12 +207,8 @@ def supports_temperature(model: str) -> bool:
     GPT-5 models don't support temperature when reasoning is enabled.
     Gemini 3 models and most other models support temperature.
     """
-    # GPT-5 doesn't support temperature with reasoning
-    if model.startswith("gpt-5"):
-        return False
-
-    # Most models (including Gemini 3, GPT-4o, etc.) support temperature
-    return True
+    model_def = _get_model_definition(model)
+    return bool(model_def.supports_temperature)
 
 
 # Type alias for reasoning effort levels
@@ -166,6 +222,7 @@ def build_model_settings(
     tool_choice: Optional[str] = None,
     parallel_tool_calls: bool = True,
     verbosity: Optional[str] = None,
+    provider_override: Optional[str] = None,
 ):
     """
     Build ModelSettings with appropriate reasoning and temperature for the model.
@@ -209,8 +266,12 @@ def build_model_settings(
     # See: https://github.com/langchain-ai/langchain/issues/32492
     effective_verbosity = verbosity if reasoning else None
 
-    # Gemini doesn't support parallel tool calls - always disable for Gemini
-    effective_parallel_tool_calls = False if is_gemini_provider() else parallel_tool_calls
+    # Provider-level capability gates (configured in providers.yaml)
+    provider = resolve_model_provider(model, provider_override)
+    provider_def = _get_provider_definition(provider)
+    effective_parallel_tool_calls = (
+        parallel_tool_calls if provider_def.supports_parallel_tool_calls else False
+    )
 
     return ModelSettings(
         temperature=effective_temperature,
@@ -263,12 +324,18 @@ def _get_env_reasoning(key: str, default: Optional[ReasoningEffort]) -> Optional
 # =============================================================================
 
 def get_default_model() -> str:
-    """Get the default model from DEFAULT_AGENT_MODEL env var.
+    """Get default model ID, preferring explicit env override if valid."""
+    from src.lib.config.models_loader import get_default_model as get_catalog_default_model
 
-    This is the single source of truth for the default model.
-    All agents fall back to this if their specific model is not set.
-    """
-    return os.getenv("DEFAULT_AGENT_MODEL", "gpt-5-mini")
+    explicit = str(os.getenv("DEFAULT_AGENT_MODEL", "")).strip()
+    if explicit:
+        _get_model_definition(explicit)
+        return explicit
+
+    default_model = get_catalog_default_model()
+    if default_model is None:
+        raise ValueError("No default model configured in models.yaml")
+    return default_model.model_id
 
 
 def get_default_temperature() -> float:

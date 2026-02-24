@@ -1,0 +1,64 @@
+models:
+  - model_id: gpt-5.2-mini
+    name: GPT-5.2 Mini
+    provider: openai
+    description: Fast default model for day-to-day curator drafting and light extraction.
+    guidance: Start here for most tasks. It is faster and cheaper than GPT-5.2 with strong overall quality.
+    default: true
+    supports_reasoning: false
+    supports_temperature: false
+    recommended_for:
+      - Interactive drafting and quick iterations
+      - Routine extraction and formatting
+      - Follow-up checks after using search/read tools
+    avoid_for:
+      - Deep multi-step adjudication with conflicting evidence
+
+  - model_id: gpt-5.2
+    name: GPT-5.2
+    provider: openai
+    description: Highest-quality model for complex curation reasoning and nuanced judgment calls.
+    guidance: Use medium reasoning by default. Low is faster; high is slower and best reserved for truly difficult reasoning.
+    default: false
+    supports_reasoning: true
+    supports_temperature: false
+    reasoning_options:
+      - low
+      - medium
+      - high
+    default_reasoning: medium
+    reasoning_descriptions:
+      low: Fastest GPT-5.2 mode. Good for quick checks and straightforward extraction.
+      medium: Recommended default for curation. Strong balance of depth, reliability, and speed.
+      high: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
+    recommended_for:
+      - Complex evidence synthesis and conflict resolution
+      - High-stakes interpretation where instruction fidelity matters
+      - Prompt architecture or policy refinement
+    avoid_for:
+      - Simple database retrieval tasks where latency is the priority
+
+  - model_id: openai/gpt-oss-120b
+    name: GPT-OSS 120B
+    provider: groq
+    description: Ultra-fast open-weight model on Groq, optimized for high-throughput retrieval and database-heavy curation workflows.
+    guidance: Fastest option for database-heavy lookup and extraction pipelines; ideal when speed and iteration tempo matter most.
+    default: false
+    supports_reasoning: false
+    supports_temperature: true
+    recommended_for:
+      - High-volume database lookups and extraction
+      - Structured summaries over many retrieved passages
+      - Fast iterative analysis loops
+    avoid_for:
+      - The most difficult long-chain reasoning tasks where GPT-5.2 is preferred
+
+  - model_id: gpt-4o
+    name: GPT-4o
+    provider: openai
+    description: Runtime compatibility model for legacy system agent defaults.
+    guidance: Internal compatibility model; prefer GPT-5.2 Mini or GPT-5.2 for new curator workflows.
+    default: false
+    curator_visible: false
+    supports_reasoning: false
+    supports_temperature: true

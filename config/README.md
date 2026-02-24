@@ -93,14 +93,55 @@ Supports environment variable substitution using `${VAR}` or `${VAR:-default}` s
 
 ### providers.yaml
 
-Defines MOD provider mappings used by tools that need provider-to-taxon resolution.
+Defines LLM runtime providers used by agent execution.
 
 ```yaml
 providers:
-  WB:
-    taxon_id: "NCBITaxon:6239"
-    species: "Caenorhabditis elegans"
+  openai:
+    driver: openai_native
+    api_key_env: OPENAI_API_KEY
+    base_url_env: OPENAI_BASE_URL
+    api_mode: responses
+    default_for_runner: true
+    supports:
+      parallel_tool_calls: true
+
+  org_custom:
+    driver: litellm
+    api_key_env: ORG_CUSTOM_API_KEY
+    base_url_env: ORG_CUSTOM_BASE_URL
+    litellm_prefix: acme
+    drop_params: true
+    supports:
+      parallel_tool_calls: true
 ```
+
+Notes:
+- Exactly one provider must set `default_for_runner: true`.
+- `driver: litellm` providers must include `litellm_prefix`.
+- API key values are never stored in YAML, only env var names.
+
+### models.yaml
+
+Defines model catalog entries and maps each model to a provider key in `providers.yaml`.
+
+```yaml
+models:
+  - model_id: gpt-5.2
+    name: GPT-5.2
+    provider: openai
+    default: false
+    curator_visible: true
+
+  - model_id: acme/model-x
+    name: Model X
+    provider: org_custom
+    curator_visible: true
+```
+
+Notes:
+- Unknown provider references are startup validation errors.
+- `curator_visible: false` keeps runtime compatibility models hidden from Agent Workshop.
 
 ### agents/
 
@@ -159,3 +200,21 @@ The system validates configuration at startup:
 - **Group validation**: Group rules reference valid group IDs
 
 Errors are logged with specific file and line information for easy debugging.
+
+## Org Onboarding: Add a Custom LLM Provider (No Code Changes)
+
+1. Add provider config in `config/providers.yaml`.
+2. Add model entries in `config/models.yaml` that reference that provider key.
+3. Set required secrets/env vars (for example `ORG_CUSTOM_API_KEY`).
+4. Restart backend.
+5. Verify diagnostics:
+   - `GET /api/admin/health/llm-providers`
+   - Confirm no `errors` and provider readiness is `ready`.
+
+If strict startup validation is too aggressive during local bring-up, set:
+
+```bash
+LLM_PROVIDER_STRICT_MODE=false
+```
+
+This downgrades missing API key checks to warnings (structural config errors still fail).

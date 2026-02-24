@@ -88,20 +88,91 @@ export interface PromptCatalog {
 }
 
 // ============================================================================
-// Custom Agent Types (Prompt Workshop)
+// Agent Workshop Model + Tool Library Types
+// ============================================================================
+
+export interface ModelOption {
+  model_id: string
+  name: string
+  provider: string
+  description: string
+  guidance: string
+  default: boolean
+  supports_reasoning: boolean
+  supports_temperature: boolean
+  reasoning_options: string[]
+  default_reasoning?: string
+  reasoning_descriptions: Record<string, string>
+  recommended_for: string[]
+  avoid_for: string[]
+}
+
+export interface ToolLibraryItem {
+  tool_key: string
+  display_name: string
+  description: string
+  category: string
+  curator_visible: boolean
+  allow_attach: boolean
+  allow_execute: boolean
+  config: Record<string, unknown>
+}
+
+export interface AgentTemplate {
+  agent_id: string
+  name: string
+  description?: string
+  icon: string
+  category?: string
+  model_id: string
+  tool_ids: string[]
+  output_schema_key?: string
+}
+
+export type ToolIdeaStatus = 'submitted' | 'reviewed' | 'in_progress' | 'completed' | 'declined'
+
+export interface ToolIdeaConversationEntry {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp?: string | null
+}
+
+export interface ToolIdeaRequest {
+  id: string
+  user_id: number
+  project_id?: string
+  title: string
+  description: string
+  opus_conversation: ToolIdeaConversationEntry[]
+  status: ToolIdeaStatus
+  developer_notes?: string
+  resulting_tool_key?: string
+  created_at: string
+  updated_at: string
+}
+
+// ============================================================================
+// Custom Agent Types (Agent Workshop)
 // ============================================================================
 
 export interface CustomAgent {
   id: string
   agent_id: string
   user_id: number
-  parent_agent_key: string
+  template_source?: string
   name: string
   description?: string
   custom_prompt: string
   mod_prompt_overrides: Record<string, string>
   icon: string
   include_mod_rules: boolean
+  model_id: string
+  model_temperature: number
+  model_reasoning?: string
+  tool_ids: string[]
+  output_schema_key?: string
+  visibility: string
+  project_id?: string
   parent_prompt_hash?: string
   current_parent_prompt_hash?: string
   parent_prompt_stale: boolean
@@ -166,9 +237,9 @@ export interface FlowContextDefinition {
   }>
 }
 
-export interface PromptWorkshopContext {
-  parent_agent_id?: string
-  parent_agent_name?: string
+export interface AgentWorkshopContext {
+  template_source?: string
+  template_name?: string
   custom_agent_id?: string
   custom_agent_name?: string
   include_mod_rules?: boolean
@@ -177,8 +248,21 @@ export interface PromptWorkshopContext {
   selected_mod_prompt_draft?: string
   mod_prompt_override_count?: number
   has_mod_prompt_overrides?: boolean
-  parent_prompt_stale?: boolean
-  parent_exists?: boolean
+  template_prompt_stale?: boolean
+  template_exists?: boolean
+  draft_tool_ids?: string[]
+  draft_model_id?: string
+  draft_model_reasoning?: string
+}
+
+export interface WorkshopPromptUpdateProposal {
+  prompt: string
+  summary?: string
+  apply_mode?: 'replace' | 'targeted_edit'
+}
+
+export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposal {
+  request_id: number
 }
 
 // Context passed to Opus chat
@@ -188,10 +272,10 @@ export interface ChatContext {
   view_mode?: 'base' | 'mod' | 'combined'
   trace_id?: string
   // Flow context (when on Flows tab)
-  active_tab?: 'agents' | 'flows' | 'prompt_workshop'  // 'agents' renamed from 'prompts'
+  active_tab?: 'agents' | 'flows' | 'agent_workshop'
   flow_name?: string
   flow_definition?: FlowContextDefinition
-  prompt_workshop?: PromptWorkshopContext
+  agent_workshop?: AgentWorkshopContext
 }
 
 // Tool call information from trace
@@ -241,10 +325,16 @@ export type OpusChatEventType = 'TEXT_DELTA' | 'TOOL_USE' | 'TOOL_RESULT' | 'DON
 
 // Tool result from suggestion submission
 export interface ToolResult {
-  success: boolean
+  success?: boolean
   suggestion_id?: string
   message?: string
   error?: string
+  pending_user_approval?: boolean
+  apply_mode?: 'replace' | 'targeted_edit'
+  proposed_prompt?: string
+  change_summary?: string
+  applied_edits?: string[]
+  [key: string]: unknown
 }
 
 export interface OpusChatEvent {

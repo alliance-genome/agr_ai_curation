@@ -337,12 +337,8 @@ class TestErrorHandling:
         assert set(agents3.keys()) == set(agents1.keys())
 
 
-class TestFactoryMappingAlignment:
-    """Tests to verify factory_mapping keys match YAML agent_ids.
-
-    This prevents the critical bug where agent_ids in the factory_mapping
-    don't match the YAML definitions, causing agents to fail dynamic discovery.
-    """
+class TestSupervisorToolAlignment:
+    """Tests to verify supervisor tool metadata aligns with YAML agent IDs."""
 
     @pytest.fixture(autouse=True)
     def reset_cache(self):
@@ -352,14 +348,9 @@ class TestFactoryMappingAlignment:
         yield
         reset_cache()
 
-    def test_all_supervisor_enabled_agents_have_factories(self):
-        """Verify all supervisor-enabled agent_ids have factory mappings.
-
-        This is a critical test that prevents the mismatch bug where
-        factory_mapping keys don't match YAML agent_id values.
-        """
+    def test_all_supervisor_enabled_agents_have_valid_metadata(self):
+        """Verify all supervisor-enabled agents expose complete metadata."""
         from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools
-        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
 
         # Load agent definitions
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
@@ -367,47 +358,29 @@ class TestFactoryMappingAlignment:
         # Get all supervisor-enabled tools
         tools = get_supervisor_tools()
 
-        # Verify each agent_id has a corresponding factory
-        missing_factories = []
+        missing_metadata = []
         for tool in tools:
             agent_id = tool["agent_id"]
-            factory = _get_agent_factory(agent_id)
-            if factory is None:
-                missing_factories.append(agent_id)
+            if not tool.get("tool_name") or not tool.get("description"):
+                missing_metadata.append(agent_id)
 
-        assert not missing_factories, (
-            f"Missing factory mappings for supervisor-enabled agents: {missing_factories}\n"
-            f"Add these agent_ids to factory_mapping in supervisor_agent.py"
+        assert not missing_metadata, (
+            f"Supervisor-enabled agents missing required metadata: {missing_metadata}\n"
+            "Ensure tool_name and description are configured in agent.yaml"
         )
 
-    def test_factory_mapping_agent_ids_exist_in_yaml(self):
-        """Verify all factory_mapping keys correspond to real YAML agent_ids.
-
-        This prevents orphaned factory mappings that never get used.
-        """
-        from src.lib.config.agent_loader import load_agent_definitions
+    def test_supervisor_tool_agent_ids_exist_in_yaml(self):
+        """Verify all supervisor tool agent IDs correspond to YAML agent IDs."""
+        from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools
 
         # Get all agent_ids from YAML
         agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
         yaml_agent_ids = set(agents.keys())
-
-        # Get factory_mapping keys (import the module to access the function internals)
-        from src.lib.openai_agents.agents import supervisor_agent
-
-        # Build factory_mapping by calling the function with a test agent_id
-        # The factory_mapping is defined inside the function, so we extract it indirectly
-        known_factory_ids = {
-            "gene_validation", "allele_validation", "disease_validation",
-            "chemical_validation", "gene_ontology_lookup", "go_annotations_lookup",
-            "orthologs_lookup", "ontology_mapping_lookup", "pdf_extraction",
-            "gene_expression_extraction",
-        }
-
-        # Check that all known factory_ids exist in YAML
-        orphaned_ids = known_factory_ids - yaml_agent_ids
+        supervisor_tool_agent_ids = {tool["agent_id"] for tool in get_supervisor_tools()}
+        orphaned_ids = supervisor_tool_agent_ids - yaml_agent_ids
         assert not orphaned_ids, (
-            f"Factory mappings exist for non-existent YAML agent_ids: {orphaned_ids}\n"
-            f"Either remove these from factory_mapping or create corresponding agent.yaml files"
+            f"Supervisor tools reference non-existent YAML agent_ids: {orphaned_ids}\n"
+            "Either remove these from supervisor routing config or add the missing agent.yaml files"
         )
 
 
@@ -715,63 +688,37 @@ class TestCrossFileConsistency:
         assert not duplicates, f"Duplicate tool_names: {duplicates}"
 
 
-class TestGetAgentFactory:
-    """Tests for _get_agent_factory function.
+class TestSupervisorToolNaming:
+    """Tests for supervisor tool naming consistency."""
 
-    Ensures lazy import mechanism works correctly.
-    """
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset cache before each test."""
+        from src.lib.config.agent_loader import reset_cache
+        reset_cache()
+        yield
+        reset_cache()
 
-    def test_returns_callable_for_valid_gene_agent(self):
-        """Should return the create_gene_agent factory function."""
-        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
+    def test_supervisor_tool_names_follow_expected_pattern(self):
+        from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools
 
-        factory = _get_agent_factory("gene_validation")
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        tool_names = [tool["tool_name"] for tool in get_supervisor_tools()]
 
-        assert factory is not None, "Factory should not be None for valid agent_id"
-        assert callable(factory), "Factory should be callable"
-        assert factory.__name__ == "create_gene_agent"
+        assert tool_names, "Expected at least one supervisor-enabled tool"
+        for tool_name in tool_names:
+            assert tool_name.startswith("ask_"), f"Unexpected tool name prefix: {tool_name}"
+            assert tool_name.endswith("_specialist"), f"Unexpected tool name suffix: {tool_name}"
 
-    def test_returns_callable_for_all_known_agents(self):
-        """Should return factories for all 10 known agents."""
-        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
+    def test_supervisor_tool_names_are_unique(self):
+        from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools
 
-        expected_agents = [
-            ("gene_validation", "create_gene_agent"),
-            ("allele_validation", "create_allele_agent"),
-            ("disease_validation", "create_disease_agent"),
-            ("chemical_validation", "create_chemical_agent"),
-            ("gene_ontology_lookup", "create_gene_ontology_agent"),
-            ("go_annotations_lookup", "create_go_annotations_agent"),
-            ("orthologs_lookup", "create_orthologs_agent"),
-            ("ontology_mapping_lookup", "create_ontology_mapping_agent"),
-            ("pdf_extraction", "create_pdf_agent"),
-            ("gene_expression_extraction", "create_gene_expression_agent"),
-        ]
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        tool_names = [tool["tool_name"] for tool in get_supervisor_tools()]
 
-        for agent_id, expected_factory_name in expected_agents:
-            factory = _get_agent_factory(agent_id)
-            assert factory is not None, f"Missing factory for {agent_id}"
-            assert callable(factory), f"Factory for {agent_id} not callable"
-            assert factory.__name__ == expected_factory_name, (
-                f"Wrong factory for {agent_id}: expected {expected_factory_name}, "
-                f"got {factory.__name__}"
-            )
-
-    def test_returns_none_for_unknown_agent_id(self):
-        """Should return None for unregistered agent_id."""
-        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
-
-        factory = _get_agent_factory("nonexistent_agent")
-
-        assert factory is None, "Should return None for unknown agent_id"
-
-    def test_returns_none_for_empty_agent_id(self):
-        """Should return None for empty string agent_id."""
-        from src.lib.openai_agents.agents.supervisor_agent import _get_agent_factory
-
-        factory = _get_agent_factory("")
-
-        assert factory is None, "Should return None for empty agent_id"
+        assert len(tool_names) == len(set(tool_names)), (
+            f"Duplicate supervisor tool names found: {tool_names}"
+        )
 
 
 class TestSchemaLoadingEdgeCases:

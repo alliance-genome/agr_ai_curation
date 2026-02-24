@@ -44,7 +44,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 - **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus 4.5
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
-- **Prompt Workshop** - Create custom agent prompts with per-MOD overrides, version history, and icon customization
+- **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-MOD overrides, version history, and icon customization
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -67,7 +67,7 @@ Supervisor → GO Annotations Agent → Response
 For multi-step tasks, you can build visual flows that chain agents together:
 
 ```
-Task Input → PDF Agent → Gene Expression Agent → CSV Formatter
+Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → CSV Formatter
                                                       ↓
                                               Downloadable CSV File
 ```
@@ -90,15 +90,15 @@ Tools for understanding, building, and improving AI behavior:
 
 **Flows Tab (Curation Flows)**
 - Build visual workflows with drag-and-drop
-- Chain 12+ agents together (PDF extraction → validation → output)
+- Chain 15 agents together (PDF extraction, validation, output)
 - Output to chat, CSV, TSV, or JSON files
 - Use "Verify with Claude" to check your flow before running
 - Save and reuse flows across documents
 
-**Prompt Workshop Tab**
+**Agent Workshop Tab**
 - Clone any system agent's prompt to create a custom version
 - Edit instructions, choose an icon, and add per-MOD prompt overrides
-- File menu for managing prompts (New, Open, Save, Manage, Delete)
+- File menu for managing agents (New, Open, Save, Manage, Delete)
 - Version history with revert support and save notes
 - Custom agents appear in Flow Builder for use in workflows
 
@@ -115,13 +115,13 @@ Real-time transparency into AI operations:
 
 ## Available Agents
 
-The system includes 16+ specialist agents organized by function:
+The system includes 15 specialist agents organized by function:
 
 | Category | Agents |
 |----------|--------|
-| **Routing** | Supervisor (routes to specialists) |
-| **Extraction** | General PDF Agent, Gene Expression Extractor |
-| **Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Mapping |
+| **System** | Supervisor Agent (routes to specialists) |
+| **PDF Extraction** | PDF Extraction Agent, Gene Expression Extractor |
+| **Data Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Mapping |
 | **Output** | Chat Output, CSV Formatter, TSV Formatter, JSON Formatter |
 
 For detailed agent documentation, see **[Available Agents](AVAILABLE_AGENTS.md)**.

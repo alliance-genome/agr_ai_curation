@@ -198,6 +198,12 @@ test-build: ## Build test image
 	@echo "$(GREEN)Building test image...$(NC)"
 	@docker compose -f docker-compose.test.yml build backend-tests
 
+.PHONY: smoke-llm-local
+smoke-llm-local: check-env ## Run local LLM provider smoke checks and capture evidence JSON
+	@echo "$(GREEN)Starting backend with sourced env and running local LLM smoke checks...$(NC)"
+	@docker compose --env-file "$(ENV_FILE)" up -d backend
+	@./scripts/testing/llm_provider_smoke_local.sh
+
 # =============================================================================
 # DATABASE
 # =============================================================================
@@ -220,6 +226,12 @@ db-migrate-create: ## Create a new migration (usage: make db-migrate-create MSG=
 		exit 1; \
 	fi
 	@docker compose exec backend alembic revision --autogenerate -m "$(MSG)"
+
+.PHONY: prefix-refresh
+prefix-refresh: check-env ## Run optional one-shot identifier-prefix refresh (project-specific)
+	@echo "$(GREEN)Running one-shot identifier prefix refresh...$(NC)"
+	@set -a && . "$(ENV_FILE)" && set +a && \
+		docker compose --profile curation-db run --rm prefix_refresh
 
 # =============================================================================
 # SHELLS / DEBUGGING

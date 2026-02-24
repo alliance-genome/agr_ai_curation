@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Best-effort prefix refresh on container start.
-# - Uses CURATION_DB_URL if set.
+# Best-effort prefix refresh helper.
+# - Uses CURATION_DB_URL if set (fallback: DATABASE_URL).
 # - Runs extract_identifier_prefixes.py with standard queries.
-# - Logs warnings on failure but never blocks startup.
+# - Logs warnings on failure and exits 0.
+# - Called on backend container startup and can also be run manually.
 set -euo pipefail
 echo '[prefix-refresh] Starting prefix refresh script'
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

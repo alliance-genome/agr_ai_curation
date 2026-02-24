@@ -27,30 +27,30 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
-def _validate_docling_timeout():
-    """Validate DOCLING_TIMEOUT environment variable.
+def _validate_pdf_extraction_timeout():
+    """Validate PDF_EXTRACTION_TIMEOUT environment variable.
 
     PDF processing can take several minutes, so we require a minimum timeout
     of 300 seconds (5 minutes) to prevent premature failures.
 
     Raises:
-        RuntimeError: If DOCLING_TIMEOUT is too low or invalid.
+        RuntimeError: If PDF_EXTRACTION_TIMEOUT is too low or invalid.
     """
-    docling_timeout = os.getenv('DOCLING_TIMEOUT', '30')
+    extraction_timeout = os.getenv('PDF_EXTRACTION_TIMEOUT', '30')
     try:
-        timeout_int = int(docling_timeout)
+        timeout_int = int(extraction_timeout)
         min_timeout = 300  # 5 minutes minimum
         if timeout_int < min_timeout:
             error_msg = (
-                f"DOCLING_TIMEOUT is set to {timeout_int} seconds, "
+                f"PDF_EXTRACTION_TIMEOUT is set to {timeout_int} seconds, "
                 f"but must be at least {min_timeout} seconds (5 minutes). "
                 f"PDF processing can take several minutes, especially for complex documents. "
-                f"Please update .env file: DOCLING_TIMEOUT=300"
+                f"Please update .env file: PDF_EXTRACTION_TIMEOUT=300"
             )
             raise RuntimeError(error_msg)
-        logger.info("DOCLING_TIMEOUT validated: %s seconds", timeout_int)
+        logger.info("PDF_EXTRACTION_TIMEOUT validated: %s seconds", timeout_int)
     except ValueError:
-        raise RuntimeError(f"DOCLING_TIMEOUT must be an integer, got: {docling_timeout}")
+        raise RuntimeError(f"PDF_EXTRACTION_TIMEOUT must be an integer, got: {extraction_timeout}")
 
 
 def _validate_embedding_env():
@@ -207,10 +207,39 @@ async def lifespan(app: FastAPI):
 
     # Validate critical environment variables
     try:
-        _validate_docling_timeout()
+        _validate_pdf_extraction_timeout()
         _validate_embedding_env()
     except RuntimeError as e:
         logger.error("FATAL: %s", e)
+        raise
+
+    # Validate LLM provider/model contracts before runtime initialization.
+    # This catches model/provider config drift at startup with clear errors.
+    try:
+        from src.lib.config.provider_validation import (
+            get_provider_validation_strict_mode,
+            validate_and_cache_provider_runtime_contracts,
+        )
+
+        llm_strict_mode = get_provider_validation_strict_mode()
+        llm_report = validate_and_cache_provider_runtime_contracts(
+            strict_mode=llm_strict_mode,
+        )
+        logger.info(
+            "LLM provider validation passed (status=%s strict_mode=%s providers=%s models=%s)",
+            llm_report.get("status"),
+            llm_report.get("strict_mode"),
+            llm_report.get("summary", {}).get("provider_count"),
+            llm_report.get("summary", {}).get("model_count"),
+        )
+    except RuntimeError as e:
+        logger.error("FATAL: %s", e)
+        logger.error(
+            "Set LLM_PROVIDER_STRICT_MODE=false to downgrade missing-key checks to warnings"
+        )
+        raise
+    except Exception as e:
+        logger.error("FATAL: Unexpected provider validation error: %s", e)
         raise
 
     try:

@@ -250,7 +250,7 @@ function AgentDetailsPanel({
   }
 
   const { documentation } = agent
-  const canCloneToWorkshop = !agent.agent_id.startsWith('ca_')
+  const canCloneToWorkshop = agent.agent_id !== 'task_input'
 
   return (
     <PanelContainer>
@@ -354,7 +354,7 @@ function AgentDetailsPanel({
                                 Example query:
                               </Typography>
                               <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                "{cap.example_query}"
+                                {cap.example_query}
                               </Typography>
                             </Box>
                           )}
@@ -426,7 +426,7 @@ function AgentDetailsPanel({
                   No detailed documentation available for this agent yet.
                 </Typography>
                 <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-                  Check the Prompts tab to view the agent's prompt instructions.
+                  Check the Prompts tab to view the agent prompt instructions.
                 </Typography>
               </Box>
             )}

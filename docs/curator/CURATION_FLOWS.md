@@ -53,13 +53,13 @@ When you select a node, this panel shows its configuration options where you can
 |-------|-------------|
 | **Initial Instructions** | Starting point - define the task for your flow |
 
-### Extraction
+### PDF Extraction
 | Agent | Description |
 |-------|-------------|
-| **General PDF Agent** | Extracts text, tables, and data from PDF documents |
+| **PDF Extraction Agent** | Extracts text, tables, and data from PDF documents |
 | **Gene Expression Extractor** | Extracts gene expression patterns from PDFs |
 
-### Validation
+### Data Validation
 | Agent | Description |
 |-------|-------------|
 | **Gene Validation Agent** | Validates gene identifiers against AGR database |
@@ -81,7 +81,7 @@ When you select a node, this panel shows its configuration options where you can
 
 ### My Custom Agents
 
-If you've created custom agents in the **Prompt Workshop**, they appear here under "My Custom Agents". You can use them in flows just like system agents. See **[Agent Studio](AGENT_STUDIO.md)** for details on creating custom agents.
+If you've created custom agents in **Agent Workshop**, they appear here under "My Custom Agents". You can use them in flows just like system agents. See **[Agent Studio](AGENT_STUDIO.md)** for details on creating custom agents.
 
 ## Building a Flow
 
@@ -255,7 +255,7 @@ When a flow generates a file:
 **Goal:** Extract gene expression data from a paper and export to CSV
 
 ```
-Initial Instructions → General PDF Agent → Gene Expression Extractor → CSV File Formatter
+Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → CSV File Formatter
 ```
 
 **Instructions for Initial Instructions node:**
@@ -266,7 +266,7 @@ Initial Instructions → General PDF Agent → Gene Expression Extractor → CSV
 **Goal:** Extract expression data and map terms to official IDs
 
 ```
-Initial Instructions → General PDF Agent → Gene Expression Extractor → Ontology Mapping Agent → TSV File Formatter
+Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → Ontology Mapping Agent → TSV File Formatter
 ```
 
 **Instructions for Ontology Mapping Agent node:**
@@ -277,7 +277,7 @@ Initial Instructions → General PDF Agent → Gene Expression Extractor → Ont
 **Goal:** Extract expression data, validate terms, and export to TSV
 
 ```
-Initial Instructions → General PDF Agent → Gene Expression Extractor → Gene Validation Agent → TSV File Formatter
+Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → Gene Validation Agent → TSV File Formatter
 ```
 
 **Instructions for Initial Instructions node:**

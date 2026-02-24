@@ -10,7 +10,7 @@
  * 2. Triple-dot menu "Open in Agent Studio" with trace context
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Box, Backdrop, CircularProgress, Alert, Typography, Stack, Tabs, Tab } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
@@ -23,8 +23,15 @@ import OpusChat from '@/components/AgentStudio/OpusChat'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
 import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
-import { fetchPromptCatalog } from '@/services/agentStudioService'
-import type { PromptCatalog, ChatContext, PromptWorkshopContext } from '@/types/promptExplorer'
+import { cloneAgentToWorkshop, fetchPromptCatalog } from '@/services/agentStudioService'
+import type {
+  PromptCatalog,
+  ChatContext,
+  AgentWorkshopContext,
+  ToolIdeaConversationEntry,
+  WorkshopPromptUpdateProposal,
+  WorkshopPromptUpdateRequest,
+} from '@/types/promptExplorer'
 
 const Root = styled(Box)(({ theme }) => ({
   flex: 1,
@@ -107,7 +114,7 @@ const TabContent = styled(Box)(() => ({
   overflow: 'hidden',
 }))
 
-type TabValue = 'agents' | 'flows' | 'prompt_workshop'
+type TabValue = 'agents' | 'flows' | 'agent_workshop'
 
 // localStorage key for tab persistence
 const AGENT_STUDIO_TAB_KEY = 'agent-studio-tab'
@@ -128,7 +135,7 @@ function AgentStudioPage() {
       localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agents')
       return 'agents'
     }
-    return (stored === 'agents' || stored === 'flows' || stored === 'prompt_workshop') ? stored : 'agents'
+    return (stored === 'agents' || stored === 'flows' || stored === 'agent_workshop') ? stored : 'agents'
   })
 
   // Persist tab changes
@@ -140,11 +147,15 @@ function AgentStudioPage() {
   const [selectedModId, setSelectedModId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'base' | 'mod' | 'combined'>('base')
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
-  const [promptWorkshopParentAgentId, setPromptWorkshopParentAgentId] = useState<string | null>(null)
-  const [promptWorkshopContext, setPromptWorkshopContext] = useState<PromptWorkshopContext | null>(null)
+  const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
+  const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
+  const [agentWorkshopContext, setAgentWorkshopContext] = useState<AgentWorkshopContext | null>(null)
   const [flowState, setFlowState] = useState<FlowState | null>(null)
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
+  const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
+  const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
+  const promptUpdateCounterRef = useRef(0)
 
   // Get trace_id from URL params (when coming from triple-dot menu)
   const traceId = searchParams.get('trace_id')
@@ -172,19 +183,19 @@ function AgentStudioPage() {
     loadData()
   }, [])
 
-  const workshopSelectedAgentId = promptWorkshopContext?.custom_agent_id || promptWorkshopContext?.parent_agent_id
-  const workshopSelectedModId = promptWorkshopContext?.selected_mod_id
+  const workshopSelectedAgentId = agentWorkshopContext?.custom_agent_id || agentWorkshopContext?.template_source
+  const workshopSelectedModId = agentWorkshopContext?.selected_mod_id
 
   const effectiveSelectedAgentId =
-    activeTab === 'prompt_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
+    activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
   const effectiveSelectedModId =
-    activeTab === 'prompt_workshop' ? workshopSelectedModId : (selectedModId || undefined)
+    activeTab === 'agent_workshop' ? workshopSelectedModId : (selectedModId || undefined)
   const effectiveViewMode =
-    activeTab === 'prompt_workshop'
+    activeTab === 'agent_workshop'
       ? (effectiveSelectedModId ? 'combined' : 'base')
       : viewMode
 
-  // Build chat context for Opus (includes active tab, flow state, and prompt workshop state)
+  // Build chat context for Opus (includes active tab, flow state, and agent workshop state)
   const chatContext: ChatContext = {
     selected_agent_id: effectiveSelectedAgentId,
     selected_mod_id: effectiveSelectedModId,
@@ -197,7 +208,7 @@ function AgentStudioPage() {
       nodes: flowState.nodes,
       edges: flowState.edges,
     } : undefined,
-    prompt_workshop: activeTab === 'prompt_workshop' ? (promptWorkshopContext || undefined) : undefined,
+    agent_workshop: activeTab === 'agent_workshop' ? (agentWorkshopContext || undefined) : undefined,
   }
 
   const selectedAgentForChat =
@@ -280,14 +291,37 @@ Agent ID: ${agentId}`
     setDiscussMessage(message)
   }, [])
 
-  const handleCloneToWorkshop = useCallback((agentId: string) => {
-    setPromptWorkshopParentAgentId(agentId)
-    setActiveTab('prompt_workshop')
-    localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'prompt_workshop')
+  const handleCloneToWorkshop = useCallback(async (agentId: string) => {
+    try {
+      if (agentId.startsWith('ca_')) {
+        const cloned = await cloneAgentToWorkshop(agentId)
+        setAgentWorkshopTemplateSource(cloned.template_source || null)
+        setAgentWorkshopCustomAgentId(cloned.id)
+      } else {
+        setAgentWorkshopTemplateSource(agentId)
+        setAgentWorkshopCustomAgentId(null)
+      }
+      setActiveTab('agent_workshop')
+      localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agent_workshop')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clone agent')
+    }
   }, [])
 
   const handleWorkshopVerifyRequest = useCallback((message: string) => {
     setVerifyMessage(message)
+  }, [])
+
+  const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
+    promptUpdateCounterRef.current += 1
+    setActiveTab('agent_workshop')
+    localStorage.setItem(AGENT_STUDIO_TAB_KEY, 'agent_workshop')
+    setWorkshopPromptUpdateRequest({
+      request_id: promptUpdateCounterRef.current,
+      prompt: proposal.prompt,
+      summary: proposal.summary,
+      apply_mode: proposal.apply_mode || 'replace',
+    })
   }, [])
 
   // Clear discuss message after it's been sent
@@ -337,6 +371,8 @@ Agent ID: ${agentId}`
               onVerifyMessageSent={handleVerifyMessageSent}
               discussMessage={discussMessage}
               onDiscussMessageSent={handleDiscussMessageSent}
+              onConversationSnapshotChange={setOpusConversation}
+              onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
             />
           </PanelSection>
         </Panel>
@@ -365,8 +401,8 @@ Agent ID: ${agentId}`
                   iconPosition="start"
                 />
                 <StyledTab
-                  value="prompt_workshop"
-                  label="Prompt Workshop"
+                  value="agent_workshop"
+                  label="Agent Workshop"
                   icon={<ScienceIcon sx={{ fontSize: 18 }} />}
                   iconPosition="start"
                 />
@@ -394,12 +430,15 @@ Agent ID: ${agentId}`
                     onVerifyRequest={handleVerifyRequest}
                   />
                 )}
-                {activeTab === 'prompt_workshop' && catalog && (
+                {activeTab === 'agent_workshop' && catalog && (
                   <PromptWorkshop
                     catalog={catalog}
-                    initialParentAgentId={promptWorkshopParentAgentId}
-                    onContextChange={setPromptWorkshopContext}
+                    initialParentAgentId={agentWorkshopTemplateSource}
+                    initialCustomAgentId={agentWorkshopCustomAgentId}
+                    onContextChange={setAgentWorkshopContext}
                     onVerifyRequest={handleWorkshopVerifyRequest}
+                    opusConversation={opusConversation}
+                    incomingPromptUpdate={workshopPromptUpdateRequest}
                   />
                 )}
               </TabContent>

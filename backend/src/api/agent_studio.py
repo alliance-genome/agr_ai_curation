@@ -12,13 +12,14 @@ import os
 import re
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
 
 import anthropic
 import boto3
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
@@ -49,17 +50,29 @@ from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
+    clone_visible_agent_for_user,
+    custom_agent_to_dict,
     get_custom_agent_mod_prompt,
     get_custom_agent_for_user,
-    list_custom_agents_for_user,
+    list_custom_agents_visible_to_user,
     make_custom_agent_id,
     parse_custom_agent_id,
+    set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
+from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
+from src.lib.agent_studio.tool_idea_service import (
+    create_tool_idea_request,
+    get_primary_project_id_for_user,
+    list_tool_idea_requests_for_user,
+    tool_idea_request_to_dict,
+)
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
+from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import get_db
 from src.services.user_service import set_global_user_from_cognito
 
@@ -149,6 +162,121 @@ class RegistryMetadataResponse(BaseModel):
     agents: Dict[str, AgentMetadata]
 
 
+class ModelOption(BaseModel):
+    """Curator-selectable model option."""
+
+    model_id: str
+    name: str
+    provider: str
+    description: str = ""
+    guidance: str = ""
+    default: bool = False
+    supports_reasoning: bool = True
+    supports_temperature: bool = True
+    reasoning_options: List[str] = Field(default_factory=list)
+    default_reasoning: Optional[str] = None
+    reasoning_descriptions: Dict[str, str] = Field(default_factory=dict)
+    recommended_for: List[str] = Field(default_factory=list)
+    avoid_for: List[str] = Field(default_factory=list)
+
+
+class ModelsResponse(BaseModel):
+    """Response for available model options."""
+
+    models: List[ModelOption]
+
+
+class ToolLibraryItem(BaseModel):
+    """Single tool entry from tool library policy table."""
+
+    tool_key: str
+    display_name: str
+    description: str
+    category: str
+    curator_visible: bool
+    allow_attach: bool
+    allow_execute: bool
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolLibraryResponse(BaseModel):
+    """Response for tool library."""
+
+    tools: List[ToolLibraryItem]
+
+
+class AgentTemplateItem(BaseModel):
+    """System agent template option for Agent Workshop."""
+
+    agent_id: str
+    name: str
+    description: Optional[str] = None
+    icon: str
+    category: Optional[str] = None
+    model_id: str
+    tool_ids: List[str]
+    output_schema_key: Optional[str] = None
+
+
+class AgentTemplatesResponse(BaseModel):
+    """Response for available system templates."""
+
+    templates: List[AgentTemplateItem]
+
+
+class CloneAgentRequest(BaseModel):
+    """Optional clone parameters."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+
+class ShareAgentRequest(BaseModel):
+    """Visibility update payload for sharing toggle."""
+
+    visibility: Literal["private", "project"]
+
+
+class ToolIdeaConversationEntry(BaseModel):
+    """Single Opus ideation conversation turn."""
+
+    role: Literal["user", "assistant", "system"]
+    content: str = Field(..., min_length=1)
+    timestamp: Optional[str] = None
+
+
+class ToolIdeaCreateRequest(BaseModel):
+    """Payload for submitting a new tool idea request."""
+
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(..., min_length=1)
+    opus_conversation: Optional[List[ToolIdeaConversationEntry]] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ToolIdeaResponseItem(BaseModel):
+    """Tool idea request row returned to curators."""
+
+    id: str
+    user_id: int
+    project_id: Optional[str] = None
+    title: str
+    description: str
+    opus_conversation: List[Dict[str, Any]]
+    status: Literal["submitted", "reviewed", "in_progress", "completed", "declined"]
+    developer_notes: Optional[str] = None
+    resulting_tool_key: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToolIdeaListResponse(BaseModel):
+    """Response payload for current user's tool idea requests."""
+
+    tool_ideas: List[ToolIdeaResponseItem]
+    total: int
+
+
 def _merge_custom_agents_into_catalog(
     catalog: PromptCatalog,
     auth_user: Any,
@@ -158,10 +286,8 @@ def _merge_custom_agents_into_catalog(
     if not isinstance(auth_user, dict) or not hasattr(db, "query"):
         return catalog
 
-    from src.lib.agent_studio.catalog_service import AGENT_REGISTRY, expand_tools_for_agent
-
     db_user = set_global_user_from_cognito(db, auth_user)
-    custom_agents = list_custom_agents_for_user(db, db_user.id)
+    custom_agents = list_custom_agents_visible_to_user(db, db_user.id)
     if not custom_agents:
         return catalog
 
@@ -174,12 +300,12 @@ def _merge_custom_agents_into_catalog(
     }
 
     for custom in custom_agents:
-        parent_entry = AGENT_REGISTRY.get(custom.parent_agent_key, {})
-        parent_name = parent_entry.get("name", custom.parent_agent_key)
-        category = parent_entry.get("category", "Custom")
-        tools = expand_tools_for_agent(custom.parent_agent_key, parent_entry.get("tools", []))
-        parent_prompt_info = parent_agents_by_id.get(custom.parent_agent_key)
-        parent_mod_rules = parent_prompt_info.mod_rules if parent_prompt_info else {}
+        template_source = str(getattr(custom, "template_source", "") or "").strip()
+        template_prompt_info = parent_agents_by_id.get(template_source) if template_source else None
+        template_name = template_prompt_info.agent_name if template_prompt_info else template_source
+        category = getattr(custom, "category", None) or "Custom"
+        tools = list(getattr(custom, "tool_ids", None) or [])
+        template_mod_rules = template_prompt_info.mod_rules if template_prompt_info else {}
         raw_overrides = getattr(custom, "mod_prompt_overrides", None) or {}
         normalized_overrides = {
             str(mod_id).strip().upper(): content
@@ -188,7 +314,7 @@ def _merge_custom_agents_into_catalog(
         }
         effective_mod_rules: Dict[str, MODRuleInfo] = {}
 
-        for mod_id, parent_mod_rule in parent_mod_rules.items():
+        for mod_id, parent_mod_rule in template_mod_rules.items():
             override_content = normalized_overrides.get(mod_id.upper())
             effective_mod_rules[mod_id] = MODRuleInfo(
                 mod_id=mod_id,
@@ -204,13 +330,17 @@ def _merge_custom_agents_into_catalog(
         prompt_info = PromptInfo(
             agent_id=make_custom_agent_id(custom.id),
             agent_name=custom.name,
-            description=custom.description or f"Custom agent based on {parent_name}",
+            description=custom.description or (
+                f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
+            ),
             base_prompt=custom.custom_prompt,
             source_file=f"custom_agent:{custom.id}",
             has_mod_rules=bool(effective_mod_rules),
             mod_rules=effective_mod_rules,
             tools=tools,
-            subcategory="My Custom Agents",
+            subcategory=(
+                "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
+            ),
             documentation=None,
             prompt_id=str(custom.id),
             prompt_version=None,
@@ -230,6 +360,250 @@ def _merge_custom_agents_into_catalog(
 # ============================================================================
 # Registry Metadata Endpoints
 # ============================================================================
+
+
+@router.get(
+    "/models",
+    response_model=ModelsResponse,
+    summary="Get model options",
+    description="Returns curator-selectable model options from config/models.yaml.",
+)
+async def get_models_endpoint(
+    user: Any = get_auth_dependency(),
+) -> ModelsResponse:
+    _ = user
+    try:
+        models = sorted(
+            [model for model in list_model_definitions() if bool(getattr(model, "curator_visible", True))],
+            key=lambda model: (not bool(model.default), model.name.lower()),
+        )
+        return ModelsResponse(
+            models=[
+                ModelOption(
+                    model_id=model.model_id,
+                    name=model.name,
+                    provider=model.provider,
+                    description=model.description,
+                    guidance=model.guidance,
+                    default=model.default,
+                    supports_reasoning=model.supports_reasoning,
+                    supports_temperature=model.supports_temperature,
+                    reasoning_options=list(model.reasoning_options or []),
+                    default_reasoning=model.default_reasoning,
+                    reasoning_descriptions=dict(model.reasoning_descriptions or {}),
+                    recommended_for=list(model.recommended_for or []),
+                    avoid_for=list(model.avoid_for or []),
+                )
+                for model in models
+            ]
+        )
+    except Exception as e:
+        logger.error("Failed to load model options: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load model options")
+
+
+@router.get(
+    "/tools/library",
+    response_model=ToolLibraryResponse,
+    summary="Get tool library",
+    description="Returns curator-visible tools from tool_policies.",
+)
+async def get_tool_library_endpoint(
+    user: Any = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> ToolLibraryResponse:
+    _ = user
+    try:
+        entries = get_tool_policy_cache().list_curator_visible(db)
+        return ToolLibraryResponse(
+            tools=[
+                ToolLibraryItem(
+                    tool_key=entry.tool_key,
+                    display_name=entry.display_name,
+                    description=entry.description,
+                    category=entry.category,
+                    curator_visible=entry.curator_visible,
+                    allow_attach=entry.allow_attach,
+                    allow_execute=entry.allow_execute,
+                    config=entry.config,
+                )
+                for entry in entries
+            ]
+        )
+    except Exception as e:
+        logger.error("Failed to load tool library: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load tool library")
+
+
+@router.get(
+    "/agents/templates",
+    response_model=AgentTemplatesResponse,
+    summary="Get system agent templates",
+    description="Returns system agents available as copy templates in Agent Workshop.",
+)
+async def get_agent_templates_endpoint(
+    user: Any = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> AgentTemplatesResponse:
+    _ = user
+    try:
+        rows = (
+            db.query(UnifiedAgent)
+            .filter(
+                UnifiedAgent.visibility == "system",
+                UnifiedAgent.is_active == True,  # noqa: E712
+                UnifiedAgent.show_in_palette == True,  # noqa: E712
+            )
+            .order_by(UnifiedAgent.category.asc(), UnifiedAgent.name.asc())
+            .all()
+        )
+        return AgentTemplatesResponse(
+            templates=[
+                AgentTemplateItem(
+                    agent_id=agent.agent_key,
+                    name=agent.name,
+                    description=agent.description,
+                    icon=agent.icon or "🤖",
+                    category=agent.category,
+                    model_id=agent.model_id,
+                    tool_ids=list(agent.tool_ids or []),
+                    output_schema_key=agent.output_schema_key,
+                )
+                for agent in rows
+            ]
+        )
+    except Exception as e:
+        logger.error("Failed to load agent templates: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load agent templates")
+
+
+@router.post(
+    "/tool-ideas",
+    response_model=ToolIdeaResponseItem,
+    status_code=201,
+    summary="Submit tool idea request",
+    description="Submit a curated tool idea request for developer triage.",
+)
+async def create_tool_idea_endpoint(
+    request: ToolIdeaCreateRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> ToolIdeaResponseItem:
+    """Create a tool idea request for the authenticated curator."""
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        project_id = get_primary_project_id_for_user(db, db_user.id)
+        record = create_tool_idea_request(
+            db=db,
+            user_id=db_user.id,
+            project_id=project_id,
+            title=request.title,
+            description=request.description,
+            opus_conversation=[
+                entry.model_dump() for entry in request.opus_conversation or []
+            ],
+        )
+        db.commit()
+        db.refresh(record)
+        return ToolIdeaResponseItem(**tool_idea_request_to_dict(record))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(
+    "/tool-ideas",
+    response_model=ToolIdeaListResponse,
+    summary="List my tool idea requests",
+    description="Returns tool idea requests submitted by the current user.",
+)
+async def list_tool_ideas_endpoint(
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> ToolIdeaListResponse:
+    """List the authenticated curator's tool idea requests."""
+    db_user = set_global_user_from_cognito(db, user)
+    rows = list_tool_idea_requests_for_user(db, db_user.id)
+    items = [ToolIdeaResponseItem(**tool_idea_request_to_dict(row)) for row in rows]
+    return ToolIdeaListResponse(tool_ideas=items, total=len(items))
+
+
+@router.post(
+    "/agents/{agent_id}/clone",
+    response_model=Dict[str, Any],
+    status_code=201,
+    summary="Clone visible agent",
+    description="Clone a visible system/private/project agent into the caller's private workspace.",
+)
+async def clone_agent_endpoint(
+    agent_id: str,
+    request: CloneAgentRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Clone any user-visible agent into caller-owned custom agent space."""
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        custom_agent = clone_visible_agent_for_user(
+            db=db,
+            user_id=db_user.id,
+            source_agent_key=agent_id,
+            name=request.name,
+        )
+        db.commit()
+        db.refresh(custom_agent)
+        return custom_agent_to_dict(custom_agent)
+    except CustomAgentNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except CustomAgentAccessError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        db.rollback()
+        if "already exists" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post(
+    "/agents/{agent_id}/share",
+    response_model=Dict[str, Any],
+    summary="Set custom agent visibility",
+    description="Set a custom agent visibility to private or project-shared.",
+)
+async def share_agent_endpoint(
+    agent_id: str,
+    request: ShareAgentRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Toggle caller-owned custom-agent visibility."""
+    custom_uuid = parse_custom_agent_id(agent_id)
+    if not custom_uuid:
+        raise HTTPException(status_code=400, detail="Only custom agents can be shared")
+    db_user = set_global_user_from_cognito(db, user)
+
+    try:
+        custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
+        set_custom_agent_visibility(
+            db=db,
+            custom_agent=custom_agent,
+            user_id=db_user.id,
+            visibility=request.visibility,
+        )
+        db.commit()
+        db.refresh(custom_agent)
+        return custom_agent_to_dict(custom_agent)
+    except CustomAgentNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except CustomAgentAccessError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.get(
     "/registry/metadata",
@@ -274,17 +648,18 @@ async def get_registry_metadata(
     # Direct unit-test calls pass dependency placeholders, so guard by type.
     if isinstance(user, dict):
         db_user = set_global_user_from_cognito(db, user)
-        custom_agents = list_custom_agents_for_user(db, db_user.id)
+        custom_agents = list_custom_agents_visible_to_user(db, db_user.id)
         for custom in custom_agents:
-            parent_entry = AGENT_REGISTRY.get(custom.parent_agent_key, {})
-            category = parent_entry.get("category", "Custom")
+            category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
 
             agents[custom_id] = AgentMetadata(
                 name=custom.name,
                 icon=custom.icon or "❓",
                 category=category,
-                subcategory="My Custom Agents",
+                subcategory=(
+                    "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
+                ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
             )
 
@@ -483,7 +858,7 @@ async def test_agent_endpoint(
             raise HTTPException(status_code=403, detail=str(exc))
 
     try:
-        metadata = get_agent_metadata(resolved_agent_id)
+        metadata = get_agent_metadata(resolved_agent_id, db_user_id=db_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -506,6 +881,7 @@ async def test_agent_endpoint(
     try:
         test_agent = get_agent_by_id(
             resolved_agent_id,
+            db_user_id=db_user.id,
             document_id=request.document_id,
             user_id=str(user_sub),
             active_groups=active_groups,
@@ -581,6 +957,70 @@ ANTHROPIC_SUGGESTION_TOOL = {
     "description": SUBMIT_SUGGESTION_TOOL["description"],
     "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
 }
+
+UPDATE_WORKSHOP_PROMPT_TOOL = {
+    "name": "update_workshop_prompt_draft",
+    "description": """Propose a prompt update for the current Agent Workshop draft.
+
+Use this when the curator asks you to rewrite, replace, or significantly refactor
+their current workshop prompt. This tool does NOT auto-apply or auto-save changes.
+The UI will show the proposal and require explicit curator approval before applying.
+""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "updated_prompt": {
+                "type": "string",
+                "description": "Complete replacement prompt text (required when apply_mode='replace').",
+            },
+            "edits": {
+                "type": "array",
+                "description": "Targeted edit operations (required when apply_mode='targeted_edit').",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["replace_text", "replace_section"],
+                            "description": "Edit operation type.",
+                        },
+                        "find_text": {
+                            "type": "string",
+                            "description": "Text to find when operation='replace_text'.",
+                        },
+                        "replacement_text": {
+                            "type": "string",
+                            "description": "Replacement text for the operation.",
+                        },
+                        "occurrence": {
+                            "type": "string",
+                            "enum": ["first", "last", "all"],
+                            "description": "Which occurrence to replace for replace_text (default: first).",
+                        },
+                        "section_heading": {
+                            "type": "string",
+                            "description": "Markdown section heading text to replace when operation='replace_section'.",
+                        },
+                    },
+                    "required": ["operation"],
+                },
+            },
+            "change_summary": {
+                "type": "string",
+                "description": "Optional short summary of what changed and why.",
+            },
+            "apply_mode": {
+                "type": "string",
+                "enum": ["replace", "targeted_edit"],
+                "description": "How to build the proposed update.",
+                "default": "replace",
+            },
+        },
+        "required": [],
+    },
+}
+
+ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
 
 REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
@@ -788,6 +1228,7 @@ def _get_all_opus_tools() -> List[dict]:
     """
     tools = [
         ANTHROPIC_SUGGESTION_TOOL,
+        ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
         ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
         # Token-aware trace analysis tools (recommended)
         GET_TRACE_SUMMARY_TOOL,
@@ -840,6 +1281,178 @@ def _format_conversation_context(messages: Optional[List[dict]]) -> Optional[str
         lines.append(f"{role_label}: {content}")
 
     return "\n\n".join(lines) if lines else None
+
+
+def _parse_markdown_heading(line: str) -> Optional[Dict[str, Any]]:
+    """Parse a markdown heading line into level/text metadata."""
+    match = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
+    if not match:
+        return None
+    return {
+        "level": len(match.group(1)),
+        "text": match.group(2).strip(),
+    }
+
+
+def _find_section_bounds(prompt: str, section_heading: str) -> Optional[Dict[str, Any]]:
+    """Find byte-range bounds for a markdown section by heading text."""
+    target = section_heading.strip().lower()
+    if not target:
+        return None
+
+    lines = prompt.splitlines(keepends=True)
+    if not lines:
+        return None
+
+    start_line_idx = None
+    start_level = None
+    heading_line = ""
+
+    for idx, line in enumerate(lines):
+        heading = _parse_markdown_heading(line)
+        if not heading:
+            continue
+        if heading["text"].strip().lower() == target:
+            start_line_idx = idx
+            start_level = heading["level"]
+            heading_line = line if line.endswith("\n") else f"{line}\n"
+            break
+
+    if start_line_idx is None or start_level is None:
+        return None
+
+    end_line_idx = len(lines)
+    for idx in range(start_line_idx + 1, len(lines)):
+        heading = _parse_markdown_heading(lines[idx])
+        if heading and heading["level"] <= start_level:
+            end_line_idx = idx
+            break
+
+    start_char = sum(len(line) for line in lines[:start_line_idx])
+    end_char = sum(len(line) for line in lines[:end_line_idx])
+
+    return {
+        "start_char": start_char,
+        "end_char": end_char,
+        "heading_line": heading_line,
+    }
+
+
+def _apply_targeted_workshop_edits(
+    base_prompt: str,
+    edits: List[Any],
+) -> Dict[str, Any]:
+    """Apply targeted edit operations against a workshop prompt draft."""
+    working_prompt = base_prompt
+    applied_edits: List[str] = []
+
+    for idx, raw_edit in enumerate(edits, start=1):
+        if not isinstance(raw_edit, dict):
+            return {
+                "success": False,
+                "error": f"Edit #{idx} must be an object.",
+            }
+
+        operation = str(raw_edit.get("operation", "")).strip()
+        if operation not in {"replace_text", "replace_section"}:
+            return {
+                "success": False,
+                "error": f"Edit #{idx} has unsupported operation: {operation or 'missing operation'}",
+            }
+
+        replacement_text = raw_edit.get("replacement_text")
+        if replacement_text is None:
+            replacement_text = ""
+        if not isinstance(replacement_text, str):
+            return {
+                "success": False,
+                "error": f"Edit #{idx} replacement_text must be a string.",
+            }
+
+        if operation == "replace_text":
+            find_text = raw_edit.get("find_text")
+            if not isinstance(find_text, str) or not find_text:
+                return {
+                    "success": False,
+                    "error": f"Edit #{idx} requires non-empty find_text for replace_text.",
+                }
+
+            occurrence = str(raw_edit.get("occurrence", "first")).strip().lower()
+            if occurrence not in {"first", "last", "all"}:
+                return {
+                    "success": False,
+                    "error": f"Edit #{idx} occurrence must be one of: first, last, all.",
+                }
+
+            if occurrence == "all":
+                count = working_prompt.count(find_text)
+                if count == 0:
+                    return {
+                        "success": False,
+                        "error": f"Edit #{idx} could not find text to replace.",
+                    }
+                working_prompt = working_prompt.replace(find_text, replacement_text)
+                applied_edits.append(
+                    f"replace_text all occurrences ({count} replacements)"
+                )
+            else:
+                pos = working_prompt.find(find_text) if occurrence == "first" else working_prompt.rfind(find_text)
+                if pos < 0:
+                    return {
+                        "success": False,
+                        "error": f"Edit #{idx} could not find text to replace.",
+                    }
+                working_prompt = (
+                    working_prompt[:pos]
+                    + replacement_text
+                    + working_prompt[pos + len(find_text):]
+                )
+                applied_edits.append(f"replace_text {occurrence} occurrence")
+
+        elif operation == "replace_section":
+            section_heading = raw_edit.get("section_heading")
+            if not isinstance(section_heading, str) or not section_heading.strip():
+                return {
+                    "success": False,
+                    "error": f"Edit #{idx} requires section_heading for replace_section.",
+                }
+
+            bounds = _find_section_bounds(working_prompt, section_heading)
+            if not bounds:
+                return {
+                    "success": False,
+                    "error": f"Edit #{idx} could not find section heading '{section_heading}'.",
+                }
+
+            replacement_block = replacement_text
+            if not replacement_block.strip():
+                return {
+                    "success": False,
+                    "error": f"Edit #{idx} replacement_text cannot be empty for replace_section.",
+                }
+
+            if not _parse_markdown_heading(replacement_block.splitlines()[0] if replacement_block.splitlines() else ""):
+                replacement_block = f"{bounds['heading_line']}{replacement_block.lstrip()}"
+
+            if not replacement_block.endswith("\n"):
+                replacement_block += "\n"
+
+            start_char = bounds["start_char"]
+            end_char = bounds["end_char"]
+            working_prompt = (
+                working_prompt[:start_char]
+                + replacement_block
+                + working_prompt[end_char:]
+            )
+            applied_edits.append(f"replace_section '{section_heading.strip()}'")
+
+    summary = "; ".join(applied_edits) if applied_edits else "No edits applied."
+    return {
+        "success": True,
+        "prompt": working_prompt,
+        "applied_edits": applied_edits,
+        "summary": summary,
+    }
 
 
 async def _handle_tool_call(
@@ -1025,6 +1638,79 @@ async def _handle_tool_call(
             "success": True,
             "suggestion_id": result["suggestion_id"],
             "message": "Suggestion submitted successfully. The development team will review it.",
+        }
+
+    elif tool_name == "update_workshop_prompt_draft":
+        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
+            return {
+                "success": False,
+                "error": "This tool is only available while the curator is on the Agent Workshop tab.",
+            }
+
+        apply_mode = tool_input.get("apply_mode", "replace")
+        if apply_mode not in {"replace", "targeted_edit"}:
+            return {
+                "success": False,
+                "error": "Unsupported apply_mode. Must be 'replace' or 'targeted_edit'.",
+            }
+
+        change_summary = tool_input.get("change_summary")
+        if change_summary is not None and not isinstance(change_summary, str):
+            return {
+                "success": False,
+                "error": "change_summary must be a string when provided.",
+            }
+
+        updated_prompt = ""
+        applied_edits: List[str] = []
+
+        if apply_mode == "replace":
+            candidate_prompt = tool_input.get("updated_prompt")
+            if not isinstance(candidate_prompt, str) or not candidate_prompt.strip():
+                return {
+                    "success": False,
+                    "error": "updated_prompt must be a non-empty string when apply_mode='replace'.",
+                }
+            updated_prompt = candidate_prompt
+        else:
+            base_prompt = context.agent_workshop.prompt_draft or ""
+            if not base_prompt.strip():
+                return {
+                    "success": False,
+                    "error": "No workshop draft prompt is available to edit. Provide updated_prompt with apply_mode='replace' instead.",
+                }
+            edits = tool_input.get("edits")
+            if not isinstance(edits, list) or len(edits) == 0:
+                return {
+                    "success": False,
+                    "error": "edits must be a non-empty array when apply_mode='targeted_edit'.",
+                }
+
+            edit_result = _apply_targeted_workshop_edits(base_prompt=base_prompt, edits=edits)
+            if not edit_result.get("success"):
+                return {
+                    "success": False,
+                    "error": str(edit_result.get("error", "Failed to apply targeted edits.")),
+                }
+            updated_prompt = str(edit_result.get("prompt", ""))
+            applied_edits = [str(item) for item in edit_result.get("applied_edits", [])]
+            if not change_summary and isinstance(edit_result.get("summary"), str):
+                change_summary = edit_result["summary"]
+
+        if len(updated_prompt) > 40000:
+            return {
+                "success": False,
+                "error": "proposed prompt exceeds maximum size (40,000 characters).",
+            }
+
+        return {
+            "success": True,
+            "pending_user_approval": True,
+            "apply_mode": apply_mode,
+            "proposed_prompt": updated_prompt,
+            "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
+            "applied_edits": applied_edits,
+            "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
         }
 
     elif tool_name == "report_tool_failure":
@@ -1596,9 +2282,9 @@ async def submit_suggestion_direct(
                 context_description.append(f"trace ID {request.context.trace_id}")
             if request.context.selected_agent_id:
                 context_description.append(f"the {request.context.selected_agent_id} agent prompt")
-            if request.context.prompt_workshop and request.context.prompt_workshop.custom_agent_name:
+            if request.context.agent_workshop and request.context.agent_workshop.custom_agent_name:
                 context_description.append(
-                    f'the Prompt Workshop draft for "{request.context.prompt_workshop.custom_agent_name}"'
+                    f'the Agent Workshop draft for "{request.context.agent_workshop.custom_agent_name}"'
                 )
 
         if context_description:
@@ -2023,6 +2709,13 @@ Include `token_info` in responses for budget management:
 - **`submit_prompt_suggestion`** - Submit improvement suggestions.
   - Types: improvement, bug, clarification, mod_specific, missing_case
   - Use when: concrete improvement identified, curator agrees, sufficient detail available
+- **`update_workshop_prompt_draft`** - Propose updates for the Agent Workshop draft prompt.
+  - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
+  - For full rewrites: use `apply_mode="replace"` with `updated_prompt`.
+  - For focused changes: use `apply_mode="targeted_edit"` with `edits` (`replace_text` or `replace_section`).
+  - In casual discussion, proactively offer help like: "Want me to apply this as a targeted edit to the Output section?"
+  - Do not call this tool until the curator clearly approves applying the change.
+  - The UI requires explicit curator approval before applying. Never claim it is applied until approval happens.
 - **`report_tool_failure`** - Report infrastructure/service tool failures to the development team.
   - Use immediately for tool errors/timeouts/connection failures
   - Do not use for user input mistakes (bad IDs, invalid symbols)
@@ -2038,13 +2731,38 @@ Include `token_info` in responses for budget management:
    - Model limitations that prompt changes can't fix
    - Genuinely ambiguous source text
    - Fixes that might help one case but break others
-</guidelines>"""
+</guidelines>
+
+<model_selection_playbook>
+## Agent Workshop Model Recommendation Playbook
+
+When curators ask which model to use, give a concrete recommendation (not just generic tradeoffs):
+
+1. **Database lookups and validation-heavy work**
+   - Recommend: `openai/gpt-oss-120b`
+   - Why: fast retrieval-oriented performance and good structured extraction throughput
+
+2. **Complex PDF extraction or difficult reasoning**
+   - Recommend: `gpt-5.2` with `medium` reasoning as default
+   - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
+
+3. **Fast balanced option between those two**
+   - Recommend: `gpt-5.2-mini`
+   - Position it as the "start here" option for quick drafting and iterative prompt work
+
+How to coach:
+- Ask 1-3 focused clarifying questions when requirements are unclear.
+- Provide a primary recommendation plus one backup option.
+- If asked for defaults, suggest `gpt-5.2` at `medium` for deep reasoning tasks.
+</model_selection_playbook>"""
 
     if context:
         additions = []
+        workshop_draft_tools: Optional[List[str]] = None
 
-        if context.active_tab == "prompt_workshop" and context.prompt_workshop:
-            workshop = context.prompt_workshop
+        if context.active_tab == "agent_workshop" and context.agent_workshop:
+            workshop = context.agent_workshop
+            workshop_draft_tools = workshop.draft_tool_ids or []
             draft_prompt = workshop.prompt_draft or ""
             selected_mod_prompt = workshop.selected_mod_prompt_draft or ""
             truncated = ""
@@ -2066,25 +2784,66 @@ Include `token_info` in responses for budget management:
 {selected_mod_prompt}
 </workshop_selected_mod_prompt>{mod_truncated}"""
 
+            model_catalog_lines: List[str] = []
+            try:
+                for model in sorted(
+                    [
+                        model
+                        for model in list_model_definitions()
+                        if bool(getattr(model, "curator_visible", True))
+                    ],
+                    key=lambda model: (not bool(model.default), model.name.lower()),
+                ):
+                    reasoning_label = (
+                        f"{', '.join(model.reasoning_options)} (default: {model.default_reasoning or 'none'})"
+                        if model.reasoning_options
+                        else "n/a"
+                    )
+                    model_catalog_lines.append(
+                        f"- {model.name} [{model.model_id}]: "
+                        f"{(model.guidance or model.description or '').strip() or 'No guidance configured.'} "
+                        f"(reasoning: {reasoning_label})"
+                    )
+            except Exception:
+                model_catalog_lines = []
+
+            model_catalog_text = "\n".join(model_catalog_lines) if model_catalog_lines else "- Model catalog unavailable."
+
             additions.append(f"""
-<prompt_workshop_context>
-## Current Context: Prompt Workshop
+<agent_workshop_context>
+## Current Context: Agent Workshop
 
-The curator is actively iterating a prompt in Prompt Workshop.
+The curator is actively iterating an agent draft in Agent Workshop.
 
-- Parent agent: {workshop.parent_agent_name or workshop.parent_agent_id or 'Unknown'}
+- Template source: {workshop.template_name or workshop.template_source or 'Unknown'}
 - Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
 - Include MOD rules: {"Yes" if workshop.include_mod_rules else "No"}
 - Selected MOD: {workshop.selected_mod_id or "None"}
 - Has MOD prompt overrides: {"Yes" if workshop.has_mod_prompt_overrides else "No"}
 - MOD override count: {workshop.mod_prompt_override_count or 0}
-- Parent prompt stale: {"Yes" if workshop.parent_prompt_stale else "No"}
-- Parent exists: {"Yes" if workshop.parent_exists is not False else "No"}
+- Template prompt stale: {"Yes" if workshop.template_prompt_stale else "No"}
+- Template exists: {"Yes" if workshop.template_exists is not False else "No"}
+- Draft attached tools: {", ".join(workshop_draft_tools) if workshop_draft_tools else "None"}
+- Draft model: {workshop.draft_model_id or "Not set"}
+- Draft reasoning: {workshop.draft_model_reasoning or "Not set"}
+
+Agent Workshop model recommendation defaults:
+- Use `openai/gpt-oss-120b` for fast database lookup and validation workflows.
+- Use `gpt-5.2` with `medium` reasoning for difficult PDF extraction and deep reasoning.
+- Use `gpt-5.2-mini` for fast iterative drafting and balanced quality/speed.
+
+Configured model options:
+{model_catalog_text}
 
 Use this workshop context to give concrete prompt-engineering feedback, especially:
 1. how to improve the draft prompt structure and specificity,
-2. what to test next in flow execution (and when to compare with the parent prompt),
+2. what to test next in flow execution (and when to compare with the template-source prompt),
 3. how MOD rules may interact with the current draft.
+4. proactively identify concrete prompt improvements during normal conversation and suggest them.
+5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
+6. after clear approval, call `update_workshop_prompt_draft`:
+   - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
+   - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
 
 <workshop_prompt_draft>
 {draft_prompt}
@@ -2094,13 +2853,20 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 Prompt injection note:
 - Structured output instructions are inserted near the first `## ` heading.
 - If the draft lacks `## ` headings, insertion happens at the top.
-</prompt_workshop_context>""")
+</agent_workshop_context>""")
 
         if context.selected_agent_id:
             # Get the agent info to provide context
             service = get_prompt_catalog()
             agent = service.get_agent(context.selected_agent_id)
             if agent:
+                tools_label = "Tools this agent can use"
+                tools_for_context = agent.tools
+                # In Agent Workshop, prefer the live draft tool attachments from UI context.
+                if context.active_tab == "agent_workshop" and workshop_draft_tools is not None:
+                    tools_label = "Tools attached to current workshop draft"
+                    tools_for_context = workshop_draft_tools
+
                 additions.append(f"""
 ## Current Context
 
@@ -2108,7 +2874,7 @@ The curator is viewing the **{agent.agent_name}** agent.
 
 **Agent Description:** {agent.description}
 
-**Tools this agent can use:** {', '.join(agent.tools) if agent.tools else 'None'}
+**{tools_label}:** {', '.join(tools_for_context) if tools_for_context else 'None'}
 
 **Has MOD-specific rules:** {'Yes' if agent.has_mod_rules else 'No'}""")
 

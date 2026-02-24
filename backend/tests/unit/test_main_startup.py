@@ -11,9 +11,9 @@ import main
 
 
 @pytest.fixture(autouse=True)
-def set_docling_timeout(monkeypatch):
-    """Set DOCLING_TIMEOUT to valid value for all tests in this module."""
-    monkeypatch.setenv("DOCLING_TIMEOUT", "300")
+def set_pdf_extraction_timeout(monkeypatch):
+    """Set PDF_EXTRACTION_TIMEOUT to valid value for all tests in this module."""
+    monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
 
 
 def make_connection(list_all_return=None):
@@ -76,6 +76,19 @@ class TestLifespan:
              patch("src.lib.config.connections_loader.load_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
+             patch(
+                 "src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts",
+                 return_value={
+                     "status": "healthy",
+                     "strict_mode": True,
+                     "validated_at": "2026-02-23T00:00:00+00:00",
+                     "errors": [],
+                     "warnings": [],
+                     "providers": [],
+                     "models": [],
+                     "summary": {},
+                 },
+             ), \
              patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
             # Mock the database session context manager
             mock_db = MagicMock()
@@ -155,3 +168,14 @@ class TestLifespan:
             pass
 
         connection.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts")
+    async def test_fail_fast_on_provider_validation_error(self, mock_validate):
+        mock_validate.side_effect = RuntimeError("LLM provider validation failed: missing OPENAI_API_KEY")
+
+        app = FastAPI()
+
+        with pytest.raises(RuntimeError, match="LLM provider validation failed"):
+            async with main.lifespan(app):
+                pass

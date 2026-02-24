@@ -35,7 +35,14 @@ import BuildIcon from '@mui/icons-material/Build'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { streamOpusChat } from '@/services/agentStudioService'
-import type { ChatMessage, ChatContext, PromptInfo, OpusChatEvent } from '@/types/promptExplorer'
+import type {
+  ChatMessage,
+  ChatContext,
+  PromptInfo,
+  OpusChatEvent,
+  ToolIdeaConversationEntry,
+  WorkshopPromptUpdateProposal,
+} from '@/types/promptExplorer'
 import SuggestionDialog from './SuggestionDialog'
 
 const ChatContainer = styled(Box)(({ theme }) => ({
@@ -118,6 +125,7 @@ interface ToolCallRecord {
 interface DisplayMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
+  timestamp?: string
   toolCalls?: ToolCallRecord[]  // Tool calls made during this message
 }
 
@@ -132,9 +140,22 @@ interface OpusChatProps {
   discussMessage?: string | null
   /** Callback after discuss message is sent */
   onDiscussMessageSent?: () => void
+  /** Callback with current chat transcript for workshop tool ideation */
+  onConversationSnapshotChange?: (messages: ToolIdeaConversationEntry[]) => void
+  /** Apply an approved prompt replacement into the Agent Workshop editor */
+  onApplyWorkshopPromptUpdate?: (proposal: WorkshopPromptUpdateProposal) => void
 }
 
-function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, discussMessage, onDiscussMessageSent }: OpusChatProps) {
+function OpusChat({
+  context,
+  selectedAgent,
+  verifyMessage,
+  onVerifyMessageSent,
+  discussMessage,
+  onDiscussMessageSent,
+  onConversationSnapshotChange,
+  onApplyWorkshopPromptUpdate,
+}: OpusChatProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -144,6 +165,8 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
   const [feedbackComment, setFeedbackComment] = useState('')
   const [isSubmittingDirect, setIsSubmittingDirect] = useState(false)
   const [submissionSent, setSubmissionSent] = useState(false)
+  const [promptUpdateDialogOpen, setPromptUpdateDialogOpen] = useState(false)
+  const [pendingPromptUpdate, setPendingPromptUpdate] = useState<WorkshopPromptUpdateProposal | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -155,6 +178,19 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Publish normalized conversation snapshot for features that need transcript context.
+  useEffect(() => {
+    if (!onConversationSnapshotChange) return
+    const snapshot: ToolIdeaConversationEntry[] = messages
+      .map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp || undefined,
+      }))
+      .filter((message) => Boolean(message.content && message.content.trim()))
+    onConversationSnapshotChange(snapshot)
+  }, [messages, onConversationSnapshotChange])
 
   // Reference for auto-sending verify message
   const handleSendRef = useRef<(messageText: string) => Promise<void>>()
@@ -194,10 +230,12 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
           {
             role: 'system',
             content: `Submitting suggestion: "${summary}"...`,
+            timestamp: new Date().toISOString(),
           },
         ])
       }
     } else if (event.type === 'TOOL_RESULT' && event.result) {
+      const toolResult = event.result as Record<string, unknown>
       // Update the last tool call with its result
       setMessages((prev) => {
         const updated = [...prev]
@@ -208,7 +246,7 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
           if (lastToolIdx >= 0) {
             toolCalls[lastToolIdx] = {
               ...toolCalls[lastToolIdx],
-              result: event.result as unknown as Record<string, unknown>,
+              result: toolResult,
             }
             updated[lastAssistantIdx] = {
               ...updated[lastAssistantIdx],
@@ -224,19 +262,71 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
         setMessages((prev) => {
           const updated = [...prev]
           const lastSystemIdx = updated.findLastIndex((m) => m.role === 'system')
-          if (lastSystemIdx !== -1 && event.result?.success) {
+          const suggestionId =
+            typeof toolResult.suggestion_id === 'string' ? toolResult.suggestion_id : 'unknown'
+          const suggestionError =
+            typeof toolResult.error === 'string' ? toolResult.error : 'Unknown error'
+          if (lastSystemIdx !== -1 && toolResult?.success) {
             updated[lastSystemIdx] = {
               role: 'system',
-              content: `✓ Suggestion submitted successfully (ID: ${event.result.suggestion_id})`,
+              content: `✓ Suggestion submitted successfully (ID: ${suggestionId})`,
+              timestamp: updated[lastSystemIdx].timestamp,
             }
-          } else if (lastSystemIdx !== -1 && event.result) {
+          } else if (lastSystemIdx !== -1) {
             updated[lastSystemIdx] = {
               role: 'system',
-              content: `✗ Failed to submit suggestion: ${event.result.error || 'Unknown error'}`,
+              content: `✗ Failed to submit suggestion: ${suggestionError}`,
+              timestamp: updated[lastSystemIdx].timestamp,
             }
           }
           return updated
         })
+      }
+
+      if (event.tool_name === 'update_workshop_prompt_draft') {
+        const success = toolResult.success === true
+        const proposedPrompt =
+          typeof toolResult.proposed_prompt === 'string'
+            ? toolResult.proposed_prompt
+            : ''
+        const changeSummary =
+          typeof toolResult.change_summary === 'string'
+            ? toolResult.change_summary
+            : undefined
+        const applyMode =
+          toolResult.apply_mode === 'replace' || toolResult.apply_mode === 'targeted_edit'
+            ? toolResult.apply_mode
+            : undefined
+
+        if (success && proposedPrompt) {
+          setPendingPromptUpdate({
+            prompt: proposedPrompt,
+            summary: changeSummary,
+            apply_mode: applyMode || 'replace',
+          })
+          setPromptUpdateDialogOpen(true)
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'system',
+              content: 'Claude prepared a prompt update proposal. Review and approve it to apply to your workshop draft.',
+              timestamp: new Date().toISOString(),
+            },
+          ])
+        } else {
+          const errorText =
+            typeof toolResult.error === 'string'
+              ? toolResult.error
+              : 'Unable to prepare workshop prompt update.'
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'system',
+              content: `✗ Prompt update proposal failed: ${errorText}`,
+              timestamp: new Date().toISOString(),
+            },
+          ])
+        }
       }
     }
   }, [])
@@ -246,14 +336,26 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
     const messageText = messageOverride || input.trim()
     if (!messageText || isStreaming) return
 
-    const userMessage: DisplayMessage = { role: 'user', content: messageText }
+    const userMessage: DisplayMessage = {
+      role: 'user',
+      content: messageText,
+      timestamp: new Date().toISOString(),
+    }
     const newMessages = [...messages, userMessage]
     setMessages(newMessages)
     if (!messageOverride) setInput('')  // Only clear input if not using override
     setIsStreaming(true)
 
     // Add empty assistant message to stream into
-    setMessages((prev) => [...prev, { role: 'assistant', content: '', toolCalls: [] }])
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        toolCalls: [],
+      },
+    ])
 
     // Convert to ChatMessage format (only user/assistant for API)
     const apiMessages: ChatMessage[] = newMessages
@@ -393,8 +495,8 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
       if (context?.active_tab !== 'flows') {
         feedbackContext.selected_agent_id = context?.selected_agent_id || selectedAgent?.agent_id || null
         feedbackContext.selected_mod_id = context?.selected_mod_id || null
-        if (context?.active_tab === 'prompt_workshop' && context?.prompt_workshop) {
-          feedbackContext.prompt_workshop = context.prompt_workshop
+        if (context?.active_tab === 'agent_workshop' && context?.agent_workshop) {
+          feedbackContext.agent_workshop = context.agent_workshop
         }
       }
 
@@ -450,6 +552,37 @@ function OpusChat({ context, selectedAgent, verifyMessage, onVerifyMessageSent, 
     }
   }, [context, selectedAgent, messages])
 
+  const handleApprovePromptUpdate = useCallback(() => {
+    if (!pendingPromptUpdate) return
+    if (!onApplyWorkshopPromptUpdate) {
+      setSnackbar({
+        open: true,
+        message: 'Prompt update cannot be applied from this view.',
+        severity: 'error',
+      })
+      setPromptUpdateDialogOpen(false)
+      setPendingPromptUpdate(null)
+      return
+    }
+
+    onApplyWorkshopPromptUpdate(pendingPromptUpdate)
+    setPromptUpdateDialogOpen(false)
+    setPendingPromptUpdate(null)
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'system',
+        content: '✓ Prompt update applied to your Agent Workshop draft.',
+        timestamp: new Date().toISOString(),
+      },
+    ])
+  }, [onApplyWorkshopPromptUpdate, pendingPromptUpdate])
+
+  const handleCancelPromptUpdate = useCallback(() => {
+    setPromptUpdateDialogOpen(false)
+    setPendingPromptUpdate(null)
+  }, [])
+
   // Quick action buttons - agent-related suggestions (shown when on agents tab)
   const promptQuickActions = [
     { label: 'Discuss the prompts', prompt: 'Can you explain how the prompts work and how they\'re structured?' },
@@ -496,10 +629,10 @@ OUTPUT:
     { label: 'Optimize my flow', prompt: 'Can you suggest optimizations for my current flow? I want to make sure it\'s efficient and well-designed.' },
   ]
 
-  // Prompt Workshop suggestions (shown when on prompt_workshop tab)
+  // Agent Workshop suggestions (shown when on agent_workshop tab)
   const workshopQuickActions = [
-    { label: 'Critique this draft', prompt: 'Please critique my current Prompt Workshop draft and suggest concrete edits.' },
-    { label: 'Plan flow tests', prompt: 'Given my draft, what 3 flow-based validation tests should I run next, including one compare-with-parent case?' },
+    { label: 'Critique this draft', prompt: 'Please critique my current Agent Workshop draft and suggest concrete edits.' },
+    { label: 'Plan flow tests', prompt: 'Given my draft, what 3 flow-based validation tests should I run next, including one compare-with-template case?' },
     { label: 'Improve structure', prompt: 'Can you help me restructure this draft prompt so instructions and output expectations are clearer?' },
   ]
 
@@ -515,13 +648,13 @@ OUTPUT:
   const baseQuickActions =
     activeTab === 'flows'
       ? flowQuickActions
-      : activeTab === 'prompt_workshop'
+      : activeTab === 'agent_workshop'
       ? workshopQuickActions
       : promptQuickActions
 
   const selectedChipLabel =
-    activeTab === 'prompt_workshop'
-      ? context?.prompt_workshop?.custom_agent_name || context?.prompt_workshop?.parent_agent_name || undefined
+    activeTab === 'agent_workshop'
+      ? context?.agent_workshop?.custom_agent_name || context?.agent_workshop?.template_name || undefined
       : selectedAgent?.agent_name
 
   const handleQuickAction = (prompt: string) => {
@@ -594,11 +727,11 @@ OUTPUT:
                   <br />
                   or verify your current flow.
                 </>
-              ) : activeTab === 'prompt_workshop' ? (
+              ) : activeTab === 'agent_workshop' ? (
                 <>
                   Ask Claude to improve your workshop prompt draft,
                   <br />
-                  plan flow tests, and compare against the parent prompt.
+                  plan flow tests, and compare against the template-source prompt.
                 </>
               ) : (
                 <>
@@ -828,9 +961,9 @@ Claude is responding...
           multiline
           maxRows={4}
           placeholder={
-            activeTab === 'flows'
+              activeTab === 'flows'
               ? 'Ask about flows...'
-              : activeTab === 'prompt_workshop'
+              : activeTab === 'agent_workshop'
               ? 'Ask about your workshop draft...'
               : 'Ask about prompts...'
           }
@@ -934,6 +1067,47 @@ Claude is responding...
             </DialogActions>
           </>
         )}
+      </Dialog>
+
+      {/* Approval Dialog for Workshop Prompt Updates */}
+      <Dialog
+        open={promptUpdateDialogOpen}
+        onClose={handleCancelPromptUpdate}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Apply Claude Prompt Update?</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 1.5 }}>
+            Claude generated a full replacement prompt for your Agent Workshop draft. Review below, then choose whether to apply it.
+          </DialogContentText>
+          {pendingPromptUpdate?.summary && (
+            <Alert severity="info" sx={{ mb: 1.5 }}>
+              {pendingPromptUpdate.summary}
+            </Alert>
+          )}
+          <TextField
+            fullWidth
+            multiline
+            minRows={10}
+            value={pendingPromptUpdate?.prompt || ''}
+            InputProps={{ readOnly: true }}
+            sx={{
+              '& .MuiInputBase-root': {
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                fontSize: '0.8rem',
+              },
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelPromptUpdate} color="inherit">
+            Cancel
+          </Button>
+          <Button onClick={handleApprovePromptUpdate} variant="contained">
+            Apply to Draft
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* Suggestion Dialog */}

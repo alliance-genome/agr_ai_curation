@@ -22,7 +22,7 @@ services:
       start_period: 30s
     environment: &langfuse-worker-env
       NEXTAUTH_URL: http://localhost:3000
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres}
       SALT: ${SALT:-CHANGE_ME_RANDOM_SALT}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-CHANGE_ME_64_CHAR_HEX_KEY_HERE_________________________________________________}
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
@@ -117,7 +117,7 @@ services:
     env_file:
       - path: .env
         required: false
-    command: bash -c "/app/scripts/refresh_prefixes_on_start.sh; exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: bash -c "cd /app/backend && alembic upgrade head; /app/scripts/refresh_prefixes_on_start.sh; exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
     depends_on:
       langfuse:
@@ -137,6 +137,18 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
+      - PDF_EXTRACTION_SERVICE_URL=${PDF_EXTRACTION_SERVICE_URL:-}
+      - PDF_EXTRACTION_TIMEOUT=${PDF_EXTRACTION_TIMEOUT:-300}
+      - PDF_EXTRACTION_POLL_INTERVAL_SECONDS=${PDF_EXTRACTION_POLL_INTERVAL_SECONDS:-2}
+      - PDF_EXTRACTION_METHODS=${PDF_EXTRACTION_METHODS:-grobid,docling,marker}
+      - PDF_EXTRACTION_MERGE=${PDF_EXTRACTION_MERGE:-true}
+      - PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD=${PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD:-}
+      - PDF_EXTRACTION_AUTH_MODE=${PDF_EXTRACTION_AUTH_MODE:-none}
+      - PDF_EXTRACTION_BEARER_TOKEN=${PDF_EXTRACTION_BEARER_TOKEN:-}
+      - PDF_EXTRACTION_COGNITO_TOKEN_URL=${PDF_EXTRACTION_COGNITO_TOKEN_URL:-}
+      - PDF_EXTRACTION_COGNITO_CLIENT_ID=${PDF_EXTRACTION_COGNITO_CLIENT_ID:-}
+      - PDF_EXTRACTION_COGNITO_CLIENT_SECRET=${PDF_EXTRACTION_COGNITO_CLIENT_SECRET:-}
+      - PDF_EXTRACTION_COGNITO_SCOPE=${PDF_EXTRACTION_COGNITO_SCOPE:-}
       - DOCKER_COMPOSE_DIR=/app  # For Docker logs API (docker-compose.yml location)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus 4.5 chat
@@ -151,11 +163,11 @@ services:
       - WEAVIATE_GRPC_HOST=${WEAVIATE_GRPC_HOST:-weaviate}
       - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
       - WEAVIATE_GRPC_SECURE=${WEAVIATE_GRPC_SECURE:-false}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
-      - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=${EMBEDDING_TOKEN_PREFLIGHT_ENABLED}
-      - EMBEDDING_MODEL_TOKEN_LIMIT=${EMBEDDING_MODEL_TOKEN_LIMIT}
-      - EMBEDDING_TOKEN_SAFETY_MARGIN=${EMBEDDING_TOKEN_SAFETY_MARGIN}
-      - CONTENT_PREVIEW_CHARS=${CONTENT_PREVIEW_CHARS}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=${EMBEDDING_TOKEN_PREFLIGHT_ENABLED:-true}
+      - EMBEDDING_MODEL_TOKEN_LIMIT=${EMBEDDING_MODEL_TOKEN_LIMIT:-8191}
+      - EMBEDDING_TOKEN_SAFETY_MARGIN=${EMBEDDING_TOKEN_SAFETY_MARGIN:-500}
+      - CONTENT_PREVIEW_CHARS=${CONTENT_PREVIEW_CHARS:-1600}
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=${WEAVIATE_BATCH_REQUESTS_PER_MINUTE:-5000}
       - PDF_STORAGE_PATH=${PDF_STORAGE_PATH:-/app/pdf_storage}
       - FILE_OUTPUT_STORAGE_PATH=${FILE_OUTPUT_STORAGE_PATH:-/app/file_outputs}
@@ -164,7 +176,8 @@ services:
       - DEBUG=true
       - POSTHOG_DISABLED=true  # Disable PostHog telemetry
       - ANONYMIZED_TELEMETRY=False  # Disable ChromaDB telemetry (capital F required)
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_curation}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/ai_curation}
+      - HEALTH_CHECK_STRICT_MODE=${HEALTH_CHECK_STRICT_MODE:-false}
       # Ontology Database Configuration
       - ONTOLOGY_ADMIN_USER=${ONTOLOGY_ADMIN_USER:-ontology_admin}
       - ONTOLOGY_ADMIN_PASSWORD=${ONTOLOGY_ADMIN_PASSWORD:-CHANGE_ME_ONTOLOGY_ADMIN_PASSWORD}
@@ -229,8 +242,6 @@ services:
       - ./backend/alembic:/app/backend/alembic:ro  # Mount migrations for alembic upgrade
       - ./pdf_storage:/app/pdf_storage
       - ./file_outputs:/app/file_outputs
-      - ./scripts/refresh_prefixes_on_start.sh:/app/scripts/refresh_prefixes_on_start.sh:ro
-      - ./scripts/extract_identifier_prefixes.py:/app/scripts/extract_identifier_prefixes.py:ro
       - ./backend/config:/app/backend/config
       - ./docker-compose.yml:/app/docker-compose.yml:ro  # For docker compose logs command
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for logs access (read-only)
@@ -243,6 +254,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # Optional one-shot identifier prefix refresh (project-specific)
+  # Run only when needed:
+  #   docker compose --profile curation-db run --rm prefix_refresh
+  prefix_refresh:
+    profiles: ["curation-db"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    command: bash -c "/app/scripts/refresh_prefixes_on_start.sh"
+    restart: "no"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/ai_curation}
+      - CURATION_DB_URL=${CURATION_DB_URL}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./backend/config:/app/backend/config
+      - ./backend/src:/app/backend/src:ro
+      - ./backend/main.py:/app/backend/main.py:ro
 
   # TraceReview Backend API for trace analysis (Agent Studio feature)
   trace_review_backend:
@@ -424,7 +457,7 @@ services:
       retries: 10
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
     ports:
       - 127.0.0.1:5434:5432

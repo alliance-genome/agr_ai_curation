@@ -36,60 +36,26 @@ class AgrQueryResult(BaseModel):
     message: Optional[str] = None
 
 
-# Provider to taxon mapping — loaded from config/providers.yaml
-def _load_provider_mappings():
-    """Load provider-to-taxon mappings from config/providers.yaml.
-
-    No hardcoded taxon fallback is used. Configuration must be provided via:
-    1) PROVIDERS_CONFIG_PATH (if set), or
-    2) <repo_root>/config/providers.yaml
-    """
-    from pathlib import Path
-    import yaml
-
-    # Strategy 1: explicit env var path
-    env_path = os.getenv("PROVIDERS_CONFIG_PATH")
-    if env_path:
-        config_path = Path(env_path)
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"PROVIDERS_CONFIG_PATH is set but file does not exist: {config_path}"
-            )
-    else:
-        # Strategy 2: default repo location derived from this file path
-        # backend/src/lib/openai_agents/tools/agr_curation.py -> repo root is parents[5]
-        config_path = Path(__file__).resolve().parents[5] / "config" / "providers.yaml"
-        if not config_path.exists():
-            raise FileNotFoundError(
-                "config/providers.yaml not found at expected path "
-                f"{config_path}. Set PROVIDERS_CONFIG_PATH to override."
-            )
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    providers = data.get("providers", {})
-    if not providers:
-        raise ValueError("config/providers.yaml is empty or missing 'providers' section")
+# Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
+def _load_group_taxon_mappings() -> dict:
+    """Build group-to-taxon mapping from config/groups.yaml."""
+    from src.lib.config.groups_loader import list_groups
     mapping = {}
-    for abbr, info in providers.items():
-        taxon_id = info.get("taxon_id")
-        if not taxon_id:
-            raise ValueError(f"Provider '{abbr}' is missing required 'taxon_id'")
-        mapping[abbr] = taxon_id
-    logger.info("Loaded %d provider mappings from %s", len(mapping), config_path)
+    for group in list_groups():
+        if group.taxon:
+            mapping[group.group_id] = group.taxon
     return mapping
 
 
-_PROVIDER_MAPPING_LOAD_ERROR: Optional[str] = None
+_GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
 try:
-    PROVIDER_TO_TAXON = _load_provider_mappings()
+    PROVIDER_TO_TAXON = _load_group_taxon_mappings()
 except Exception as exc:
-    # Degrade gracefully so unrelated app routes can still boot.
-    _PROVIDER_MAPPING_LOAD_ERROR = str(exc)
+    _GROUP_MAPPING_LOAD_ERROR = str(exc)
     PROVIDER_TO_TAXON = {}
-    logger.error("Failed to load provider mappings: %s", exc)
+    logger.error("Failed to load group-to-taxon mappings: %s", exc)
 
-# Reverse mapping: taxon to MOD abbreviation
+# Reverse mapping: taxon to group abbreviation
 TAXON_TO_PROVIDER = {v: k for k, v in PROVIDER_TO_TAXON.items()}
 
 # MODs with useful creator/institution info in allele fullnames

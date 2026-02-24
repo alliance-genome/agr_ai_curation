@@ -116,6 +116,7 @@ scripts/testing/test_*.sh
 *.ovpn
 *credentials*
 *secrets*
+scripts/local_db_tunnel.sh
 scripts/local_db_tunnel_env.sh
 
 # Backup files
@@ -161,10 +162,10 @@ delete_*.py
 find_*.py
 *_debug.py
 /*_test.py
-SECTION_HIERARCHY_PLAN.md
-TEST_OVERHAUL_PLAN.md
-CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md
-prompt_workshop_plan.md
+*_PLAN.md
+*_DESIGN.md
+*_DESIGN_PLAN.md
+*_ARCHITECTURE_PLAN.md
 
 # Claude Code settings
 .claude/
@@ -188,3 +189,4 @@ external_review_prompt.md
 # Presentation files
 presentation/
 .collab/
+.collabwork/

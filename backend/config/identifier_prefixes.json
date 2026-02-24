@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-01-25T15:18:37.998990+00:00",
+  "generated_at": "2026-02-23T16:16:43.780459+00:00",
   "prefixes": [
     "AAO",
     "ABA",
@@ -327,6 +327,7 @@
     "dip",
     "doi",
     "drugbank",
+    "drugbank.metabolite",
     "drugcentral",
     "efo",
     "emdb",
