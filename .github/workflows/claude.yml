@@ -9,7 +9,7 @@ on:
 # Prevent duplicate runs on the same PR — only one review at a time
 concurrency:
   group: claude-review-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   claude-review:
