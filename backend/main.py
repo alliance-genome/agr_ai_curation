@@ -388,7 +388,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down Weaviate Control Panel API...")
     try:
-        connection = WeaviateConnection()
         await connection.close()
     except Exception as e:
         logger.error("Error during shutdown: %s", e)
@@ -456,7 +455,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
+    allow_origins=os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173",
+    ).split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

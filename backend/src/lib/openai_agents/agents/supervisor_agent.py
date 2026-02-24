@@ -606,9 +606,9 @@ The tool returns file information including a download URL that will render as a
     set_pending_prompts(supervisor.name, prompts_used)
 
     # Log supervisor configuration to Langfuse for trace visibility
-    from ..langfuse_client import log_agent_config
+    from ..langfuse_client import log_agent_config as log_agent_config_to_langfuse
     tool_names = [getattr(t, 'name', str(t)) for t in specialist_tools]
-    log_agent_config(
+    log_agent_config_to_langfuse(
         agent_name="Query Supervisor",
         instructions=instructions,
         model=config.model,

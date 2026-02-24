@@ -21,6 +21,14 @@ providers:
     supports:
       parallel_tool_calls: true
 
+  gemini:
+    driver: litellm
+    api_key_env: GEMINI_API_KEY
+    litellm_prefix: gemini
+    api_mode: chat_completions
+    supports:
+      parallel_tool_calls: true
+
   groq:
     driver: litellm
     api_key_env: GROQ_API_KEY
