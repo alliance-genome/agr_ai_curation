@@ -344,7 +344,6 @@ describe('OpusChat', () => {
     })
 
     expect(screen.getByText(/Proposed removals are highlighted in red with strikethrough/)).toBeInTheDocument()
-    expect(screen.getByText('Removed lines')).toBeInTheDocument()
     expect(screen.getByText('Line B')).toBeInTheDocument()
   })
 })

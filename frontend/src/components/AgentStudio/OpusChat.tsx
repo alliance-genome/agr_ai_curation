@@ -146,51 +146,66 @@ interface OpusChatProps {
   onApplyWorkshopPromptUpdate?: (proposal: WorkshopPromptUpdateProposal) => void
 }
 
-interface ProposedLineDiff {
+interface PromptLineDiff {
   line: string
-  added: boolean
+  kind: 'unchanged' | 'added' | 'removed'
 }
 
 function normalizePromptForComparison(value: string | undefined | null): string {
   return (value || '').replace(/\r\n/g, '\n').trim()
 }
 
-function buildAddedLineDiff(currentPrompt: string, proposedPrompt: string): ProposedLineDiff[] {
+function buildPromptLineDiff(currentPrompt: string, proposedPrompt: string): PromptLineDiff[] {
   const currentLines = currentPrompt.replace(/\r\n/g, '\n').split('\n')
   const proposedLines = proposedPrompt.replace(/\r\n/g, '\n').split('\n')
+  const currentCount = currentLines.length
+  const proposedCount = proposedLines.length
 
-  const currentLineCounts = new Map<string, number>()
-  for (const line of currentLines) {
-    currentLineCounts.set(line, (currentLineCounts.get(line) || 0) + 1)
+  const lcs: number[][] = Array.from({ length: currentCount + 1 }, () =>
+    Array.from({ length: proposedCount + 1 }, () => 0)
+  )
+
+  for (let i = 1; i <= currentCount; i += 1) {
+    for (let j = 1; j <= proposedCount; j += 1) {
+      if (currentLines[i - 1] === proposedLines[j - 1]) {
+        lcs[i][j] = lcs[i - 1][j - 1] + 1
+      } else {
+        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1])
+      }
+    }
   }
 
-  return proposedLines.map((line) => {
-    const existingCount = currentLineCounts.get(line) || 0
-    if (existingCount > 0) {
-      currentLineCounts.set(line, existingCount - 1)
-      return { line, added: false }
+  const reversedDiff: PromptLineDiff[] = []
+  let i = currentCount
+  let j = proposedCount
+
+  while (i > 0 && j > 0) {
+    if (currentLines[i - 1] === proposedLines[j - 1]) {
+      reversedDiff.push({ line: currentLines[i - 1], kind: 'unchanged' })
+      i -= 1
+      j -= 1
+      continue
     }
-    return { line, added: true }
-  })
-}
 
-function buildRemovedLineDiff(currentPrompt: string, proposedPrompt: string): ProposedLineDiff[] {
-  const currentLines = currentPrompt.replace(/\r\n/g, '\n').split('\n')
-  const proposedLines = proposedPrompt.replace(/\r\n/g, '\n').split('\n')
-
-  const proposedLineCounts = new Map<string, number>()
-  for (const line of proposedLines) {
-    proposedLineCounts.set(line, (proposedLineCounts.get(line) || 0) + 1)
+    if (lcs[i][j - 1] >= lcs[i - 1][j]) {
+      reversedDiff.push({ line: proposedLines[j - 1], kind: 'added' })
+      j -= 1
+    } else {
+      reversedDiff.push({ line: currentLines[i - 1], kind: 'removed' })
+      i -= 1
+    }
   }
 
-  return currentLines.flatMap((line) => {
-    const existingCount = proposedLineCounts.get(line) || 0
-    if (existingCount > 0) {
-      proposedLineCounts.set(line, existingCount - 1)
-      return []
-    }
-    return [{ line, added: false }]
-  })
+  while (i > 0) {
+    reversedDiff.push({ line: currentLines[i - 1], kind: 'removed' })
+    i -= 1
+  }
+  while (j > 0) {
+    reversedDiff.push({ line: proposedLines[j - 1], kind: 'added' })
+    j -= 1
+  }
+
+  return reversedDiff.reverse()
 }
 
 function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string {
@@ -262,21 +277,17 @@ function OpusChat({
   const currentModWorkshopDraft = context?.agent_workshop?.selected_mod_prompt_draft || ''
   const currentPromptForPendingUpdate =
     pendingPromptUpdate?.target_prompt === 'mod' ? currentModWorkshopDraft : currentMainWorkshopDraft
-  const proposedLineDiff = useMemo(
-    () => buildAddedLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
-    [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
-  )
-  const removedLineDiff = useMemo(
-    () => buildRemovedLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
+  const promptLineDiff = useMemo(
+    () => buildPromptLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
     [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
   )
   const addedLineCount = useMemo(
-    () => proposedLineDiff.filter((entry) => entry.added).length,
-    [proposedLineDiff]
+    () => promptLineDiff.filter((entry) => entry.kind === 'added').length,
+    [promptLineDiff]
   )
   const removedLineCount = useMemo(
-    () => removedLineDiff.length,
-    [removedLineDiff]
+    () => promptLineDiff.filter((entry) => entry.kind === 'removed').length,
+    [promptLineDiff]
   )
 
   // Handle tool events from Opus - add tool calls to the current assistant message
@@ -1256,14 +1267,21 @@ Claude is responding...
               fontSize: '0.8rem',
             }}
           >
-            {proposedLineDiff.map((entry, idx) => (
+            {promptLineDiff.map((entry, idx) => (
               <Box
                 key={`proposal-line-${idx}`}
                 component="div"
                 sx={{
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                  bgcolor: entry.added ? (theme) => alpha(theme.palette.success.main, 0.16) : 'transparent',
+                  bgcolor:
+                    entry.kind === 'added'
+                      ? (theme) => alpha(theme.palette.success.main, 0.16)
+                      : entry.kind === 'removed'
+                      ? (theme) => alpha(theme.palette.error.main, 0.16)
+                      : 'transparent',
+                  color: entry.kind === 'removed' ? 'error.main' : 'inherit',
+                  textDecoration: entry.kind === 'removed' ? 'line-through' : 'none',
                   px: 0.5,
                   borderRadius: 0.5,
                 }}
@@ -1272,44 +1290,6 @@ Claude is responding...
               </Box>
             ))}
           </Box>
-          {removedLineCount > 0 && (
-            <Box sx={{ mt: 1.5 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
-                Removed lines
-              </Typography>
-              <Box
-                sx={{
-                  border: (theme) => `1px solid ${theme.palette.divider}`,
-                  borderRadius: 1,
-                  maxHeight: 220,
-                  overflow: 'auto',
-                  bgcolor: 'background.default',
-                  px: 1,
-                  py: 1,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {removedLineDiff.map((entry, idx) => (
-                  <Box
-                    key={`removed-line-${idx}`}
-                    component="div"
-                    sx={{
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      bgcolor: (theme) => alpha(theme.palette.error.main, 0.16),
-                      color: 'error.main',
-                      textDecoration: 'line-through',
-                      px: 0.5,
-                      borderRadius: 0.5,
-                    }}
-                  >
-                    {entry.line || ' '}
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCancelPromptUpdate} color="inherit">

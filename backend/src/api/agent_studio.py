@@ -2,7 +2,7 @@
 
 Provides endpoints for the Agent Studio feature:
 - GET /catalog - Get all agent prompts organized by category
-- POST /chat - Stream a conversation with Opus 4.5
+- POST /chat - Stream a conversation with Opus 4.6
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
@@ -77,6 +77,9 @@ from src.models.sql import get_db
 from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus-4-6"
+ANTHROPIC_OPUS_MODEL = (os.getenv("ANTHROPIC_OPUS_MODEL") or DEFAULT_ANTHROPIC_OPUS_MODEL).strip()
 
 # Create router with prefix
 router = APIRouter(prefix="/api/agent-studio")
@@ -948,7 +951,7 @@ async def test_agent_endpoint(
 
 
 # ============================================================================
-# Chat Endpoints (Opus 4.5)
+# Chat Endpoints (Opus 4.6)
 # ============================================================================
 
 # Convert tool definition to Anthropic format
@@ -1903,9 +1906,9 @@ async def _handle_tool_call(
 
 @router.post(
     "/chat",
-    summary="Chat with Opus 4.5",
+    summary="Chat with Opus 4.6",
     description="""
-    Stream a conversation with Claude Opus 4.5 about prompts.
+    Stream a conversation with Claude Opus 4.6 about prompts.
 
     Opus can discuss prompts, suggest improvements, and submit suggestions
     to the development team using the submit_prompt_suggestion tool.
@@ -1924,7 +1927,7 @@ async def chat_with_opus(
     request: ChatRequest,
     user: Dict[str, Any] = get_auth_dependency()
 ):
-    """Stream a conversation with Opus 4.5 with tool support."""
+    """Stream a conversation with Opus 4.6 with tool support."""
     import anthropic
 
     # Get API key
@@ -1995,7 +1998,7 @@ async def chat_with_opus(
             # Build API call parameters for beta API with effort parameter
             # Using effort="medium" for optimal quality/cost balance (76% fewer tokens)
             api_params = {
-                "model": "claude-opus-4-5-20251101",
+                "model": ANTHROPIC_OPUS_MODEL,
                 "betas": ["effort-2025-11-24"],
                 "max_tokens": 16384,
                 "system": system_prompt,
@@ -2003,7 +2006,10 @@ async def chat_with_opus(
                 "tools": _get_all_opus_tools(request.context),
                 "output_config": {"effort": "medium"},
             }
-            logger.info("Opus chat using effort='medium' for balanced quality/cost")
+            logger.info(
+                "Opus chat using model='%s' and effort='medium' for balanced quality/cost",
+                ANTHROPIC_OPUS_MODEL,
+            )
 
             while True:
                 # Track tool uses that need processing after stream completes
@@ -2315,7 +2321,7 @@ async def _process_suggestion_background(
         client = anthropic.Anthropic(api_key=api_key)
 
         response = client.messages.create(
-            model="claude-opus-4-5-20251101",
+            model=ANTHROPIC_OPUS_MODEL,
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
