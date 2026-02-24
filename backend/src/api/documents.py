@@ -13,6 +13,7 @@ from pathlib import Path as FilePath
 import logging
 import asyncio
 import json
+import hashlib
 import uuid
 import os
 import shutil
@@ -51,7 +52,7 @@ from ..lib.pipeline.tracker import PipelineTracker
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -735,13 +736,23 @@ async def upload_document_endpoint(
             # Ensure user exists in database and provision Weaviate tenants
             db_user = provision_user(session, principal_from_claims(user))
 
-            # Check for duplicate file BEFORE creating Weaviate document
-            # This prevents UUID mismatch between PostgreSQL and Weaviate
+            # Use a user-scoped hash so different users can upload identical files
+            # without colliding on the legacy globally-unique file_hash constraint.
+            raw_checksum = document.metadata.checksum
+            scoped_file_hash = hashlib.sha256(
+                f"{db_user.id}:{raw_checksum}".encode("utf-8")
+            ).hexdigest()
+
+            # Check for duplicate file BEFORE creating Weaviate document.
+            # Include legacy raw-hash rows for backward compatibility.
             existing = (
                 session.execute(
                     select(ViewerPDFDocument).where(
                         ViewerPDFDocument.user_id == db_user.id,
-                        ViewerPDFDocument.file_hash == document.metadata.checksum
+                        or_(
+                            ViewerPDFDocument.file_hash == scoped_file_hash,
+                            ViewerPDFDocument.file_hash == raw_checksum,
+                        )
                     )
                 )
                 .scalars()
@@ -783,7 +794,6 @@ async def upload_document_endpoint(
                         # Remove the document directory (contains the PDF)
                         shutil.rmtree(saved_path.parent)
 
-                    session.close()
                     raise HTTPException(
                         status_code=409,  # Conflict
                         detail={
@@ -806,29 +816,45 @@ async def upload_document_endpoint(
                 id=uuid.UUID(document.id),
                 filename=document.filename,
                 file_path=str(relative_path).replace('\\', '/'),
-                file_hash=document.metadata.checksum,
+                file_hash=scoped_file_hash,
                 file_size=saved_path.stat().st_size,
                 page_count=max(document.metadata.page_count, 1),
                 user_id=db_user.id,  # T029: Track document ownership (FR-016)
             )
-            session.merge(record)
+            session.add(record)
             session.commit()
-        except IntegrityError:
+        except IntegrityError as integrity_error:
             session.rollback()
-            existing = (
-                session.execute(
-                    select(ViewerPDFDocument).where(ViewerPDFDocument.file_hash == document.metadata.checksum)
-                )
-                .scalars()
-                .first()
+            logger.warning(
+                "Integrity error persisting PDF metadata for document %s (user_id=%s): %s",
+                document.id,
+                db_user.id,
+                integrity_error,
             )
-            if existing:
-                existing.filename = document.filename
-                existing.file_path = str(relative_path).replace('\\', '/')
-                existing.file_size = saved_path.stat().st_size
-                existing.page_count = max(document.metadata.page_count, 1)
-                existing.user_id = db_user.id  # T029: Update ownership on re-upload
-                session.commit()
+
+            # Keep Weaviate/PostgreSQL in sync: if SQL persistence fails after creating
+            # the Weaviate document, remove the Weaviate object to avoid orphan records.
+            try:
+                await delete_document(user["sub"], document.id)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Best-effort Weaviate cleanup failed for document %s: %s",
+                    document.id,
+                    cleanup_err,
+                )
+
+            # Remove uploaded file artifacts for this failed upload attempt.
+            if saved_path.exists():
+                shutil.rmtree(saved_path.parent, ignore_errors=True)
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "duplicate_file",
+                    "message": "This file appears to have already been uploaded for your account.",
+                    "suggestion": "Refresh the document list. If needed, delete the existing document and upload again.",
+                },
+            ) from integrity_error
         finally:
             session.close()
 
