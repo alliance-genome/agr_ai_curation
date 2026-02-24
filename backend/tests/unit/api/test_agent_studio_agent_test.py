@@ -249,8 +249,14 @@ class TestAgentWorkshopSystemPrompt:
 
     def test_get_all_opus_tools_includes_workshop_prompt_update_tool(self):
         from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
-        tools = api_module._get_all_opus_tools()
+        tools = api_module._get_all_opus_tools(
+            ChatContext(
+                active_tab="agent_workshop",
+                agent_workshop=AgentWorkshopContext(template_source="gene"),
+            )
+        )
         tool_names = {tool.get("name") for tool in tools}
 
         assert "update_workshop_prompt_draft" in tool_names
@@ -319,7 +325,7 @@ class TestAgentWorkshopSystemPrompt:
         )
 
         assert result["success"] is False
-        assert "Flow tools are only available on the Flows tab" in result["error"]
+        assert "not available on the agent_workshop tab" in result["error"]
 
     def test_handle_update_workshop_prompt_tool_rejects_non_workshop_context(self):
         from src.api import agent_studio as api_module

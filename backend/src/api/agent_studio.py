@@ -1212,6 +1212,81 @@ GET_DOCKER_LOGS_TOOL = {
 }
 
 
+_COMMON_TOOLS = {
+    "submit_prompt_suggestion",
+    "report_tool_failure",
+}
+_TRACE_TOOLS = {
+    "get_trace_summary",
+    "get_tool_calls_summary",
+    "get_tool_calls_page",
+    "get_tool_call_detail",
+    "get_trace_conversation",
+    "get_trace_view",
+    "get_docker_logs",
+}
+_FLOW_TOOLS = {
+    "create_flow",
+    "validate_flow",
+    "get_flow_templates",
+    "get_current_flow",
+    "get_available_agents",
+}
+_AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
+    "agr_curation_query",
+    "curation_db_sql",
+    "chebi_api_call",
+    "quickgo_api_call",
+    "go_api_call",
+}
+
+
+def _get_active_tab(context: Optional[ChatContext]) -> str:
+    """Resolve active tab from chat context with a safe default."""
+    if context and context.active_tab in {"agents", "flows", "agent_workshop"}:
+        return context.active_tab
+    return "agents"
+
+
+def _is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) -> bool:
+    """Check whether a tool is allowed for the current tab/context."""
+    active_tab = _get_active_tab(context)
+    has_trace = bool(context and context.trace_id)
+
+    if tool_name in _COMMON_TOOLS:
+        return True
+
+    if tool_name == "update_workshop_prompt_draft":
+        return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
+
+    if tool_name in _FLOW_TOOLS:
+        return active_tab == "flows"
+
+    if tool_name in _AGENTS_ONLY_DIAGNOSTIC_TOOLS:
+        return active_tab == "agents"
+
+    if tool_name == "get_prompt":
+        return active_tab in {"agents", "flows", "agent_workshop"}
+
+    if tool_name in _TRACE_TOOLS:
+        return active_tab == "agents" or has_trace
+
+    # Unknown/legacy tools are left to existing handlers and validation paths.
+    return True
+
+
+def _tool_scope_error(tool_name: str, context: Optional[ChatContext]) -> Dict[str, Any]:
+    """Build a curator-friendly error for disallowed tool usage."""
+    active_tab = _get_active_tab(context)
+    return {
+        "success": False,
+        "error": (
+            f"Tool '{tool_name}' is not available on the {active_tab} tab. "
+            "Use the matching screen for that tool type."
+        ),
+    }
+
+
 def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
     """
     Get all tools available to Opus in Anthropic format.
@@ -1226,11 +1301,11 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
     - get_trace_conversation: User query and assistant response
     - get_trace_view: Generic view access with token metadata
     """
-    tools = [
+    candidate_tools = [
         ANTHROPIC_SUGGESTION_TOOL,
         ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
         ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
-        # Token-aware trace analysis tools (recommended)
+        # Token-aware trace analysis tools
         GET_TRACE_SUMMARY_TOOL,
         GET_TOOL_CALLS_SUMMARY_TOOL,
         GET_TOOL_CALLS_PAGE_TOOL,
@@ -1240,14 +1315,17 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         GET_DOCKER_LOGS_TOOL,
     ]
 
-    # Add diagnostic tools from registry.
-    # Flow tools are only exposed when the curator is actively on the Flows tab.
-    # This reduces accidental cross-context tool calls in Agent Workshop chats.
+    tools = [
+        tool
+        for tool in candidate_tools
+        if _is_tool_allowed_for_context(str(tool.get("name", "")), context)
+    ]
+
+    # Add diagnostic tools from registry using the same context-aware gate.
     registry = get_diagnostic_tools_registry()
-    include_flow_tools = bool(context and context.active_tab == "flows")
     diagnostic_tools = []
     for tool in registry.get_all_tools():
-        if tool.category == "flows" and not include_flow_tools:
+        if not _is_tool_allowed_for_context(tool.name, context):
             continue
         diagnostic_tools.append(
             {
@@ -1749,11 +1827,8 @@ async def _handle_tool_call(
     tool_def = registry.get_tool(tool_name)
 
     if tool_def:
-        if tool_def.category == "flows" and (not context or context.active_tab != "flows"):
-            return {
-                "success": False,
-                "error": "Flow tools are only available on the Flows tab. Switch to Flows and open a flow to use this tool.",
-            }
+        if not _is_tool_allowed_for_context(tool_name, context):
+            return _tool_scope_error(tool_name, context)
 
         # Execute the diagnostic tool handler
         logger.debug('Executing diagnostic tool: %s', tool_name)
