@@ -1497,21 +1497,6 @@ function PromptWorkshop({
                 </Box>
               )}
 
-              <FormControlLabel
-                control={
-                  <Switch
-                    size="small"
-                    checked={includeModRules}
-                    onChange={(event) => setIncludeModRules(event.target.checked)}
-                  />
-                }
-                label={
-                  <Typography variant="body2" color="text.secondary">
-                    Include MOD rules at runtime
-                  </Typography>
-                }
-                sx={{ ml: 0 }}
-              />
             </Stack>
           </SectionCard>
 
@@ -1525,26 +1510,131 @@ function PromptWorkshop({
                 </Button>
               )}
             </Stack>
-            <TextField
-              fullWidth
-              multiline
-              minRows={12}
-              value={customPrompt}
-              onChange={(event) => setCustomPrompt(event.target.value)}
-              placeholder="Enter the system prompt for this agent..."
-              variant="outlined"
-              sx={{
-                '& .MuiInputBase-root': {
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                  fontSize: '0.85rem',
-                  backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                  borderRadius: 1.5,
-                },
-                '& .MuiOutlinedInput-notchedOutline': {
-                  borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                },
-              }}
-            />
+            <Stack spacing={1}>
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Main Prompt</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={12}
+                    value={customPrompt}
+                    onChange={(event) => setCustomPrompt(event.target.value)}
+                    placeholder="Enter the system prompt for this agent..."
+                    variant="outlined"
+                    sx={{
+                      '& .MuiInputBase-root': {
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: '0.85rem',
+                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                        borderRadius: 1.5,
+                      },
+                      '& .MuiOutlinedInput-notchedOutline': {
+                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                      },
+                    }}
+                  />
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>MOD Prompt Overrides</Typography>
+                    {hasAnyModOverrides && (
+                      <Chip size="small" label={`${Object.keys(modPromptOverrides).length} override${Object.keys(modPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    )}
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={1.5}>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <FormControlLabel
+                        sx={{ ml: 0, mr: 0 }}
+                        control={
+                          <Switch
+                            size="small"
+                            checked={includeModRules}
+                            onChange={(event) => setIncludeModRules(event.target.checked)}
+                          />
+                        }
+                        label={
+                          <Typography variant="body2" color="text.secondary">
+                            Add MOD prompts at runtime
+                          </Typography>
+                        }
+                      />
+                      <Tooltip
+                        title="When enabled, MOD-specific prompts/rules are included at runtime for this agent."
+                        placement="top"
+                      >
+                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="MOD prompt runtime help">
+                          <HelpOutlineIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+
+                    {availableModIds.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        This template has no MOD-specific prompts to override.
+                      </Typography>
+                    ) : (
+                      <Stack spacing={1.5}>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Select
+                            size="small"
+                            value={modId}
+                            onChange={(event) => setModId(event.target.value)}
+                            sx={{ minWidth: 160 }}
+                          >
+                            {availableModIds.map((availableModId) => (
+                              <MenuItem key={availableModId} value={availableModId}>
+                                {availableModId}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={handleResetSelectedModPrompt}
+                            disabled={!hasSelectedModOverride}
+                          >
+                            Reset to Template
+                          </Button>
+                        </Stack>
+                        <TextField
+                          fullWidth
+                          multiline
+                          minRows={8}
+                          label={selectedModId ? `${selectedModId} Prompt` : 'MOD Prompt'}
+                          value={selectedModPrompt}
+                          onChange={(event) => handleSelectedModPromptChange(event.target.value)}
+                          sx={{
+                            '& .MuiInputBase-root': {
+                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                              fontSize: '0.8rem',
+                              backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                              borderRadius: 1.5,
+                            },
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                            },
+                          }}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                          {hasSelectedModOverride
+                            ? `Custom override active for ${selectedModId}.`
+                            : `Using template ${selectedModId} prompt content.`}
+                          {hasAnyModOverrides ? ` Total overrides: ${Object.keys(modPromptOverrides).length}.` : ''}
+                        </Typography>
+                      </Stack>
+                    )}
+                  </Stack>
+                </AccordionDetails>
+              </StyledAccordion>
+            </Stack>
           </SectionCard>
 
           {/* ── Section 3: Advanced Settings ── */}
@@ -1596,75 +1686,6 @@ function PromptWorkshop({
                     </Button>
                   </Stack>
                 </Stack>
-              </AccordionDetails>
-            </StyledAccordion>
-
-            {/* MOD Prompt Overrides accordion */}
-            <StyledAccordion defaultExpanded={hasAnyModOverrides}>
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>MOD Prompt Overrides</Typography>
-                  {hasAnyModOverrides && (
-                    <Chip size="small" label={`${Object.keys(modPromptOverrides).length} override${Object.keys(modPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  )}
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails>
-                {availableModIds.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    This template has no MOD-specific prompts to override.
-                  </Typography>
-                ) : (
-                  <Stack spacing={1.5}>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Select
-                        size="small"
-                        value={modId}
-                        onChange={(event) => setModId(event.target.value)}
-                        sx={{ minWidth: 160 }}
-                      >
-                        {availableModIds.map((availableModId) => (
-                          <MenuItem key={availableModId} value={availableModId}>
-                            {availableModId}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={handleResetSelectedModPrompt}
-                        disabled={!hasSelectedModOverride}
-                      >
-                        Reset to Template
-                      </Button>
-                    </Stack>
-                    <TextField
-                      fullWidth
-                      multiline
-                      minRows={8}
-                      label={selectedModId ? `${selectedModId} Prompt` : 'MOD Prompt'}
-                      value={selectedModPrompt}
-                      onChange={(event) => handleSelectedModPromptChange(event.target.value)}
-                      sx={{
-                        '& .MuiInputBase-root': {
-                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                          fontSize: '0.8rem',
-                          backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                          borderRadius: 1.5,
-                        },
-                        '& .MuiOutlinedInput-notchedOutline': {
-                          borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                        },
-                      }}
-                    />
-                    <Typography variant="caption" color="text.secondary">
-                      {hasSelectedModOverride
-                        ? `Custom override active for ${selectedModId}.`
-                        : `Using template ${selectedModId} prompt content.`}
-                      {hasAnyModOverrides ? ` Total overrides: ${Object.keys(modPromptOverrides).length}.` : ''}
-                    </Typography>
-                  </Stack>
-                )}
               </AccordionDetails>
             </StyledAccordion>
 

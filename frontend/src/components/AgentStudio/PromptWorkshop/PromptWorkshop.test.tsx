@@ -421,6 +421,8 @@ describe('PromptWorkshop', () => {
       />
     )
 
+    fireEvent.click(await screen.findByText('Main Prompt'))
+
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Enter the system prompt for this agent...')).toHaveValue(
         'Updated prompt from Claude'
