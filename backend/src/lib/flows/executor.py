@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
-from agents import Agent
+from agents import Agent, function_tool
 
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
@@ -136,6 +136,67 @@ def get_task_instructions(flow: CurationFlow) -> Optional[str]:
     return None
 
 
+def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
+    """Return executable flow nodes in edge-traversal order.
+
+    Uses entry_node_id + edges when available, and appends disconnected
+    executable nodes at the end so no configured step is silently ignored.
+    """
+    flow_def = flow.flow_definition or {}
+    nodes: List[Dict[str, Any]] = flow_def.get("nodes", []) or []
+    edges: List[Dict[str, Any]] = flow_def.get("edges", []) or []
+    entry_node_id = flow_def.get("entry_node_id")
+
+    node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
+    if not node_by_id:
+        return []
+
+    edges_from: Dict[str, List[str]] = {}
+    incoming_targets: Set[str] = set()
+    for edge in edges:
+        source = edge.get("source")
+        target = edge.get("target")
+        if not source or not target:
+            continue
+        edges_from.setdefault(source, []).append(target)
+        incoming_targets.add(target)
+
+    if entry_node_id and entry_node_id in node_by_id:
+        start_node_id = entry_node_id
+    else:
+        potential_starts = [n.get("id") for n in nodes if n.get("id") not in incoming_targets]
+        start_node_id = potential_starts[0] if potential_starts else nodes[0].get("id")
+
+    ordered: List[Dict[str, Any]] = []
+    visited: Set[str] = set()
+    queue: List[str] = [start_node_id] if start_node_id else []
+
+    def _is_executable(node: Dict[str, Any]) -> bool:
+        node_type = node.get("type", "agent")
+        agent_id = node.get("data", {}).get("agent_id")
+        return node_type != "task_input" and agent_id not in ("task_input", "supervisor")
+
+    while queue:
+        node_id = queue.pop(0)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        node = node_by_id.get(node_id)
+        if node and _is_executable(node):
+            ordered.append(node)
+        for next_id in edges_from.get(node_id, []):
+            if next_id not in visited:
+                queue.append(next_id)
+
+    # Append any disconnected executable nodes to preserve configured steps.
+    for node in nodes:
+        node_id = node.get("id")
+        if node_id not in visited and _is_executable(node):
+            ordered.append(node)
+
+    return ordered
+
+
 def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     """Count occurrences of each agent_id in the flow (excluding task_input).
 
@@ -190,7 +251,8 @@ def get_all_agent_tools(
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
-) -> Tuple[List, Set[str]]:
+    include_unavailable: bool = False,
+) -> Any:
     """Get streaming-wrapped tools for agents in the flow.
 
     Creates one tool per flow node (not per unique agent_id). This means
@@ -216,15 +278,16 @@ def get_all_agent_tools(
         doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
 
     Returns:
-        Tuple of (tools, created_tool_names) where tools is the list of
-        streaming-wrapped tool functions and created_tool_names is the set
-        of tool names that were actually created (used by
-        build_supervisor_instructions to avoid referencing non-existent tools).
+        By default returns (tools, created_tool_names).
+        When include_unavailable=True, returns
+        (tools, created_tool_names, unavailable_steps) where unavailable_steps
+        contains skipped steps with reasons for UI warnings.
     """
-    nodes = flow.flow_definition.get("nodes", [])
+    nodes = _get_ordered_executable_nodes(flow)
     agent_id_counts = _count_agent_ids(flow)
     all_tools = []
     created_tool_names: Set[str] = set()
+    unavailable_steps: List[Dict[str, Any]] = []
 
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization matches how chat pre-fetches and passes through
@@ -254,36 +317,87 @@ def get_all_agent_tools(
     # Create one tool per node (not per unique agent_id)
     # This ensures each step gets its own agent instance with its own custom_instructions
     step_num = 0
+    ordered_tool_names: List[str] = []
+    execution_state = {"next_tool_index": 0}
+
+    def _wrap_with_step_order(tool_callable, tool_name: str):
+        """Enforce strict flow step ordering at runtime."""
+
+        @function_tool(name_override=tool_name, description_override=f"Flow step tool: {tool_name}")
+        async def _ordered_tool(query: str) -> str:
+            next_idx = execution_state["next_tool_index"]
+            if next_idx >= len(ordered_tool_names):
+                return (
+                    "All remaining flow steps are already complete. "
+                    "Summarize final output and stop."
+                )
+            expected_tool = ordered_tool_names[next_idx]
+            if tool_name != expected_tool:
+                logger.info(
+                    "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
+                    tool_name,
+                    expected_tool,
+                )
+                return (
+                    f"Flow step order is strict. The next required step tool is "
+                    f"'{expected_tool}'. Do not call '{tool_name}' yet."
+                )
+
+            result = await tool_callable(query=query)
+            execution_state["next_tool_index"] = next_idx + 1
+            return result
+
+        return _ordered_tool
+
     for node in nodes:
-        node_type = node.get("type", "agent")
         data = node.get("data", {})
         agent_id = data.get("agent_id")
-
-        # Skip non-executable nodes (task_input = context, supervisor = system routing)
-        if node_type == "task_input" or agent_id in ("task_input", "supervisor"):
-            continue
 
         step_num += 1
 
         if not agent_id:
             logger.warning("[Flow Executor] Node is missing agent_id, skipping")
+            unavailable_steps.append({
+                "step": step_num,
+                "agent_id": None,
+                "agent_name": "Unknown",
+                "reason": "missing agent_id in flow node",
+            })
             continue
 
         entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
         if not entry:
             logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
+            unavailable_steps.append({
+                "step": step_num,
+                "agent_id": agent_id,
+                "agent_name": data.get("agent_display_name") or agent_id,
+                "reason": "agent could not be resolved from unified registry",
+            })
             continue
 
         # Check if this agent requires document and we don't have one
         if entry.get("requires_document", False) and not document_id:
             logger.warning(
                 "[Flow Executor] Agent '%s' requires document but none provided, skipping", agent_id)
+            unavailable_steps.append({
+                "step": step_num,
+                "agent_id": agent_id,
+                "agent_name": entry.get("name", agent_id),
+                "reason": "agent requires a document, but no document is loaded",
+            })
             continue
 
         try:
             agent = get_agent_by_id(agent_id, **context)
         except Exception as e:
             logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
+            unavailable_steps.append({
+                "step": step_num,
+                "agent_id": agent_id,
+                "agent_name": entry.get("name", agent_id),
+                "reason": str(e),
+            })
             continue
 
         # Prepend per-node custom instructions (step-specific, not agent-global)
@@ -316,18 +430,22 @@ def get_all_agent_tools(
             specialist_name = entry.get("name", agent_id)
             tool_description = entry.get("description", f"Ask the {entry['name']}")
 
-        streaming_tool = _create_streaming_tool(
+        raw_streaming_tool = _create_streaming_tool(
             agent=agent,
             tool_name=tool_name,
             tool_description=tool_description,
             specialist_name=specialist_name,
         )
+        ordered_tool_names.append(tool_name)
+        streaming_tool = _wrap_with_step_order(raw_streaming_tool, tool_name)
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
         all_tools.append(streaming_tool)
         created_tool_names.add(tool_name)
 
     logger.info('[Flow Executor] Created %s streaming tools for flow', len(all_tools))
+    if include_unavailable:
+        return all_tools, created_tool_names, unavailable_steps
     return all_tools, created_tool_names
 
 
@@ -363,22 +481,15 @@ def build_supervisor_instructions(
     Returns:
         System instructions string for the flow supervisor
     """
-    nodes = flow.flow_definition.get("nodes", [])
     agent_id_counts = _count_agent_ids(flow)
     # entry_node_id = flow.flow_definition.get("entry_node_id")  # Reserved for future edge traversal
 
-    # Build ordered step list (for V1, just use node order)
-    # Skip task_input nodes - they're context, not steps
+    # Build ordered step list from edge traversal order.
     step_descriptions = []
     step_num = 0
-    for node in nodes:
-        node_type = node.get("type", "agent")
+    for node in _get_ordered_executable_nodes(flow):
         data = node.get("data", {})
         agent_id = data.get("agent_id")
-
-        # Skip task_input nodes
-        if node_type == "task_input" or agent_id == "task_input":
-            continue
 
         step_num += 1
         agent_name = data.get("agent_display_name")
@@ -435,7 +546,9 @@ Execute these steps in order:
 {chr(10).join(step_descriptions)}
 
 Guidelines:
-- You MAY call agents multiple times if you need more data before moving to the next step
+- Step execution order is STRICTLY enforced by runtime tool gating
+- Call each available step exactly once, in order
+- If a step is unavailable, skip it and continue to the next available step
 - Pass relevant context from previous steps to subsequent steps
 - The final step typically produces output (file or response)
 
@@ -486,17 +599,11 @@ def build_flow_prompt(
         prompt_parts.append(f"Execute the '{flow.name}' curation workflow.")
 
     # Add step-specific goals as context (skip task_input nodes)
-    nodes = flow.flow_definition.get("nodes", [])
+    nodes = _get_ordered_executable_nodes(flow)
     step_goals = []
     step_num = 0
     for node in nodes:
-        node_type = node.get("type", "agent")
         data = node.get("data", {})
-        agent_id = data.get("agent_id")
-
-        # Skip task_input nodes
-        if node_type == "task_input" or agent_id == "task_input":
-            continue
 
         step_num += 1
         goal = data.get("step_goal")
@@ -553,7 +660,7 @@ def create_flow_supervisor(
     # Pass through pre-fetched doc_context to avoid redundant Weaviate queries
     # Returns (tools, created_tool_names) so supervisor instructions only
     # reference tools that were actually created
-    tools, created_tool_names = get_all_agent_tools(
+    tools, created_tool_names, unavailable_steps = get_all_agent_tools(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
@@ -561,6 +668,7 @@ def create_flow_supervisor(
         document_name=document_name,
         active_groups=active_groups,
         doc_context=doc_context,
+        include_unavailable=True,
     )
 
     # Fail fast if no tools could be created — the supervisor would have nothing to call
@@ -599,6 +707,7 @@ def create_flow_supervisor(
         model=model,
         model_settings=model_settings,
     )
+    setattr(supervisor, "_flow_unavailable_steps", unavailable_steps)
 
     logger.info(
         f"[Flow Executor] Created flow supervisor for '{flow.name}': "
@@ -689,6 +798,27 @@ async def execute_flow(
             "total_steps": total_steps,
         }
     }
+
+    # Surface any unavailable flow steps to UI/audit so skipped work is explicit.
+    unavailable_steps = getattr(supervisor, "_flow_unavailable_steps", []) or []
+    for step in unavailable_steps:
+        step_num = step.get("step")
+        agent_name = step.get("agent_name", "Unknown Agent")
+        reason = step.get("reason", "unknown reason")
+        yield {
+            "type": "DOMAIN_WARNING",
+            "timestamp": _now_iso(),
+            "details": {
+                "reason": "flow_step_unavailable",
+                "message": (
+                    f"Flow step {step_num} ({agent_name}) is unavailable and will be skipped: {reason}"
+                ),
+                "step": step_num,
+                "agent_id": step.get("agent_id"),
+                "agent_name": agent_name,
+                "unavailable_reason": reason,
+            }
+        }
 
     # Delegate to run_agent_streamed with flow supervisor
     # This gives us: Langfuse tracing, prompt logging, document metadata,
