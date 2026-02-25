@@ -558,6 +558,7 @@ async def _run_agent_with_tracing(
                         # Check if chat_output agent completed (for flow termination)
                         # This signals that a chat-based flow has produced its final output
                         if last_tool == "ask_chat_output_specialist":
+                            full_output = str(output) if output is not None else ""
                             logger.info(
                                 "Chat output agent completed",
                                 extra={"trace_id": trace_id, "user_id": user_id},
@@ -566,8 +567,9 @@ async def _run_agent_with_tracing(
                                 "type": "CHAT_OUTPUT_READY",
                                 "timestamp": _now_iso(),
                                 "details": {
+                                    "output": full_output,
                                     "output_preview": output_preview,
-                                    "output_length": len(str(output)),
+                                    "output_length": len(full_output),
                                 }
                             }
 

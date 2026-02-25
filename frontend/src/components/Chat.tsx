@@ -538,6 +538,34 @@ function Chat({
         })
       }
 
+      // CHAT_OUTPUT_READY - flow chat output is finalized in a tool call
+      // Emit an assistant message so the user sees the actual flow result text.
+      if (parsed.type === 'CHAT_OUTPUT_READY' && parsed.details) {
+        const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
+        if (outputText) {
+          setMessages(prev => {
+            const lastMsg = prev[prev.length - 1]
+            // Avoid duplicate append if the same output is already the latest assistant message
+            if (lastMsg?.role === 'assistant' && lastMsg.content.trim() === outputText) {
+              return prev
+            }
+            return [
+              ...prev,
+              {
+                role: 'assistant',
+                content: outputText,
+                timestamp: new Date(),
+                id: `msg-${Date.now()}`,
+                traceIds: [...sessionTraceIds.current]
+              }
+            ]
+          })
+          assistantMessageRef.current = ''
+          assistantMessageIdRef.current = null
+        }
+        return
+      }
+
       // FILE_READY - create a file download message
       if (parsed.type === 'FILE_READY' && parsed.details) {
         const fileData: FileInfo = {
