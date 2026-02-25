@@ -324,7 +324,15 @@ def get_all_agent_tools(
     def _wrap_with_step_order(tool_callable, tool_name: str):
         """Enforce strict flow step ordering at runtime."""
 
-        @function_tool(name_override=tool_name, description_override=f"Flow step tool: {tool_name}")
+        # Preserve the original streaming tool description so downstream audit/event
+        # formatting can recover user-facing specialist names (especially custom agents).
+        description_override = getattr(
+            tool_callable,
+            "description",
+            f"Flow step tool: {tool_name}",
+        )
+
+        @function_tool(name_override=tool_name, description_override=description_override)
         async def _ordered_tool(query: str) -> str:
             next_idx = execution_state["next_tool_index"]
             if next_idx >= len(ordered_tool_names):

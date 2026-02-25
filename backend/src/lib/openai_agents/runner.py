@@ -156,6 +156,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _build_custom_tool_display_names(agent: Agent) -> Dict[str, str]:
+    """Map custom specialist tool names to user-facing labels.
+
+    Custom flow tools use names like ask_ca_<uuid>_specialist. We recover a readable
+    label from the tool description (typically "Ask the <Agent Name>").
+    """
+    display_names: Dict[str, str] = {}
+    for tool in getattr(agent, "tools", []) or []:
+        tool_name = (getattr(tool, "name", None) or "").strip()
+        if not tool_name.startswith("ask_ca_") or not tool_name.endswith("_specialist"):
+            continue
+
+        description = (getattr(tool, "description", None) or "").strip()
+        if not description:
+            continue
+
+        lower_desc = description.lower()
+        if lower_desc.startswith("ask the "):
+            display = description[8:].strip()
+        elif lower_desc.startswith("ask "):
+            display = description[4:].strip()
+        else:
+            display = description
+
+        if display:
+            display_names[tool_name] = display
+
+    return display_names
+
+
 def _log_used_prompts_to_db(
     trace_id: str,
     session_id: Optional[str] = None,
@@ -274,6 +304,7 @@ async def _run_agent_with_tracing(
     tool_calls_count = 0
     current_agent = agent.name
     agents_used = [agent.name]
+    custom_tool_display_names = _build_custom_tool_display_names(agent)
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
 
     # Create Langfuse-wrapped OpenAI client
@@ -505,13 +536,19 @@ async def _run_agent_with_tracing(
                                 "agent": current_agent,
                             },
                         )
+                        display_name = custom_tool_display_names.get(tool_name, tool_name)
+                        is_specialist_call = tool_name.startswith("ask_") and tool_name.endswith("_specialist")
                         # Audit event: TOOL_START
                         yield {
                             "type": "TOOL_START",
                             "timestamp": _now_iso(),
                             "details": {
                                 "toolName": tool_name,
-                                "friendlyName": f"Calling {tool_name}...",
+                                "friendlyName": (
+                                    f"Calling {display_name}..."
+                                    if is_specialist_call
+                                    else f"Calling {tool_name}..."
+                                ),
                                 "agent": current_agent,
                                 "toolArgs": tool_args
                             }
@@ -550,7 +587,7 @@ async def _run_agent_with_tracing(
                             "timestamp": _now_iso(),
                             "details": {
                                 "toolName": last_tool,
-                                "friendlyName": f"{last_tool} complete",
+                                "friendlyName": f"{custom_tool_display_names.get(last_tool, last_tool)} complete",
                                 "success": True
                             }
                         }
