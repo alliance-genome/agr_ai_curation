@@ -38,6 +38,12 @@ def test_provider_method_succeeds_when_mapping_present(monkeypatch):
     assert result is None
 
 
+def test_tool_schema_requires_only_method():
+    """FunctionTool schema should not require optional AGR query params."""
+    schema = getattr(agr_curation.agr_curation_query, "params_json_schema", {}) or {}
+    assert schema.get("required") == ["method"]
+
+
 def _unwrap_function_tool(tool):
     """Extract decorated function from FunctionTool wrapper for unit testing.
 
