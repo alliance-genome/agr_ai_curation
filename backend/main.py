@@ -297,6 +297,11 @@ async def lifespan(app: FastAPI):
             from src.lib.config.groups_loader import load_groups
             groups = load_groups()
             logger.info("Group definitions loaded: %s groups", len(groups))
+
+            # Fail fast if any active agent references an unknown structured-output schema.
+            from src.lib.agent_studio.catalog_service import validate_active_agent_output_schemas
+            validate_active_agent_output_schemas(db)
+            logger.info("Agent output schema validation passed")
         except Exception as e:
             logger.error("FATAL: Failed to initialize prompts/groups: %s", e)
             db.rollback()  # Rollback any partial changes on failure

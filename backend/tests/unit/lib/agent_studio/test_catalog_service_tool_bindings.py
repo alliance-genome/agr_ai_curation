@@ -12,6 +12,28 @@ class _FakeTool:
         self.name = name
 
 
+class _FakeQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeDB:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def query(self, *_args, **_kwargs):
+        return _FakeQuery(self._rows)
+
+
 def test_resolve_tools_rejects_unknown_binding(monkeypatch):
     monkeypatch.setattr(catalog_service, "TOOL_BINDINGS", {})
 
@@ -201,3 +223,32 @@ def test_get_agent_metadata_db_lookup_coerces_string_user_id(monkeypatch):
 
     assert observed["user_id"] == 17
     assert metadata["required_params"] == []
+
+
+def test_validate_active_agent_output_schemas_passes(monkeypatch):
+    db = _FakeDB([
+        ("gene", "Gene Validation Agent", "GeneResultEnvelope"),
+        ("orthologs", "Orthologs Agent", "OrthologsResult"),
+    ])
+    monkeypatch.setattr(
+        catalog_service,
+        "_resolve_output_schema",
+        lambda schema_key: object() if schema_key in {"GeneResultEnvelope", "OrthologsResult"} else None,
+    )
+
+    catalog_service.validate_active_agent_output_schemas(db)
+
+
+def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
+    db = _FakeDB([
+        ("gene", "Gene Validation Agent", "GeneResultEnvelope"),
+        ("bad_agent", "Bad Agent", "MissingEnvelope"),
+    ])
+    monkeypatch.setattr(
+        catalog_service,
+        "_resolve_output_schema",
+        lambda schema_key: object() if schema_key == "GeneResultEnvelope" else None,
+    )
+
+    with pytest.raises(RuntimeError, match="bad_agent \\(Bad Agent\\) -> MissingEnvelope"):
+        catalog_service.validate_active_agent_output_schemas(db)

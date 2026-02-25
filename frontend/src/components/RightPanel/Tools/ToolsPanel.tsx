@@ -18,6 +18,8 @@ export interface ToolsPanelProps {
   sessionId: string | null
   /** Callback to execute a flow */
   onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
+  /** Callback to stop currently executing flow/chat stream */
+  onStopFlow?: () => void | Promise<void>
   /** Whether a flow is currently executing */
   isExecuting?: boolean
   /** Current document loaded in PDF viewer */
@@ -34,6 +36,7 @@ export interface ToolsPanelProps {
 const ToolsPanel: React.FC<ToolsPanelProps> = ({
   sessionId,
   onExecuteFlow,
+  onStopFlow,
   isExecuting = false,
   currentDocumentId,
 }) => {
@@ -76,6 +79,7 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
           <CurationFlows
             sessionId={sessionId}
             onExecuteFlow={onExecuteFlow}
+            onStopFlow={onStopFlow}
             isExecuting={isExecuting}
             currentDocumentId={currentDocumentId}
           />

@@ -1695,6 +1695,34 @@ def _resolve_output_schema(schema_key: str) -> Optional[Any]:
     return schema
 
 
+def validate_active_agent_output_schemas(db: Any) -> None:
+    """Fail fast when active agents reference unknown output schema keys."""
+    from src.models.sql.agent import Agent as DBAgent
+
+    rows = (
+        db.query(DBAgent.agent_key, DBAgent.name, DBAgent.output_schema_key)
+        .filter(DBAgent.is_active == True)  # noqa: E712
+        .filter(DBAgent.output_schema_key.isnot(None))
+        .filter(DBAgent.output_schema_key != "")
+        .order_by(DBAgent.agent_key.asc())
+        .all()
+    )
+
+    unresolved: List[str] = []
+    for agent_key, name, output_schema_key in rows:
+        if not _resolve_output_schema(str(output_schema_key)):
+            unresolved.append(
+                f"{agent_key} ({name}) -> {output_schema_key}"
+            )
+
+    if unresolved:
+        details = "; ".join(unresolved)
+        raise RuntimeError(
+            "Found active agents with unknown output schemas in agents table: "
+            f"{details}"
+        )
+
+
 def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
     from src.lib.openai_agents.guardrails import (

@@ -23,6 +23,7 @@ import {
   DialogActions,
 } from '@mui/material'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -63,6 +64,8 @@ export interface CurationFlowsProps {
   sessionId: string | null
   /** Callback to execute a flow */
   onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
+  /** Callback to stop currently executing flow/chat stream */
+  onStopFlow?: () => void | Promise<void>
   /** Whether a flow is currently executing */
   isExecuting?: boolean
   /** Current document loaded in PDF viewer */
@@ -80,6 +83,7 @@ export interface CurationFlowsProps {
 const CurationFlows: React.FC<CurationFlowsProps> = ({
   sessionId,
   onExecuteFlow,
+  onStopFlow,
   isExecuting = false,
   currentDocumentId,
 }) => {
@@ -145,6 +149,18 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       console.error('Error executing flow:', err)
     } finally {
       setExecutingFlowId(null)
+    }
+  }
+
+  /**
+   * Stop the currently running flow execution stream
+   */
+  const handleStopExecution = async () => {
+    if (!onStopFlow) return
+    try {
+      await onStopFlow()
+    } catch (err) {
+      console.error('Error stopping flow execution:', err)
     }
   }
 
@@ -434,6 +450,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
               {flows.map((flow) => {
                 const isExpanded = expandedFlowId === flow.id
                 const isThisFlowExecuting = executingFlowId === flow.id
+                const canStopThisFlow = Boolean(isThisFlowExecuting && isExecuting && onStopFlow)
                 const canExecute = !isExecuting && !isThisFlowExecuting && sessionId
 
                 return (
@@ -508,22 +525,12 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
 
                       {/* Action Buttons */}
                       <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center' }}>
-                        {/* Run Button */}
-                        <Tooltip
-                          title={
-                            !sessionId
-                              ? 'No active session'
-                              : isExecuting
-                                ? 'Another flow is running'
-                                : 'Run this flow'
-                          }
-                        >
-                          <span>
+                        {canStopThisFlow ? (
+                          <Tooltip title="Stop running flow">
                             <Button
-                              variant="contained"
+                              variant="outlined"
                               size="small"
-                              disabled={!canExecute}
-                              onClick={() => void handleExecuteFlow(flow)}
+                              onClick={() => void handleStopExecution()}
                               sx={{
                                 minWidth: 'auto',
                                 px: 1.5,
@@ -531,35 +538,72 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                                 fontSize: '0.75rem',
                                 fontWeight: 500,
                                 textTransform: 'none',
-                                backgroundColor: alpha('#2196f3', 0.9),
-                                color: '#fff',
-                                boxShadow: 'none',
+                                borderColor: 'rgba(244, 67, 54, 0.6)',
+                                color: '#f44336',
                                 '&:hover': {
-                                  backgroundColor: '#2196f3',
-                                  boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
-                                },
-                                '&:disabled': {
-                                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                                  color: 'rgba(255, 255, 255, 0.3)',
+                                  borderColor: '#f44336',
+                                  backgroundColor: 'rgba(244, 67, 54, 0.1)',
                                 },
                               }}
                             >
-                              {isThisFlowExecuting ? (
-                                <CircularProgress
-                                  size={14}
-                                  sx={{ color: 'inherit' }}
-                                />
-                              ) : (
-                                <>
-                                  <PlayArrowIcon
-                                    sx={{ fontSize: '1rem', mr: 0.25 }}
-                                  />
-                                  Run
-                                </>
-                              )}
+                              <StopIcon sx={{ fontSize: '0.95rem', mr: 0.4 }} />
+                              Stop
                             </Button>
-                          </span>
-                        </Tooltip>
+                          </Tooltip>
+                        ) : (
+                          /* Run Button */
+                          <Tooltip
+                            title={
+                              !sessionId
+                                ? 'No active session'
+                                : isExecuting
+                                  ? 'Another flow is running'
+                                  : 'Run this flow'
+                            }
+                          >
+                            <span>
+                              <Button
+                                variant="contained"
+                                size="small"
+                                disabled={!canExecute}
+                                onClick={() => void handleExecuteFlow(flow)}
+                                sx={{
+                                  minWidth: 'auto',
+                                  px: 1.5,
+                                  py: 0.5,
+                                  fontSize: '0.75rem',
+                                  fontWeight: 500,
+                                  textTransform: 'none',
+                                  backgroundColor: alpha('#2196f3', 0.9),
+                                  color: '#fff',
+                                  boxShadow: 'none',
+                                  '&:hover': {
+                                    backgroundColor: '#2196f3',
+                                    boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                                  },
+                                  '&:disabled': {
+                                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                                    color: 'rgba(255, 255, 255, 0.3)',
+                                  },
+                                }}
+                              >
+                                {isThisFlowExecuting ? (
+                                  <CircularProgress
+                                    size={14}
+                                    sx={{ color: 'inherit' }}
+                                  />
+                                ) : (
+                                  <>
+                                    <PlayArrowIcon
+                                      sx={{ fontSize: '1rem', mr: 0.25 }}
+                                    />
+                                    Run
+                                  </>
+                                )}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        )}
 
                         {/* Delete Button */}
                         <Tooltip title="Delete this flow">
@@ -655,7 +699,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ color: 'rgba(255, 255, 255, 0.7)' }}>
-            Are you sure you want to delete "{flowToDelete?.name}"? This action cannot be undone.
+            Are you sure you want to delete &ldquo;{flowToDelete?.name}&rdquo;? This action cannot be undone.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

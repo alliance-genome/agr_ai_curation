@@ -362,9 +362,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const [loadingFlows, setLoadingFlows] = useState(false)
   const [flowSearchTerm, setFlowSearchTerm] = useState('')
 
-  // Save Dialog state (for new flows)
+  // Save Dialog state (for save/save-as naming)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveDialogName, setSaveDialogName] = useState('')
+  const [saveDialogMode, setSaveDialogMode] = useState<'save' | 'save_as'>('save')
 
   // Manage Flows Dialog state
   const [manageDialogOpen, setManageDialogOpen] = useState(false)
@@ -564,8 +565,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   }, [nodes.length, edgeTopologyKey]) // eslint-disable-line react-hooks/exhaustive-deps
   // Note: We deliberately exclude revalidateValidators to avoid re-render loops
 
-  // Save flow to API (nameOverride allows passing name directly for new flows)
-  const handleSave = async (nameOverride?: string) => {
+  // Save flow to API (nameOverride allows passing name directly; forceCreate enables Save As behavior)
+  const handleSave = async (
+    nameOverride?: string,
+    options?: { forceCreate?: boolean }
+  ) => {
+    const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
     if (!nameToUse.trim()) {
@@ -649,7 +654,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       }
 
       let savedFlow: FlowResponse
-      if (currentFlowId) {
+      if (currentFlowId && !forceCreate) {
         savedFlow = await updateFlow(currentFlowId, {
           name: nameToUse,
           description: flowDescription || undefined,
@@ -666,7 +671,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       // Update flowName state to match saved name
       setFlowName(nameToUse)
-      setSnackbar({ message: 'Flow saved successfully', severity: 'success' })
+      setSnackbar({
+        message: forceCreate ? 'Flow saved as new flow' : 'Flow saved successfully',
+        severity: 'success'
+      })
       onFlowSaved?.(savedFlow.id)
     } catch (err) {
       logger.error('Failed to save flow', err as Error, { component: 'FlowBuilder' })
@@ -968,10 +976,26 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       handleSave()
     } else {
       // New flow - show save dialog
+      setSaveDialogMode('save')
       setSaveDialogName(flowName === 'New Flow' ? '' : flowName)
       setSaveDialogOpen(true)
     }
   }, [currentFlowId, flowName, nodes.length, handleSave])
+
+  const handleSaveAsClick = useCallback(() => {
+    setFileMenuAnchor(null)
+    if (nodes.length === 0) {
+      setSnackbar({ message: 'Add at least one agent to the flow', severity: 'error' })
+      return
+    }
+
+    const suggestedName = flowName === 'New Flow'
+      ? ''
+      : `${flowName} (Copy)`
+    setSaveDialogMode('save_as')
+    setSaveDialogName(suggestedName)
+    setSaveDialogOpen(true)
+  }, [flowName, nodes.length])
 
   const handleSaveDialogClose = useCallback(() => {
     setSaveDialogOpen(false)
@@ -985,8 +1009,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     }
     setSaveDialogOpen(false)
     // Pass name directly to handleSave to avoid async state update issues
-    handleSave(nameToSave)
-  }, [saveDialogName, handleSave])
+    handleSave(nameToSave, { forceCreate: saveDialogMode === 'save_as' })
+  }, [saveDialogName, saveDialogMode, handleSave])
 
   // Manage Flows Dialog handlers
   const handleManageDialogOpen = useCallback(() => {
@@ -1194,6 +1218,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <StyledMenuItem onClick={handleSaveClick} disabled={saving || nodes.length === 0}>
             <span>{saving ? 'Saving...' : 'Save'}</span>
             <Shortcut>Ctrl+S</Shortcut>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={handleSaveAsClick} disabled={saving || nodes.length === 0}>
+            <span>Save As...</span>
+            <Shortcut>Ctrl+Shift+S</Shortcut>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
           <StyledMenuItem onClick={handleDeleteFlowClick} disabled={!currentFlowId}>
@@ -1435,7 +1463,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         </DialogActions>
       </Dialog>
 
-      {/* Save Flow Dialog (for new flows) */}
+      {/* Save/Save As Flow Dialog */}
       <Dialog
         open={saveDialogOpen}
         onClose={handleSaveDialogClose}
@@ -1445,12 +1473,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       >
         <DialogTitle sx={{ pb: 1 }}>
           <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-            Save Flow
+            {saveDialogMode === 'save_as' ? 'Save Flow As' : 'Save Flow'}
           </Typography>
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Enter a name for your flow
+            {saveDialogMode === 'save_as'
+              ? 'Enter a name for the new copy of this flow'
+              : 'Enter a name for your flow'}
           </Typography>
           <TextField
             fullWidth
@@ -1476,7 +1506,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             size="small"
             disabled={!saveDialogName.trim() || saving}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving
+              ? 'Saving...'
+              : (saveDialogMode === 'save_as' ? 'Save As' : 'Save')}
           </Button>
         </DialogActions>
       </Dialog>

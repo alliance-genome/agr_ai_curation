@@ -394,6 +394,45 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
   })
 
+  it('saves a copy via Save Agent As without updating the original agent', async () => {
+    const existing = buildCustomAgent({ name: 'Original Agent' })
+    const copied = buildCustomAgent({
+      id: '22222222-2222-2222-2222-222222222222',
+      agent_id: 'ca_22222222-2222-2222-2222-222222222222',
+      name: 'Original Agent (Copy)',
+    })
+
+    serviceMocks.listCustomAgents
+      .mockResolvedValueOnce({ custom_agents: [existing], total: 1 })
+      .mockResolvedValueOnce({ custom_agents: [existing, copied], total: 2 })
+    serviceMocks.createCustomAgent.mockResolvedValue(copied)
+
+    render(
+      <PromptWorkshop
+        catalog={buildCatalog()}
+        initialCustomAgentId={existing.id}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Editing: Original Agent/)).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save Agent As...'))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Save Agent As' })
+    fireEvent.change(within(dialog).getByLabelText('Agent Name'), {
+      target: { value: 'Original Agent (Copy)' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save As' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
+    })
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
   it('refreshes once to resolve a cloned initial custom agent id created after initial load', async () => {
     const existing = buildCustomAgent({ id: 'aaaaaaaa-1111-1111-1111-111111111111', name: 'Existing Agent' })
     const cloned = buildCustomAgent({ id: 'bbbbbbbb-2222-2222-2222-222222222222', name: 'Cloned Agent' })

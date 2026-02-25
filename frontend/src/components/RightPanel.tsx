@@ -179,6 +179,7 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
             <ToolsPanel
               sessionId={sessionId}
               onExecuteFlow={onExecuteFlow || (async () => {})}
+              onStopFlow={onStop}
               isExecuting={isStreaming}
               currentDocumentId={currentDocumentId}
             />
