@@ -595,19 +595,21 @@ async def get_pdf_extraction_health():
         if worker_state == "unknown":
             worker_state = str((payload or {}).get("ec2", "")).strip().lower() or "unknown"
 
-        proxy_status = str((payload or {}).get("status", "")).strip().lower()
         worker_available = worker_state in {"ready", "busy"}
-        proxy_ok = response.status_code == 200 and proxy_status == "healthy"
+        proxy_status = str((payload or {}).get("status", "")).strip().lower()
+        proxy_ok = response.status_code == 200 and proxy_status in {"healthy", "degraded"}
         deep_ok = deep_response.status_code == 200 and str((deep_payload or {}).get("status", "")).strip().lower() == "healthy"
 
-        status = "healthy" if proxy_ok and worker_available and deep_ok else "degraded"
+        # Deep health validates auth contract + downstream extract roundtrip and is
+        # less susceptible to transient downstream health-flap noise.
+        status = "healthy" if worker_available and deep_ok else "degraded"
         error_message = None
         if not worker_available:
             error_message = f"Worker {worker_state or 'unknown'}"
-        elif not proxy_ok:
-            error_message = "Proxy health degraded"
         elif not deep_ok:
             error_message = "Deep health check failed"
+        elif not proxy_ok:
+            error_message = "Proxy status endpoint unavailable"
         elif status_error:
             error_message = status_error
 
