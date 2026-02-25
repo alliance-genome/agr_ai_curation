@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -160,6 +161,96 @@ def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
     if available_tool_names & _AGR_DB_REQUIRED_TOOL_NAMES:
         return set(_AGR_DB_REQUIRED_TOOL_NAMES)
     return None
+
+
+def _agent_tool_names(agent: Agent) -> set[str]:
+    """Return normalized tool names for an agent."""
+    tools = getattr(agent, "tools", []) or []
+    return {
+        name for name in (_extract_tool_name(tool) for tool in tools) if name
+    }
+
+
+def _estimate_bulk_entity_count(input_text: str) -> int:
+    """Estimate how many entities are being requested in a single specialist query."""
+    if not input_text:
+        return 0
+
+    text = str(input_text)
+    lowered = text.lower()
+
+    # Prefer list-heavy tail segment to avoid counting instruction prose.
+    tail_start = 0
+    for marker in (
+        "extracted list:",
+        "raw list:",
+        "gene list:",
+        "list:",
+        "genes extracted:",
+        "items:",
+    ):
+        idx = lowered.find(marker)
+        if idx >= 0:
+            tail_start = max(tail_start, idx + len(marker))
+    candidate = text[tail_start:] if tail_start > 0 else text
+
+    # Split on common list delimiters and keep plausible symbols.
+    parts = re.split(r"[,;\n]+", candidate)
+    seen: set[str] = set()
+    for raw in parts:
+        token = raw.strip().strip(".")
+        if not token:
+            continue
+        if len(token) > 80:
+            continue
+        if token.lower().startswith(("query:", "return:", "provide:", "notes:")):
+            continue
+        if re.search(r"[A-Za-z0-9]", token) is None:
+            continue
+        seen.add(token.lower())
+
+    return len(seen)
+
+
+def _compute_adaptive_specialist_max_turns(
+    *,
+    agent: Agent,
+    input_text: str,
+    base_max_turns: int,
+) -> int:
+    """Increase turn budget for large AGR query workloads to prevent premature failure."""
+    tool_names = _agent_tool_names(agent)
+    if "agr_curation_query" not in tool_names:
+        return base_max_turns
+
+    entity_count = _estimate_bulk_entity_count(input_text)
+    if entity_count < 8:
+        return base_max_turns
+
+    # Typical gene normalization requests can include dozens of symbols.
+    # Budget scales with list size but remains capped to prevent runaway loops.
+    adaptive = max(base_max_turns, 10 + (entity_count * 2))
+    adaptive = max(adaptive, 40)
+    adaptive = min(adaptive, 120)
+    return adaptive
+
+
+def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
+    """Return guidance that nudges large list processing toward fewer tool turns."""
+    tool_names = _agent_tool_names(agent)
+    if "agr_curation_query" not in tool_names:
+        return ""
+
+    entity_count = _estimate_bulk_entity_count(input_text)
+    if entity_count < 8:
+        return ""
+
+    return (
+        "TOOL EFFICIENCY REQUIREMENT:\n"
+        "The request includes a large entity list. Minimize tool rounds.\n"
+        "If provider/model supports it, issue parallel tool calls in the same turn.\n"
+        "Avoid one-call-per-entity loops when enough evidence already exists to synthesize output.\n"
+    )
 
 
 def _adapt_tools_for_groq_schema_constraints(tools: List[Any]) -> List[Any]:
@@ -600,6 +691,11 @@ async def run_specialist_with_events(
     # Use config default if not specified
     if max_turns is None:
         max_turns = get_max_turns()
+    max_turns = _compute_adaptive_specialist_max_turns(
+        agent=agent,
+        input_text=input_text,
+        base_max_turns=max_turns,
+    )
 
     logger.info(
         "Starting specialist=%s (max_turns=%s)",
@@ -627,6 +723,20 @@ async def run_specialist_with_events(
         ).strip()
         logger.info(
             "%s enabling Groq JSON/tool compatibility mode (output_type disabled for initial run)",
+            specialist_name,
+            extra={"specialist_name": specialist_name, "tool_name": tool_name},
+        )
+
+    efficiency_instruction = _build_tool_efficiency_instruction(agent, input_text)
+    if efficiency_instruction:
+        if runtime_agent is agent:
+            runtime_agent = copy.copy(agent)
+        runtime_agent.instructions = (
+            f"{getattr(runtime_agent, 'instructions', '') or ''}\n\n"
+            f"{efficiency_instruction}"
+        ).strip()
+        logger.info(
+            "%s applying tool-efficiency instruction for large list workload",
             specialist_name,
             extra={"specialist_name": specialist_name, "tool_name": tool_name},
         )
@@ -1055,6 +1165,21 @@ async def run_specialist_with_events(
         )
 
     except Exception as e:
+        if type(e).__name__ == "MaxTurnsExceeded":
+            error_message = (
+                f"{specialist_name} reached max turns ({max_turns}) after "
+                f"{len(tool_calls)} internal tool calls."
+            )
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "error": error_message,
+                    "reason": "max_turns_exceeded",
+                    "severity": "error",
+                }
+            })
         logger.error(
             "%s stream error: %s: %s. Events before error: %s, Event types: %s",
             specialist_name,

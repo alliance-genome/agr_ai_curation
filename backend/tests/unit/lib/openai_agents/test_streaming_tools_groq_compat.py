@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from src.lib.openai_agents.streaming_tools import (
     _adapt_tools_for_groq_schema_constraints,
+    _compute_adaptive_specialist_max_turns,
+    _estimate_bulk_entity_count,
     _required_tool_failure_message,
     _required_tool_names_for_agent,
     _should_use_groq_tool_json_compat,
@@ -111,3 +113,38 @@ def test_adapt_tools_for_groq_replaces_agr_tool(monkeypatch):
 
     assert adapted[0] is replacement
     assert getattr(adapted[1], "name", None) == "search_document"
+
+
+def test_estimate_bulk_entity_count_detects_list_payload():
+    query = (
+        "Validate this list: crb, ninaE, Rh1, norpA, trp, Arr1, Arr2, ninaC, "
+        "Act5C, Act87E, Act57B, patj, stardust"
+    )
+
+    assert _estimate_bulk_entity_count(query) >= 12
+
+
+def test_compute_adaptive_specialist_max_turns_scales_for_large_agr_lists():
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="agr_curation_query")])
+    query = "List: " + ", ".join(f"gene_{idx}" for idx in range(30))
+
+    adaptive = _compute_adaptive_specialist_max_turns(
+        agent=agent,
+        input_text=query,
+        base_max_turns=20,
+    )
+
+    assert adaptive > 20
+    assert adaptive <= 120
+
+
+def test_compute_adaptive_specialist_max_turns_keeps_default_for_non_agr_agents():
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
+
+    adaptive = _compute_adaptive_specialist_max_turns(
+        agent=agent,
+        input_text="List: a, b, c, d, e, f, g, h, i, j",
+        base_max_turns=20,
+    )
+
+    assert adaptive == 20
