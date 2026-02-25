@@ -13,6 +13,13 @@ from .base import (
     StructuredMessageEnvelope,
     Destination,
     RoutingPlan,
+    ExclusionReasonCode,
+    EvidenceRecord,
+    MentionCandidate,
+    ExtractionItem,
+    ExclusionRecord,
+    AmbiguityRecord,
+    ExtractionRunSummary,
 )
 
 # Import envelope schemas
@@ -94,6 +101,13 @@ __all__ = [
     'StructuredMessageEnvelope',
     'Destination',
     'RoutingPlan',
+    'ExclusionReasonCode',
+    'EvidenceRecord',
+    'MentionCandidate',
+    'ExtractionItem',
+    'ExclusionRecord',
+    'AmbiguityRecord',
+    'ExtractionRunSummary',
 
     # Envelope schemas
     'SupervisorEnvelope',

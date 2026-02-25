@@ -6,7 +6,15 @@ Used by PDF extraction specialist for document responses.
 from typing import List
 from pydantic import Field, ConfigDict
 
-from .base import StructuredMessageEnvelope
+from .base import (
+    StructuredMessageEnvelope,
+    ExtractionItem,
+    MentionCandidate,
+    EvidenceRecord,
+    ExclusionRecord,
+    AmbiguityRecord,
+    ExtractionRunSummary,
+)
 from .citation import Citation
 
 
@@ -25,3 +33,10 @@ class PdfSpecialistEnvelope(StructuredMessageEnvelope):
         description="Search queries used to find content"
     )
     chunks_found: int = Field(default=0, description="Number of relevant chunks found")
+    items: List[ExtractionItem] = Field(default_factory=list, description="Normalized extraction items retained for curation")
+    raw_mentions: List[MentionCandidate] = Field(default_factory=list, description="Raw mentions harvested before normalization")
+    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence snippets for extracted findings")
+    normalization_notes: List[str] = Field(default_factory=list, description="Normalization decisions and caveats")
+    exclusions: List[ExclusionRecord] = Field(default_factory=list, description="Candidates excluded by policy with explicit reason codes")
+    ambiguities: List[AmbiguityRecord] = Field(default_factory=list, description="Candidates requiring curator follow-up")
+    run_summary: ExtractionRunSummary = Field(default_factory=ExtractionRunSummary, description="Run-level extraction counts and warnings")

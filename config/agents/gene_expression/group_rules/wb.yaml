@@ -95,6 +95,28 @@ content: '
 
   - Sex-specific: hermaphrodite, male (C. elegans is hermaphrodite with rare males)
 
+  ### WB Evidence Gate and Exclusion Coding (Agent Rework)
+
+  Keep an annotation only when evidence is directly experimental in THIS paper and
+  supports a specific gene-expression assertion.
+
+  Exclusion coding requirements:
+
+  - Use `previously_reported` when statement is only prior literature/background.
+  - Use `marker_only_visualization` when marker is used only to visualize or identify cells/strains.
+  - Use `promoter_driven_marker_localization` when promoter-reporter localization is not native expression.
+  - Use `mutant_background_only` when signal is only in mutant/perturbation context and policy excludes direct annotation.
+  - Use `structural_label_or_fusion_only` when construct/fusion naming is not a new expression finding.
+  - Use `non_experimental_claim` when statement is narrative/speculative without direct experiment evidence.
+  - Use `insufficient_experimental_evidence` when evidence text is too weak/indirect to curate confidently.
+
+  WB-specific reminders:
+
+  - Do not annotate promoter-driven marker localization as native expression finding.
+  - Exclude marker transgenes used only for visualization or strain identification.
+  - Exclude non-experimental narrative claims from output annotations.
+  - Prefer most specific anatomy label explicitly supported by the evidence snippet.
+
 
   '
 group_id: WB

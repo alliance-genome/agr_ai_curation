@@ -6,6 +6,15 @@ from datetime import datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
+from src.schemas.models.base import (
+    EvidenceRecord,
+    MentionCandidate,
+    ExtractionItem,
+    ExclusionRecord,
+    AmbiguityRecord,
+    ExtractionRunSummary,
+)
+
 
 # ============================================================================
 # File Output Models
@@ -243,6 +252,34 @@ class GeneExpressionEnvelope(BaseModel):
     summary: Optional[str] = Field(
         None,
         description="Brief summary of expression findings"
+    )
+    items: List[ExtractionItem] = Field(
+        default_factory=list,
+        description="Normalized extraction items retained for curation workflows"
+    )
+    raw_mentions: List[MentionCandidate] = Field(
+        default_factory=list,
+        description="Raw mentions harvested from the paper before normalization"
+    )
+    evidence_records: List[EvidenceRecord] = Field(
+        default_factory=list,
+        description="Evidence snippets supporting retained/excluded decisions"
+    )
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="Normalization decisions and caveats captured during pass-B validation"
+    )
+    exclusions: List[ExclusionRecord] = Field(
+        default_factory=list,
+        description="Excluded candidates with explicit reason codes"
+    )
+    ambiguities: List[AmbiguityRecord] = Field(
+        default_factory=list,
+        description="Ambiguous candidates requiring curator follow-up"
+    )
+    run_summary: ExtractionRunSummary = Field(
+        default_factory=ExtractionRunSummary,
+        description="Run-level extraction counters and warnings"
     )
 
 

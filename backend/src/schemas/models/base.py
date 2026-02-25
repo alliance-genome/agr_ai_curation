@@ -7,7 +7,7 @@ This module contains foundational types used across all schema models:
 - StructuredMessageEnvelope: Base class for all envelope schemas
 """
 
-from typing import List
+from typing import List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -50,6 +50,90 @@ class RoutingPlan(BaseModel):
         default_factory=list,
         description="Ordered list of handler names to execute. Valid handlers: pdf_extraction, disease_ontology, chemical_ontology, gene_curation, allele_curation, gene_expression, ontology_mapping, gene_ontology, go_annotations, alliance_orthologs, synthesize"
     )
+
+
+class ExclusionReasonCode(str, Enum):
+    """Canonical reason codes for extractor exclusion decisions."""
+
+    PREVIOUSLY_REPORTED = "previously_reported"
+    NON_EXPERIMENTAL_CLAIM = "non_experimental_claim"
+    MARKER_ONLY_VISUALIZATION = "marker_only_visualization"
+    PROMOTER_DRIVEN_MARKER_LOCALIZATION = "promoter_driven_marker_localization"
+    MUTANT_BACKGROUND_ONLY = "mutant_background_only"
+    STRUCTURAL_LABEL_OR_FUSION_ONLY = "structural_label_or_fusion_only"
+    INSUFFICIENT_EXPERIMENTAL_EVIDENCE = "insufficient_experimental_evidence"
+    OUT_OF_SCOPE = "out_of_scope"
+    AMBIGUOUS_ENTITY = "ambiguous_entity"
+    DUPLICATE_MENTION = "duplicate_mention"
+    UNSUPPORTED_ENTITY_TYPE = "unsupported_entity_type"
+
+
+class EvidenceRecord(BaseModel):
+    """Evidence snippet used to support keep/exclude decisions."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    section: Optional[str] = Field(default=None, description="Document section containing the evidence")
+    page: Optional[int] = Field(default=None, description="1-based page number if known")
+    snippet: str = Field(description="Quoted evidence text")
+    subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
+    figure_reference: Optional[str] = Field(default=None, description="Figure/table reference, if available")
+
+
+class MentionCandidate(BaseModel):
+    """Raw mention harvested from the document before normalization."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    mention: str = Field(description="Original mention text from the paper")
+    entity_type: Optional[str] = Field(default=None, description="Entity type guess (gene, allele, disease, etc.)")
+    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Supporting evidence for the raw mention")
+
+
+class ExtractionItem(BaseModel):
+    """Normalized extractor item retained for downstream curation."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    label: str = Field(description="Canonical label retained by the extractor")
+    entity_type: Optional[str] = Field(default=None, description="Entity type (gene, expression, phenotype, etc.)")
+    normalized_id: Optional[str] = Field(default=None, description="Normalized CURIE/ontology ID when resolved")
+    source_mentions: List[str] = Field(default_factory=list, description="Raw mentions that support this normalized item")
+    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence used to retain the item")
+
+
+class ExclusionRecord(BaseModel):
+    """Candidate rejected by extraction policy with explicit reason code."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    mention: str = Field(description="Candidate mention that was excluded")
+    reason_code: ExclusionReasonCode = Field(description="Canonical exclusion reason code")
+    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence supporting the exclusion")
+    details: Optional[str] = Field(default=None, description="Optional free-text explanation")
+
+
+class AmbiguityRecord(BaseModel):
+    """Candidate requiring curator follow-up due to unresolved ambiguity."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    mention: str = Field(description="Ambiguous mention text")
+    why_ambiguous: str = Field(description="Why normalization/classification is ambiguous")
+    recommended_followup: Optional[str] = Field(default=None, description="Action suggested for curator follow-up")
+    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence associated with ambiguity")
+
+
+class ExtractionRunSummary(BaseModel):
+    """Summary counters/warnings for a single extractor run."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    candidate_count: int = Field(default=0, ge=0, description="Number of harvested candidates")
+    kept_count: int = Field(default=0, ge=0, description="Number of retained normalized items")
+    excluded_count: int = Field(default=0, ge=0, description="Number of excluded candidates")
+    ambiguous_count: int = Field(default=0, ge=0, description="Number of ambiguous candidates")
+    warnings: List[str] = Field(default_factory=list, description="Run-level warnings and caveats")
 
 
 class StructuredMessageEnvelope(BaseModel):
