@@ -14,6 +14,7 @@ immediately, allowing real-time visibility into specialist agent activity.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import uuid
@@ -49,6 +50,85 @@ class SpecialistOutputError(Exception):
         self.specialist_name = specialist_name
         self.output_type_name = output_type_name
         super().__init__(message or f"{specialist_name} failed to produce {output_type_name} after retry")
+
+
+def _extract_model_identifier(model: Any) -> str:
+    """Best-effort model ID extraction from agent model config."""
+    if isinstance(model, str):
+        return model
+    return str(getattr(model, "model", "") or "").strip()
+
+
+def _should_use_groq_tool_json_compat(agent: Agent) -> bool:
+    """Groq currently rejects response_format JSON mode combined with tool calling.
+
+    Docs: https://console.groq.com/docs/structured-outputs
+    """
+    output_type = getattr(agent, "output_type", None)
+    if output_type is None:
+        return False
+
+    tools = getattr(agent, "tools", []) or []
+    if len(tools) == 0:
+        return False
+
+    model_id = _extract_model_identifier(getattr(agent, "model", None)).lower()
+    if model_id.startswith("groq/"):
+        return True
+
+    # Safety net for alternate naming conventions if encountered in runtime model IDs.
+    if "groq" in model_id and "/" in model_id:
+        return True
+
+    return False
+
+
+def _build_json_only_instruction(output_type: Any) -> str:
+    """Instruction used when structured outputs must be disabled for provider compatibility."""
+    schema_blob = ""
+    try:
+        if output_type is not None and hasattr(output_type, "model_json_schema"):
+            schema_blob = json.dumps(output_type.model_json_schema(), ensure_ascii=True)
+    except Exception:
+        schema_blob = ""
+
+    if schema_blob:
+        return (
+            "IMPORTANT OUTPUT FORMAT REQUIREMENT:\n"
+            "After completing tool calls, respond with ONLY valid JSON (no markdown, no backticks).\n"
+            "Your JSON MUST match this schema exactly:\n"
+            f"{schema_blob}\n"
+        )
+
+    return (
+        "IMPORTANT OUTPUT FORMAT REQUIREMENT:\n"
+        "After completing tool calls, respond with ONLY valid JSON (no markdown, no backticks).\n"
+    )
+
+
+def _try_validate_json_output(raw_text: str, output_type: Any) -> Optional[str]:
+    """Extract JSON from text and validate against a Pydantic output_type."""
+    if not raw_text or output_type is None:
+        return None
+
+    text = str(raw_text).strip()
+    if not text:
+        return None
+
+    json_candidate = text
+    if not (text.startswith("{") and text.endswith("}")):
+        json_start = text.find("{")
+        json_end = text.rfind("}")
+        if json_start < 0 or json_end <= json_start:
+            return None
+        json_candidate = text[json_start:json_end + 1]
+
+    try:
+        parsed = json.loads(json_candidate)
+        validated = output_type.model_validate(parsed)
+        return json.dumps(validated.model_dump())
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -446,6 +526,26 @@ async def run_specialist_with_events(
         extra={"specialist_name": specialist_name, "tool_name": tool_name},
     )
 
+    expected_output_type = getattr(agent, "output_type", None)
+    groq_tool_json_compat_mode = False
+    runtime_agent = agent
+
+    # Groq currently rejects response_format + tools in the same request.
+    # For this provider/path, run with tools and plain-text JSON, then validate.
+    if _should_use_groq_tool_json_compat(agent):
+        groq_tool_json_compat_mode = True
+        runtime_agent = copy.copy(agent)
+        runtime_agent.output_type = None
+        runtime_agent.instructions = (
+            f"{getattr(agent, 'instructions', '') or ''}\n\n"
+            f"{_build_json_only_instruction(expected_output_type)}"
+        ).strip()
+        logger.info(
+            "%s enabling Groq JSON/tool compatibility mode (output_type disabled for initial run)",
+            specialist_name,
+            extra={"specialist_name": specialist_name, "tool_name": tool_name},
+        )
+
     # Commit pending prompts for this specialist - moves from pending to used
     # This is where the agent ACTUALLY executes, so we log the prompts now
     commit_pending_prompts(agent.name)
@@ -460,7 +560,7 @@ async def run_specialist_with_events(
 
     # Run with streaming to capture internal events
     result = Runner.run_streamed(
-        agent,
+        runtime_agent,
         input=input_text,
         max_turns=max_turns,
         run_config=effective_config
@@ -904,6 +1004,23 @@ async def run_specialist_with_events(
             # String output
             final_output = str(result.final_output)
             logger.info("%s final_output is string: %s...", specialist_name, final_output[:200])
+
+            # Groq compatibility path: we intentionally disabled SDK-level structured
+            # outputs when tools are present; recover structure by validating text JSON.
+            if groq_tool_json_compat_mode and expected_output_type is not None:
+                validated_output = _try_validate_json_output(final_output, expected_output_type)
+                if validated_output:
+                    final_output = validated_output
+                    logger.info(
+                        "%s Groq compatibility parse succeeded: validated text output as %s",
+                        specialist_name,
+                        expected_output_type.__name__,
+                    )
+                else:
+                    logger.warning(
+                        "%s Groq compatibility parse failed: returning raw text output",
+                        specialist_name,
+                    )
     else:
         logger.warning("%s has no final_output!", specialist_name)
 
@@ -921,7 +1038,7 @@ async def run_specialist_with_events(
         # 2. accumulated_text from streaming deltas is ALWAYS incomplete/truncated
         # 3. The SDK's as_tool() uses new_items for custom_output_extractor
 
-        output_type = getattr(agent, 'output_type', None)
+        output_type = expected_output_type
 
         # Extract complete text from result.new_items (the ONLY reliable source)
         text_from_items = None
