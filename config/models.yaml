@@ -1,6 +1,6 @@
 models:
-  - model_id: gpt-5.2-mini
-    name: GPT-5.2 Mini
+  - model_id: gpt-5-mini
+    name: GPT-5 Mini
     provider: openai
     description: Fast default model for day-to-day curator drafting and light extraction.
     guidance: Start here for most tasks. It is faster and cheaper than GPT-5.2 with strong overall quality.
@@ -57,7 +57,7 @@ models:
     name: GPT-4o
     provider: openai
     description: Runtime compatibility model for legacy system agent defaults.
-    guidance: Internal compatibility model; prefer GPT-5.2 Mini or GPT-5.2 for new curator workflows.
+    guidance: Internal compatibility model; prefer GPT-5 Mini or GPT-5.2 for new curator workflows.
     default: false
     curator_visible: false
     supports_reasoning: false
