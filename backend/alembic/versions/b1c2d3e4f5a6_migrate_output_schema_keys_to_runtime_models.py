@@ -30,8 +30,9 @@ FORWARD_SCHEMA_KEY_MAP = {
 
 
 def _rewrite_schema_keys(mapping: dict[str, str]) -> None:
+    bind = op.get_bind()
     for old_key, new_key in mapping.items():
-        op.execute(
+        bind.execute(
             sa.text(
                 """
                 UPDATE agents
