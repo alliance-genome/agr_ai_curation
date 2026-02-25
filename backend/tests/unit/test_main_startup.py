@@ -73,6 +73,7 @@ class TestLifespan:
              patch("src.lib.config.prompt_loader.load_prompts", return_value={"base_prompts": 0, "group_rules": 0}), \
              patch("src.lib.prompts.cache.initialize"), \
              patch("src.lib.config.groups_loader.load_groups", return_value={}), \
+             patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas") as mock_validate_schemas, \
              patch("src.lib.config.connections_loader.load_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
@@ -93,7 +94,10 @@ class TestLifespan:
             # Mock the database session context manager
             mock_db = MagicMock()
             mock_session.return_value = mock_db
-            yield
+            yield {
+                "db": mock_db,
+                "validate_schemas": mock_validate_schemas,
+            }
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
@@ -168,6 +172,33 @@ class TestLifespan:
             pass
 
         connection.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_calls_output_schema_validation(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+
+        app = FastAPI()
+
+        async with main.lifespan(app):
+            pass
+
+        mock_subsystems["validate_schemas"].assert_called_once_with(mock_subsystems["db"])
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    async def test_fail_fast_on_output_schema_validation_error(self, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+        mock_subsystems["validate_schemas"].side_effect = RuntimeError("unknown output schema")
+
+        app = FastAPI()
+
+        with pytest.raises(RuntimeError, match="unknown output schema"):
+            async with main.lifespan(app):
+                pass
 
     @pytest.mark.asyncio
     @patch("src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts")

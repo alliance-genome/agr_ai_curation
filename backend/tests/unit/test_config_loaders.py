@@ -70,7 +70,7 @@ class TestAgentLoader:
         assert "agr_curation_query" in gene.tools
 
         # Check output schema
-        assert gene.output_schema == "GeneValidationEnvelope"
+        assert gene.output_schema == "GeneResultEnvelope"
 
     def test_pdf_agent_not_batchable(self):
         """Test that PDF agent is marked as not batchable."""
@@ -615,17 +615,27 @@ class TestCrossFileConsistency:
         assert not duplicates, f"Duplicate agent_ids found: {duplicates}"
 
     def test_output_schema_references_valid_schema(self):
-        """Every output_schema reference matches an actual schema class."""
+        """Every output_schema reference maps to a class in runtime models module."""
+        import re
         from src.lib.config.agent_loader import load_agent_definitions
-        from src.lib.config.schema_discovery import discover_agent_schemas
 
         agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
-        schemas = discover_agent_schemas(ALLIANCE_AGENTS_PATH)
+        models_py = (
+            Path(__file__).parent.parent.parent.parent
+            / "backend"
+            / "src"
+            / "lib"
+            / "openai_agents"
+            / "models.py"
+        )
+        model_classes = set(
+            re.findall(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)\(", models_py.read_text(), flags=re.M)
+        )
 
         missing_schemas = []
         for agent_id, agent in agents.items():
             if agent.output_schema:
-                if agent.output_schema not in schemas:
+                if agent.output_schema not in model_classes:
                     missing_schemas.append(
                         f"{agent_id} references '{agent.output_schema}' but schema not found"
                     )

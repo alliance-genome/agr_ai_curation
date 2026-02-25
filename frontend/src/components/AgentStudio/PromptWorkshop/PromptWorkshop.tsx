@@ -337,6 +337,8 @@ function PromptWorkshop({
   const [toolLibraryDialogOpen, setToolLibraryDialogOpen] = useState(false)
   const [toolLibrarySearch, setToolLibrarySearch] = useState('')
   const [toolLibraryCategory, setToolLibraryCategory] = useState('all')
+  const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false)
+  const [saveAsName, setSaveAsName] = useState('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [pendingDeleteAgent, setPendingDeleteAgent] = useState<CustomAgent | null>(null)
   const appliedInitialCustomAgentId = useRef<string | null>(null)
@@ -889,7 +891,10 @@ function PromptWorkshop({
     await refreshAgentMetadata()
   }
 
-  const handleSave = async () => {
+  const handleSave = async (options?: { forceCreate?: boolean; nameOverride?: string }) => {
+    const forceCreate = options?.forceCreate ?? false
+    const nameToSave = (options?.nameOverride ?? name).trim()
+
     if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) {
       setError('Please select a template')
       return
@@ -902,7 +907,7 @@ function PromptWorkshop({
       setError('Please select a model')
       return
     }
-    if (!name.trim()) {
+    if (!nameToSave) {
       setError('Please enter a custom agent name')
       return
     }
@@ -916,9 +921,10 @@ function PromptWorkshop({
     setStatus(null)
 
     try {
-      if (selectedCustomAgentId) {
+      const shouldCreate = forceCreate || !selectedCustomAgentId
+      if (!shouldCreate && selectedCustomAgentId) {
         let updated = await updateCustomAgent(selectedCustomAgentId, {
-          name: name.trim(),
+          name: nameToSave,
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
           mod_prompt_overrides: modPromptOverrides,
@@ -937,12 +943,13 @@ function PromptWorkshop({
         await reloadAfterSave(updated.id)
         setStatus(`Updated "${updated.name}"`)
       } else {
-        const templateSource = gettingStartedMode === 'template'
-          ? parentAgentId
-          : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined)
+        const templateSource = selectedCustomAgent?.template_source
+          || (gettingStartedMode === 'template'
+            ? parentAgentId
+            : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined))
         let created = await createCustomAgent({
           template_source: templateSource || undefined,
-          name: name.trim(),
+          name: nameToSave,
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
           mod_prompt_overrides: modPromptOverrides,
@@ -957,9 +964,12 @@ function PromptWorkshop({
           created = await setCustomAgentVisibility(created.agent_id, 'project')
         }
         await reloadAfterSave(created.id)
-        setStatus(`Created "${created.name}"`)
+        setStatus(forceCreate ? `Saved as "${created.name}"` : `Created "${created.name}"`)
       }
       setSaveNotes('')
+      if (forceCreate) {
+        setSaveAsName('')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save custom agent')
     } finally {
@@ -1132,6 +1142,29 @@ function PromptWorkshop({
     setManageDialogOpen(false)
   }
 
+  const handleSaveAsOpen = () => {
+    handleFileMenuClose()
+    const suggestedName = (name || selectedCustomAgent?.name || '').trim()
+    setSaveAsName(suggestedName ? `${suggestedName} (Copy)` : '')
+    setSaveAsDialogOpen(true)
+  }
+
+  const handleSaveAsClose = () => {
+    setSaveAsDialogOpen(false)
+    setSaveAsName('')
+  }
+
+  const handleSaveAsConfirm = async () => {
+    const trimmedName = saveAsName.trim()
+    if (!trimmedName) {
+      setError('Please enter a custom agent name')
+      return
+    }
+
+    setSaveAsDialogOpen(false)
+    await handleSave({ forceCreate: true, nameOverride: trimmedName })
+  }
+
   const requestDelete = (agent?: CustomAgent) => {
     const target = agent || selectedCustomAgent
     if (!target) return
@@ -1217,8 +1250,11 @@ function PromptWorkshop({
             <span>Manage Agents...</span>
           </StyledMenuItem>
           <Divider />
-          <StyledMenuItem onClick={handleSave} disabled={saving}>
+          <StyledMenuItem onClick={() => void handleSave()} disabled={saving}>
             <span>{selectedCustomAgentId ? 'Save Agent' : 'Save New Agent'}</span>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={handleSaveAsOpen} disabled={saving}>
+            <span>Save Agent As...</span>
           </StyledMenuItem>
           <StyledMenuItem onClick={() => requestDelete()} disabled={!selectedCustomAgentId || saving}>
             <span>Delete Agent</span>
@@ -2001,6 +2037,51 @@ function PromptWorkshop({
           <DialogActions sx={{ px: 3, pb: 2 }}>
             <Button onClick={handleManageDialogClose} size="small">
               Close
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={saveAsDialogOpen}
+          onClose={handleSaveAsClose}
+          maxWidth="xs"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 2 } }}
+        >
+          <DialogTitle sx={{ pb: 1 }}>
+            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
+              Save Agent As
+            </Typography>
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Enter a name for the new copy
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              label="Agent Name"
+              value={saveAsName}
+              onChange={(event) => setSaveAsName(event.target.value)}
+              autoFocus
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  void handleSaveAsConfirm()
+                }
+              }}
+            />
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={handleSaveAsClose} size="small" disabled={saving}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleSaveAsConfirm()}
+              variant="contained"
+              size="small"
+              disabled={saving || !saveAsName.trim()}
+            >
+              {saving ? 'Saving...' : 'Save As'}
             </Button>
           </DialogActions>
         </Dialog>
