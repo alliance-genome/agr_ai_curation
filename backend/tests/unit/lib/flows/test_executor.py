@@ -715,6 +715,29 @@ class TestGetAllAgentToolsCreatedNames:
         assert len(tools) == 1
         assert "ask_ca_11111111_2222_3333_4444_555555555555_specialist" in created_names
 
+    @patch("src.lib.flows.executor.get_agent_metadata")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_empty_metadata_description_uses_fallback_tool_description(
+        self, mock_get_agent, mock_streaming, mock_get_agent_metadata
+    ):
+        """Empty metadata descriptions should fall back to 'Ask the <display_name>'."""
+        custom_id = "ca_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        mock_get_agent_metadata.return_value = {
+            "agent_id": custom_id,
+            "display_name": "Gene Validation Agent (Custom)",
+            "description": "",
+            "requires_document": False,
+            "required_params": [],
+        }
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([_agent_node("n1", custom_id)])
+        get_all_agent_tools(flow)
+
+        assert mock_streaming.call_args.kwargs["tool_description"] == "Ask the Gene Validation Agent (Custom)"
+
 
 # ===========================================================================
 # build_supervisor_instructions – unavailable step filtering

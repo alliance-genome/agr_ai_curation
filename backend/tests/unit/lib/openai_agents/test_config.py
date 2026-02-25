@@ -223,3 +223,52 @@ def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
     assert captured["model"] == "acme/model-x"
     assert captured["base_url"] == "https://runtime-org.example/v1"
     assert captured["api_key"] == "org-key"
+
+
+def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch):
+    captured = {}
+
+    class FakeLitellmModel:
+        def __init__(self, model, base_url=None, api_key=None):
+            captured["model"] = model
+            captured["base_url"] = base_url
+            captured["api_key"] = api_key
+
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="groq"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="groq",
+                driver="litellm",
+                api_key_env="GROQ_API_KEY",
+                base_url_env="GROQ_BASE_URL",
+                default_base_url="https://api.groq.com/openai/v1",
+                litellm_prefix="groq",
+                drop_params=True,
+                supports_parallel_tool_calls=True,
+            )
+            if provider_id == "groq"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        "agents.extensions.models.litellm_model.LitellmModel",
+        FakeLitellmModel,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "GROQ_API_KEY": "groq-key",
+            "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+        },
+    ):
+        get_model_for_agent("openai/gpt-oss-120b")
+
+    assert captured["model"] == "groq/openai/gpt-oss-120b"
+    assert captured["base_url"] == "https://api.groq.com/openai/v1"
+    assert captured["api_key"] == "groq-key"

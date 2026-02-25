@@ -34,7 +34,7 @@ providers:
     api_key_env: GROQ_API_KEY
     base_url_env: GROQ_BASE_URL
     default_base_url: https://api.groq.com/openai/v1
-    litellm_prefix: openai
+    litellm_prefix: groq
     drop_params: true
     supports:
       parallel_tool_calls: true

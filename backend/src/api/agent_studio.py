@@ -2902,7 +2902,7 @@ When curators ask which model to use, give a concrete recommendation (not just g
    - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
 
 3. **Fast balanced option between those two**
-   - Recommend: `gpt-5.2-mini`
+   - Recommend: `gpt-5-mini`
    - Position it as the "start here" option for quick drafting and iterative prompt work
 
 How to coach:
@@ -2985,7 +2985,7 @@ The curator is actively iterating an agent draft in Agent Workshop.
 Agent Workshop model recommendation defaults:
 - Use `openai/gpt-oss-120b` for fast database lookup and validation workflows.
 - Use `gpt-5.2` with `medium` reasoning for difficult PDF extraction and deep reasoning.
-- Use `gpt-5.2-mini` for fast iterative drafting and balanced quality/speed.
+- Use `gpt-5-mini` for fast iterative drafting and balanced quality/speed.
 
 Configured model options:
 {model_catalog_text}

@@ -321,16 +321,13 @@ def get_all_agent_tools(
     ordered_tool_names: List[str] = []
     execution_state = {"next_tool_index": 0}
 
-    def _wrap_with_step_order(tool_callable, tool_name: str):
+    def _wrap_with_step_order(tool_callable, tool_name: str, specialist_label: str):
         """Enforce strict flow step ordering at runtime."""
 
-        # Preserve the original streaming tool description so downstream audit/event
-        # formatting can recover user-facing specialist names (especially custom agents).
-        description_override = getattr(
-            tool_callable,
-            "description",
-            f"Flow step tool: {tool_name}",
-        )
+        # Always embed a user-facing specialist label in the wrapper description.
+        # Runner-side audit formatting reads tool descriptions to recover custom agent
+        # names (ask_ca_<uuid>_specialist) for TOOL_START/TOOL_COMPLETE labels.
+        description_override = f"Ask the {specialist_label}"
 
         @function_tool(name_override=tool_name, description_override=description_override)
         async def _ordered_tool(query: str) -> str:
@@ -438,11 +435,12 @@ def get_all_agent_tools(
         if is_duplicate:
             tool_name = f"ask_{tool_agent_segment}_step{step_num}_specialist"
             specialist_name = f"{entry.get('name', agent_id)} (Step {step_num})"
-            tool_description = entry.get("description", f"Ask the {entry['name']}") + f" (Step {step_num})"
+            base_tool_description = entry.get("description") or f"Ask the {entry.get('name', agent_id)}"
+            tool_description = f"{base_tool_description} (Step {step_num})"
         else:
             tool_name = f"ask_{tool_agent_segment}_specialist"
             specialist_name = entry.get("name", agent_id)
-            tool_description = entry.get("description", f"Ask the {entry['name']}")
+            tool_description = entry.get("description") or f"Ask the {entry.get('name', agent_id)}"
 
         raw_streaming_tool = _create_streaming_tool(
             agent=agent,
@@ -451,7 +449,7 @@ def get_all_agent_tools(
             specialist_name=specialist_name,
         )
         ordered_tool_names.append(tool_name)
-        streaming_tool = _wrap_with_step_order(raw_streaming_tool, tool_name)
+        streaming_tool = _wrap_with_step_order(raw_streaming_tool, tool_name, specialist_name)
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
         all_tools.append(streaming_tool)

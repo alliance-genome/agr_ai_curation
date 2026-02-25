@@ -9,7 +9,7 @@ Environment variable naming convention:
 
 Example:
   AGENT_SUPERVISOR_MODEL=gpt-4o
-  AGENT_PDF_MODEL=gpt-5.2-mini
+  AGENT_PDF_MODEL=gpt-5-mini
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
