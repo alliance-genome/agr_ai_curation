@@ -28,6 +28,18 @@ def test_provider_method_requires_mapping(monkeypatch):
     assert "missing file" in result.message
 
 
+def test_provider_bulk_method_requires_mapping(monkeypatch):
+    """Bulk provider methods should also require provider mappings."""
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", "missing file")
+
+    result = agr_curation._ensure_provider_mappings("search_genes_bulk")
+
+    assert result is not None
+    assert result.status == "error"
+    assert "Provider mappings are unavailable" in result.message
+
+
 def test_provider_method_succeeds_when_mapping_present(monkeypatch):
     """Provider-fanout methods should proceed when mapping is available."""
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
@@ -167,3 +179,119 @@ def test_query_returns_mapping_error_for_provider_methods(monkeypatch):
 
     assert result.status == "error"
     assert "provider mappings are unavailable" in (result.message or "").lower()
+
+
+def test_query_search_genes_bulk_returns_per_symbol_results(monkeypatch):
+    """search_genes_bulk should return list-in/list-out payload in one tool call."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class _Display:
+        def __init__(self, text):
+            self.displayText = text
+
+    class _Gene:
+        def __init__(self, curie, symbol, name):
+            self.primaryExternalId = curie
+            self.geneSymbol = _Display(symbol)
+            self.geneFullName = _Display(name)
+            self.geneType = None
+
+    gene_rows = {
+        "FB:FBgn0000117": _Gene("FB:FBgn0000117", "crb", "crumbs"),
+        "FB:FBgn0002942": _Gene("FB:FBgn0002942", "ninaE", "neither inactivation nor afterpotential E"),
+    }
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            if entity_type != "gene" or taxon_curie != "NCBITaxon:7227":
+                return []
+            if search_pattern == "crb":
+                return [{"entity_curie": "FB:FBgn0000117", "entity": "crb", "match_type": "exact"}]
+            if search_pattern == "ninaE":
+                return [{"entity_curie": "FB:FBgn0002942", "entity": "ninaE", "match_type": "exact"}]
+            return []
+
+        @staticmethod
+        def get_gene(curie):
+            return gene_rows.get(curie)
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["crb", "ninaE"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.data["method"] == "search_genes_bulk"
+    assert result.data["requested_count"] == 2
+    assert len(result.data["items"]) == 2
+    assert result.data["items"][0]["status"] == "ok"
+    assert result.data["items"][0]["count"] == 1
+    assert result.data["items"][1]["status"] == "ok"
+    assert result.data["items"][1]["count"] == 1
+
+
+def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch):
+    """search_alleles_bulk should surface validation warnings per input item."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class _Display:
+        def __init__(self, text):
+            self.displayText = text
+
+    class _Allele:
+        def __init__(self, curie, symbol, name):
+            self.primaryExternalId = curie
+            self.alleleSymbol = _Display(symbol)
+            self.alleleFullName = _Display(name)
+            self.taxon = "NCBITaxon:7227"
+
+    allele_rows = {
+        "FB:FBal0000001": _Allele("FB:FBal0000001", "e1370", "e1370"),
+    }
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            if entity_type != "allele" or taxon_curie != "NCBITaxon:7227":
+                return []
+            if search_pattern == "e1370":
+                return [{"entity_curie": "FB:FBal0000001", "entity": "e1370", "match_type": "exact"}]
+            return []
+
+        @staticmethod
+        def get_allele(curie):
+            return allele_rows.get(curie)
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["e1370", "w +/+"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.data["method"] == "search_alleles_bulk"
+    assert len(result.data["items"]) == 2
+    assert result.data["items"][0]["status"] == "ok"
+    assert result.data["items"][1]["status"] == "validation_warning"

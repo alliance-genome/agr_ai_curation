@@ -2844,7 +2844,7 @@ Include `token_info` in responses for budget management:
 
 ### Database Query Tools (Category 2 Investigation)
 - **`curation_db_sql`** - Direct SQL to Alliance Curation Database. Example: `SELECT * FROM gene WHERE symbol = 'daf-16'`
-- **`agr_curation_query`** - Structured API (search_genes, get_gene_by_id, search_alleles, get_allele_by_id). Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.
+- **`agr_curation_query`** - Structured API (search_genes, search_genes_bulk, get_gene_by_id, search_alleles, search_alleles_bulk, get_allele_by_id). Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, mod_id)`** - Fetch exact agent prompts.

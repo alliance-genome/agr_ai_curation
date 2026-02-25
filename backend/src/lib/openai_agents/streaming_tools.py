@@ -248,6 +248,8 @@ def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
     return (
         "TOOL EFFICIENCY REQUIREMENT:\n"
         "The request includes a large entity list. Minimize tool rounds.\n"
+        "Prefer bulk AGR methods when available (search_genes_bulk/search_alleles_bulk)\n"
+        "using list inputs instead of one-call-per-entity loops.\n"
         "If provider/model supports it, issue parallel tool calls in the same turn.\n"
         "Avoid one-call-per-entity loops when enough evidence already exists to synthesize output.\n"
     )

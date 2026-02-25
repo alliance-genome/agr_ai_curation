@@ -267,9 +267,11 @@ def register_all_tools(registry: DiagnosticToolRegistry) -> None:
 
 Available methods:
 - search_genes: Search genes by symbol (LIKE search, partial matches)
+- search_genes_bulk: Bulk search genes by symbol list (single call)
 - get_gene_by_exact_symbol: Get gene by exact symbol match
 - get_gene_by_id: Get gene by CURIE (e.g., WB:WBGene00006963)
 - search_alleles: Search alleles by symbol (LIKE search)
+- search_alleles_bulk: Bulk search alleles by symbol list (single call)
 - get_allele_by_exact_symbol: Get allele by exact symbol
 - get_allele_by_id: Get allele by CURIE
 - get_data_providers: List data providers (MGI, FB, WB, etc.)
@@ -285,15 +287,17 @@ Use data_provider to filter by species: MGI (mouse), FB (fly), WB (worm), ZFIN (
                     "type": "string",
                     "description": "Query method to execute",
                     "enum": [
-                        "search_genes", "get_gene_by_exact_symbol", "get_gene_by_id",
-                        "search_alleles", "get_allele_by_exact_symbol", "get_allele_by_id",
+                        "search_genes", "search_genes_bulk", "get_gene_by_exact_symbol", "get_gene_by_id",
+                        "search_alleles", "search_alleles_bulk", "get_allele_by_exact_symbol", "get_allele_by_id",
                         "get_data_providers",
                         "search_anatomy_terms", "search_life_stage_terms", "search_go_terms"
                     ]
                 },
                 "gene_symbol": {"type": "string", "description": "Gene symbol to search"},
+                "gene_symbols": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols for bulk search"},
                 "gene_id": {"type": "string", "description": "Gene CURIE for direct lookup"},
                 "allele_symbol": {"type": "string", "description": "Allele symbol to search"},
+                "allele_symbols": {"type": "array", "items": {"type": "string"}, "description": "Allele symbols for bulk search"},
                 "allele_id": {"type": "string", "description": "Allele CURIE for direct lookup"},
                 "data_provider": {
                     "type": "string",

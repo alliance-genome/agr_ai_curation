@@ -133,6 +133,12 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "description": "Gene symbol to search for (e.g., 'daf-2', 'Brca1').",
                 },
                 {
+                    "name": "gene_symbols",
+                    "type": "array[string]",
+                    "required": False,
+                    "description": "List of gene symbols for bulk lookup (e.g., ['crb', 'ninaE', 'Rh1']).",
+                },
+                {
                     "name": "gene_id",
                     "type": "string",
                     "required": False,
@@ -143,6 +149,12 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "required": False,
                     "description": "Allele symbol to search for (e.g., 'e1370', 'tm1Gldn').",
+                },
+                {
+                    "name": "allele_symbols",
+                    "type": "array[string]",
+                    "required": False,
+                    "description": "List of allele symbols for bulk lookup.",
                 },
                 {
                     "name": "allele_id",
@@ -177,6 +189,18 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "limit": 10,
                 },
             },
+            "search_genes_bulk": {
+                "name": "Search Genes (Bulk)",
+                "description": "Bulk gene symbol search in one tool call (list-in/list-out).",
+                "required_params": ["gene_symbols"],
+                "optional_params": ["data_provider", "limit", "include_synonyms"],
+                "example": {
+                    "method": "search_genes_bulk",
+                    "gene_symbols": ["crb", "ninaE", "Rh1"],
+                    "data_provider": "FB",
+                    "limit": 10,
+                },
+            },
             "get_gene_by_exact_symbol": {
                 "name": "Get Gene by Exact Symbol",
                 "description": "Find a gene by its exact official symbol (SQL IN clause - requires exact match).",
@@ -206,6 +230,18 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "example": {
                     "method": "search_alleles",
                     "allele_symbol": "tm1",
+                    "data_provider": "WB",
+                    "limit": 10,
+                },
+            },
+            "search_alleles_bulk": {
+                "name": "Search Alleles (Bulk)",
+                "description": "Bulk allele symbol search in one tool call (list-in/list-out).",
+                "required_params": ["allele_symbols"],
+                "optional_params": ["data_provider", "limit", "include_synonyms"],
+                "example": {
+                    "method": "search_alleles_bulk",
+                    "allele_symbols": ["tm1", "e1370", "n765"],
                     "data_provider": "WB",
                     "limit": 10,
                 },
@@ -287,17 +323,17 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "agent_methods": {
             "gene": {
                 "agent_name": "Gene Validation Agent",
-                "methods": ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"],
+                "methods": ["search_genes", "search_genes_bulk", "get_gene_by_exact_symbol", "get_gene_by_id"],
                 "description": "The Gene Agent uses these methods to validate gene identifiers and retrieve gene information.",
             },
             "allele": {
                 "agent_name": "Allele Validation Agent",
-                "methods": ["search_alleles", "get_allele_by_exact_symbol", "get_allele_by_id"],
+                "methods": ["search_alleles", "search_alleles_bulk", "get_allele_by_exact_symbol", "get_allele_by_id"],
                 "description": "The Allele Agent uses these methods to validate allele/variant identifiers.",
             },
             "gene_expression": {
                 "agent_name": "Gene Expression Extractor",
-                "methods": ["search_genes", "get_gene_by_exact_symbol"],
+                "methods": ["search_genes", "search_genes_bulk", "get_gene_by_exact_symbol"],
                 "description": "The Gene Expression agent validates gene names found during PDF extraction.",
             },
             "gene_ontology": {

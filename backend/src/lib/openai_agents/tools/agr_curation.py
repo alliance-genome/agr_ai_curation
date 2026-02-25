@@ -236,8 +236,10 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
     methods_requiring_provider_map = {
         "get_gene_by_exact_symbol",
         "search_genes",
+        "search_genes_bulk",
         "get_allele_by_exact_symbol",
         "search_alleles",
+        "search_alleles_bulk",
     }
     if method not in methods_requiring_provider_map:
         return None
@@ -257,8 +259,10 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
 def agr_curation_query(
     method: str,
     gene_symbol: Optional[str] = None,
+    gene_symbols: Optional[List[str]] = None,
     gene_id: Optional[str] = None,
     allele_symbol: Optional[str] = None,
+    allele_symbols: Optional[List[str]] = None,
     allele_id: Optional[str] = None,
     data_provider: Optional[str] = None,
     taxon_id: Optional[str] = None,
@@ -285,10 +289,12 @@ def agr_curation_query(
     3. Only use force=True if you're certain the exact string should be searched
 
     Args:
-        method: The query method (search_genes, search_alleles, get_gene_by_id, etc.)
+        method: The query method (search_genes, search_genes_bulk, search_alleles, search_alleles_bulk, etc.)
         gene_symbol: Gene symbol to search for
+        gene_symbols: List of gene symbols for bulk lookup methods
         gene_id: Gene ID/CURIE for direct lookup
         allele_symbol: Allele symbol to search for
+        allele_symbols: List of allele symbols for bulk lookup methods
         allele_id: Allele ID/CURIE for direct lookup
         data_provider: Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
@@ -443,6 +449,120 @@ def agr_curation_query(
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
             return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
+
+        # SEARCH GENES BULK (single tool call, multiple symbols)
+        elif method == "search_genes_bulk":
+            if not isinstance(gene_symbols, list) or not gene_symbols:
+                return _err("search_genes_bulk requires gene_symbols (list of symbols)")
+
+            normalized_symbols: List[str] = []
+            seen_inputs: set[str] = set()
+            for raw_symbol in gene_symbols:
+                symbol = str(raw_symbol).strip()
+                if not symbol:
+                    continue
+                key = symbol.lower()
+                if key in seen_inputs:
+                    continue
+                seen_inputs.add(key)
+                normalized_symbols.append(symbol)
+
+            if not normalized_symbols:
+                return _err("search_genes_bulk received no valid symbols")
+
+            if data_provider:
+                taxon = PROVIDER_TO_TAXON.get(data_provider)
+                if not taxon:
+                    return _err(f"Unknown data_provider: {data_provider}")
+                taxon_ids = [taxon]
+            else:
+                taxon_ids = list(PROVIDER_TO_TAXON.values())
+
+            bulk_items: List[Dict[str, Any]] = []
+            total_matches = 0
+
+            for symbol in normalized_symbols:
+                item_warnings: List[str] = []
+                if not force:
+                    validation = validate_search_symbol(symbol, 'gene')
+                    if not validation.is_valid:
+                        bulk_items.append({
+                            "input": symbol,
+                            "status": "validation_warning",
+                            "message": validation.warning_message,
+                            "results": [],
+                            "count": 0,
+                        })
+                        continue
+                else:
+                    force_valid, force_error = check_force_parameters(force, force_reason)
+                    if not force_valid:
+                        return _err(force_error)
+                    log_validation_override(symbol, 'gene', force_reason)
+
+                genes_data: List[Dict[str, Any]] = []
+                for tid in taxon_ids:
+                    try:
+                        results = db.search_entities(
+                            entity_type='gene',
+                            search_pattern=symbol,
+                            taxon_curie=tid,
+                            include_synonyms=include_synonyms,
+                            limit=limit_value
+                        )
+                        for result in results:
+                            try:
+                                gene = db.get_gene(result['entity_curie'])
+                                if gene:
+                                    matched_entity = result['entity']
+                                    primary_symbol = (
+                                        gene.geneSymbol.displayText if gene.geneSymbol else matched_entity
+                                    )
+                                    gene_entry = {
+                                        "curie": gene.primaryExternalId,
+                                        "symbol": primary_symbol,
+                                        "name": gene.geneFullName.displayText if gene.geneFullName else None,
+                                        "taxon": tid,
+                                        "match_type": result.get('match_type', 'unknown'),
+                                    }
+                                    enrich_with_match_context(
+                                        gene_entry,
+                                        matched_entity,
+                                        primary_symbol,
+                                        'gene'
+                                    )
+                                    genes_data.append(gene_entry)
+                            except Exception as e:
+                                logger.warning("Failed to fetch gene details in bulk for '%s': %s", symbol, e)
+                    except Exception as e:
+                        logger.warning("Failed to fuzzy search genes in bulk for '%s' taxon %s: %s", symbol, tid, e)
+
+                validated_data = genes_data[:limit_value]
+                validated_data, invalid_curie_count = _validate_curie_list(validated_data)
+                if invalid_curie_count > 0:
+                    item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+
+                total_matches += len(validated_data)
+                item_payload: Dict[str, Any] = {
+                    "input": symbol,
+                    "status": "ok",
+                    "results": validated_data,
+                    "count": len(validated_data),
+                }
+                if item_warnings:
+                    item_payload["warnings"] = item_warnings
+                bulk_items.append(item_payload)
+
+            return _ok(
+                data={
+                    "items": bulk_items,
+                    "requested_count": len(normalized_symbols),
+                    "total_matches": total_matches,
+                    "method": "search_genes_bulk",
+                },
+                count=len(bulk_items),
+                warnings=warnings,
+            )
 
         # GET GENE BY ID
         elif method == "get_gene_by_id":
@@ -615,6 +735,133 @@ def agr_curation_query(
 
             return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
 
+        # SEARCH ALLELES BULK (single tool call, multiple symbols)
+        elif method == "search_alleles_bulk":
+            if not isinstance(allele_symbols, list) or not allele_symbols:
+                return _err("search_alleles_bulk requires allele_symbols (list of symbols)")
+
+            normalized_symbols: List[str] = []
+            seen_inputs: set[str] = set()
+            for raw_symbol in allele_symbols:
+                symbol = str(raw_symbol).strip()
+                if not symbol:
+                    continue
+                key = symbol.lower()
+                if key in seen_inputs:
+                    continue
+                seen_inputs.add(key)
+                normalized_symbols.append(symbol)
+
+            if not normalized_symbols:
+                return _err("search_alleles_bulk received no valid symbols")
+
+            if data_provider:
+                taxon = PROVIDER_TO_TAXON.get(data_provider)
+                if not taxon:
+                    return _err(f"Unknown data_provider: {data_provider}")
+                taxon_ids = [taxon]
+            else:
+                taxon_ids = list(PROVIDER_TO_TAXON.values())
+
+            bulk_items: List[Dict[str, Any]] = []
+            total_matches = 0
+
+            for symbol in normalized_symbols:
+                item_warnings: List[str] = []
+                if not force:
+                    validation = validate_search_symbol(symbol, 'allele')
+                    if not validation.is_valid:
+                        bulk_items.append({
+                            "input": symbol,
+                            "status": "validation_warning",
+                            "message": validation.warning_message,
+                            "results": [],
+                            "count": 0,
+                        })
+                        continue
+                else:
+                    force_valid, force_error = check_force_parameters(force, force_reason)
+                    if not force_valid:
+                        return _err(force_error)
+                    log_validation_override(symbol, 'allele', force_reason)
+
+                alleles_data: List[Dict[str, Any]] = []
+                seen_curies = set()
+                for tid in taxon_ids:
+                    try:
+                        results = db.search_entities(
+                            entity_type='allele',
+                            search_pattern=symbol,
+                            taxon_curie=tid,
+                            include_synonyms=include_synonyms,
+                            limit=limit_value
+                        )
+                        for result in results:
+                            try:
+                                curie = result['entity_curie']
+                                if curie in seen_curies:
+                                    continue
+                                seen_curies.add(curie)
+                                allele = db.get_allele(curie)
+                                if allele:
+                                    matched_entity = result['entity']
+                                    primary_symbol = (
+                                        allele.alleleSymbol.displayText
+                                        if allele.alleleSymbol
+                                        else matched_entity
+                                    )
+                                    fullname = (
+                                        allele.alleleFullName.displayText
+                                        if allele.alleleFullName
+                                        else None
+                                    )
+                                    allele_entry = {
+                                        "curie": allele.primaryExternalId,
+                                        "symbol": primary_symbol,
+                                        "name": fullname,
+                                        "taxon": tid,
+                                        "match_type": result.get('match_type', 'unknown'),
+                                        "fullname_attribution": _extract_fullname_attribution(fullname, tid),
+                                    }
+                                    enrich_with_match_context(
+                                        allele_entry,
+                                        matched_entity,
+                                        primary_symbol,
+                                        'allele'
+                                    )
+                                    alleles_data.append(allele_entry)
+                            except Exception as e:
+                                logger.warning("Failed to fetch allele details in bulk for '%s': %s", symbol, e)
+                    except Exception as e:
+                        logger.warning("Failed to fuzzy search alleles in bulk for '%s' taxon %s: %s", symbol, tid, e)
+
+                validated_data = alleles_data[:limit_value]
+                validated_data, invalid_curie_count = _validate_curie_list(validated_data)
+                if invalid_curie_count > 0:
+                    item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+
+                total_matches += len(validated_data)
+                item_payload: Dict[str, Any] = {
+                    "input": symbol,
+                    "status": "ok",
+                    "results": validated_data,
+                    "count": len(validated_data),
+                }
+                if item_warnings:
+                    item_payload["warnings"] = item_warnings
+                bulk_items.append(item_payload)
+
+            return _ok(
+                data={
+                    "items": bulk_items,
+                    "requested_count": len(normalized_symbols),
+                    "total_matches": total_matches,
+                    "method": "search_alleles_bulk",
+                },
+                count=len(bulk_items),
+                warnings=warnings,
+            )
+
         # GET ALLELE BY ID
         elif method == "get_allele_by_id":
             if not allele_id:
@@ -708,8 +955,8 @@ def agr_curation_query(
         else:
             return _err(
                 "Unknown method: {method}. Valid: "
-                "search_genes, get_gene_by_exact_symbol, get_gene_by_id, "
-                "search_alleles, get_allele_by_exact_symbol, get_allele_by_id, "
+                "search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id, "
+                "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
                 "get_species, get_data_providers, "
                 "search_anatomy_terms, search_life_stage_terms, search_go_terms".format(method=method)
             )
