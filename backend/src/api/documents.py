@@ -18,6 +18,7 @@ import uuid
 import os
 import shutil
 import time
+import base64
 
 import httpx
 
@@ -62,6 +63,9 @@ from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 pipeline_tracker = PipelineTracker()
+
+_pdf_extraction_service_token: Optional[str] = None
+_pdf_extraction_service_token_expires_at: float = 0.0
 
 
 _PROCESSING_STATUS_VALUES = {status.value for status in ProcessingStatus}
@@ -413,6 +417,132 @@ async def list_documents_endpoint(
         )
 
 
+async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
+    """Build service-auth headers for proxy endpoints that require auth (status/wake)."""
+    global _pdf_extraction_service_token, _pdf_extraction_service_token_expires_at
+
+    auth_mode = os.getenv("PDF_EXTRACTION_AUTH_MODE", "none").strip().lower()
+    if auth_mode == "none":
+        return {}
+
+    if auth_mode == "static_bearer":
+        token = os.getenv("PDF_EXTRACTION_BEARER_TOKEN", "").strip()
+        if not token:
+            raise HTTPException(
+                status_code=500,
+                detail="PDF_EXTRACTION_BEARER_TOKEN is required when PDF_EXTRACTION_AUTH_MODE=static_bearer",
+            )
+        return {"Authorization": f"Bearer {token}"}
+
+    if auth_mode != "cognito_client_credentials":
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unsupported PDF_EXTRACTION_AUTH_MODE: {auth_mode}",
+        )
+
+    now = time.monotonic()
+    if _pdf_extraction_service_token and now < (_pdf_extraction_service_token_expires_at - 30):
+        return {"Authorization": f"Bearer {_pdf_extraction_service_token}"}
+
+    token_url = os.getenv("PDF_EXTRACTION_COGNITO_TOKEN_URL", "").strip()
+    if not token_url:
+        cognito_domain = os.getenv("COGNITO_DOMAIN", "").strip().rstrip("/")
+        if not cognito_domain:
+            raise HTTPException(
+                status_code=500,
+                detail="Set PDF_EXTRACTION_COGNITO_TOKEN_URL or COGNITO_DOMAIN for PDF extraction service auth",
+            )
+        token_url = f"{cognito_domain}/oauth2/token"
+
+    client_id = os.getenv("PDF_EXTRACTION_COGNITO_CLIENT_ID", "").strip()
+    client_secret = os.getenv("PDF_EXTRACTION_COGNITO_CLIENT_SECRET", "").strip()
+    scope = os.getenv("PDF_EXTRACTION_COGNITO_SCOPE", "").strip()
+    if not client_id or not client_secret or not scope:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "PDF_EXTRACTION_COGNITO_CLIENT_ID, PDF_EXTRACTION_COGNITO_CLIENT_SECRET, "
+                "and PDF_EXTRACTION_COGNITO_SCOPE are required for cognito_client_credentials auth mode"
+            ),
+        )
+
+    auth_basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+    headers = {
+        "Authorization": f"Basic {auth_basic}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    body = {"grant_type": "client_credentials", "scope": scope}
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(token_url, data=body, headers=headers)
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch PDF extraction service token ({response.status_code})",
+        )
+
+    payload = response.json()
+    access_token = str(payload.get("access_token", "")).strip()
+    if not access_token:
+        raise HTTPException(status_code=502, detail="Token endpoint response missing access_token")
+
+    expires_in_raw = payload.get("expires_in", 3600)
+    try:
+        expires_in = int(expires_in_raw)
+    except (TypeError, ValueError):
+        expires_in = 3600
+
+    _pdf_extraction_service_token = access_token
+    _pdf_extraction_service_token_expires_at = time.monotonic() + max(60, expires_in)
+    return {"Authorization": f"Bearer {_pdf_extraction_service_token}"}
+
+
+async def _require_pdf_extraction_worker_ready() -> None:
+    """Fail fast when proxy worker is sleeping/stopped."""
+    service_url = os.getenv("PDF_EXTRACTION_SERVICE_URL", "").rstrip("/")
+    if not service_url:
+        return
+
+    status_endpoint = f"{service_url}/api/v1/status"
+    health_endpoint = f"{service_url}/api/v1/health"
+    timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
+    headers = await _build_pdf_extraction_service_headers()
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            if headers:
+                status_response = await client.get(status_endpoint, headers=headers)
+            else:
+                status_response = await client.get(health_endpoint)
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unable to reach PDF extraction worker status endpoint: {exc}",
+        ) from exc
+
+    if status_response.status_code >= 400:
+        raise HTTPException(
+            status_code=503,
+            detail=f"PDF extraction worker status check failed ({status_response.status_code})",
+        )
+
+    payload = status_response.json() if status_response.content else {}
+    if isinstance(payload, dict):
+        state = str(payload.get("state", "") or payload.get("ec2", "")).strip().lower()
+    else:
+        state = ""
+    if state not in {"ready", "busy"}:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "pdf_extraction_worker_not_ready",
+                "worker_state": state or "unknown",
+                "message": "PDF extraction worker is sleeping or starting. Wake worker before uploading.",
+            },
+        )
+
+
 @router.get("/documents/pdf-extraction-health")
 async def get_pdf_extraction_health():
     """Report health status for the PDF extraction service."""
@@ -429,24 +559,57 @@ async def get_pdf_extraction_health():
         }
 
     health_endpoint = f"{service_url}/api/v1/health"
+    deep_health_endpoint = f"{service_url}/api/v1/health/deep"
+    status_endpoint = f"{service_url}/api/v1/status"
     timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(health_endpoint)
+            deep_response = await client.get(deep_health_endpoint)
+
+            worker_state = "unknown"
+            status_payload = None
+            status_code = None
+            status_error = None
+            try:
+                status_headers = await _build_pdf_extraction_service_headers()
+                status_resp = await client.get(status_endpoint, headers=status_headers)
+                status_code = status_resp.status_code
+                status_payload = status_resp.json()
+                if isinstance(status_payload, dict):
+                    worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
+            except Exception as exc:
+                status_error = str(exc)
 
         try:
             payload = response.json()
         except ValueError:
             payload = None
 
-        status_value = str((payload or {}).get("status", "")).lower()
-        proxy_value = str((payload or {}).get("proxy", "")).lower()
-        is_healthy = response.status_code == 200 and status_value in {"healthy", "ok", "up"}
-        if response.status_code == 200 and proxy_value == "ok":
-            is_healthy = True
+        try:
+            deep_payload = deep_response.json()
+        except ValueError:
+            deep_payload = None
 
-        status = "healthy" if is_healthy else "degraded"
+        if worker_state == "unknown":
+            worker_state = str((payload or {}).get("ec2", "")).strip().lower() or "unknown"
+
+        proxy_status = str((payload or {}).get("status", "")).strip().lower()
+        worker_available = worker_state in {"ready", "busy"}
+        proxy_ok = response.status_code == 200 and proxy_status == "healthy"
+        deep_ok = deep_response.status_code == 200 and str((deep_payload or {}).get("status", "")).strip().lower() == "healthy"
+
+        status = "healthy" if proxy_ok and worker_available and deep_ok else "degraded"
+        error_message = None
+        if not worker_available:
+            error_message = f"Worker {worker_state or 'unknown'}"
+        elif not proxy_ok:
+            error_message = "Proxy health degraded"
+        elif not deep_ok:
+            error_message = "Deep health check failed"
+        elif status_error:
+            error_message = status_error
 
         return {
             "status": status,
@@ -454,6 +617,15 @@ async def get_pdf_extraction_health():
             "last_checked": checked_at,
             "response_code": response.status_code,
             "details": payload,
+            "deep_details": deep_payload,
+            "deep_response_code": deep_response.status_code,
+            "worker_state": worker_state,
+            "worker_available": worker_available,
+            "wake_required": not worker_available,
+            "status_details": status_payload,
+            "status_response_code": status_code,
+            "status_error": status_error,
+            "error": error_message,
         }
 
     except httpx.RequestError as exc:
@@ -463,7 +635,57 @@ async def get_pdf_extraction_health():
             "service_url": service_url,
             "last_checked": checked_at,
             "error": str(exc),
+            "worker_state": "unknown",
+            "worker_available": False,
+            "wake_required": False,
         }
+
+
+@router.post("/documents/pdf-extraction-wake")
+async def wake_pdf_extraction_worker(user: Dict[str, Any] = get_auth_dependency()):
+    """Wake PDF extraction worker and return resulting state."""
+    del user
+
+    service_url = os.getenv("PDF_EXTRACTION_SERVICE_URL", "").rstrip("/")
+    if not service_url:
+        raise HTTPException(
+            status_code=500,
+            detail="PDF_EXTRACTION_SERVICE_URL is not configured",
+        )
+
+    wake_endpoint = f"{service_url}/api/v1/wake"
+    status_endpoint = f"{service_url}/api/v1/status"
+    timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
+    headers = await _build_pdf_extraction_service_headers()
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            wake_response = await client.post(wake_endpoint, headers=headers)
+            wake_payload = wake_response.json() if wake_response.content else {}
+            status_response = await client.get(status_endpoint, headers=headers)
+            status_payload = status_response.json() if status_response.content else {}
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to wake PDF extraction worker: {exc}") from exc
+
+    if wake_response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Wake request failed ({wake_response.status_code}): {wake_payload}",
+        )
+
+    worker_state = str(status_payload.get("state", "")).strip().lower() if isinstance(status_payload, dict) else "unknown"
+    worker_available = worker_state in {"ready", "busy"}
+
+    return {
+        "service_url": service_url,
+        "wake_response_code": wake_response.status_code,
+        "wake_details": wake_payload,
+        "status_response_code": status_response.status_code,
+        "status_details": status_payload,
+        "worker_state": worker_state or "unknown",
+        "worker_available": worker_available,
+        "wake_required": not worker_available,
+    }
 
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
@@ -714,6 +936,10 @@ async def upload_document_endpoint(
                 status_code=400,
                 detail=f"File must be a PDF. Got: {file.filename}"
             )
+
+        # Require worker ready before accepting upload to avoid queueing documents
+        # into a known sleeping/stopped extraction backend.
+        await _require_pdf_extraction_worker_ready()
 
         # T029: Use user-specific storage path (FR-012)
         # Create: pdf_storage/{user_id}/

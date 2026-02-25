@@ -146,7 +146,26 @@ export interface PdfExtractionHealthStatus {
   last_checked?: string;
   response_code?: number;
   details?: Record<string, unknown> | null;
+  deep_details?: Record<string, unknown> | null;
+  deep_response_code?: number;
+  worker_state?: string;
+  worker_available?: boolean;
+  wake_required?: boolean;
+  status_details?: Record<string, unknown> | null;
+  status_response_code?: number;
+  status_error?: string;
   error?: string;
+}
+
+export interface PdfExtractionWakeResponse {
+  service_url: string;
+  wake_response_code: number;
+  wake_details?: Record<string, unknown> | null;
+  status_response_code?: number;
+  status_details?: Record<string, unknown> | null;
+  worker_state?: string;
+  worker_available?: boolean;
+  wake_required?: boolean;
 }
 
 const toStringOrNull = (value: unknown): string | null => {
@@ -460,8 +479,42 @@ const fetchPdfExtractionHealth = async (): Promise<PdfExtractionHealthStatus> =>
     last_checked: data?.last_checked,
     response_code: data?.response_code,
     details: data?.details ?? null,
+    deep_details: data?.deep_details ?? null,
+    deep_response_code: data?.deep_response_code,
+    worker_state: data?.worker_state,
+    worker_available: data?.worker_available,
+    wake_required: data?.wake_required,
+    status_details: data?.status_details ?? null,
+    status_response_code: data?.status_response_code,
+    status_error: data?.status_error,
     error: data?.error,
   };
+};
+
+export const wakePdfExtractionWorker = async (): Promise<PdfExtractionWakeResponse> => {
+  const response = await fetch(`${API_BASE_URL}/documents/pdf-extraction-wake`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    let message = 'Failed to wake PDF extraction worker';
+    try {
+      const payload = await response.json();
+      const detail = payload?.detail;
+      if (typeof detail === 'string') {
+        message = detail;
+      } else if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
+        message = detail.message;
+      }
+    } catch {
+      // Keep default message
+    }
+    throw new Error(message);
+  }
+
+  const data = (await response.json()) as PdfExtractionWakeResponse;
+  return data;
 };
 
 export const usePdfExtractionHealth = (

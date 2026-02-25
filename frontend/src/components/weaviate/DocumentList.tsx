@@ -34,7 +34,12 @@ import UploadProgressDialog from './UploadProgressDialog';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
-import { DocumentSummary, fetchDocumentDetail, usePdfExtractionHealth } from '../../services/weaviate';
+import {
+  DocumentSummary,
+  fetchDocumentDetail,
+  usePdfExtractionHealth,
+  wakePdfExtractionWorker,
+} from '../../services/weaviate';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -78,6 +83,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
 }) => {
   const extractionHealthQuery = usePdfExtractionHealth();
   const extractionHealth = extractionHealthQuery.data;
+  const [wakingWorker, setWakingWorker] = useState(false);
+  const [wakeError, setWakeError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -129,6 +136,45 @@ const DocumentList: React.FC<DocumentListProps> = ({
     const match = documents.find((doc) => doc.id === selectedDocumentId) || null;
     setSelectedDocument(match);
   }, [documents, selectedDocumentId]);
+
+  const workerState = String(extractionHealth?.worker_state || '').toLowerCase();
+  const workerSleeping = Boolean(
+    extractionHealth?.wake_required ||
+      workerState === 'stopped' ||
+      workerState === 'starting' ||
+      workerState === 'unknown'
+  );
+  const extractionHealthy = extractionHealth?.status === 'healthy' && extractionHealth?.worker_available === true;
+  const uploadBlockedByExtraction =
+    extractionHealthQuery.isLoading ||
+    extractionHealthQuery.isError ||
+    !extractionHealth ||
+    !extractionHealthy;
+
+  const uploadBlockedReason =
+    wakeError ||
+    extractionHealth?.error ||
+    extractionHealth?.status_error ||
+    (workerSleeping
+      ? `PDF extraction worker is ${workerState || 'not ready'}. Wake worker before uploading.`
+      : extractionHealthQuery.isError
+        ? 'Unable to reach PDF extraction service.'
+        : !extractionHealthy
+          ? 'PDF extraction service is not healthy.'
+          : null);
+
+  const handleWakeWorker = async () => {
+    setWakeError(null);
+    setWakingWorker(true);
+    try {
+      await wakePdfExtractionWorker();
+      await extractionHealthQuery.refetch();
+    } catch (error) {
+      setWakeError(error instanceof Error ? error.message : 'Failed to wake worker');
+    } finally {
+      setWakingWorker(false);
+    }
+  };
 
   const formatFileSize = (bytes: number | null | undefined): string => {
     if (bytes === null || bytes === undefined) return '—';
@@ -572,7 +618,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
                   size="small"
                   onClick={() => {
                     const summary = toDocumentSummary(params.row);
-                    setEditDocument(summary);
+                    setEditDocument(summary ?? null);
                     setEditDialogOpen(true);
                   }}
                 >
@@ -626,6 +672,11 @@ const DocumentList: React.FC<DocumentListProps> = ({
             sx={{ flex: 1 }}
           >
             PDF extraction service ({extractionHealth.service_url}): {extractionHealth.status}
+            {extractionHealth.worker_state && (
+              <Typography component="span" variant="caption" sx={{ ml: 1 }}>
+                · Worker: {extractionHealth.worker_state}
+              </Typography>
+            )}
             {extractionHealth.last_checked && (
               <Typography component="span" variant="caption" sx={{ ml: 1 }}>
                 · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
@@ -652,14 +703,31 @@ const DocumentList: React.FC<DocumentListProps> = ({
         >
           Refresh Status
         </Button>
+        {(workerSleeping || extractionHealth?.wake_required) && (
+          <Button
+            size="small"
+            variant="contained"
+            onClick={handleWakeWorker}
+            disabled={wakingWorker}
+            startIcon={wakingWorker ? <CircularProgress size={14} /> : undefined}
+          >
+            Wake Worker
+          </Button>
+        )}
       </Stack>
+
+      {uploadBlockedReason && (
+        <Alert severity={workerSleeping ? 'warning' : 'error'} sx={{ mb: 2 }}>
+          {uploadBlockedReason}
+        </Alert>
+      )}
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
         <Button
           variant="contained"
           startIcon={<CloudUpload />}
           onClick={handleUploadClick}
-          disabled={loading || pipelineBusy || uploadDialogOpen}
+          disabled={loading || pipelineBusy || uploadDialogOpen || uploadBlockedByExtraction || wakingWorker}
         >
           Upload Document
         </Button>
