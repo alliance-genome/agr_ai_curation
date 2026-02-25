@@ -1109,6 +1109,9 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
 
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
 _FORMATTER_TOOL_IDS = {"save_csv_file", "save_tsv_file", "save_json_file"}
+# AGR validation agents should not answer without at least one DB query attempt.
+# We enforce this similarly to document-tool agents.
+_AGR_DB_QUERY_TOOL_IDS = {"agr_curation_query"}
 
 
 def _canonical_tool_ids(tool_ids: List[str]) -> List[str]:
@@ -1753,8 +1756,13 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     output_guardrails: List[Any] = []
     if requested_tool_ids:
         tool_tracker: Optional[ToolCallTracker] = None
-        if bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS):
+        has_document_tools = bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS)
+        has_agr_db_query_tools = bool(set(canonical_tool_ids) & _AGR_DB_QUERY_TOOL_IDS)
+
+        if has_document_tools or has_agr_db_query_tools:
             tool_tracker = ToolCallTracker()
+
+        if has_document_tools:
             output_guardrails.append(
                 create_tool_required_output_guardrail(
                     tracker=tool_tracker,
@@ -1762,6 +1770,17 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
                     error_message=(
                         "You must search or read the document before answering. "
                         "Use search_document, read_section, or read_subsection first."
+                    ),
+                )
+            )
+        elif has_agr_db_query_tools:
+            output_guardrails.append(
+                create_tool_required_output_guardrail(
+                    tracker=tool_tracker,
+                    minimum_calls=1,
+                    error_message=(
+                        "You must query the AGR Curation Database before answering. "
+                        "Use agr_curation_query first."
                     ),
                 )
             )

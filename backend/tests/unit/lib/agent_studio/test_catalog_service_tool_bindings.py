@@ -225,6 +225,62 @@ def test_get_agent_metadata_db_lookup_coerces_string_user_id(monkeypatch):
     assert metadata["required_params"] == []
 
 
+def test_create_db_agent_requires_agr_query_tool_call(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="ca_custom_gene_validation",
+        template_source="gene",
+        instructions="validate genes",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning=None,
+        output_schema_key=None,
+        tool_ids=["agr_curation_query"],
+        name="Gene Validation Agent (Custom)",
+    )
+
+    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "instructions")
+    monkeypatch.setattr(
+        catalog_service,
+        "resolve_tools",
+        lambda _tool_ids, _ctx: [_FakeTool("agr_curation_query")],
+    )
+
+    from src.lib.openai_agents import config as agent_config
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model, **_kwargs: "mock-model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **_kwargs: {"ok": True})
+
+    from src.lib.openai_agents import guardrails as guardrails_mod
+
+    captured = {}
+
+    class _DummyTracker:
+        pass
+
+    def _fake_guardrail(*, tracker, minimum_calls, error_message):
+        captured["tracker"] = tracker
+        captured["minimum_calls"] = minimum_calls
+        captured["error_message"] = error_message
+        return {"kind": "tool_required", "minimum_calls": minimum_calls}
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(guardrails_mod, "ToolCallTracker", _DummyTracker)
+    monkeypatch.setattr(guardrails_mod, "create_tool_required_output_guardrail", _fake_guardrail)
+    monkeypatch.setattr(catalog_service, "Agent", _FakeAgent)
+
+    built = catalog_service._create_db_agent(fake_row)
+
+    assert isinstance(captured["tracker"], _DummyTracker)
+    assert captured["minimum_calls"] == 1
+    assert "AGR Curation Database" in captured["error_message"]
+    assert built.kwargs["output_guardrails"] == [{"kind": "tool_required", "minimum_calls": 1}]
+
+
 def test_validate_active_agent_output_schemas_passes(monkeypatch):
     db = _FakeDB([
         ("gene", "Gene Validation Agent", "GeneResultEnvelope"),
