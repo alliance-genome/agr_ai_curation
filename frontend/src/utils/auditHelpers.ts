@@ -107,7 +107,21 @@ const INTERNAL_TOOL_NAMES: Record<string, string> = {
  * For other tools, returns the original name.
  */
 function formatToolName(toolName: string): string {
-  return SPECIALIST_DISPLAY_NAMES[toolName] || INTERNAL_TOOL_NAMES[toolName] || toolName
+  const mapped = SPECIALIST_DISPLAY_NAMES[toolName] || INTERNAL_TOOL_NAMES[toolName]
+  if (mapped) return mapped
+
+  // Custom Agent Workshop tools use names like:
+  // ask_ca_<uuid_with_underscores>_specialist
+  // ask_ca_<uuid_with_underscores>_step3_specialist
+  const customStepMatch = toolName.match(/^ask_ca_[a-z0-9_]+_step(\d+)_specialist$/i)
+  if (customStepMatch) {
+    return `Custom Agent (Step ${customStepMatch[1]})`
+  }
+  if (/^ask_ca_[a-z0-9_]+_specialist$/i.test(toolName)) {
+    return 'Custom Agent'
+  }
+
+  return toolName
 }
 
 /**
@@ -397,7 +411,9 @@ export function getEventLabel(event: AuditEvent): string {
       // - Other tools: use friendlyName from backend or raw tool name
       let displayName: string
       if (isSpecialistAgent) {
-        displayName = `Calling ${friendlyToolName}...`
+        // Prefer backend-provided specialist label (supports custom flow agents),
+        // then fall back to frontend formatting.
+        displayName = toolStart.friendlyName || `Calling ${friendlyToolName}...`
       } else if (toolStart.agent && INTERNAL_TOOL_NAMES[toolStart.toolName]) {
         // Use our friendly tool name with agent prefix
         displayName = `${toolStart.agent}: ${friendlyToolName}`
@@ -422,7 +438,9 @@ export function getEventLabel(event: AuditEvent): string {
       // Build completion message consistently with TOOL_START
       let completionMessage: string
       if (isSpecialistAgent) {
-        completionMessage = `${friendlyToolName} complete`
+        // Prefer backend-provided specialist label (supports custom flow agents),
+        // then fall back to frontend formatting.
+        completionMessage = toolComplete.friendlyName || `${friendlyToolName} complete`
       } else if (toolComplete.agent && INTERNAL_TOOL_NAMES[toolComplete.toolName]) {
         completionMessage = `${toolComplete.agent}: ${friendlyToolName} complete`
       } else {

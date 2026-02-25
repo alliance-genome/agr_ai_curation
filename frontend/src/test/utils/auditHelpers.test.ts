@@ -581,6 +581,50 @@ describe('getEventLabel (T015)', () => {
     expect(label).toContain('(failed)')
   })
 
+  it('formats custom specialist TOOL_START with backend friendly name', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_START',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'ask_ca_7fffddac_c7ad_4ee3_b641_97b6c652fc5b_specialist',
+        friendlyName: 'Calling Gene Validation Agent (Custom)...'
+      } as ToolStartDetails
+    }
+
+    expect(getEventLabel(event)).toBe('Calling Gene Validation Agent (Custom)...')
+  })
+
+  it('formats custom specialist TOOL_COMPLETE with backend friendly name', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_COMPLETE',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'ask_ca_7fffddac_c7ad_4ee3_b641_97b6c652fc5b_specialist',
+        friendlyName: 'Gene Validation Agent (Custom) complete'
+      } as ToolCompleteDetails
+    }
+
+    expect(getEventLabel(event)).toBe('Gene Validation Agent (Custom) complete')
+  })
+
+  it('formats custom specialist TOOL_START without friendly name fallback', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_START',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'ask_ca_7fffddac_c7ad_4ee3_b641_97b6c652fc5b_specialist'
+      } as ToolStartDetails
+    }
+
+    expect(getEventLabel(event)).toBe('Calling Custom Agent...')
+  })
+
   it('formats LLM_CALL with default message', () => {
     const event: AuditEvent = {
       id: '123',
