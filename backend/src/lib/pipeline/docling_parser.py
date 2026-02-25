@@ -40,7 +40,7 @@ class DoclingParser:
         if not self.service_url:
             raise ConfigurationError("PDF_EXTRACTION_SERVICE_URL is required")
 
-        timeout_raw = os.getenv("PDF_EXTRACTION_TIMEOUT", "300")
+        timeout_raw = os.getenv("PDF_EXTRACTION_TIMEOUT", "3600")
         try:
             self.timeout_seconds = int(timeout_raw)
         except ValueError as exc:

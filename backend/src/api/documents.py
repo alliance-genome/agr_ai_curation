@@ -17,6 +17,7 @@ import hashlib
 import uuid
 import os
 import shutil
+import time
 
 import httpx
 
@@ -998,7 +999,34 @@ async def stream_document_progress(
         """Generate SSE events for document processing progress."""
         last_status_snapshot = None
         retry_count = 0
-        max_retries = 300  # 5 minutes max wait time (300 * 1 second)
+        poll_interval_raw = os.getenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
+        timeout_raw = os.getenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS") or os.getenv("PDF_EXTRACTION_TIMEOUT", "3600")
+
+        try:
+            poll_interval_seconds = int(poll_interval_raw)
+            if poll_interval_seconds <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS=%r; defaulting to 1",
+                poll_interval_raw,
+            )
+            poll_interval_seconds = 1
+
+        try:
+            timeout_seconds = int(timeout_raw)
+            if timeout_seconds <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid PDF_PROCESSING_SSE_TIMEOUT_SECONDS/PDF_EXTRACTION_TIMEOUT=%r; defaulting to 3600",
+                timeout_raw,
+            )
+            timeout_seconds = 3600
+
+        max_retries = max(1, timeout_seconds // poll_interval_seconds)
+        timeout_minutes = timeout_seconds / 60
+        timeout_deadline = time.monotonic() + timeout_seconds
 
         try:
             # First, check if document exists
@@ -1081,15 +1109,19 @@ async def stream_document_progress(
                         }
                         yield f"data: {json.dumps(waiting_data)}\n\n"
 
-                await asyncio.sleep(1)  # Poll every second
+                remaining_seconds = timeout_deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    break
+
+                await asyncio.sleep(min(poll_interval_seconds, remaining_seconds))
                 retry_count += 1
 
             # If we've exceeded max retries, send timeout message
-            if retry_count >= max_retries:
+            if retry_count >= max_retries or time.monotonic() >= timeout_deadline:
                 timeout_data = {
                     'stage': 'timeout',
                     'progress': 0,
-                    'message': 'Progress monitoring timed out after 5 minutes',
+                    'message': f'Progress monitoring timed out after {timeout_minutes:g} minutes',
                     'timestamp': datetime.now().isoformat(),
                     'final': True
                 }
