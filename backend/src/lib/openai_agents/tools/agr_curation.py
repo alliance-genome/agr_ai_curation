@@ -8,6 +8,8 @@ using the official agr-curation-api-client package.
 import logging
 import os
 import re
+import json
+import inspect
 from typing import Optional, List, Dict, Any, Tuple
 
 from pydantic import BaseModel
@@ -747,3 +749,93 @@ def _normalize_agr_query_tool_schema() -> None:
 
 
 _normalize_agr_query_tool_schema()
+
+
+def _unwrap_function_tool_callable(tool: Any, target_name: str) -> Any:
+    """Extract original callable from a FunctionTool wrapper."""
+    visited_ids = set()
+
+    def _walk(candidate: Any) -> Optional[Any]:
+        if not callable(candidate):
+            return None
+        obj_id = id(candidate)
+        if obj_id in visited_ids:
+            return None
+        visited_ids.add(obj_id)
+
+        if getattr(candidate, "__name__", "") == target_name:
+            return candidate
+
+        for cell in getattr(candidate, "__closure__", ()) or ():
+            found = _walk(cell.cell_contents)
+            if found is not None:
+                return found
+        return None
+
+    found = _walk(getattr(tool, "on_invoke_tool", None))
+    if found is None:
+        raise RuntimeError(f"Unable to locate callable for tool '{target_name}'")
+    return found
+
+
+_AGR_QUERY_CALLABLE = _unwrap_function_tool_callable(agr_curation_query, "agr_curation_query")
+
+
+def _derive_agr_query_optional_arg_keys() -> Tuple[str, ...]:
+    """Derive forwardable AGR query args from schema/signature (no hardcoded list)."""
+    schema = getattr(agr_curation_query, "params_json_schema", {}) or {}
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if isinstance(properties, dict) and properties:
+        keys = tuple(str(k) for k in properties.keys() if str(k) != "method")
+        if keys:
+            return keys
+
+    try:
+        params = inspect.signature(_AGR_QUERY_CALLABLE).parameters
+        keys = tuple(str(k) for k in params.keys() if str(k) != "method")
+        if keys:
+            return keys
+    except Exception:
+        pass
+
+    return ()
+
+
+_AGR_QUERY_OPTIONAL_ARG_KEYS = _derive_agr_query_optional_arg_keys()
+
+
+def create_groq_agr_curation_query_tool():
+    """Create Groq-compatible wrapper for AGR query tool.
+
+    Groq enforces that every property listed in tool `properties` appears in
+    `required`. To preserve optional AGR parameters, this wrapper accepts a
+    compact required schema: `method` + `payload_json`.
+    """
+
+    @function_tool(
+        name_override="agr_curation_query",
+        description_override=(
+            "Query AGR curation DB. Provide method and payload_json. "
+            "payload_json must be a JSON object string containing any optional AGR args "
+            "(gene_symbol, allele_symbol, data_provider, term, go_aspect, limit, etc)."
+        ),
+    )
+    def agr_curation_query_groq(method: str, payload_json: str) -> AgrQueryResult:
+        payload_raw = (payload_json or "").strip()
+        if not payload_raw:
+            payload: Dict[str, Any] = {}
+        else:
+            try:
+                parsed = json.loads(payload_raw)
+            except json.JSONDecodeError as exc:
+                return _err(f"payload_json must be valid JSON object string: {exc}")
+            if not isinstance(parsed, dict):
+                return _err("payload_json must decode to a JSON object")
+            payload = parsed
+
+        forwarded_kwargs: Dict[str, Any] = {
+            key: payload.get(key) for key in _AGR_QUERY_OPTIONAL_ARG_KEYS
+        }
+        return _AGR_QUERY_CALLABLE(method=method, **forwarded_kwargs)
+
+    return agr_curation_query_groq

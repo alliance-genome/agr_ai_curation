@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from src.lib.openai_agents.streaming_tools import (
+    _adapt_tools_for_groq_schema_constraints,
     _required_tool_failure_message,
     _required_tool_names_for_agent,
     _should_use_groq_tool_json_compat,
@@ -93,3 +94,20 @@ def test_required_tool_failure_message_is_none_when_required_tool_called():
     )
 
     assert message is None
+
+
+def test_adapt_tools_for_groq_replaces_agr_tool(monkeypatch):
+    replacement = SimpleNamespace(name="agr_curation_query")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.agr_curation.create_groq_agr_curation_query_tool",
+        lambda: replacement,
+    )
+    tools = [
+        SimpleNamespace(name="agr_curation_query"),
+        SimpleNamespace(name="search_document"),
+    ]
+
+    adapted = _adapt_tools_for_groq_schema_constraints(tools)
+
+    assert adapted[0] is replacement
+    assert getattr(adapted[1], "name", None) == "search_document"

@@ -44,6 +44,47 @@ def test_tool_schema_requires_only_method():
     assert schema.get("required") == ["method"]
 
 
+def test_optional_arg_keys_are_derived_from_tool_contract():
+    """Forwarded payload keys should be derived, not manually duplicated."""
+    assert "gene_symbol" in agr_curation._AGR_QUERY_OPTIONAL_ARG_KEYS
+    assert "allele_symbol" in agr_curation._AGR_QUERY_OPTIONAL_ARG_KEYS
+    assert "method" not in agr_curation._AGR_QUERY_OPTIONAL_ARG_KEYS
+
+
+def test_groq_wrapper_schema_uses_compact_required_fields():
+    """Groq wrapper should expose an all-required compact schema."""
+    tool = agr_curation.create_groq_agr_curation_query_tool()
+    schema = getattr(tool, "params_json_schema", {}) or {}
+    assert sorted((schema.get("properties") or {}).keys()) == ["method", "payload_json"]
+    assert schema.get("required") == ["method", "payload_json"]
+
+
+def test_groq_wrapper_forwards_payload_json(monkeypatch):
+    """Groq wrapper should decode payload_json and pass kwargs to AGR query callable."""
+    captured = {}
+
+    def _fake_query(method, **kwargs):
+        captured["method"] = method
+        captured["kwargs"] = kwargs
+        return agr_curation.AgrQueryResult(status="ok", data={"method": method})
+
+    monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", _fake_query)
+    tool = agr_curation.create_groq_agr_curation_query_tool()
+    wrapped = agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query_groq")
+
+    result = wrapped(
+        method="search_genes",
+        payload_json='{"gene_symbol":"norpA","data_provider":"FB","limit":10}',
+    )
+
+    assert result.status == "ok"
+    assert captured["method"] == "search_genes"
+    assert captured["kwargs"]["gene_symbol"] == "norpA"
+    assert captured["kwargs"]["data_provider"] == "FB"
+    assert captured["kwargs"]["limit"] == 10
+    assert captured["kwargs"]["allele_symbol"] is None
+
+
 def _unwrap_function_tool(tool):
     """Extract decorated function from FunctionTool wrapper for unit testing.
 

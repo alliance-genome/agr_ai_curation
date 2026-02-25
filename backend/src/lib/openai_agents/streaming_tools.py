@@ -162,6 +162,23 @@ def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
     return None
 
 
+def _adapt_tools_for_groq_schema_constraints(tools: List[Any]) -> List[Any]:
+    """Replace tools that violate Groq's strict schema constraints."""
+    adapted: List[Any] = []
+    for tool in tools:
+        tool_name = _extract_tool_name(tool)
+        if tool_name != "agr_curation_query":
+            adapted.append(tool)
+            continue
+
+        from src.lib.openai_agents.tools.agr_curation import (
+            create_groq_agr_curation_query_tool,
+        )
+
+        adapted.append(create_groq_agr_curation_query_tool())
+    return adapted
+
+
 def _required_tool_failure_message(
     *,
     agent: Agent,
@@ -601,6 +618,9 @@ async def run_specialist_with_events(
         groq_tool_json_compat_mode = True
         runtime_agent = copy.copy(agent)
         runtime_agent.output_type = None
+        runtime_agent.tools = _adapt_tools_for_groq_schema_constraints(
+            list(getattr(agent, "tools", []) or [])
+        )
         runtime_agent.instructions = (
             f"{getattr(agent, 'instructions', '') or ''}\n\n"
             f"{_build_json_only_instruction(expected_output_type)}"
