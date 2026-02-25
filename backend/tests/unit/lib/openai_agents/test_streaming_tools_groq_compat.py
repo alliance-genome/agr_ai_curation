@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from src.lib.openai_agents.streaming_tools import (
+    _required_tool_failure_message,
+    _required_tool_names_for_agent,
     _should_use_groq_tool_json_compat,
     _try_validate_json_output,
 )
@@ -46,3 +48,48 @@ def test_try_validate_json_output_returns_none_for_invalid_shape():
     raw = '{"unexpected":"field"}'
 
     assert _try_validate_json_output(raw, _Envelope) is None
+
+
+def test_required_tool_names_prefers_document_tools_over_agr():
+    agent = SimpleNamespace(
+        tools=[
+            SimpleNamespace(name="agr_curation_query"),
+            SimpleNamespace(name="search_document"),
+        ]
+    )
+
+    assert _required_tool_names_for_agent(agent) == {
+        "search_document",
+        "read_section",
+        "read_subsection",
+    }
+
+
+def test_required_tool_failure_message_for_missing_agr_call():
+    agent = SimpleNamespace(
+        tools=[SimpleNamespace(name="agr_curation_query")]
+    )
+
+    message = _required_tool_failure_message(
+        agent=agent,
+        specialist_name="Gene Specialist",
+        tool_calls=[],
+    )
+
+    assert message is not None
+    assert "required AGR DB tools" in message
+    assert "agr_curation_query" in message
+
+
+def test_required_tool_failure_message_is_none_when_required_tool_called():
+    agent = SimpleNamespace(
+        tools=[SimpleNamespace(name="agr_curation_query")]
+    )
+
+    message = _required_tool_failure_message(
+        agent=agent,
+        specialist_name="Gene Specialist",
+        tool_calls=[SimpleNamespace(tool_name="agr_curation_query")],
+    )
+
+    assert message is None

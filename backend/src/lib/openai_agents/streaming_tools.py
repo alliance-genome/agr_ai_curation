@@ -33,6 +33,9 @@ from src.lib.prompts.context import commit_pending_prompts
 
 logger = logging.getLogger(__name__)
 
+_DOCUMENT_REQUIRED_TOOL_NAMES = {"search_document", "read_section", "read_subsection"}
+_AGR_DB_REQUIRED_TOOL_NAMES = {"agr_curation_query"}
+
 
 # =============================================================================
 # EXCEPTION CLASSES
@@ -129,6 +132,68 @@ def _try_validate_json_output(raw_text: str, output_type: Any) -> Optional[str]:
         return json.dumps(validated.model_dump())
     except Exception:
         return None
+
+
+def _extract_tool_name(tool: Any) -> str:
+    """Best-effort extraction of tool name from SDK tool objects."""
+    return str(
+        getattr(tool, "name", None)
+        or getattr(tool, "tool_name", None)
+        or ""
+    ).strip()
+
+
+def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
+    """Return required tool set for runtime enforcement, if applicable."""
+    tools = getattr(agent, "tools", []) or []
+    available_tool_names = {
+        name for name in (_extract_tool_name(tool) for tool in tools) if name
+    }
+    if not available_tool_names:
+        return None
+
+    # Match unified catalog semantics:
+    # - Document tools take precedence when present.
+    # - AGR DB tools are required when document tools are absent.
+    if available_tool_names & _DOCUMENT_REQUIRED_TOOL_NAMES:
+        return set(_DOCUMENT_REQUIRED_TOOL_NAMES)
+    if available_tool_names & _AGR_DB_REQUIRED_TOOL_NAMES:
+        return set(_AGR_DB_REQUIRED_TOOL_NAMES)
+    return None
+
+
+def _required_tool_failure_message(
+    *,
+    agent: Agent,
+    specialist_name: str,
+    tool_calls: List["SpecialistToolCall"],
+) -> Optional[str]:
+    """Return enforcement error if specialist skipped required internal tools."""
+    required_tools = _required_tool_names_for_agent(agent)
+    if not required_tools:
+        return None
+
+    called_tools = {
+        str(getattr(call, "tool_name", "") or "").strip()
+        for call in tool_calls
+        if str(getattr(call, "tool_name", "") or "").strip()
+    }
+    if called_tools & required_tools:
+        return None
+
+    required_text = ", ".join(sorted(required_tools))
+    called_text = ", ".join(sorted(called_tools)) if called_tools else "none"
+
+    if required_tools == _DOCUMENT_REQUIRED_TOOL_NAMES:
+        return (
+            f"{specialist_name} did not call required document tools before answering. "
+            f"Required: {required_text}. Called: {called_text}."
+        )
+
+    return (
+        f"{specialist_name} did not call required AGR DB tools before answering. "
+        f"Required: {required_text}. Called: {called_text}."
+    )
 
 
 # =============================================================================
@@ -984,6 +1049,35 @@ async def run_specialist_with_events(
     # Calculate total duration
     total_duration = datetime.now(timezone.utc) - start_time
     total_duration_ms = int(total_duration.total_seconds() * 1000)
+
+    required_tool_error = _required_tool_failure_message(
+        agent=runtime_agent,
+        specialist_name=specialist_name,
+        tool_calls=tool_calls,
+    )
+    if required_tool_error:
+        output_type_name = getattr(expected_output_type, "__name__", "response")
+        logger.error(
+            "%s required-tool enforcement failure: %s",
+            specialist_name,
+            required_tool_error,
+        )
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "specialist": specialist_name,
+                "output_type": output_type_name,
+                "error": required_tool_error,
+                "reason": "required_tool_not_called",
+                "severity": "error",
+            }
+        })
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=output_type_name,
+            message=required_tool_error,
+        )
 
     # Get final output - handle both structured and string outputs
     final_output = ""

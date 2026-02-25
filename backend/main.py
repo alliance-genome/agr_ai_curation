@@ -302,8 +302,31 @@ async def lifespan(app: FastAPI):
             from src.lib.agent_studio.catalog_service import validate_active_agent_output_schemas
             validate_active_agent_output_schemas(db)
             logger.info("Agent output schema validation passed")
+
+            # Validate unified agent runtime contracts (model/tool/template integrity).
+            # Strict mode is opt-in by default for safe rollout during data backfill.
+            from src.lib.agent_studio.runtime_validation import (
+                get_agent_runtime_validation_strict_mode,
+                validate_and_cache_agent_runtime_contracts,
+            )
+
+            agent_strict_mode = get_agent_runtime_validation_strict_mode()
+            agent_report = validate_and_cache_agent_runtime_contracts(
+                strict_mode=agent_strict_mode,
+            )
+            logger.info(
+                "Agent runtime validation passed (status=%s strict_mode=%s agents=%s errors=%s warnings=%s)",
+                agent_report.get("status"),
+                agent_report.get("strict_mode"),
+                agent_report.get("summary", {}).get("agent_count"),
+                len(agent_report.get("errors", [])),
+                len(agent_report.get("warnings", [])),
+            )
         except Exception as e:
-            logger.error("FATAL: Failed to initialize prompts/groups: %s", e)
+            logger.error("FATAL: Failed to initialize prompts/groups/agent runtime validation: %s", e)
+            logger.error(
+                "Set AGENT_RUNTIME_STRICT_MODE=false to downgrade critical template-tool drift checks to warnings"
+            )
             db.rollback()  # Rollback any partial changes on failure
             raise  # Re-raise to prevent app startup
         finally:

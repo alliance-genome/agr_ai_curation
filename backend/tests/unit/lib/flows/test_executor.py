@@ -12,6 +12,7 @@ from src.lib.flows.executor import (
     get_all_agent_tools,
     build_supervisor_instructions,
     create_flow_supervisor,
+    execute_flow,
 )
 
 
@@ -24,6 +25,7 @@ def _make_flow(nodes):
     flow = MagicMock()
     flow.flow_definition = {"nodes": nodes}
     flow.name = "Test Flow"
+    flow.id = "11111111-1111-1111-1111-111111111111"
     return flow
 
 
@@ -949,3 +951,88 @@ class TestCreateFlowSupervisorNoTools:
         # Should not raise
         supervisor = create_flow_supervisor(flow)
         assert supervisor is not None
+
+
+# ===========================================================================
+# execute_flow – fail-fast on specialist/runtime errors
+# ===========================================================================
+
+
+class TestExecuteFlowTermination:
+    """Tests flow-level termination behavior for success and failure paths."""
+
+    @pytest.mark.asyncio
+    async def test_stops_immediately_on_specialist_error(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "SPECIALIST_ERROR",
+                "details": {"error": "Gene Validation did not call required AGR DB tools"},
+            }
+            # If execute_flow does not break, this would leak through.
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_STARTED" in event_types
+        assert "SPECIALIST_ERROR" in event_types
+        assert "FLOW_ERROR" in event_types
+        assert "CHAT_OUTPUT_READY" not in event_types
+
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"]["failure_reason"] is not None
+
+    @pytest.mark.asyncio
+    async def test_marks_completed_on_chat_output_ready(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" not in event_types
+        assert "CHAT_OUTPUT_READY" in event_types
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["failure_reason"] is None

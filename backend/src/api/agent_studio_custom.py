@@ -77,6 +77,7 @@ class UpdateCustomAgentRequest(BaseModel):
     model_reasoning: Optional[str] = Field(None, max_length=20)
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
+    allow_empty_tool_ids: bool = False
     notes: Optional[str] = None
 
 
@@ -265,6 +266,7 @@ async def update_custom_agent_endpoint(
             model_reasoning=request.model_reasoning,
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,
+            allow_empty_tool_ids=request.allow_empty_tool_ids,
             notes=request.notes,
         )
         db.commit()

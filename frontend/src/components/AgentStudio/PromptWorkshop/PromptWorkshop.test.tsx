@@ -394,6 +394,44 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
   })
 
+  it('blocks saving an existing agent when all previously attached tools are removed', async () => {
+    const existing = buildCustomAgent({
+      name: 'Tooled Agent',
+      tool_ids: ['search_document'],
+    })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.updateCustomAgent.mockResolvedValue(existing)
+
+    render(
+      <PromptWorkshop
+        catalog={buildCatalog()}
+        initialCustomAgentId={existing.id}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Editing: Tooled Agent/)).toBeInTheDocument()
+    })
+
+    // Ensure tools controls are visible before opening the library modal
+    fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Tools' }))
+    const toolDialog = await screen.findByRole('dialog', { name: 'Tool Library' })
+    fireEvent.click(within(toolDialog).getByText('Search Document'))
+    fireEvent.click(within(toolDialog).getByRole('button', { name: 'Done' }))
+
+    fireEvent.click(screen.getByText('File'))
+    fireEvent.click(await screen.findByText('Save Agent'))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Cannot save this agent with no tools selected/)
+      ).toBeInTheDocument()
+    })
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  }, 15000)
+
   it('saves a copy via Save Agent As without updating the original agent', async () => {
     const existing = buildCustomAgent({ name: 'Original Agent' })
     const copied = buildCustomAgent({

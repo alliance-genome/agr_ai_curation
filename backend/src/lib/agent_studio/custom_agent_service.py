@@ -488,6 +488,7 @@ def update_custom_agent(
     model_reasoning: Optional[str] = None,
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
+    allow_empty_tool_ids: bool = False,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
     if name is not None:
@@ -550,7 +551,14 @@ def update_custom_agent(
     if model_reasoning is not None:
         custom_agent.model_reasoning = model_reasoning
     if tool_ids is not None:
-        custom_agent.tool_ids = _validate_requested_tool_ids(db, tool_ids) or []
+        validated_tool_ids = _validate_requested_tool_ids(db, tool_ids) or []
+        existing_tool_ids = list(custom_agent.tool_ids or [])
+        if existing_tool_ids and not validated_tool_ids and not allow_empty_tool_ids:
+            raise ValueError(
+                "Refusing to clear all tool_ids from an existing agent without explicit override. "
+                "Re-attach at least one tool before saving."
+            )
+        custom_agent.tool_ids = validated_tool_ids
     if output_schema_key is not None:
         custom_agent.output_schema_key = output_schema_key
 

@@ -74,6 +74,18 @@ class TestLifespan:
              patch("src.lib.prompts.cache.initialize"), \
              patch("src.lib.config.groups_loader.load_groups", return_value={}), \
              patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas") as mock_validate_schemas, \
+             patch(
+                 "src.lib.agent_studio.runtime_validation.validate_and_cache_agent_runtime_contracts",
+                 return_value={
+                     "status": "healthy",
+                     "strict_mode": False,
+                     "validated_at": "2026-02-25T00:00:00+00:00",
+                     "errors": [],
+                     "warnings": [],
+                     "agents": [],
+                     "summary": {"agent_count": 0},
+                 },
+             ) as mock_validate_agents, \
              patch("src.lib.config.connections_loader.load_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
              patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
@@ -97,6 +109,7 @@ class TestLifespan:
             yield {
                 "db": mock_db,
                 "validate_schemas": mock_validate_schemas,
+                "validate_agents": mock_validate_agents,
             }
 
     @pytest.mark.asyncio
@@ -189,6 +202,20 @@ class TestLifespan:
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_calls_agent_runtime_validation(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+
+        app = FastAPI()
+
+        async with main.lifespan(app):
+            pass
+
+        mock_subsystems["validate_agents"].assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
     async def test_fail_fast_on_output_schema_validation_error(self, mock_conn_cls, mock_subsystems):
         connection, _ = make_connection()
         mock_conn_cls.return_value = connection
@@ -208,5 +235,16 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="LLM provider validation failed"):
+            async with main.lifespan(app):
+                pass
+
+    @pytest.mark.asyncio
+    @patch("src.lib.agent_studio.runtime_validation.validate_and_cache_agent_runtime_contracts")
+    async def test_fail_fast_on_agent_runtime_validation_error(self, mock_validate):
+        mock_validate.side_effect = RuntimeError("Agent runtime validation failed: ca_bad tools drifted")
+
+        app = FastAPI()
+
+        with pytest.raises(RuntimeError, match="Agent runtime validation failed"):
             async with main.lifespan(app):
                 pass

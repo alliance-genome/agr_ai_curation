@@ -126,6 +126,7 @@ config/
 - `GEMINI_API_KEY` - Google Gemini API key (optional, for Gemini provider)
 - `GROQ_API_KEY` - Groq API key (optional, for Groq provider)
 - `LLM_PROVIDER_STRICT_MODE` - Fail startup if required provider keys missing (default: `true`)
+- `AGENT_RUNTIME_STRICT_MODE` - Escalate critical template-tool drift warnings to startup errors (default: `false`)
 
 ### Config Paths (optional)
 - `MODELS_CONFIG_PATH` - Override path to `models.yaml` (default: auto-detected)
@@ -142,6 +143,13 @@ config/
 - `UNSTRUCTURED_API_KEY` - Unstructured API key
 - `TOOL_POLICY_CACHE_TTL_SECONDS` - Tool policy cache lifetime (default: `30`)
 - `DEBUG` - Enable debug mode (default: `false`)
+
+## Maintenance Scripts
+
+- Audit/backfill custom-agent tool drift from template defaults:
+  - Dry-run: `.venv/bin/python scripts/audit_backfill_agent_tools.py`
+  - Apply critical candidates: `.venv/bin/python scripts/audit_backfill_agent_tools.py --apply`
+  - Include non-critical candidates: `.venv/bin/python scripts/audit_backfill_agent_tools.py --apply --include-noncritical`
 
 ## Development Setup
 

@@ -838,6 +838,9 @@ async def execute_flow(
     # Pass pre-fetched doc_context to avoid redundant Weaviate queries
     from src.lib.openai_agents.runner import run_agent_streamed
 
+    flow_status = "completed"
+    failure_reason: Optional[str] = None
+
     async for event in run_agent_streamed(
         user_message=prompt,
         user_id=str(user_id),
@@ -856,6 +859,55 @@ async def execute_flow(
         # CHAT_OUTPUT_READY indicates chat output agent completed
         # This prevents the supervisor from looping back to call agents again
         event_type = event.get("type")
+        if event_type == "SPECIALIST_ERROR":
+            details = event.get("details", {}) or {}
+            failure_reason = (
+                details.get("error")
+                or details.get("message")
+                or "A specialist step failed."
+            )
+            flow_status = "failed"
+            logger.error(
+                "[Flow Executor] Specialist error in flow '%s': %s",
+                flow.name,
+                failure_reason,
+            )
+            yield {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "specialist_step_failed",
+                    "message": (
+                        f"Flow '{flow.name}' stopped because a specialist step failed. "
+                        f"{failure_reason}"
+                    ),
+                },
+            }
+            break
+        if event_type == "RUN_ERROR":
+            data = event.get("data", {}) or {}
+            failure_reason = (
+                data.get("message")
+                or data.get("error")
+                or "Flow execution failed."
+            )
+            flow_status = "failed"
+            logger.error(
+                "[Flow Executor] Run error in flow '%s': %s",
+                flow.name,
+                failure_reason,
+            )
+            yield {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "run_error",
+                    "message": (
+                        f"Flow '{flow.name}' failed during execution. {failure_reason}"
+                    ),
+                },
+            }
+            break
         if event_type == "FILE_READY":
             logger.info(
                 "[Flow Executor] Output file produced - terminating flow '%s'", flow.name)
@@ -872,7 +924,16 @@ async def execute_flow(
         "data": {
             "flow_id": str(flow.id),
             "flow_name": flow.name,
+            "status": flow_status,
+            "failure_reason": failure_reason,
         }
     }
 
-    logger.info("[Flow Executor] Flow completed: '%s'", flow.name)
+    if flow_status == "failed":
+        logger.warning(
+            "[Flow Executor] Flow failed: '%s' (reason=%s)",
+            flow.name,
+            failure_reason,
+        )
+    else:
+        logger.info("[Flow Executor] Flow completed: '%s'", flow.name)

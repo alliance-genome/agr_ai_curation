@@ -161,6 +161,7 @@ export interface UpdateCustomAgentRequest {
   model_reasoning?: string
   tool_ids?: string[]
   output_schema_key?: string
+  allow_empty_tool_ids?: boolean
   notes?: string
 }
 

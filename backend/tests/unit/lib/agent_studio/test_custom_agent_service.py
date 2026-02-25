@@ -240,6 +240,34 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         )
 
 
+def test_update_custom_agent_rejects_clearing_existing_tool_ids_without_override():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    class FakeDB:
+        pass
+
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=7,
+        name="Existing Agent",
+        custom_prompt="Prompt",
+        mod_prompt_overrides={},
+        include_mod_rules=True,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning=None,
+        tool_ids=["agr_curation_query"],
+        output_schema_key=None,
+    )
+
+    with pytest.raises(ValueError, match="Refusing to clear all tool_ids"):
+        service.update_custom_agent(
+            db=FakeDB(),
+            custom_agent=custom_agent,
+            tool_ids=[],
+        )
+
+
 def test_create_custom_agent_rejects_unknown_model_id(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 

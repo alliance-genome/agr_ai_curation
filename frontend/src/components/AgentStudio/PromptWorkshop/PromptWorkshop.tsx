@@ -915,6 +915,15 @@ function PromptWorkshop({
       setError('Prompt text cannot be empty')
       return
     }
+    const updatingExistingAgent = !forceCreate && Boolean(selectedCustomAgentId)
+    const existingToolCount = selectedCustomAgent?.tool_ids?.length || 0
+    if (updatingExistingAgent && existingToolCount > 0 && selectedToolIds.length === 0) {
+      setError(
+        'Cannot save this agent with no tools selected because it previously had attached tools. '
+        + 'Re-attach at least one tool or use Save As to intentionally create a tool-free copy.'
+      )
+      return
+    }
 
     setSaving(true)
     setError(null)
