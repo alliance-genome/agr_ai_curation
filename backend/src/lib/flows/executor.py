@@ -18,6 +18,7 @@ Architecture:
     to capture internal tool calls (read_section, search_document, etc.) and emit
     events for the audit panel and PDF highlighting.
 """
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
@@ -343,7 +344,12 @@ def get_all_agent_tools(
                     f"'{expected_tool}'. Do not call '{tool_name}' yet."
                 )
 
-            result = await tool_callable(query=query)
+            # _create_streaming_tool() returns a FunctionTool (not a plain callable).
+            # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
+            if hasattr(tool_callable, "on_invoke_tool"):
+                result = await tool_callable.on_invoke_tool(None, json.dumps({"query": query}))
+            else:
+                result = await tool_callable(query=query)
             execution_state["next_tool_index"] = next_idx + 1
             return result
 

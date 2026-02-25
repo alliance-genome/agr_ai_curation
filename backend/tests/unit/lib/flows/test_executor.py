@@ -1,8 +1,10 @@
 """Tests for flow executor custom_instructions wiring."""
+import asyncio
+import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from agents import Agent, ModelSettings
+from agents import Agent, ModelSettings, function_tool
 
 from src.lib.flows.executor import (
     _count_agent_ids,
@@ -420,6 +422,56 @@ class TestGetAllAgentToolsDuplicateAgents:
         # Steps are 1, 2 (task_input is skipped)
         assert "ask_gene_step1_specialist" in tool_names
         assert "ask_gene_step2_specialist" in tool_names
+
+
+# ===========================================================================
+# get_all_agent_tools – strict step order runtime behavior
+# ===========================================================================
+
+
+class TestGetAllAgentToolsStepOrderRuntime:
+    """Tests strict step order against real FunctionTool invocation shape."""
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_repeated_first_tool_is_blocked_after_success(self, mock_get_agent, mock_streaming):
+        """After step 1 runs, calling it again should be blocked until step 2 runs."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        invocations = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append((tool_name, query))
+                return f"ok:{tool_name}:{query}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        flow = _make_flow([
+            _agent_node("n1", "gene"),
+            _agent_node("n2", "disease"),
+        ])
+
+        tools, _ = get_all_agent_tools(flow)
+
+        # Step 1 executes normally.
+        out1 = asyncio.run(tools[0].on_invoke_tool(None, json.dumps({"query": "q1"})))
+        # Repeating step 1 should now be blocked (step 2 is next).
+        out2 = asyncio.run(tools[0].on_invoke_tool(None, json.dumps({"query": "q2"})))
+        # Step 2 executes normally.
+        out3 = asyncio.run(tools[1].on_invoke_tool(None, json.dumps({"query": "q3"})))
+
+        assert out1.startswith("ok:ask_gene_specialist:q1")
+        assert "Flow step order is strict" in out2
+        assert "ask_disease_specialist" in out2
+        assert out3.startswith("ok:ask_disease_specialist:q3")
+        # Ensure blocked call did not invoke underlying step-1 specialist again.
+        assert invocations == [
+            ("ask_gene_specialist", "q1"),
+            ("ask_disease_specialist", "q3"),
+        ]
 
 
 # ===========================================================================
