@@ -562,25 +562,40 @@ async def get_pdf_extraction_health():
     deep_health_endpoint = f"{service_url}/api/v1/health/deep"
     status_endpoint = f"{service_url}/api/v1/status"
     timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
+    service_headers: Dict[str, str] = {}
+    auth_header_error: Optional[str] = None
+
+    try:
+        service_headers = await _build_pdf_extraction_service_headers()
+    except Exception as exc:
+        auth_header_error = str(getattr(exc, "detail", exc))
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(health_endpoint)
-            deep_response = await client.get(deep_health_endpoint)
+            if service_headers:
+                response = await client.get(health_endpoint, headers=service_headers)
+                deep_response = await client.get(deep_health_endpoint, headers=service_headers)
+            else:
+                response = await client.get(health_endpoint)
+                deep_response = await client.get(deep_health_endpoint)
 
             worker_state = "unknown"
             status_payload = None
             status_code = None
             status_error = None
             try:
-                status_headers = await _build_pdf_extraction_service_headers()
-                status_resp = await client.get(status_endpoint, headers=status_headers)
+                if service_headers:
+                    status_resp = await client.get(status_endpoint, headers=service_headers)
+                else:
+                    status_resp = await client.get(status_endpoint)
                 status_code = status_resp.status_code
                 status_payload = status_resp.json()
                 if isinstance(status_payload, dict):
                     worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
             except Exception as exc:
                 status_error = str(exc)
+            if auth_header_error and not status_error:
+                status_error = auth_header_error
 
         try:
             payload = response.json()
