@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: allele_variant_extraction
+agent_id: allele_extractor
 
 name: "Allele/Variant Extraction Agent"
 

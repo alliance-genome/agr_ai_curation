@@ -1,4 +1,4 @@
-agent_id: disease_extraction
+agent_id: disease_extractor
 content: |
   <role>
   You are a Disease Extraction Agent for biological curation.

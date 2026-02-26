@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: gene_extraction
+agent_id: gene_extractor
 
 name: "Gene Extraction Agent"
 

@@ -1,4 +1,4 @@
-agent_id: allele_variant_extraction
+agent_id: allele_extractor
 content: |
   <role>
   You are an Allele/Variant Extraction Agent for biological curation.

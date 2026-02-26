@@ -29,7 +29,7 @@ depends_on = None
 
 _MODEL_ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+):-([^}]+)\}$")
 _AGENT_KEY = "chemical_extractor"
-_AGENT_ID = "chemical_extraction"
+_AGENT_ID = "chemical_extractor"
 _CREATED_BY = "alembic:f7a8b9c0d1e2"
 
 

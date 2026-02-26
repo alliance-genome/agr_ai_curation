@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: chemical_extraction
+agent_id: chemical_extractor
 
 name: "Chemical Extraction Agent"
 

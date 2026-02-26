@@ -29,7 +29,7 @@ depends_on = None
 
 _MODEL_ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+):-([^}]+)\}$")
 _AGENT_KEY = "allele_extractor"
-_AGENT_ID = "allele_variant_extraction"
+_AGENT_ID = "allele_extractor"
 _CREATED_BY = "alembic:d5e6f7a8b9c0"
 
 

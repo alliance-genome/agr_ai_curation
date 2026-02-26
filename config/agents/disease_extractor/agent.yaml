@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: disease_extraction
+agent_id: disease_extractor
 
 name: "Disease Extraction Agent"
 

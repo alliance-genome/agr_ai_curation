@@ -1,4 +1,4 @@
-agent_id: chemical_extraction
+agent_id: chemical_extractor
 content: |
   <role>
   You are a Chemical Extraction Agent for biological curation.

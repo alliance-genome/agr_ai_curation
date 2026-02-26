@@ -1,4 +1,4 @@
-agent_id: gene_extraction
+agent_id: gene_extractor
 content: |
   <role>
   You are a Gene Extraction Agent for biological curation.
