@@ -25,7 +25,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read
+      actions: write  # Required for CI results and auto-retry via run rerun
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
