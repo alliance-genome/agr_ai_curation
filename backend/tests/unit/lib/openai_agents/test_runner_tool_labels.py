@@ -58,6 +58,7 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
     [
         ("ask_gene_specialist", "Gene Validation Agent"),
         ("ask_allele_specialist", "Allele Validation Agent"),
+        ("ask_allele_extractor_specialist", "Allele/Variant Extraction Agent"),
         ("ask_disease_specialist", "Disease Ontology Agent"),
         ("ask_chemical_specialist", "Chemical Ontology Agent"),
         ("ask_gene_expression_specialist", "Gene Expression Extractor"),

@@ -21,6 +21,13 @@ class TestBatchCapabilities:
         assert "batch_capabilities" in agent
         assert "pdf_extraction" in agent["batch_capabilities"]
 
+    def test_allele_extractor_has_pdf_extraction_flag(self):
+        """Allele extractor should have batch_pdf_extraction capability."""
+        agent = AGENT_REGISTRY.get("allele_extractor")
+        assert agent is not None
+        assert "batch_capabilities" in agent
+        assert "pdf_extraction" in agent["batch_capabilities"]
+
     def test_csv_formatter_has_file_output_flag(self):
         """CSV formatter should have file_output capability."""
         agent = AGENT_REGISTRY.get("csv_formatter")

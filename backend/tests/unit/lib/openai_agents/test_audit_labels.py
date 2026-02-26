@@ -16,6 +16,13 @@ def test_resolve_tool_display_name_uses_builtin_phenotype_map():
     assert resolve_tool_display_name("ask_phenotype_specialist") == "Phenotype Extraction Agent"
 
 
+def test_resolve_tool_display_name_uses_builtin_allele_extractor_map():
+    assert (
+        resolve_tool_display_name("ask_allele_extractor_specialist")
+        == "Allele/Variant Extraction Agent"
+    )
+
+
 def test_resolve_tool_display_name_marks_missing_label():
     assert (
         resolve_tool_display_name("ask_ca_custom_specialist", {"ask_ca_custom_specialist": "  "})

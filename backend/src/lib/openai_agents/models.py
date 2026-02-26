@@ -372,6 +372,78 @@ class PhenotypeResultEnvelope(BaseModel):
 
 
 # ============================================================================
+# Allele Extraction Structured Output Models
+# ============================================================================
+
+class AlleleExtractionFinding(BaseModel):
+    """A single retained allele/variant assertion."""
+    mention: str = Field(
+        ...,
+        description="Allele/variant notation exactly as written in the paper"
+    )
+    normalized_symbol: Optional[str] = Field(
+        None,
+        description="Normalized allele/variant symbol when resolved"
+    )
+    normalized_id: Optional[str] = Field(
+        None,
+        description="Database identifier when resolved (e.g., WB:WBVar...)"
+    )
+    associated_gene: Optional[str] = Field(
+        None,
+        description="Associated gene symbol/ID if supported by evidence"
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        "medium",
+        description="Extractor confidence in normalization and classification"
+    )
+    evidence: List[EvidenceRecord] = Field(
+        default_factory=list,
+        description="Evidence supporting this retained allele/variant assertion"
+    )
+
+
+class AlleleExtractionResultEnvelope(BaseModel):
+    """Structured output for allele/variant extraction workflows."""
+    summary: Optional[str] = Field(
+        None,
+        description="Brief run summary for allele/variant extraction"
+    )
+    alleles: List[AlleleExtractionFinding] = Field(
+        default_factory=list,
+        description="Retained allele/variant assertions from the paper"
+    )
+    items: List[ExtractionItem] = Field(
+        default_factory=list,
+        description="Normalized extraction items retained for curation workflows"
+    )
+    raw_mentions: List[MentionCandidate] = Field(
+        default_factory=list,
+        description="Raw mentions harvested from the paper before normalization"
+    )
+    evidence_records: List[EvidenceRecord] = Field(
+        default_factory=list,
+        description="Evidence snippets supporting retained/excluded decisions"
+    )
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="Normalization decisions and caveats captured during extraction"
+    )
+    exclusions: List[ExclusionRecord] = Field(
+        default_factory=list,
+        description="Excluded candidates with explicit reason codes"
+    )
+    ambiguities: List[AmbiguityRecord] = Field(
+        default_factory=list,
+        description="Ambiguous candidates requiring curator follow-up"
+    )
+    run_summary: ExtractionRunSummary = Field(
+        default_factory=ExtractionRunSummary,
+        description="Run-level extraction counters and warnings"
+    )
+
+
+# ============================================================================
 # Gene Curation Structured Output Models
 # ============================================================================
 
