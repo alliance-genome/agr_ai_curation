@@ -6,6 +6,7 @@ from typing import Dict, Optional
 BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_pdf_specialist": "General PDF Extraction Agent",
     "ask_gene_specialist": "Gene Validation Agent",
+    "ask_gene_extractor_specialist": "Gene Extraction Agent",
     "ask_allele_specialist": "Allele Validation Agent",
     "ask_allele_extractor_specialist": "Allele/Variant Extraction Agent",
     "ask_disease_specialist": "Disease Ontology Agent",

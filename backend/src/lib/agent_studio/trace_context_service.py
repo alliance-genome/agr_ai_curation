@@ -271,6 +271,9 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
     # IMPORTANT: These must match catalog_service.py AGENT_REGISTRY keys
     agent_patterns = {
         'supervisor': 'supervisor',
+        'gene_extraction': 'gene_extractor',
+        'gene_extractor': 'gene_extractor',
+        'ask_gene_extractor_': 'gene_extractor',
         'gene_expression': 'gene_expression',
         'allele_variant_extraction': 'allele_extractor',
         'allele_extractor': 'allele_extractor',
@@ -324,6 +327,8 @@ def _normalize_agent_id(agent_id: str) -> str:
     # Mapping from legacy/trace names to canonical AGENT_REGISTRY IDs
     normalization_map = {
         'pdf_specialist': 'pdf',
+        'gene_extraction': 'gene_extractor',
+        'ask_gene_extractor_specialist': 'gene_extractor',
         'allele_variant_extraction': 'allele_extractor',
         'ask_allele_extractor_specialist': 'allele_extractor',
         'disease_extraction': 'disease_extractor',
@@ -347,6 +352,7 @@ def _agent_id_to_name(agent_id: str) -> str:
     # These should match AGENT_REGISTRY 'name' values
     names = {
         'supervisor': 'Supervisor',
+        'gene_extractor': 'Gene Extraction Agent',
         'gene_expression': 'Gene Expression Extractor',
         'allele_extractor': 'Allele/Variant Extraction Agent',
         'disease_extractor': 'Disease Extraction Agent',

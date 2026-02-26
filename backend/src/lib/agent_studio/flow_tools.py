@@ -407,6 +407,7 @@ def _validate_flow_handler():
             a in seen_agents
             for a in [
                 "gene",
+                "gene_extractor",
                 "allele",
                 "allele_extractor",
                 "disease",
@@ -462,6 +463,15 @@ def _get_flow_templates_handler():
                     {"agent_id": "pdf", "step_goal": "Find gene symbols and identifiers"},
                     {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
                     {"agent_id": "chat_output", "step_goal": "Display validated results"}
+                ]
+            },
+            {
+                "name": "Gene Extraction",
+                "description": "Extract experimentally supported gene assertions from papers",
+                "steps": [
+                    {"agent_id": "pdf", "step_goal": "Find gene mentions and context"},
+                    {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
+                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
             },
             {
@@ -1057,7 +1067,7 @@ Returns agents grouped by category (Extraction, Validation, Output) and identifi
 which agents are designed for specific purposes:
 
 - output_agents: Agents meant to be the final step (chat_output, csv_formatter, tsv_formatter, json_formatter)
-- extraction_agents: Agents that extract data from documents (pdf, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
+- extraction_agents: Agents that extract data from documents (pdf, gene_extractor, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
 - validation_agents: Agents that validate/lookup data (gene, allele, disease, etc.)
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,

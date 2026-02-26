@@ -14,6 +14,13 @@ class TestBatchCapabilities:
         assert "batch_capabilities" in agent
         assert "pdf_extraction" in agent["batch_capabilities"]
 
+    def test_gene_extractor_has_pdf_extraction_flag(self):
+        """Gene extractor should have batch_pdf_extraction capability."""
+        agent = AGENT_REGISTRY.get("gene_extractor")
+        assert agent is not None
+        assert "batch_capabilities" in agent
+        assert "pdf_extraction" in agent["batch_capabilities"]
+
     def test_gene_expression_has_pdf_extraction_flag(self):
         """Gene expression agent should have batch_pdf_extraction capability."""
         agent = AGENT_REGISTRY.get("gene_expression")

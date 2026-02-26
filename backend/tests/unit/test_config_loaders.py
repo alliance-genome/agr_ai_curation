@@ -1865,7 +1865,7 @@ content: Test content for {folder_name}
         These should all be valid AGENT_REGISTRY keys.
         """
         expected_agents = {
-            "gene", "allele", "allele_extractor", "disease", "disease_extractor", "chemical", "chemical_extractor",
+            "gene", "gene_extractor", "allele", "allele_extractor", "disease", "disease_extractor", "chemical", "chemical_extractor",
             "gene_expression", "phenotype", "gene_ontology", "go_annotations",
             "orthologs", "ontology_mapping",
             "csv_formatter", "json_formatter", "tsv_formatter",
