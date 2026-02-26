@@ -61,68 +61,12 @@ const DOMAIN_DISPLAY_NAMES: Record<string, string> = {
   external_api_domain: 'External APIs'
 }
 
-// Map specialist tool names to user-friendly display names
-const SPECIALIST_DISPLAY_NAMES: Record<string, string> = {
-  ask_pdf_specialist: 'PDF Specialist',
-  ask_gene_specialist: 'Gene Specialist',
-  ask_allele_specialist: 'Allele Specialist',
-  ask_disease_specialist: 'Disease Specialist',
-  ask_chemical_specialist: 'Chemical Specialist',
-  ask_gene_expression_specialist: 'Gene Expression Specialist',
-  ask_gene_ontology_specialist: 'Gene Ontology Specialist',
-  ask_go_annotations_specialist: 'GO Annotations Specialist',
-  ask_orthologs_specialist: 'Orthologs Specialist',
-  ask_ontology_mapping_specialist: 'Ontology Mapping Specialist',
-  // File output formatters
-  ask_csv_formatter_specialist: 'CSV Formatter',
-  ask_tsv_formatter_specialist: 'TSV Formatter',
-  ask_json_formatter_specialist: 'JSON Formatter',
-}
-
 // Formatter specialists - suppress verbose query display (contains raw data to format)
 const FORMATTER_SPECIALISTS = new Set([
   'ask_csv_formatter_specialist',
   'ask_tsv_formatter_specialist',
   'ask_json_formatter_specialist',
 ])
-
-// Map internal tool names to user-friendly display names
-const INTERNAL_TOOL_NAMES: Record<string, string> = {
-  // PDF tools
-  search_document: 'Search Document',
-  read_section: 'Read Section',
-  read_subsection: 'Read Subsection',
-  // Database tools
-  agr_curation_query: 'AGR Curation Query',
-  sql_query: 'SQL Query',
-  // API tools
-  alliance_api_call: 'Alliance API',
-  rest_api_call: 'REST API',
-}
-
-/**
- * Convert tool name to user-friendly display name.
- * For specialist agents (ask_*), returns the friendly name.
- * For internal tools, returns a cleaner name.
- * For other tools, returns the original name.
- */
-function formatToolName(toolName: string): string {
-  const mapped = SPECIALIST_DISPLAY_NAMES[toolName] || INTERNAL_TOOL_NAMES[toolName]
-  if (mapped) return mapped
-
-  // Custom Agent Workshop tools use names like:
-  // ask_ca_<uuid_with_underscores>_specialist
-  // ask_ca_<uuid_with_underscores>_step3_specialist
-  const customStepMatch = toolName.match(/^ask_ca_[a-z0-9_]+_step(\d+)_specialist$/i)
-  if (customStepMatch) {
-    return `Custom Agent (Step ${customStepMatch[1]})`
-  }
-  if (/^ask_ca_[a-z0-9_]+_specialist$/i.test(toolName)) {
-    return 'Custom Agent'
-  }
-
-  return toolName
-}
 
 /**
  * Parses a Server-Sent Event (SSE) into an AuditEvent object.
@@ -402,24 +346,7 @@ export function getEventLabel(event: AuditEvent): string {
 
     case 'TOOL_START': {
       const toolStart = event.details as ToolStartDetails
-      const isSpecialistAgent = toolStart.toolName.startsWith('ask_')
-      const friendlyToolName = formatToolName(toolStart.toolName)
-
-      // Build display name:
-      // - Specialist agents: "Calling PDF Specialist..."
-      // - Internal tools with agent context: "Gene Specialist: AGR Curation Query"
-      // - Other tools: use friendlyName from backend or raw tool name
-      let displayName: string
-      if (isSpecialistAgent) {
-        // Prefer backend-provided specialist label (supports custom flow agents),
-        // then fall back to frontend formatting.
-        displayName = toolStart.friendlyName || `Calling ${friendlyToolName}...`
-      } else if (toolStart.agent && INTERNAL_TOOL_NAMES[toolStart.toolName]) {
-        // Use our friendly tool name with agent prefix
-        displayName = `${toolStart.agent}: ${friendlyToolName}`
-      } else {
-        displayName = toolStart.friendlyName || friendlyToolName
-      }
+      const displayName = toolStart.friendlyName || `[Missing tool label] ${toolStart.toolName}`
 
       // Don't show agent in parentheses - it's either in the displayName or not relevant
       // Skip query details for formatter specialists (contains verbose raw data, not useful)
@@ -432,20 +359,7 @@ export function getEventLabel(event: AuditEvent): string {
 
     case 'TOOL_COMPLETE': {
       const toolComplete = event.details as ToolCompleteDetails
-      const isSpecialistAgent = toolComplete.toolName.startsWith('ask_')
-      const friendlyToolName = formatToolName(toolComplete.toolName)
-
-      // Build completion message consistently with TOOL_START
-      let completionMessage: string
-      if (isSpecialistAgent) {
-        // Prefer backend-provided specialist label (supports custom flow agents),
-        // then fall back to frontend formatting.
-        completionMessage = toolComplete.friendlyName || `${friendlyToolName} complete`
-      } else if (toolComplete.agent && INTERNAL_TOOL_NAMES[toolComplete.toolName]) {
-        completionMessage = `${toolComplete.agent}: ${friendlyToolName} complete`
-      } else {
-        completionMessage = toolComplete.friendlyName || `${friendlyToolName} complete`
-      }
+      const completionMessage = toolComplete.friendlyName || `[Missing tool label] ${toolComplete.toolName}`
 
       const failed = toolComplete.success === false || Boolean(toolComplete.error)
       const failureText = failed ? ' (failed)' : ''

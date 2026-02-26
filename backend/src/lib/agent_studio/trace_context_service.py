@@ -326,21 +326,21 @@ def _agent_id_to_name(agent_id: str) -> str:
     # These should match AGENT_REGISTRY 'name' values
     names = {
         'supervisor': 'Supervisor',
-        'gene_expression': 'Gene Expression Specialist',
-        'gene': 'Gene Specialist',
-        'allele': 'Allele Specialist',
-        'disease': 'Disease Specialist',
-        'chemical': 'Chemical Specialist',
-        'gene_ontology': 'GO Term Specialist',
-        'go_annotations': 'GO Annotations Specialist',
-        'orthologs': 'Orthologs Specialist',
-        'ontology_mapping': 'Ontology Mapping Specialist',
+        'gene_expression': 'Gene Expression Extractor',
+        'gene': 'Gene Validation Agent',
+        'allele': 'Allele Validation Agent',
+        'disease': 'Disease Ontology Agent',
+        'chemical': 'Chemical Ontology Agent',
+        'gene_ontology': 'Gene Ontology Agent',
+        'go_annotations': 'GO Annotations Agent',
+        'orthologs': 'Orthologs Agent',
+        'ontology_mapping': 'Ontology Mapping Agent',
         'chat_output': 'Chat Output',
         'csv_formatter': 'CSV File Formatter',
         'tsv_formatter': 'TSV File Formatter',
         'json_formatter': 'JSON File Formatter',
         # Normalized: 'pdf' not 'pdf_specialist'
-        'pdf': 'PDF Specialist',
+        'pdf': 'General PDF Extraction Agent',
     }
     return names.get(agent_id, agent_id.replace('_', ' ').title())
 

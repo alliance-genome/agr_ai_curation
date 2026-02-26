@@ -455,7 +455,7 @@ describe('getEventLabel (T015)', () => {
 
     const label = getEventLabel(event)
 
-    expect(label).toContain('with agents:')
+    expect(label).toContain('Starting crew:')
     expect(label).toContain('disease_ontology_agent')
     expect(label).toContain('lookup_agent')
   })
@@ -503,6 +503,20 @@ describe('getEventLabel (T015)', () => {
     }
 
     expect(getEventLabel(event)).toBe('Searching database...')
+  })
+
+  it('flags specialist TOOL_START missing backend friendly label', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_START',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'ask_gene_specialist'
+      } as ToolStartDetails
+    }
+
+    expect(getEventLabel(event)).toBe('[Missing tool label] ask_gene_specialist')
   })
 
   it('formats TOOL_START with SQL query details', () => {
@@ -562,6 +576,20 @@ describe('getEventLabel (T015)', () => {
     expect(getEventLabel(event)).toBe('Database search complete')
   })
 
+  it('flags specialist TOOL_COMPLETE missing backend friendly label', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_COMPLETE',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'ask_disease_specialist'
+      } as ToolCompleteDetails
+    }
+
+    expect(getEventLabel(event)).toBe('[Missing tool label] ask_disease_specialist')
+  })
+
   it('formats TOOL_COMPLETE with failure indication', () => {
     const event: AuditEvent = {
       id: '123',
@@ -611,7 +639,7 @@ describe('getEventLabel (T015)', () => {
     expect(getEventLabel(event)).toBe('Gene Validation Agent (Custom) complete')
   })
 
-  it('formats custom specialist TOOL_START without friendly name fallback', () => {
+  it('flags custom specialist TOOL_START missing backend friendly label', () => {
     const event: AuditEvent = {
       id: '123',
       type: 'TOOL_START',
@@ -622,7 +650,7 @@ describe('getEventLabel (T015)', () => {
       } as ToolStartDetails
     }
 
-    expect(getEventLabel(event)).toBe('Calling Custom Agent...')
+    expect(getEventLabel(event)).toBe('[Missing tool label] ask_ca_7fffddac_c7ad_4ee3_b641_97b6c652fc5b_specialist')
   })
 
   it('formats LLM_CALL with default message', () => {

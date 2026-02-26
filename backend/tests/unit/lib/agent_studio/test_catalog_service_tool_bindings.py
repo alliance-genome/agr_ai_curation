@@ -1,5 +1,6 @@
 """Unit tests for catalog_service tool binding resolution."""
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,12 @@ from src.lib.agent_studio import catalog_service
 class _FakeTool:
     def __init__(self, name: str):
         self.name = name
+
+
+@dataclass(frozen=True)
+class _FakeFunctionTool:
+    name: str
+    on_invoke_tool: object
 
 
 class _FakeQuery:
@@ -308,3 +315,48 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
 
     with pytest.raises(RuntimeError, match="bad_agent \\(Bad Agent\\) -> MissingEnvelope"):
         catalog_service.validate_active_agent_output_schemas(db)
+
+
+def test_resolve_agr_curation_tool_without_tracker_returns_singleton(monkeypatch):
+    fake_tool = _FakeFunctionTool(name="agr_curation_query", on_invoke_tool=None)
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.agr_curation.agr_curation_query",
+        fake_tool,
+        raising=False,
+    )
+
+    resolved = catalog_service._resolve_agr_curation_tool(catalog_service.ToolExecutionContext())
+
+    assert resolved is fake_tool
+
+
+@pytest.mark.asyncio
+async def test_resolve_agr_curation_tool_with_tracker_wraps_invoke(monkeypatch):
+    calls = []
+
+    class _Tracker:
+        def record_call(self, tool_name):
+            calls.append(tool_name)
+
+    async def _original_invoke(_ctx, input_str):
+        return f"original:{input_str}"
+
+    fake_tool = _FakeFunctionTool(
+        name="agr_curation_query",
+        on_invoke_tool=_original_invoke,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.agr_curation.agr_curation_query",
+        fake_tool,
+        raising=False,
+    )
+
+    resolved = catalog_service._resolve_agr_curation_tool(
+        catalog_service.ToolExecutionContext(tool_tracker=_Tracker())
+    )
+
+    assert resolved is not fake_tool
+    result = await resolved.on_invoke_tool(None, '{"method":"search_genes"}')
+
+    assert calls == ["agr_curation_query"]
+    assert result == 'original:{"method":"search_genes"}'

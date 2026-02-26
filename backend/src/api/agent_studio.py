@@ -2676,7 +2676,7 @@ The system uses a multi-agent architecture:
 
 **Extraction Agents (work with uploaded papers):**
 - **Gene Expression Specialist**: Extracts where, when, and how genes are expressed.
-- **PDF Specialist**: Answers general questions about PDF documents.
+- **General PDF Extraction Agent**: Answers broad questions about PDF documents.
 - **Formatter**: Converts natural language into structured JSON matching the Alliance data model.
 
 **Database Query Agents (query external sources):**
