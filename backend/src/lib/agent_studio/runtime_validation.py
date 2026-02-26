@@ -83,6 +83,17 @@ def _normalize_tool_ids(raw_tool_ids: Any) -> Tuple[List[str], Optional[str]]:
     return normalized, None
 
 
+def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
+    """Load expected system-agent keys from config/agents definitions."""
+    try:
+        from src.lib.config.agent_loader import load_agent_definitions
+
+        agent_defs = load_agent_definitions()
+        return {agent.folder_name for agent in agent_defs.values()}, None
+    except Exception as exc:
+        return set(), f"Failed to load expected system agents from config: {exc}"
+
+
 def build_agent_runtime_report(
     *,
     strict_mode: Optional[bool] = None,
@@ -114,6 +125,7 @@ def build_agent_runtime_report(
                 "degraded_agent_count": 0,
                 "missing_tool_backfill_candidates": 0,
                 "critical_missing_tool_backfill_candidates": 0,
+                "missing_system_agent_count": 0,
             },
         }
 
@@ -133,6 +145,7 @@ def build_agent_runtime_report(
                 "degraded_agent_count": 0,
                 "missing_tool_backfill_candidates": 0,
                 "critical_missing_tool_backfill_candidates": 0,
+                "missing_system_agent_count": 0,
             },
         }
 
@@ -160,6 +173,20 @@ def build_agent_runtime_report(
                 "tool_ids": canonical_tool_ids,
                 "has_critical_tools": bool(set(canonical_tool_ids) & critical_tool_ids),
             }
+
+    missing_system_agent_count = 0
+    expected_system_agent_keys, expected_system_agent_error = _load_expected_system_agent_keys()
+    if expected_system_agent_error:
+        warnings.append(expected_system_agent_error)
+    else:
+        actual_system_agent_keys = set(system_rows_by_key.keys())
+        missing_system_agents = sorted(expected_system_agent_keys - actual_system_agent_keys)
+        if missing_system_agents:
+            missing_system_agent_count = len(missing_system_agents)
+            errors.append(
+                "Missing active system agents in unified agents table: "
+                + ", ".join(missing_system_agents)
+            )
 
     unhealthy_agent_count = 0
     degraded_agent_count = 0
@@ -293,6 +320,7 @@ def build_agent_runtime_report(
             "degraded_agent_count": degraded_agent_count,
             "missing_tool_backfill_candidates": missing_tool_candidates,
             "critical_missing_tool_backfill_candidates": critical_missing_tool_candidates,
+            "missing_system_agent_count": missing_system_agent_count,
         },
     }
 

@@ -39,6 +39,7 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(agent_key="ca_bad", model_id="unknown-model", tool_ids=["missing_tool"])
     ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
     monkeypatch.setattr(
@@ -56,6 +57,66 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
     assert report["status"] == "unhealthy"
     assert any("Unknown model_id 'unknown-model'" in msg for msg in report["errors"])
     assert any("Unknown tool_ids: missing_tool" in msg for msg in report["errors"])
+
+
+def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["agr_curation_query"]),
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene", "phenotype"}, None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": {"search_document"},
+            "agr_db_query_tool_ids": {"agr_curation_query"},
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+    assert report["status"] == "unhealthy"
+    assert report["summary"]["missing_system_agent_count"] == 1
+    assert any(
+        "Missing active system agents in unified agents table: phenotype" in msg
+        for msg in report["errors"]
+    )
+
+
+def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["agr_curation_query"]),
+    ])
+    monkeypatch.setattr(
+        module,
+        "_load_expected_system_agent_keys",
+        lambda: (set(), "Failed to load expected system agents from config: boom"),
+    )
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": {"search_document"},
+            "agr_db_query_tool_ids": {"agr_curation_query"},
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+    assert report["status"] == "degraded"
+    assert report["errors"] == []
+    assert report["summary"]["missing_system_agent_count"] == 0
+    assert any("Failed to load expected system agents from config: boom" in msg for msg in report["warnings"])
 
 
 def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monkeypatch):
@@ -76,6 +137,7 @@ def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monk
             tool_ids=[],
         ),
     ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
     monkeypatch.setattr(
@@ -114,6 +176,7 @@ def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monk
             tool_ids=[],
         ),
     ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
     monkeypatch.setattr(
