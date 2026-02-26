@@ -51,7 +51,7 @@ def test_provider_method_succeeds_when_mapping_present(monkeypatch):
 
 
 def test_tool_schema_requires_only_method():
-    """FunctionTool schema should not require optional AGR query params."""
+    """With strict_mode=False, only 'method' is required (optional params are truly optional)."""
     schema = getattr(agr_curation.agr_curation_query, "params_json_schema", {}) or {}
     assert schema.get("required") == ["method"]
 
