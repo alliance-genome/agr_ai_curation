@@ -14,6 +14,26 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_go_annotations_specialist": "GO Annotations Agent",
     "ask_orthologs_specialist": "Orthologs Agent",
     "ask_ontology_mapping_specialist": "Ontology Mapping Agent",
+    "ask_chat_output_specialist": "Chat Output Agent",
+    "ask_csv_formatter_specialist": "CSV File Formatter",
+    "ask_tsv_formatter_specialist": "TSV File Formatter",
+    "ask_json_formatter_specialist": "JSON File Formatter",
+}
+
+INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
+    "search_document": "Search Document",
+    "read_section": "Read Section",
+    "read_subsection": "Read Subsection",
+    "agr_curation_query": "AGR Curation Query",
+    "sql_query": "SQL Query",
+    "alliance_api_call": "Alliance API",
+    "rest_api_call": "REST API",
+    "quickgo_api_call": "QuickGO API",
+    "go_api_call": "GO Annotations API",
+    "save_csv_file": "Save CSV File",
+    "save_tsv_file": "Save TSV File",
+    "save_json_file": "Save JSON File",
+    "export_to_file": "Export to File",
 }
 
 
@@ -28,7 +48,12 @@ def _ensure_non_empty_label(tool_name: str, label: Optional[str]) -> str:
 def resolve_tool_display_name(tool_name: str, custom_display_names: Optional[Dict[str, str]] = None) -> str:
     """Resolve the best user-facing display name for a tool call."""
     custom = custom_display_names or {}
-    label = custom.get(tool_name) or BUILTIN_SPECIALIST_DISPLAY_NAMES.get(tool_name) or tool_name
+    label = (
+        custom.get(tool_name)
+        or BUILTIN_SPECIALIST_DISPLAY_NAMES.get(tool_name)
+        or INTERNAL_TOOL_DISPLAY_NAMES.get(tool_name)
+        or tool_name
+    )
     return _ensure_non_empty_label(tool_name, label)
 
 
@@ -38,7 +63,8 @@ def build_tool_start_friendly_name(tool_name: str, custom_display_names: Optiona
     if is_specialist:
         display = resolve_tool_display_name(tool_name, custom_display_names)
         return _ensure_non_empty_label(tool_name, f"Calling {display}...")
-    return _ensure_non_empty_label(tool_name, f"Calling {tool_name}...")
+    display = resolve_tool_display_name(tool_name, custom_display_names)
+    return _ensure_non_empty_label(tool_name, f"Calling {display}...")
 
 
 def build_tool_complete_friendly_name(tool_name: str, custom_display_names: Optional[Dict[str, str]] = None) -> str:
@@ -55,10 +81,11 @@ def build_specialist_internal_friendly_name(
 ) -> str:
     """Build friendly labels for specialist-internal tool events."""
     specialist = (specialist_name or "").strip()
+    display_tool_name = resolve_tool_display_name(tool_name)
     if not specialist:
-        base = _ensure_non_empty_label(tool_name, None)
+        base = _ensure_non_empty_label(tool_name, display_tool_name)
     else:
-        base = f"{specialist}: {tool_name}"
+        base = f"{specialist}: {display_tool_name}"
     if complete:
         return f"{base} complete"
     return base

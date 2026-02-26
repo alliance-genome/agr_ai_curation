@@ -24,7 +24,7 @@ def test_build_tool_start_friendly_name_for_specialist():
 
 
 def test_build_tool_start_friendly_name_for_internal_tool():
-    assert build_tool_start_friendly_name("sql_query") == "Calling sql_query..."
+    assert build_tool_start_friendly_name("sql_query") == "Calling SQL Query..."
 
 
 def test_build_tool_complete_friendly_name():
@@ -32,7 +32,4 @@ def test_build_tool_complete_friendly_name():
 
 
 def test_build_specialist_internal_friendly_name_marks_missing_specialist():
-    assert (
-        build_specialist_internal_friendly_name("", "search_document")
-        == "[Missing tool label] search_document"
-    )
+    assert build_specialist_internal_friendly_name("", "search_document") == "Search Document"

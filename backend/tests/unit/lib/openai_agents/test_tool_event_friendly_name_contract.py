@@ -39,7 +39,7 @@ def _tool_output_stream_event(output: str = '{"summary":"ok"}'):
 
 
 @pytest.mark.asyncio
-async def test_runner_tool_events_always_include_friendly_name(monkeypatch):
+async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
     fake_events = [
         _tool_call_stream_event("ask_gene_specialist"),
         _tool_output_stream_event(),
@@ -86,15 +86,12 @@ async def test_runner_tool_events_always_include_friendly_name(monkeypatch):
     ]
     assert tool_events, "Expected TOOL_START/TOOL_COMPLETE events from runner stream"
 
-    for event in tool_events:
-        details = event.get("details", {})
-        assert "friendlyName" in details
-        assert isinstance(details["friendlyName"], str)
-        assert details["friendlyName"].strip()
+    assert tool_events[0]["details"]["friendlyName"] == "Calling Gene Validation Agent..."
+    assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent complete"
 
 
 @pytest.mark.asyncio
-async def test_specialist_tool_events_always_include_friendly_name(monkeypatch):
+async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch):
     fake_events = [
         _tool_call_stream_event("search_document"),
         _tool_output_stream_event(),
@@ -132,8 +129,5 @@ async def test_specialist_tool_events_always_include_friendly_name(monkeypatch):
     ]
     assert tool_events, "Expected TOOL_START/TOOL_COMPLETE events from specialist stream"
 
-    for event in tool_events:
-        details = event.get("details", {})
-        assert "friendlyName" in details
-        assert isinstance(details["friendlyName"], str)
-        assert details["friendlyName"].strip()
+    assert tool_events[0]["details"]["friendlyName"] == "Gene Validation Agent: Search Document"
+    assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent: Search Document complete"

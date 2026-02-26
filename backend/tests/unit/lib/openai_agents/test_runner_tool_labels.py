@@ -65,6 +65,10 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
         ("ask_go_annotations_specialist", "GO Annotations Agent"),
         ("ask_orthologs_specialist", "Orthologs Agent"),
         ("ask_ontology_mapping_specialist", "Ontology Mapping Agent"),
+        ("ask_chat_output_specialist", "Chat Output Agent"),
+        ("ask_csv_formatter_specialist", "CSV File Formatter"),
+        ("ask_tsv_formatter_specialist", "TSV File Formatter"),
+        ("ask_json_formatter_specialist", "JSON File Formatter"),
     ],
 )
 def test_resolve_tool_display_name_uses_canonical_builtin_names(tool_name, expected_label):
@@ -87,3 +91,8 @@ def test_build_tool_start_friendly_name_formats_specialist_label():
 def test_build_tool_complete_friendly_name_formats_specialist_label():
     label = _build_tool_complete_friendly_name("ask_gene_specialist", {})
     assert label == "Gene Validation Agent complete"
+
+
+def test_build_tool_start_friendly_name_humanizes_internal_tool_labels():
+    label = _build_tool_start_friendly_name("search_document", {})
+    assert label == "Calling Search Document..."
