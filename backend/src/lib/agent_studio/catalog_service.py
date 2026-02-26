@@ -922,10 +922,25 @@ class ToolExecutionContext:
     tool_tracker: Optional[Any] = None
 
 
-def _resolve_agr_curation_tool(_context: ToolExecutionContext) -> Any:
+def _resolve_agr_curation_tool(context: ToolExecutionContext) -> Any:
+    from dataclasses import replace
     from src.lib.openai_agents.tools.agr_curation import agr_curation_query
 
-    return agr_curation_query
+    if not context.tool_tracker:
+        return agr_curation_query
+
+    # Wrap with ToolCallTracker recording so the output guardrail
+    # sees the call count.  Uses dataclasses.replace to create an
+    # independent copy of the FunctionTool — the module-level
+    # singleton is never mutated.
+    tracker = context.tool_tracker
+    original_invoke = agr_curation_query.on_invoke_tool
+
+    async def _tracked_invoke(ctx, input_str):
+        tracker.record_call("agr_curation_query")
+        return await original_invoke(ctx, input_str)
+
+    return replace(agr_curation_query, on_invoke_tool=_tracked_invoke)
 
 
 def _resolve_search_document_tool(context: ToolExecutionContext) -> Any:
