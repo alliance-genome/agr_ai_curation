@@ -18,7 +18,7 @@ async def test_get_schema_endpoint_success(monkeypatch):
         }
 
     monkeypatch.setattr(schema, "get_collection_settings", _settings)
-    result = await schema.get_schema_endpoint()
+    result = await schema.get_schema_endpoint({"sub": "dev-user-123"})
 
     assert result["collection"] == "PDFDocument"
     assert result["version"] == "v2"
@@ -36,7 +36,7 @@ async def test_get_schema_endpoint_failure(monkeypatch):
     monkeypatch.setattr(schema, "get_collection_settings", _boom)
 
     with pytest.raises(HTTPException) as exc:
-        await schema.get_schema_endpoint()
+        await schema.get_schema_endpoint({"sub": "dev-user-123"})
 
     assert exc.value.status_code == 500
     assert "Failed to retrieve schema" in str(exc.value.detail)
@@ -50,7 +50,8 @@ async def test_update_schema_endpoint_rejects_invalid_property_dtype():
                 "properties": [
                     {"name": "bad", "dataType": ["uuid"]},
                 ]
-            }
+            },
+            {"sub": "dev-user-123"},
         )
 
     assert exc.value.status_code == 400
@@ -63,7 +64,8 @@ async def test_update_schema_endpoint_rejects_invalid_distance():
         await schema.update_schema_endpoint(
             {
                 "vectorIndexConfig": {"distance": "chebyshev"},
-            }
+            },
+            {"sub": "dev-user-123"},
         )
 
     assert exc.value.status_code == 400
@@ -82,7 +84,8 @@ async def test_update_schema_endpoint_success(monkeypatch):
         {
             "properties": [{"name": "title", "dataType": ["text"]}],
             "vectorIndexConfig": {"distance": "cosine"},
-        }
+        },
+        {"sub": "dev-user-123"},
     )
 
     assert result["success"] is True
@@ -101,7 +104,8 @@ async def test_update_schema_endpoint_handles_update_failure(monkeypatch):
         await schema.update_schema_endpoint(
             {
                 "properties": [{"name": "title", "dataType": ["text"]}],
-            }
+            },
+            {"sub": "dev-user-123"},
         )
 
     assert exc.value.status_code == 500

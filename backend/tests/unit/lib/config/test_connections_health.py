@@ -172,57 +172,50 @@ class TestCheckRedisHealth:
     @pytest.mark.asyncio
     async def test_returns_tuple_result(self, sample_redis_connection):
         """Should return a tuple of (bool, Optional[str])."""
-        # Just verify the function returns the correct structure
-        # It may return import error if redis isn't installed, or connection
-        # error if redis service isn't running - both are valid for this test
-        result = await _check_redis_health(sample_redis_connection)
+        mock_client = AsyncMock()
+        mock_client.ping = AsyncMock(return_value=True)
+        mock_client.aclose = AsyncMock(return_value=None)
+
+        with patch("redis.asyncio.from_url", return_value=mock_client):
+            result = await _check_redis_health(sample_redis_connection)
 
         assert isinstance(result, tuple)
         assert len(result) == 2
         is_healthy, error = result
         assert isinstance(is_healthy, bool)
         assert error is None or isinstance(error, str)
+        assert is_healthy is True
 
     @pytest.mark.asyncio
-    async def test_handles_missing_package_gracefully(self, sample_redis_connection):
+    async def test_handles_missing_package_gracefully(self, sample_redis_connection, monkeypatch):
         """Should return (False, message) when redis package not installed."""
-        # Simulate import failure by patching the import statement
-        import sys
+        import builtins
 
-        # Store original module if it exists
-        original = sys.modules.get("redis.asyncio")
+        real_import = builtins.__import__
 
-        try:
-            # Remove from cache to force reimport
-            sys.modules["redis.asyncio"] = None
-            sys.modules["redis"] = None
+        def fake_import(name, *args, **kwargs):
+            if name == "redis.asyncio":
+                raise ImportError("redis package not installed")
+            return real_import(name, *args, **kwargs)
 
-            # The function should catch ImportError and return a clean error
-            is_healthy, error = await _check_redis_health(sample_redis_connection)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
 
-            # Either it handles the import error or somehow still works
-            assert isinstance(is_healthy, bool)
-            if not is_healthy and error:
-                # Should be a meaningful error message
-                assert len(error) > 0
-        finally:
-            # Restore
-            if original:
-                sys.modules["redis.asyncio"] = original
+        is_healthy, error = await _check_redis_health(sample_redis_connection)
+        assert is_healthy is False
+        assert error == "redis package not installed"
 
     @pytest.mark.asyncio
     async def test_connection_failure_returns_false(self, sample_redis_connection):
         """Should return (False, error) when connection fails."""
-        # Test with a URL that will definitely fail to connect
-        sample_redis_connection.url = "redis://nonexistent-host:9999"
-        sample_redis_connection.timeout_seconds = 1  # Short timeout
+        mock_client = AsyncMock()
+        mock_client.ping = AsyncMock(side_effect=ConnectionError("Connection refused"))
+        mock_client.aclose = AsyncMock(return_value=None)
 
-        is_healthy, error = await _check_redis_health(sample_redis_connection)
+        with patch("redis.asyncio.from_url", return_value=mock_client):
+            is_healthy, error = await _check_redis_health(sample_redis_connection)
 
-        # Should fail gracefully (either import error or connection error)
-        assert isinstance(is_healthy, bool)
-        # If redis is installed but can't connect, should return False
-        # If redis is not installed, should also return False
+        assert is_healthy is False
+        assert "Connection failed" in error
 
 
 class TestCheckPostgresHealth:
@@ -231,44 +224,53 @@ class TestCheckPostgresHealth:
     @pytest.mark.asyncio
     async def test_returns_tuple_result(self, sample_postgres_connection):
         """Should return a tuple of (bool, Optional[str])."""
-        # Just verify the function returns the correct structure
-        # It may return import error if asyncpg isn't installed, or connection
-        # error if postgres isn't running - both are valid for this test
-        result = await _check_postgres_health(sample_postgres_connection)
+        import sys
+        from types import SimpleNamespace
+
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value="SELECT 1")
+        mock_conn.close = AsyncMock(return_value=None)
+        mock_asyncpg = SimpleNamespace(connect=AsyncMock(return_value=mock_conn))
+
+        with patch.dict(sys.modules, {"asyncpg": mock_asyncpg}):
+            result = await _check_postgres_health(sample_postgres_connection)
 
         assert isinstance(result, tuple)
         assert len(result) == 2
         is_healthy, error = result
-        assert isinstance(is_healthy, bool)
-        assert error is None or isinstance(error, str)
+        assert is_healthy is True
+        assert error is None
 
     @pytest.mark.asyncio
-    async def test_handles_missing_packages_gracefully(self, sample_postgres_connection):
+    async def test_handles_missing_packages_gracefully(self, sample_postgres_connection, monkeypatch):
         """Should handle missing asyncpg/psycopg2 packages."""
-        # Test that the function doesn't crash even without database drivers
-        is_healthy, error = await _check_postgres_health(sample_postgres_connection)
+        import builtins
 
-        # Should either succeed or return an error message
-        assert isinstance(is_healthy, bool)
-        if not is_healthy:
-            assert error is not None
-            # Error should be meaningful
-            assert len(error) > 0
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name in {"asyncpg", "psycopg2"}:
+                raise ImportError(f"{name} missing")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        is_healthy, error = await _check_postgres_health(sample_postgres_connection)
+        assert is_healthy is False
+        assert error == "Neither asyncpg nor psycopg2 installed"
 
     @pytest.mark.asyncio
     async def test_connection_failure_returns_false(self, sample_postgres_connection):
         """Should return (False, error) when connection fails."""
-        # Test with a URL that will definitely fail to connect
-        # Using IP format to avoid secret detection false positives
-        sample_postgres_connection.url = "postgresql://127.0.0.1:59999/nonexistent"
-        sample_postgres_connection.timeout_seconds = 1  # Short timeout
+        import sys
+        from types import SimpleNamespace
 
-        is_healthy, error = await _check_postgres_health(sample_postgres_connection)
+        mock_asyncpg = SimpleNamespace(connect=AsyncMock(side_effect=Exception("connection refused")))
+        with patch.dict(sys.modules, {"asyncpg": mock_asyncpg}):
+            is_healthy, error = await _check_postgres_health(sample_postgres_connection)
 
-        # Should fail gracefully (either import error or connection error)
-        assert isinstance(is_healthy, bool)
-        # If asyncpg/psycopg2 is installed but can't connect, should return False
-        # If neither is installed, should also return False
+        assert is_healthy is False
+        assert "connection refused" in error
 
 
 class TestCheckServiceHealth:
@@ -291,8 +293,8 @@ class TestCheckServiceHealth:
         """Should update connection's is_healthy field after check."""
         load_connections()
 
-        # Check a known service (may fail if service not running, but status should update)
-        await check_service_health("weaviate")
+        with patch("src.lib.config.connections_loader._check_http_health", new=AsyncMock(return_value=(True, None))):
+            await check_service_health("weaviate")
 
         from src.lib.config.connections_loader import get_connection
         conn = get_connection("weaviate")
@@ -315,7 +317,8 @@ class TestCheckAllHealth:
         """Should return health status for all configured services."""
         load_connections()
 
-        result = await check_all_health()
+        with patch("src.lib.config.connections_loader.check_service_health", new=AsyncMock(return_value=True)):
+            result = await check_all_health()
 
         assert isinstance(result, dict)
         # Should have entries for configured services
@@ -332,7 +335,8 @@ class TestCheckAllHealth:
         """Should include overall system status."""
         load_connections()
 
-        result = await check_all_health()
+        with patch("src.lib.config.connections_loader.check_service_health", new=AsyncMock(return_value=True)):
+            result = await check_all_health()
 
         # The overall status is returned separately, check any service has expected structure
         for status in result.values():

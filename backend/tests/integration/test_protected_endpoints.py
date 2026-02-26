@@ -202,6 +202,8 @@ class TestProtectedEndpoints:
                     "provider": "openai"
                 }
             }),
+            ("GET", "/weaviate/schema", None),
+            ("PUT", "/weaviate/schema", {"properties": []}),
         ]
 
         for method, endpoint, payload in settings_endpoints:
@@ -336,6 +338,8 @@ class TestProtectedEndpoints:
             # Settings endpoints (should be protected)
             ("GET", "/weaviate/settings"),
             ("PUT", "/weaviate/settings"),
+            ("GET", "/weaviate/schema"),
+            ("PUT", "/weaviate/schema"),
 
             # Feedback endpoints (should be protected)
             ("POST", "/api/feedback/submit"),

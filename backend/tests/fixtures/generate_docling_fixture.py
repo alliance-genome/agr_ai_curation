@@ -18,7 +18,7 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.lib.pipeline.docling_parser import (
+from src.lib.pipeline.pdfx_parser import (
     DoclingResponse,
     normalize_elements,
     build_pipeline_elements,

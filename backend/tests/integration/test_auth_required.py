@@ -350,6 +350,26 @@ class TestAuthenticationRequired:
                "not authenticated" in data["detail"].lower(), \
                f"Expected auth error message, got: {data['detail']}"
 
+    def test_schema_endpoints_require_auth(self, client):
+        """Test that schema endpoints require authentication."""
+        response = client.get("/weaviate/schema")
+        assert response.status_code == 401, \
+            f"Schema endpoint MUST require auth. Got {response.status_code}."
+
+        data = response.json()
+        assert "detail" in data
+        assert "authenticate" in data["detail"].lower() or \
+               "not authenticated" in data["detail"].lower()
+
+        response = client.put("/weaviate/schema", json={"properties": []})
+        assert response.status_code == 401, \
+            f"Schema update MUST require auth. Got {response.status_code}."
+
+        data = response.json()
+        assert "detail" in data
+        assert "authenticate" in data["detail"].lower() or \
+               "not authenticated" in data["detail"].lower()
+
     def test_root_endpoint_accessible(self, client):
         """Test that root endpoint (/) is accessible without auth.
 
@@ -388,6 +408,8 @@ class TestAuthenticationRequired:
                 "trace_ids": []
             }),
             ("GET", "/weaviate/settings", None),
+            ("GET", "/weaviate/schema", None),
+            ("PUT", "/weaviate/schema", {"properties": []}),
         ]
 
         for method, endpoint, payload in protected_endpoints:
@@ -395,6 +417,8 @@ class TestAuthenticationRequired:
                 response = client.get(endpoint)
             elif method == "POST":
                 response = client.post(endpoint, json=payload)
+            elif method == "PUT":
+                response = client.put(endpoint, json=payload)
 
             assert response.status_code == 401, \
                 f"{method} {endpoint} should require authentication, got {response.status_code}"

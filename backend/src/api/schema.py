@@ -4,14 +4,18 @@ from fastapi import APIRouter, HTTPException, Body
 from typing import Dict, Any
 import logging
 
-from ..lib.weaviate_client.settings import update_schema, get_collection_settings
+from ..lib.weaviate_client.settings import (
+    update_schema_async as update_schema,
+    get_collection_settings_async as get_collection_settings,
+)
+from .auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 
 
 @router.get("/schema")
-async def get_schema_endpoint() -> Dict[str, Any]:
+async def get_schema_endpoint(user: Dict[str, Any] = get_auth_dependency()) -> Dict[str, Any]:
     """
     Get current Weaviate collection schema.
 
@@ -155,7 +159,8 @@ async def get_schema_endpoint() -> Dict[str, Any]:
 
 @router.put("/schema")
 async def update_schema_endpoint(
-    schema_update: Dict[str, Any] = Body(...)
+    schema_update: Dict[str, Any] = Body(...),
+    user: Dict[str, Any] = get_auth_dependency(),
 ) -> Dict[str, Any]:
     """
     Update Weaviate collection schema.

@@ -4,8 +4,8 @@ import pytest
 
 from src.lib.exceptions import ConfigurationError
 from src.lib.exceptions import PDFParsingError
-from src.lib.pipeline.docling_parser import (
-    DoclingParser,
+from src.lib.pipeline.pdfx_parser import (
+    PDFXParser,
     _build_progress_message,
     markdown_to_pipeline_elements,
 )
@@ -59,6 +59,7 @@ def parser_env(monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "http://pdfx.local")
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
     monkeypatch.setenv("PDF_EXTRACTION_POLL_INTERVAL_SECONDS", "2")
+    monkeypatch.delenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", raising=False)
 
 
 def test_markdown_to_pipeline_elements_builds_expected_types():
@@ -108,7 +109,7 @@ async def test_build_auth_headers_static_bearer(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "static_bearer")
     monkeypatch.setenv("PDF_EXTRACTION_BEARER_TOKEN", "token-123")
 
-    parser = DoclingParser()
+    parser = PDFXParser()
     headers = await parser._build_auth_headers(session=None)  # type: ignore[arg-type]
     assert headers == {"Authorization": "Bearer token-123"}
 
@@ -118,7 +119,7 @@ async def test_build_auth_headers_static_bearer_requires_token(parser_env, monke
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "static_bearer")
     monkeypatch.delenv("PDF_EXTRACTION_BEARER_TOKEN", raising=False)
 
-    parser = DoclingParser()
+    parser = PDFXParser()
     with pytest.raises(ConfigurationError, match="PDF_EXTRACTION_BEARER_TOKEN"):
         await parser._build_auth_headers(session=None)  # type: ignore[arg-type]
 
@@ -127,7 +128,7 @@ async def test_build_auth_headers_static_bearer_requires_token(parser_env, monke
 async def test_download_markdown_uses_merged_variant_when_merge_enabled(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "true")
 
-    parser = DoclingParser()
+    parser = PDFXParser()
     session = _DummySession(_DummyResponse(200, "# merged markdown\n"))
 
     markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
@@ -141,7 +142,7 @@ async def test_download_markdown_uses_first_method_when_merge_disabled(parser_en
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
     monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,docling,marker")
 
-    parser = DoclingParser()
+    parser = PDFXParser()
     session = _DummySession(_DummyResponse(200, "# grobid markdown\n"))
 
     markdown = await parser._download_markdown(session=session, process_id="proc-2", headers={})
@@ -157,7 +158,7 @@ def test_primary_download_method_must_be_in_configured_methods(parser_env, monke
     monkeypatch.setenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", "marker")
 
     with pytest.raises(ConfigurationError, match="PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD"):
-        DoclingParser()
+        PDFXParser()
 
 
 @pytest.mark.asyncio
@@ -165,8 +166,8 @@ async def test_submit_retries_on_transient_504_and_succeeds(parser_env, monkeypa
     async def _no_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("src.lib.pipeline.docling_parser.asyncio.sleep", _no_sleep)
-    parser = DoclingParser()
+    monkeypatch.setattr("src.lib.pipeline.pdfx_parser.asyncio.sleep", _no_sleep)
+    parser = PDFXParser()
     parser.poll_interval_seconds = 0
 
     pdf_path = tmp_path / "paper.pdf"
@@ -186,7 +187,7 @@ async def test_submit_retries_on_transient_504_and_succeeds(parser_env, monkeypa
 
 @pytest.mark.asyncio
 async def test_submit_fails_on_non_transient_error(parser_env, tmp_path):
-    parser = DoclingParser()
+    parser = PDFXParser()
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%test")
@@ -207,8 +208,8 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
     async def _no_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("src.lib.pipeline.docling_parser.asyncio.sleep", _no_sleep)
-    parser = DoclingParser()
+    monkeypatch.setattr("src.lib.pipeline.pdfx_parser.asyncio.sleep", _no_sleep)
+    parser = PDFXParser()
     parser.poll_interval_seconds = 0
 
     session = _SequenceSession(
@@ -237,7 +238,7 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
 
 @pytest.mark.asyncio
 async def test_poll_raises_when_status_missing_on_non_transient_response(parser_env):
-    parser = DoclingParser()
+    parser = PDFXParser()
     session = _SequenceSession(
         get_responses=[
             _DummyResponse(200, '{"detail":"still processing"}'),

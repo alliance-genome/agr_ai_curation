@@ -12,10 +12,10 @@ from ..models.api_schemas import (
     AvailableModel
 )
 from ..lib.weaviate_client.settings import (
-    get_embedding_config,
-    update_embedding_config,
-    get_collection_settings,
-    get_available_models
+    get_embedding_config_async as get_embedding_config,
+    update_embedding_config_async as update_embedding_config,
+    get_collection_settings_async as get_collection_settings,
+    get_available_models_async as get_available_models,
 )
 from .auth import get_auth_dependency
 

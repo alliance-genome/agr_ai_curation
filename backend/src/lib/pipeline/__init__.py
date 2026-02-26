@@ -13,7 +13,7 @@ from .upload import (
     PDFUploadHandler,
     UploadError
 )
-from .docling_parser import parse_pdf_document
+from .pdfx_parser import parse_pdf_document
 from .chunk import chunk_parsed_document
 from .store import store_to_weaviate
 from .tracker import PipelineTracker

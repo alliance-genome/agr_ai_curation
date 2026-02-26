@@ -76,9 +76,13 @@ async def test_async_list_documents_normalises_results():
     def mock_get_db():
         yield mock_db_session
 
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
          patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(mock_collection, mock_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="test_tenant"):
         from src.models.api_schemas import DocumentFilter, PaginationParams
 
@@ -143,7 +147,11 @@ async def test_update_document_status_detailed_success():
     mock_connection = MagicMock()
     mock_connection.session.side_effect = fake_session
 
-    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection):
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop):
         result = await update_document_status_detailed("doc-1", "test_user_user_id", embedding_status="completed")
 
     assert result["success"] is True

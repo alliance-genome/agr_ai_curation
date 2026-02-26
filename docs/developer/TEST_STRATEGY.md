@@ -22,7 +22,7 @@ This plan prioritizes catching breakage before curator discovery, with explicit 
    - ~1325 test functions
 2. CI reality:
    - Unit job now runs coverage with published artifacts (`.coverage`, `coverage.xml`, `htmlcov`) via shared runner script.
-   - Current backend unit coverage baseline is ~`57.89%` (`877` passing unit tests in latest local docker run).
+   - Current backend unit coverage baseline is ~`58.24%` (`891` passing unit tests in latest local run).
    - PR CI does not run full integration/contract suites; only persistence integration runs.
    - Frontend tests now run in PR CI but are temporarily non-blocking due legacy failures (`113` failing tests across `13` files on latest local run).
 3. Drift/debt indicators:
@@ -229,6 +229,23 @@ Status:
      - requires `PDFX_LIVE_ENABLE=1`
    - Un-ignored startup validation path in CI and stabilized tests:
      - `backend/tests/unit/test_main_startup.py`
+   - Refactored Weaviate settings adapter layer and added direct unit coverage:
+     - `backend/src/lib/weaviate_client/settings.py`
+     - `backend/tests/unit/lib/test_weaviate_settings.py`
+     - `backend/src/api/settings.py`
+     - `backend/src/api/schema.py`
+   - Added auth protection to schema endpoints and hardened schema adapter execution path:
+     - `/weaviate/schema` now auth-protected for GET/PUT
+     - async schema update now executes via `asyncio.to_thread` with dynamic connection lookup
+   - Renamed parser implementation to PDFX-first naming with compatibility shim:
+     - `backend/src/lib/pipeline/pdfx_parser.py`
+     - `backend/src/lib/pipeline/docling_parser.py` (compat import shim)
+     - `backend/src/lib/pipeline/orchestrator.py`
+     - `backend/tests/unit/pipeline/test_pdfx_parser.py`
+   - Eliminated major unit-suite timeout hotspots by removing real network/threadpool behavior from unit tests:
+     - `backend/tests/unit/lib/config/test_connections_health.py`
+     - `backend/tests/unit/pipeline/test_store.py`
+     - `backend/tests/unit/test_weaviate_client.py`
 2. Remaining Phase 2 backlog:
    - Add/expand provider-health contract assertions for `/api/admin/health/llm-providers`.
    - Keep replacing stale chat contract/integration patching of removed internals.

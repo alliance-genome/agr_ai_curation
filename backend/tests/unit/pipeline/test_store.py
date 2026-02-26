@@ -288,8 +288,12 @@ async def test_update_document_metadata_best_effort():
     weaviate_client = MagicMock()
     weaviate_client.session.side_effect = fake_session
 
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
     # Mock get_user_collections to return tenant-scoped collections
-    with patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
+    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
         await update_document_metadata("doc-1", stats, weaviate_client, "test_user")
 
     pdf_collection.data.update.assert_called_once()

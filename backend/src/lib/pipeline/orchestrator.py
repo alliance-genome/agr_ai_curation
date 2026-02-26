@@ -103,7 +103,7 @@ class DocumentPipelineOrchestrator:
             logger.info("Starting PDF parsing for document %s", document_id)
             await self._update_status(document_id, ProcessingStage.PARSING)
 
-            from .docling_parser import parse_pdf_document
+            from .pdfx_parser import parse_pdf_document
 
             async def _track_parser_progress(message: str) -> None:
                 await self.tracker.track_pipeline_progress(

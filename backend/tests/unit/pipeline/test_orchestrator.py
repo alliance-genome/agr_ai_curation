@@ -32,7 +32,7 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
     document_id = "doc-123"
     orchestrator._sync_sql_document_status = AsyncMock()
 
-    with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(return_value={
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [{"text": "Foo"}],
         "docling_json_path": "docling/doc.json",
         "processed_json_path": "processed/doc.json",
@@ -80,7 +80,7 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
 async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf):
     orchestrator._sync_sql_document_status = AsyncMock()
 
-    with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(side_effect=RuntimeError("boom"))):
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(side_effect=RuntimeError("boom"))):
         result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_user", validate_first=False)
 
     assert result.success is False
@@ -102,7 +102,7 @@ def test_validate_pipeline_requirements(orchestrator):
 
 @pytest.mark.asyncio
 async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
-    with patch("src.lib.pipeline.docling_parser.parse_pdf_document", new=AsyncMock(return_value={
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [],
         "docling_json_path": None,
         "processed_json_path": None,
