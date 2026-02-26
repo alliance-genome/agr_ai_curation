@@ -19,10 +19,10 @@ This plan prioritizes catching breakage before curator discovery, with explicit 
 
 1. Test inventory:
    - ~116 test files under `backend/tests/`
-   - ~1306 test functions
+   - ~1311 test functions
 2. CI reality:
    - Unit job now runs coverage with published artifacts (`.coverage`, `coverage.xml`, `htmlcov`) via shared runner script.
-   - Current backend unit coverage baseline is ~`57.26%` (`858` passing unit tests in latest local docker run).
+   - Current backend unit coverage baseline is ~`57.35%` (`863` passing unit tests in latest local docker run).
    - PR CI does not run full integration/contract suites; only persistence integration runs.
    - Frontend tests now run in PR CI but are temporarily non-blocking due legacy failures (`113` failing tests across `13` files on latest local run).
 3. Drift/debt indicators:
