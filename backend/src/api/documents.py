@@ -562,25 +562,40 @@ async def get_pdf_extraction_health():
     deep_health_endpoint = f"{service_url}/api/v1/health/deep"
     status_endpoint = f"{service_url}/api/v1/status"
     timeout_seconds = float(os.getenv("PDF_EXTRACTION_HEALTH_TIMEOUT", "5"))
+    service_headers: Dict[str, str] = {}
+    auth_header_error: Optional[str] = None
+
+    try:
+        service_headers = await _build_pdf_extraction_service_headers()
+    except Exception as exc:
+        auth_header_error = str(getattr(exc, "detail", exc))
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(health_endpoint)
-            deep_response = await client.get(deep_health_endpoint)
+            if service_headers:
+                response = await client.get(health_endpoint, headers=service_headers)
+                deep_response = await client.get(deep_health_endpoint, headers=service_headers)
+            else:
+                response = await client.get(health_endpoint)
+                deep_response = await client.get(deep_health_endpoint)
 
             worker_state = "unknown"
             status_payload = None
             status_code = None
             status_error = None
             try:
-                status_headers = await _build_pdf_extraction_service_headers()
-                status_resp = await client.get(status_endpoint, headers=status_headers)
+                if service_headers:
+                    status_resp = await client.get(status_endpoint, headers=service_headers)
+                else:
+                    status_resp = await client.get(status_endpoint)
                 status_code = status_resp.status_code
                 status_payload = status_resp.json()
                 if isinstance(status_payload, dict):
                     worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
             except Exception as exc:
                 status_error = str(exc)
+            if auth_header_error and not status_error:
+                status_error = auth_header_error
 
         try:
             payload = response.json()
@@ -595,19 +610,21 @@ async def get_pdf_extraction_health():
         if worker_state == "unknown":
             worker_state = str((payload or {}).get("ec2", "")).strip().lower() or "unknown"
 
-        proxy_status = str((payload or {}).get("status", "")).strip().lower()
         worker_available = worker_state in {"ready", "busy"}
-        proxy_ok = response.status_code == 200 and proxy_status == "healthy"
+        proxy_status = str((payload or {}).get("status", "")).strip().lower()
+        proxy_ok = response.status_code == 200 and proxy_status in {"healthy", "degraded"}
         deep_ok = deep_response.status_code == 200 and str((deep_payload or {}).get("status", "")).strip().lower() == "healthy"
 
-        status = "healthy" if proxy_ok and worker_available and deep_ok else "degraded"
+        # Deep health validates auth contract + downstream extract roundtrip and is
+        # less susceptible to transient downstream health-flap noise.
+        status = "healthy" if worker_available and deep_ok else "degraded"
         error_message = None
         if not worker_available:
             error_message = f"Worker {worker_state or 'unknown'}"
-        elif not proxy_ok:
-            error_message = "Proxy health degraded"
         elif not deep_ok:
             error_message = "Deep health check failed"
+        elif not proxy_ok:
+            error_message = "Proxy status endpoint unavailable"
         elif status_error:
             error_message = status_error
 

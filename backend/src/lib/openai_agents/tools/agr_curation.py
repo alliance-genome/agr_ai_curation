@@ -255,7 +255,7 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
     return _err(msg)
 
 
-@function_tool
+@function_tool(strict_mode=False)
 def agr_curation_query(
     method: str,
     gene_symbol: Optional[str] = None,
@@ -966,36 +966,6 @@ def agr_curation_query(
         return _err(f"Query error: {str(e)}")
 
 
-def _normalize_agr_query_tool_schema() -> None:
-    """Patch FunctionTool schema so Groq validates optional args correctly.
-
-    The OpenAI Agents SDK currently generates `required` for every parameter on
-    this FunctionTool, even when the function signature marks params optional.
-    Groq strictly validates tool payloads and rejects calls unless all required
-    fields are present, which breaks normal method-specific calls.
-
-    Runtime contract for this tool is: only `method` is globally required.
-    Method-specific requirements are validated inside `agr_curation_query`.
-    """
-    schema = getattr(agr_curation_query, "params_json_schema", None)
-    if not isinstance(schema, dict):
-        return
-
-    properties = schema.get("properties")
-    if not isinstance(properties, dict) or "method" not in properties:
-        return
-
-    required = schema.get("required")
-    if not isinstance(required, list):
-        required = []
-
-    # Keep only the universal required parameter; method-specific validation
-    # stays in the tool implementation to preserve behavior.
-    if required != ["method"]:
-        schema["required"] = ["method"]
-
-
-_normalize_agr_query_tool_schema()
 
 
 def _unwrap_function_tool_callable(tool: Any, target_name: str) -> Any:
