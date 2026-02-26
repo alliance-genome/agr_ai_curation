@@ -30,6 +30,13 @@ def test_resolve_tool_display_name_uses_builtin_disease_extractor_map():
     )
 
 
+def test_resolve_tool_display_name_uses_builtin_chemical_extractor_map():
+    assert (
+        resolve_tool_display_name("ask_chemical_extractor_specialist")
+        == "Chemical Extraction Agent"
+    )
+
+
 def test_resolve_tool_display_name_marks_missing_label():
     assert (
         resolve_tool_display_name("ask_ca_custom_specialist", {"ask_ca_custom_specialist": "  "})

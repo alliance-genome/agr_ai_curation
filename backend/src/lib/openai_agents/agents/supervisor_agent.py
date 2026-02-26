@@ -559,7 +559,7 @@ The tool returns file information including a download URL that will render as a
         instructions += "\n\n**DOCUMENT CONTEXT**: A PDF document is loaded. When users ask to \"create annotation\", \"extract\", or request curation tasks, use the loaded document as the source."
     else:
         # No document - inform supervisor that PDF tools are unavailable
-        instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist, ask_gene_expression_specialist, ask_phenotype_specialist, ask_allele_extractor_specialist, and ask_disease_extractor_specialist tools are not available."
+        instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist, ask_gene_expression_specialist, ask_phenotype_specialist, ask_allele_extractor_specialist, ask_disease_extractor_specialist, and ask_chemical_extractor_specialist tools are not available."
 
     # Inject group-specific rules for supervisor dispatch behavior
     if active_groups:

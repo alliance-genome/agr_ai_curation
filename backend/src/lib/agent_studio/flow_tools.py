@@ -405,7 +405,17 @@ def _validate_flow_handler():
         # Generate suggestions based on agent patterns
         if "pdf" not in seen_agents and any(
             a in seen_agents
-            for a in ["gene", "allele", "allele_extractor", "disease", "disease_extractor", "gene_expression", "phenotype"]
+            for a in [
+                "gene",
+                "allele",
+                "allele_extractor",
+                "disease",
+                "disease_extractor",
+                "chemical",
+                "chemical_extractor",
+                "gene_expression",
+                "phenotype",
+            ]
         ):
             suggestions.append(
                 "Consider adding 'pdf' step first to extract entities from documents"
@@ -478,6 +488,15 @@ def _get_flow_templates_handler():
                 "steps": [
                     {"agent_id": "pdf", "step_goal": "Extract chemical names"},
                     {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"}
+                ]
+            },
+            {
+                "name": "Chemical Extraction",
+                "description": "Extract experimentally supported chemical assertions from papers",
+                "steps": [
+                    {"agent_id": "pdf", "step_goal": "Find chemical mentions and context"},
+                    {"agent_id": "chemical_extractor", "step_goal": "Extract evidence-backed chemical assertions"},
+                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
             },
             {
@@ -1038,7 +1057,7 @@ Returns agents grouped by category (Extraction, Validation, Output) and identifi
 which agents are designed for specific purposes:
 
 - output_agents: Agents meant to be the final step (chat_output, csv_formatter, tsv_formatter, json_formatter)
-- extraction_agents: Agents that extract data from documents (pdf, gene_expression, phenotype, allele_extractor, disease_extractor)
+- extraction_agents: Agents that extract data from documents (pdf, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
 - validation_agents: Agents that validate/lookup data (gene, allele, disease, etc.)
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,

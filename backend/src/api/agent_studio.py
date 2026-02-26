@@ -2550,7 +2550,7 @@ def _fetch_trace_for_opus(trace_id: str) -> Optional[str]:
             # Identify agents from generation observations
             if obs_type == 'GENERATION':
                 # Try to identify the agent
-                for agent_pattern in ['supervisor', 'gene_expression', 'allele_variant_extraction', 'allele_extractor', 'ask_allele_extractor_', 'disease_extraction', 'disease_extractor', 'ask_disease_extractor_', 'phenotype_extraction', 'phenotype_specialist', 'ask_phenotype_', 'pdf_specialist', 'gene', 'allele',
+                for agent_pattern in ['supervisor', 'gene_expression', 'allele_variant_extraction', 'allele_extractor', 'ask_allele_extractor_', 'disease_extraction', 'disease_extractor', 'ask_disease_extractor_', 'chemical_extraction', 'chemical_extractor', 'ask_chemical_extractor_', 'phenotype_extraction', 'phenotype_specialist', 'ask_phenotype_', 'pdf_specialist', 'gene', 'allele',
                                      'disease', 'chemical', 'gene_ontology', 'go_annotations',
                                      'orthologs', 'ontology_mapping', 'chat_output',
                                      'csv_formatter', 'tsv_formatter', 'json_formatter']:
@@ -2848,7 +2848,7 @@ Include `token_info` in responses for budget management:
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, mod_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, pdf, gene, allele, allele_extractor, disease, disease_extractor, chemical, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_mapping, chat_output, csv_formatter, tsv_formatter, json_formatter
+  - agent_id: supervisor, pdf, gene, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_mapping, chat_output, csv_formatter, tsv_formatter, json_formatter
   - mod_id (optional): WB, FB, MGI, RGD, SGD, ZFIN
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or MOD variant.
   - **Do NOT announce or explain** that you already have the prompt in context. Just use it naturally.

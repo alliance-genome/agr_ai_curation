@@ -62,6 +62,7 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
         ("ask_disease_specialist", "Disease Ontology Agent"),
         ("ask_disease_extractor_specialist", "Disease Extraction Agent"),
         ("ask_chemical_specialist", "Chemical Ontology Agent"),
+        ("ask_chemical_extractor_specialist", "Chemical Extraction Agent"),
         ("ask_gene_expression_specialist", "Gene Expression Extractor"),
         ("ask_phenotype_specialist", "Phenotype Extraction Agent"),
         ("ask_gene_ontology_specialist", "Gene Ontology Agent"),
