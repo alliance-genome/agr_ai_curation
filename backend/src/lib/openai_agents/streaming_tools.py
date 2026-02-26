@@ -27,6 +27,7 @@ from typing import List, Dict, Any, Optional
 from agents import Agent, Runner, RunConfig
 from agents.models.openai_provider import OpenAIProvider
 
+from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns
 
 # Prompt context tracking for execution logging
@@ -1050,7 +1051,10 @@ async def run_specialist_with_events(
                             "timestamp": current_tool_start.isoformat(),
                             "details": {
                                 "toolName": current_tool_name,
-                                "friendlyName": f"{specialist_name}: {current_tool_name}",
+                                "friendlyName": build_specialist_internal_friendly_name(
+                                    specialist_name,
+                                    current_tool_name,
+                                ),
                                 "agent": specialist_name,
                                 "toolArgs": tool_args,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
@@ -1112,7 +1116,11 @@ async def run_specialist_with_events(
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "details": {
                                 "toolName": current_tool_name,
-                                "friendlyName": f"{specialist_name}: {current_tool_name} complete",
+                                "friendlyName": build_specialist_internal_friendly_name(
+                                    specialist_name,
+                                    current_tool_name,
+                                    complete=True,
+                                ),
                                 "success": True,
                                 "durationMs": duration_ms,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool

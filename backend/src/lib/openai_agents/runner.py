@@ -38,6 +38,12 @@ from .langfuse_client import (
     flush_agent_configs,
     clear_pending_configs
 )
+from .audit_labels import (
+    BUILTIN_SPECIALIST_DISPLAY_NAMES,
+    resolve_tool_display_name as _shared_resolve_tool_display_name,
+    build_tool_start_friendly_name as _shared_build_tool_start_friendly_name,
+    build_tool_complete_friendly_name as _shared_build_tool_complete_friendly_name,
+)
 from src.lib.config.providers_loader import get_default_runner_provider
 from .config import get_api_key, get_base_url
 
@@ -186,28 +192,23 @@ def _build_custom_tool_display_names(agent: Agent) -> Dict[str, str]:
     return display_names
 
 
-_BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
-    "ask_pdf_specialist": "General PDF Extraction Agent",
-    "ask_gene_specialist": "Gene Validation Agent",
-    "ask_allele_specialist": "Allele Validation Agent",
-    "ask_disease_specialist": "Disease Ontology Agent",
-    "ask_chemical_specialist": "Chemical Ontology Agent",
-    "ask_gene_expression_specialist": "Gene Expression Extractor",
-    "ask_gene_ontology_specialist": "Gene Ontology Agent",
-    "ask_go_annotations_specialist": "GO Annotations Agent",
-    "ask_orthologs_specialist": "Orthologs Agent",
-    "ask_ontology_mapping_specialist": "Ontology Mapping Agent",
-}
+# Backward-compatible alias for unit tests and local helpers in this module.
+_BUILTIN_SPECIALIST_DISPLAY_NAMES = BUILTIN_SPECIALIST_DISPLAY_NAMES
 
 
 def _resolve_tool_display_name(tool_name: str, custom_display_names: Dict[str, str]) -> str:
     """Resolve the best user-facing display name for a tool call."""
+    return _shared_resolve_tool_display_name(tool_name, custom_display_names)
 
-    return (
-        custom_display_names.get(tool_name)
-        or _BUILTIN_SPECIALIST_DISPLAY_NAMES.get(tool_name)
-        or tool_name
-    )
+
+def _build_tool_start_friendly_name(tool_name: str, custom_display_names: Dict[str, str]) -> str:
+    """Build a stable TOOL_START label and guarantee non-empty output."""
+    return _shared_build_tool_start_friendly_name(tool_name, custom_display_names)
+
+
+def _build_tool_complete_friendly_name(tool_name: str, custom_display_names: Dict[str, str]) -> str:
+    """Build a stable TOOL_COMPLETE label and guarantee non-empty output."""
+    return _shared_build_tool_complete_friendly_name(tool_name, custom_display_names)
 
 
 def _log_used_prompts_to_db(
@@ -560,18 +561,15 @@ async def _run_agent_with_tracing(
                                 "agent": current_agent,
                             },
                         )
-                        display_name = _resolve_tool_display_name(tool_name, custom_tool_display_names)
-                        is_specialist_call = tool_name.startswith("ask_") and tool_name.endswith("_specialist")
                         # Audit event: TOOL_START
                         yield {
                             "type": "TOOL_START",
                             "timestamp": _now_iso(),
                             "details": {
                                 "toolName": tool_name,
-                                "friendlyName": (
-                                    f"Calling {display_name}..."
-                                    if is_specialist_call
-                                    else f"Calling {tool_name}..."
+                                "friendlyName": _build_tool_start_friendly_name(
+                                    tool_name,
+                                    custom_tool_display_names,
                                 ),
                                 "agent": current_agent,
                                 "toolArgs": tool_args
@@ -611,7 +609,10 @@ async def _run_agent_with_tracing(
                             "timestamp": _now_iso(),
                             "details": {
                                 "toolName": last_tool,
-                                "friendlyName": f"{_resolve_tool_display_name(last_tool, custom_tool_display_names)} complete",
+                                "friendlyName": _build_tool_complete_friendly_name(
+                                    last_tool,
+                                    custom_tool_display_names,
+                                ),
                                 "success": True
                             }
                         }

@@ -1,0 +1,64 @@
+"""Shared helpers for audit-friendly tool labels."""
+
+from typing import Dict, Optional
+
+
+BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
+    "ask_pdf_specialist": "General PDF Extraction Agent",
+    "ask_gene_specialist": "Gene Validation Agent",
+    "ask_allele_specialist": "Allele Validation Agent",
+    "ask_disease_specialist": "Disease Ontology Agent",
+    "ask_chemical_specialist": "Chemical Ontology Agent",
+    "ask_gene_expression_specialist": "Gene Expression Extractor",
+    "ask_gene_ontology_specialist": "Gene Ontology Agent",
+    "ask_go_annotations_specialist": "GO Annotations Agent",
+    "ask_orthologs_specialist": "Orthologs Agent",
+    "ask_ontology_mapping_specialist": "Ontology Mapping Agent",
+}
+
+
+def _ensure_non_empty_label(tool_name: str, label: Optional[str]) -> str:
+    """Return a non-empty label string for audit payloads."""
+    cleaned = (label or "").strip()
+    if cleaned:
+        return cleaned
+    return f"[Missing tool label] {tool_name}"
+
+
+def resolve_tool_display_name(tool_name: str, custom_display_names: Optional[Dict[str, str]] = None) -> str:
+    """Resolve the best user-facing display name for a tool call."""
+    custom = custom_display_names or {}
+    label = custom.get(tool_name) or BUILTIN_SPECIALIST_DISPLAY_NAMES.get(tool_name) or tool_name
+    return _ensure_non_empty_label(tool_name, label)
+
+
+def build_tool_start_friendly_name(tool_name: str, custom_display_names: Optional[Dict[str, str]] = None) -> str:
+    """Build consistent TOOL_START friendly label."""
+    is_specialist = tool_name.startswith("ask_") and tool_name.endswith("_specialist")
+    if is_specialist:
+        display = resolve_tool_display_name(tool_name, custom_display_names)
+        return _ensure_non_empty_label(tool_name, f"Calling {display}...")
+    return _ensure_non_empty_label(tool_name, f"Calling {tool_name}...")
+
+
+def build_tool_complete_friendly_name(tool_name: str, custom_display_names: Optional[Dict[str, str]] = None) -> str:
+    """Build consistent TOOL_COMPLETE friendly label."""
+    display = resolve_tool_display_name(tool_name, custom_display_names)
+    return _ensure_non_empty_label(tool_name, f"{display} complete")
+
+
+def build_specialist_internal_friendly_name(
+    specialist_name: Optional[str],
+    tool_name: str,
+    *,
+    complete: bool = False,
+) -> str:
+    """Build friendly labels for specialist-internal tool events."""
+    specialist = (specialist_name or "").strip()
+    if not specialist:
+        base = _ensure_non_empty_label(tool_name, None)
+    else:
+        base = f"{specialist}: {tool_name}"
+    if complete:
+        return f"{base} complete"
+    return base

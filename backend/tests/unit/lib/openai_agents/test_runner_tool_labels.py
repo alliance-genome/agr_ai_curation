@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.lib.openai_agents.runner import _build_custom_tool_display_names, _resolve_tool_display_name
+from src.lib.openai_agents.runner import (
+    _build_custom_tool_display_names,
+    _resolve_tool_display_name,
+    _build_tool_start_friendly_name,
+    _build_tool_complete_friendly_name,
+)
 
 
 def test_build_custom_tool_display_names_maps_custom_tool_from_description():
@@ -64,3 +69,21 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
 )
 def test_resolve_tool_display_name_uses_canonical_builtin_names(tool_name, expected_label):
     assert _resolve_tool_display_name(tool_name, {}) == expected_label
+
+
+def test_resolve_tool_display_name_marks_missing_custom_label():
+    resolved = _resolve_tool_display_name(
+        "ask_ca_empty_specialist",
+        {"ask_ca_empty_specialist": "   "},
+    )
+    assert resolved == "[Missing tool label] ask_ca_empty_specialist"
+
+
+def test_build_tool_start_friendly_name_formats_specialist_label():
+    label = _build_tool_start_friendly_name("ask_gene_specialist", {})
+    assert label == "Calling Gene Validation Agent..."
+
+
+def test_build_tool_complete_friendly_name_formats_specialist_label():
+    label = _build_tool_complete_friendly_name("ask_gene_specialist", {})
+    assert label == "Gene Validation Agent complete"
