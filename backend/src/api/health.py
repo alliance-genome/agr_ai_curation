@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import os
 
@@ -22,7 +22,7 @@ async def health_check_endpoint() -> Dict[str, Any]:
     """
     health_status = {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "Weaviate Control Panel API",
         "version": "0.1.0",
         "cognito_configured": is_cognito_configured(),
@@ -103,7 +103,7 @@ async def readiness_check_endpoint() -> Dict[str, Any]:
 
         return {
             "ready": True,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except HTTPException:

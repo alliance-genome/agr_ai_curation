@@ -228,8 +228,12 @@ class TestLifespan:
                 pass
 
     @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
     @patch("src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts")
-    async def test_fail_fast_on_provider_validation_error(self, mock_validate):
+    async def test_fail_fast_on_provider_validation_error(self, mock_validate, _mock_init, mock_conn_cls):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
         mock_validate.side_effect = RuntimeError("LLM provider validation failed: missing OPENAI_API_KEY")
 
         app = FastAPI()
@@ -237,10 +241,16 @@ class TestLifespan:
         with pytest.raises(RuntimeError, match="LLM provider validation failed"):
             async with main.lifespan(app):
                 pass
+        mock_conn_cls.assert_not_called()
+        _mock_init.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
     @patch("src.lib.agent_studio.runtime_validation.validate_and_cache_agent_runtime_contracts")
-    async def test_fail_fast_on_agent_runtime_validation_error(self, mock_validate):
+    async def test_fail_fast_on_agent_runtime_validation_error(self, mock_validate, _mock_init, mock_conn_cls):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
         mock_validate.side_effect = RuntimeError("Agent runtime validation failed: ca_bad tools drifted")
 
         app = FastAPI()

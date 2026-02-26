@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends, UploadFile, 
 from fastapi.responses import StreamingResponse, FileResponse
 from typing import Dict, Any
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path as FilePath
 import logging
 import asyncio
@@ -473,8 +473,14 @@ async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
     }
     body = {"grant_type": "client_credentials", "scope": scope}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(token_url, data=body, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(token_url, data=body, headers=headers)
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch PDF extraction service token: {exc}",
+        ) from exc
 
     if response.status_code != 200:
         raise HTTPException(
@@ -482,7 +488,10 @@ async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
             detail=f"Failed to fetch PDF extraction service token ({response.status_code})",
         )
 
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Token endpoint response was not valid JSON") from exc
     access_token = str(payload.get("access_token", "")).strip()
     if not access_token:
         raise HTTPException(status_code=502, detail="Token endpoint response missing access_token")
@@ -527,7 +536,13 @@ async def _require_pdf_extraction_worker_ready() -> None:
             detail=f"PDF extraction worker status check failed ({status_response.status_code})",
         )
 
-    payload = status_response.json() if status_response.content else {}
+    if status_response.content:
+        try:
+            payload = status_response.json()
+        except ValueError:
+            payload = {}
+    else:
+        payload = {}
     if isinstance(payload, dict):
         state = str(payload.get("state", "") or payload.get("ec2", "")).strip().lower()
     else:
@@ -544,11 +559,12 @@ async def _require_pdf_extraction_worker_ready() -> None:
 
 
 @router.get("/documents/pdf-extraction-health")
-async def get_pdf_extraction_health():
+async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()):
     """Report health status for the PDF extraction service."""
+    del user
 
     service_url = os.getenv("PDF_EXTRACTION_SERVICE_URL", "").rstrip("/")
-    checked_at = datetime.utcnow().isoformat() + "Z"
+    checked_at = datetime.now(timezone.utc).isoformat()
 
     if not service_url:
         return {
@@ -589,9 +605,12 @@ async def get_pdf_extraction_health():
                 else:
                     status_resp = await client.get(status_endpoint)
                 status_code = status_resp.status_code
-                status_payload = status_resp.json()
-                if isinstance(status_payload, dict):
-                    worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
+                if status_resp.status_code >= 400:
+                    status_error = f"Status endpoint returned {status_resp.status_code}"
+                elif status_resp.content:
+                    status_payload = status_resp.json()
+                    if isinstance(status_payload, dict):
+                        worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
             except Exception as exc:
                 status_error = str(exc)
             if auth_header_error and not status_error:
@@ -607,19 +626,22 @@ async def get_pdf_extraction_health():
         except ValueError:
             deep_payload = None
 
-        if worker_state == "unknown":
+        if worker_state == "unknown" and (status_code is None or status_code < 400):
             worker_state = str((payload or {}).get("ec2", "")).strip().lower() or "unknown"
 
         worker_available = worker_state in {"ready", "busy"}
+        auth_ok = not auth_header_error
         proxy_status = str((payload or {}).get("status", "")).strip().lower()
         proxy_ok = response.status_code == 200 and proxy_status in {"healthy", "degraded"}
         deep_ok = deep_response.status_code == 200 and str((deep_payload or {}).get("status", "")).strip().lower() == "healthy"
 
         # Deep health validates auth contract + downstream extract roundtrip and is
         # less susceptible to transient downstream health-flap noise.
-        status = "healthy" if worker_available and deep_ok else "degraded"
+        status = "healthy" if auth_ok and worker_available and deep_ok else "degraded"
         error_message = None
-        if not worker_available:
+        if auth_header_error:
+            error_message = auth_header_error
+        elif not worker_available:
             error_message = f"Worker {worker_state or 'unknown'}"
         elif not deep_ok:
             error_message = "Deep health check failed"
@@ -678,9 +700,24 @@ async def wake_pdf_extraction_worker(user: Dict[str, Any] = get_auth_dependency(
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             wake_response = await client.post(wake_endpoint, headers=headers)
-            wake_payload = wake_response.json() if wake_response.content else {}
+            if wake_response.content:
+                try:
+                    wake_payload = wake_response.json()
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Wake endpoint returned non-JSON response",
+                    ) from exc
+            else:
+                wake_payload = {}
             status_response = await client.get(status_endpoint, headers=headers)
-            status_payload = status_response.json() if status_response.content else {}
+            if status_response.content:
+                try:
+                    status_payload = status_response.json()
+                except ValueError:
+                    status_payload = {}
+            else:
+                status_payload = {}
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to wake PDF extraction worker: {exc}") from exc
 

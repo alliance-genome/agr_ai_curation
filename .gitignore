@@ -176,6 +176,7 @@ find_*.py
 # Local planning docs (private - not for public repo)
 docs/plans/
 external_review_prompt.md
+/AGENT_REWORK_EXTRACTOR_PLAN.md
 
 # Sensitive local files - NEVER commit to public repo
 # PDFs (grant reviews, application docs, etc.)
@@ -190,3 +191,5 @@ external_review_prompt.md
 presentation/
 .collab/
 .collabwork/
+
+.collab/

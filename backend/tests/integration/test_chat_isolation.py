@@ -158,10 +158,10 @@ class TestChatIsolation:
         test_db.commit()
 
         # Mock chat flow execution to avoid complex setup
-        with patch("src.api.chat.generate_chat_response") as mock_execute:
+        with patch("src.api.chat.run_agent_streamed") as mock_execute:
             # Mock successful chat response
             async def mock_chat_generator():
-                yield {"type": "message", "content": "Test response"}
+                yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
 
             mock_execute.return_value = mock_chat_generator()
 
@@ -179,12 +179,11 @@ class TestChatIsolation:
             assert response.status_code in [200, 422, 500], \
                 f"Chat endpoint should be accessible, got {response.status_code}"
 
-            # Verify mock was called with user_id
+            # Verify mock was called with authenticated user_id
             if mock_execute.called:
-                call_args = mock_execute.call_args
-                # Check that user_id was passed to chat flow
-                assert curator1_user.uid in str(call_args), \
-                    "Chat flow should receive user's ID"
+                call_kwargs = mock_execute.call_args.kwargs if mock_execute.call_args else {}
+                assert call_kwargs.get("user_id") == curator1_user.uid, \
+                    "Chat flow should receive authenticated user's ID as user_id"
 
     def test_chat_queries_isolated_between_users(
         self, test_db, curator1_user, curator2_user,
@@ -247,9 +246,9 @@ class TestChatIsolation:
         test_db.commit()
 
         # Mock chat flow to track tenant usage
-        with patch("src.api.chat.generate_chat_response") as mock_execute:
+        with patch("src.api.chat.run_agent_streamed") as mock_execute:
             async def mock_chat_generator():
-                yield {"type": "message", "content": "Test"}
+                yield {"type": "RUN_FINISHED", "data": {"response": "Test"}}
 
             mock_execute.return_value = mock_chat_generator()
 

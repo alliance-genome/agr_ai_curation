@@ -43,9 +43,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Validate ignored test paths
+        run: |
+          bash backend/tests/unit/run_ci_unit_tests.sh --validate-only
+
       - name: Run unit tests
         run: |
+          mkdir -p backend/htmlcov
           docker run --rm \
+            -v "${{ github.workspace }}/backend:/app/backend" \
             -e PYTHONUNBUFFERED=1 \
             -e OPENAI_API_KEY=test-key-for-unit-tests \
             -e LANGFUSE_PUBLIC_KEY=test-key \
@@ -58,18 +64,17 @@ jobs:
             -e CONTENT_PREVIEW_CHARS=1600 \
             -e WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000 \
             ai-curation-unit-tests:latest \
-            python -m pytest tests/unit/ -v --tb=short --no-cov \
-            --ignore=tests/integration \
-            --ignore=tests/contract \
-            --ignore=tests/database \
-            --ignore=tests/unit/test_create_agent_cli.py \
-            --ignore=tests/unit/test_create_agent_validation.py \
-            --ignore=tests/unit/test_create_tool_cli.py \
-            --ignore=tests/unit/test_validate_registry.py \
-            --ignore=tests/unit/test_main_startup.py \
-            --ignore=tests/unit/api/test_files.py \
-            --ignore=tests/unit/lib/batch/test_batch_service.py \
-            --ignore=tests/unit/lib/agent_studio/test_registry_types.py
+            bash /app/backend/tests/unit/run_ci_unit_tests.sh
+
+      - name: Upload backend coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-coverage
+          path: |
+            backend/.coverage
+            backend/coverage.xml
+            backend/htmlcov
 
       - name: Test Summary
         if: always()
@@ -77,15 +82,11 @@ jobs:
           echo "## Unit Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Backend unit tests completed. See logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "Coverage artifacts uploaded: \`backend-unit-coverage\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Excluded Tests (Require Database or External Dependencies)" >> $GITHUB_STEP_SUMMARY
           echo "- \`test_files.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
           echo "- \`test_batch_service.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
-          echo "- \`test_registry_types.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
-          echo "- \`test_create_agent_*.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
-          echo "- \`test_create_tool_cli.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
-          echo "- \`test_validate_registry.py\` - Requires scripts module" >> $GITHUB_STEP_SUMMARY
-          echo "- \`test_main_startup.py\` - Requires full app context" >> $GITHUB_STEP_SUMMARY
 
   backend-persistence-tests:
     name: Backend Persistence Tests
@@ -137,6 +138,38 @@ jobs:
           echo "These tests verify chunks actually persist in Weaviate after batch insert." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**No OpenAI API key required** - uses vectorizer: none" >> $GITHUB_STEP_SUMMARY
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm run test -- --run
+
+      - name: Frontend Test Summary
+        if: always()
+        run: |
+          echo "## Frontend Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend tests completed. See logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "Note: This job is currently non-blocking while we stabilize legacy failures." >> $GITHUB_STEP_SUMMARY
 
   frontend-build:
     name: Frontend Build

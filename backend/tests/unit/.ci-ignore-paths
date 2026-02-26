@@ -1,0 +1,5 @@
+# Paths are relative to backend/
+tests/integration
+tests/contract
+tests/unit/api/test_files.py
+tests/unit/lib/batch/test_batch_service.py

@@ -72,20 +72,8 @@ services:
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
-    # Note: These ignores match .github/workflows/test.yml for CI consistency
-    command: >
-      python -m pytest tests/unit/ -v --tb=short --no-cov
-      --ignore=tests/integration
-      --ignore=tests/contract
-      --ignore=tests/database
-      --ignore=tests/unit/test_create_agent_cli.py
-      --ignore=tests/unit/test_create_agent_validation.py
-      --ignore=tests/unit/test_create_tool_cli.py
-      --ignore=tests/unit/test_validate_registry.py
-      --ignore=tests/unit/test_main_startup.py
-      --ignore=tests/unit/api/test_files.py
-      --ignore=tests/unit/lib/batch/test_batch_service.py
-      --ignore=tests/unit/lib/agent_studio/test_registry_types.py
+    # Unit tests use shared CI runner script for validated ignore paths + coverage settings.
+    command: bash /app/backend/tests/unit/run_ci_unit_tests.sh
     networks:
       - test-network
 

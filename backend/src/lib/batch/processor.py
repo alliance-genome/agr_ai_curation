@@ -80,8 +80,8 @@ def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
             db.close()
     except Exception as e:
         logger.error("Error validating file ownership: %s", e)
-        # Fail open to avoid blocking legitimate files, but log the error
-        return True
+        # Fail closed - do not trust file ownership when validation cannot run.
+        return False
 
 
 @contextmanager
@@ -162,11 +162,14 @@ def process_batch_task(batch_id: UUID) -> None:
                 batch = db.query(Batch).filter(Batch.id == batch_id).first()
                 batch_doc = db.query(BatchDocument).filter(BatchDocument.id == batch_doc.id).first()
                 if batch_doc and batch:
-                    batch_doc.status = BatchDocumentStatus.FAILED
-                    batch_doc.error_message = str(e)[:500]  # Limit error message length
-                    batch_doc.processed_at = datetime.now(timezone.utc)
-                    batch.failed_documents += 1
-                    db.commit()
+                    # _process_single_document already persists FAILED status for expected runtime errors.
+                    # Only apply fallback persistence if the document is not already marked failed.
+                    if batch_doc.status != BatchDocumentStatus.FAILED:
+                        batch_doc.status = BatchDocumentStatus.FAILED
+                        batch_doc.error_message = str(e)[:500]  # Limit error message length
+                        batch_doc.processed_at = datetime.now(timezone.utc)
+                        batch.failed_documents += 1
+                        db.commit()
 
         # Mark batch as completed (unless cancelled)
         db.refresh(batch)
@@ -219,6 +222,10 @@ def _process_single_document(
                 db_user_id=batch.user_id,
             )
         )
+
+        # Batch workflows are file-output driven; missing FILE_READY is a hard failure.
+        if not result_file_path:
+            raise RuntimeError("Flow completed without FILE_READY output")
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -303,17 +310,19 @@ async def _execute_flow_for_document(
         ):
             event_type = event.get("type", "")
 
-            # Enrich event with batch context for the frontend
-            enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
-
-            # Publish ALL events to the broadcaster for SSE streaming
-            broadcaster.publish_sync(batch_uuid, enriched_event)
-
             # Look for file output in FILE_READY events
             # The runner emits FILE_READY when file output tools produce FileInfo
             if event_type == "FILE_READY":
-                download_url = event.get("details", {}).get("download_url")
-                file_id = event.get("details", {}).get("file_id")
+                details = event.get("details")
+                if not isinstance(details, dict):
+                    logger.warning(
+                        "FILE_READY event ignored - malformed details payload: %r",
+                        details
+                    )
+                    continue
+
+                download_url = details.get("download_url")
+                file_id = details.get("file_id")
 
                 if download_url and file_id:
                     # GUARDRAIL: Validate file ownership before capturing
@@ -321,10 +330,12 @@ async def _execute_flow_for_document(
                     # (defense-in-depth for KANBAN-935 race condition fix)
                     if _validate_file_ownership(file_id, cognito_sub):
                         result_file_path = download_url
+                        enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
+                        broadcaster.publish_sync(batch_uuid, enriched_event)
                         logger.info(
                             "Found file output in flow: %s (filename: %s)",
                             result_file_path,
-                            event.get("details", {}).get("filename")
+                            details.get("filename")
                         )
                     else:
                         logger.warning(
@@ -333,15 +344,18 @@ async def _execute_flow_for_document(
                             file_id, cognito_sub
                         )
                 elif download_url:
-                    # Fallback for events without file_id (shouldn't happen, but be safe)
                     logger.warning(
-                        "FILE_READY event missing file_id, capturing without ownership check: %s",
+                        "FILE_READY event missing file_id, ignoring unverified output: %s",
                         download_url
                     )
-                    result_file_path = download_url
+                continue
+
+            # Enrich/publish non-file events with batch context for frontend streaming.
+            enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
+            broadcaster.publish_sync(batch_uuid, enriched_event)
 
             # Log supervisor completion for debugging
-            elif event_type == "SUPERVISOR_COMPLETE":
+            if event_type == "SUPERVISOR_COMPLETE":
                 logger.debug(
                     "Flow supervisor complete for document %s",
                     document_id

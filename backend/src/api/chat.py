@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from .auth import get_auth_dependency
 from ..lib.chat_state import document_state
@@ -38,6 +39,7 @@ from ..lib.redis_client import (
     register_active_stream,
     unregister_active_stream,
     is_stream_active,
+    get_stream_owner,
 )
 
 # Context variables for file output tools
@@ -182,6 +184,7 @@ class StopRequest(BaseModel):
 # Local fallback for cancel events (used alongside Redis for immediate in-process cancellation)
 # Redis provides cross-worker cancellation; this provides immediate same-worker cancellation
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
+_LOCAL_SESSION_OWNERS: Dict[str, str] = {}
 
 
 def _build_active_document(document_payload: Dict[str, Any]) -> ActiveDocument:
@@ -439,8 +442,35 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         )
 
     # Create local cancellation event (for immediate same-worker cancellation)
+    stream_claim_token = str(uuid.uuid4())
+    existing_owner = _LOCAL_SESSION_OWNERS.get(session_id)
+    if existing_owner:
+        if existing_owner != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+        raise HTTPException(status_code=409, detail="Session is already active")
+    _LOCAL_SESSION_OWNERS[session_id] = user_id
+
     cancel_event = asyncio.Event()
     _LOCAL_CANCEL_EVENTS[session_id] = cancel_event
+
+    if not await register_active_stream(session_id, user_id=user_id, stream_token=stream_claim_token):
+        _LOCAL_CANCEL_EVENTS.pop(session_id, None)
+        _LOCAL_SESSION_OWNERS.pop(session_id, None)
+        raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+    cleanup_done = False
+
+    async def _cleanup_stream_state(target_session_id: str) -> None:
+        """Best-effort idempotent cleanup for active stream bookkeeping."""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        _LOCAL_CANCEL_EVENTS.pop(target_session_id, None)
+        if _LOCAL_SESSION_OWNERS.get(target_session_id) == user_id:
+            _LOCAL_SESSION_OWNERS.pop(target_session_id, None)
+        await unregister_active_stream(target_session_id, user_id=user_id, stream_token=stream_claim_token)
+        await clear_cancel_signal(target_session_id)
 
     async def generate_stream():
         """Generate SSE events from the agent runner."""
@@ -449,9 +479,6 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         trace_id = None  # Capture trace_id for error reporting
 
         try:
-            # Register stream as active in Redis (for cross-worker visibility)
-            await register_active_stream(current_session_id)
-
             async for event in run_agent_streamed(
                 user_message=chat_message.message,
                 user_id=user_id,
@@ -530,13 +557,12 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
             yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': f'An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         finally:
             # Cleanup: remove from local dict, unregister from Redis, clear any cancel signal
-            _LOCAL_CANCEL_EVENTS.pop(session_id, None)
-            await unregister_active_stream(current_session_id)
-            await clear_cancel_signal(current_session_id)
+            await _cleanup_stream_state(current_session_id)
 
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
+        background=BackgroundTask(_cleanup_stream_state, session_id),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -553,10 +579,22 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     but cannot interrupt long-running tool calls mid-execution.
     """
     session_id = request.session_id
+    requester_id = user.get("sub")
+    if not requester_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+
+    owner_id = _LOCAL_SESSION_OWNERS.get(session_id)
+    if owner_id is None:
+        owner_id = await get_stream_owner(session_id)
+    if owner_id and owner_id != requester_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to cancel this session")
 
     # Check if stream is active (either locally or in Redis)
     local_event = _LOCAL_CANCEL_EVENTS.get(session_id)
     stream_active = await is_stream_active(session_id)
+
+    if stream_active and owner_id is None:
+        raise HTTPException(status_code=403, detail="Unable to verify stream ownership for cancellation")
 
     if not local_event and not stream_active:
         return {"status": "ok", "message": "No running chat for this session."}
@@ -604,11 +642,6 @@ async def execute_flow_endpoint(
     if flow.user_id != db_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Update execution stats
-    flow.execution_count += 1
-    flow.last_executed_at = datetime.now(timezone.utc)
-    db.commit()
-
     # Extract active groups from user's Cognito groups for prompt injection
     cognito_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_cognito(cognito_groups)
@@ -643,8 +676,61 @@ async def execute_flow_endpoint(
     )
 
     # Create local cancellation event (for immediate same-worker cancellation)
+    stream_claim_token = str(uuid.uuid4())
+    existing_owner = _LOCAL_SESSION_OWNERS.get(request.session_id)
+    if existing_owner:
+        if existing_owner != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+        raise HTTPException(status_code=409, detail="Session is already active")
+    _LOCAL_SESSION_OWNERS[request.session_id] = user_id
+
     cancel_event = asyncio.Event()
     _LOCAL_CANCEL_EVENTS[request.session_id] = cancel_event
+
+    if not await register_active_stream(
+        request.session_id,
+        user_id=user_id,
+        stream_token=stream_claim_token,
+    ):
+        _LOCAL_CANCEL_EVENTS.pop(request.session_id, None)
+        _LOCAL_SESSION_OWNERS.pop(request.session_id, None)
+        raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+    cleanup_done = False
+
+    async def _cleanup_stream_state(target_session_id: str) -> None:
+        """Best-effort idempotent cleanup for active flow stream bookkeeping."""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        _LOCAL_CANCEL_EVENTS.pop(target_session_id, None)
+        if _LOCAL_SESSION_OWNERS.get(target_session_id) == user_id:
+            _LOCAL_SESSION_OWNERS.pop(target_session_id, None)
+        await unregister_active_stream(
+            target_session_id,
+            user_id=user_id,
+            stream_token=stream_claim_token,
+        )
+        await clear_cancel_signal(target_session_id)
+
+    # Update execution stats only after ownership/session checks succeed.
+    try:
+        flow.execution_count += 1
+        flow.last_executed_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to persist flow execution start for session %s: %s",
+            request.session_id,
+            exc,
+            extra={"session_id": request.session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        if hasattr(db, "rollback"):
+            db.rollback()
+        await _cleanup_stream_state(request.session_id)
+        raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
 
     # Stream events via SSE with cancellation support
     async def event_generator():
@@ -653,9 +739,6 @@ async def execute_flow_endpoint(
         trace_id = None
 
         try:
-            # Register stream as active in Redis (for cross-worker visibility)
-            await register_active_stream(current_session_id)
-
             async for event in execute_flow(
                 flow=flow,
                 user_id=user_id,
@@ -717,13 +800,12 @@ async def execute_flow_endpoint(
             yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': f'Flow execution error: {str(e)}', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         finally:
             # Cleanup: remove from local dict, unregister from Redis, clear any cancel signal
-            _LOCAL_CANCEL_EVENTS.pop(request.session_id, None)
-            await unregister_active_stream(current_session_id)
-            await clear_cancel_signal(current_session_id)
+            await _cleanup_stream_state(current_session_id)
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
+        background=BackgroundTask(_cleanup_stream_state, request.session_id),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
