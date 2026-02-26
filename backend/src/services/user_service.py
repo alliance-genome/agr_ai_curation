@@ -9,7 +9,7 @@ Requirements: FR-005, FR-006
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from sqlalchemy.orm import Session
@@ -121,8 +121,8 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
             auth_sub=auth_sub,
             email=user_email,
             display_name=display_name,
-            created_at=datetime.utcnow(),
-            last_login=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            last_login=datetime.now(timezone.utc),
             is_active=True
         )
         db.add(db_user)
@@ -157,7 +157,7 @@ def provision_user(db: Session, principal: AuthPrincipal) -> User:
         needs_update = True
 
     # Update last_login timestamp
-    db_user.last_login = datetime.utcnow()
+    db_user.last_login = datetime.now(timezone.utc)
     needs_update = True
 
     if needs_update:

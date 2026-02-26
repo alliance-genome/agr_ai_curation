@@ -19,10 +19,10 @@ This plan prioritizes catching breakage before curator discovery, with explicit 
 
 1. Test inventory:
    - ~116 test files under `backend/tests/`
-   - ~1317 test functions
+   - ~1325 test functions
 2. CI reality:
    - Unit job now runs coverage with published artifacts (`.coverage`, `coverage.xml`, `htmlcov`) via shared runner script.
-   - Current backend unit coverage baseline is ~`57.56%` (`869` passing unit tests in latest local docker run).
+   - Current backend unit coverage baseline is ~`57.89%` (`877` passing unit tests in latest local docker run).
    - PR CI does not run full integration/contract suites; only persistence integration runs.
    - Frontend tests now run in PR CI but are temporarily non-blocking due legacy failures (`113` failing tests across `13` files on latest local run).
 3. Drift/debt indicators:
@@ -221,6 +221,9 @@ Status:
      - `backend/tests/unit/api/test_auth_api.py`
    - Added processing API unit coverage for reprocess/reembed endpoint branches:
      - `backend/tests/unit/api/test_processing_api.py`
+   - Added user-service unit coverage (principal mapping, tenant provisioning, new/existing user provisioning branches) and removed deprecated naive UTC timestamps:
+     - `backend/tests/unit/services/test_user_service.py`
+     - `backend/src/services/user_service.py`
    - Added manual live PDFX smoke harness with explicit opt-in:
      - `backend/tests/integration/live_pdfx/test_pdfx_live_smoke.py`
      - requires `PDFX_LIVE_ENABLE=1`
