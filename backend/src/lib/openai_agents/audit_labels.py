@@ -10,6 +10,7 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_disease_specialist": "Disease Ontology Agent",
     "ask_chemical_specialist": "Chemical Ontology Agent",
     "ask_gene_expression_specialist": "Gene Expression Extractor",
+    "ask_phenotype_specialist": "Phenotype Extraction Agent",
     "ask_gene_ontology_specialist": "Gene Ontology Agent",
     "ask_go_annotations_specialist": "GO Annotations Agent",
     "ask_orthologs_specialist": "Orthologs Agent",

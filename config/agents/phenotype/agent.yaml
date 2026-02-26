@@ -1,0 +1,75 @@
+# =============================================================================
+# AGENT DEFINITION: phenotype
+# =============================================================================
+# Extracts experimentally supported phenotype assertions from uploaded PDFs.
+# Tool name generated at runtime: ask_phenotype_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: phenotype_extraction
+
+name: "Phenotype Extraction Agent"
+
+description: >
+  Extracts phenotype assertions from uploaded PDFs with evidence-first
+  inclusion/exclusion decisions and normalization hints for curator review.
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for extracting phenotype assertions from the loaded paper, including
+    polarity/context and explicit exclusion reasons with evidence.
+  batchable: false  # Document-based agent, processes one document at a time
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - search_document
+  - read_section
+  - read_subsection
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: PhenotypeResultEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_PHENOTYPE_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "medium"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🧫"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: true

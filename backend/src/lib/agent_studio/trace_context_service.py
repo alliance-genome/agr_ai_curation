@@ -272,6 +272,9 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
     agent_patterns = {
         'supervisor': 'supervisor',
         'gene_expression': 'gene_expression',
+        'phenotype_extraction': 'phenotype',
+        'phenotype_specialist': 'phenotype',
+        'ask_phenotype_': 'phenotype',
         'gene_agent': 'gene',
         'allele_agent': 'allele',
         'disease_agent': 'disease',
@@ -312,6 +315,9 @@ def _normalize_agent_id(agent_id: str) -> str:
     # Mapping from legacy/trace names to canonical AGENT_REGISTRY IDs
     normalization_map = {
         'pdf_specialist': 'pdf',
+        'phenotype_extraction': 'phenotype',
+        'phenotype_specialist': 'phenotype',
+        'ask_phenotype_specialist': 'phenotype',
     }
     return normalization_map.get(agent_id, agent_id)
 
@@ -327,6 +333,7 @@ def _agent_id_to_name(agent_id: str) -> str:
     names = {
         'supervisor': 'Supervisor',
         'gene_expression': 'Gene Expression Extractor',
+        'phenotype': 'Phenotype Extraction Agent',
         'gene': 'Gene Validation Agent',
         'allele': 'Allele Validation Agent',
         'disease': 'Disease Ontology Agent',

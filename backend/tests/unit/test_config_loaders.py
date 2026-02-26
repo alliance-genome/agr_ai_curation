@@ -1866,7 +1866,7 @@ content: Test content for {folder_name}
         """
         expected_agents = {
             "gene", "allele", "disease", "chemical",
-            "gene_expression", "gene_ontology", "go_annotations",
+            "gene_expression", "phenotype", "gene_ontology", "go_annotations",
             "orthologs", "ontology_mapping",
             "csv_formatter", "json_formatter", "tsv_formatter",
             "chat_output", "pdf", "supervisor"

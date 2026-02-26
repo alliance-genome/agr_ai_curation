@@ -284,6 +284,94 @@ class GeneExpressionEnvelope(BaseModel):
 
 
 # ============================================================================
+# Phenotype Extraction Structured Output Models
+# ============================================================================
+
+class PhenotypeCandidateTerm(BaseModel):
+    """Candidate ontology mapping for a phenotype mention."""
+    label: str = Field(
+        ...,
+        description="Candidate phenotype term label"
+    )
+    term_id: Optional[str] = Field(
+        None,
+        description="Candidate phenotype ontology identifier when available"
+    )
+
+
+class PhenotypeObservation(BaseModel):
+    """A single phenotype assertion extracted from the paper."""
+    mention: str = Field(
+        ...,
+        description="Phenotype assertion text as stated in the paper"
+    )
+    normalized_label: Optional[str] = Field(
+        None,
+        description="Best normalized phenotype label when confidently resolved"
+    )
+    normalized_id: Optional[str] = Field(
+        None,
+        description="Best normalized phenotype identifier when confidently resolved"
+    )
+    polarity: Optional[str] = Field(
+        None,
+        description="Phenotype direction/context (e.g., increased, decreased, absent, abnormal)"
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        "medium",
+        description="Extractor confidence in normalized phenotype mapping"
+    )
+    candidate_terms: List[PhenotypeCandidateTerm] = Field(
+        default_factory=list,
+        description="Alternative candidate terms considered for mapping"
+    )
+    evidence: List[EvidenceRecord] = Field(
+        default_factory=list,
+        description="Evidence supporting this phenotype assertion"
+    )
+
+
+class PhenotypeResultEnvelope(BaseModel):
+    """Structured output for phenotype extraction and normalization hints."""
+    summary: Optional[str] = Field(
+        None,
+        description="Brief run summary for phenotype extraction"
+    )
+    phenotypes: List[PhenotypeObservation] = Field(
+        default_factory=list,
+        description="Extracted phenotype assertions with normalization hints"
+    )
+    items: List[ExtractionItem] = Field(
+        default_factory=list,
+        description="Normalized extraction items retained for curation workflows"
+    )
+    raw_mentions: List[MentionCandidate] = Field(
+        default_factory=list,
+        description="Raw mentions harvested from the paper before normalization"
+    )
+    evidence_records: List[EvidenceRecord] = Field(
+        default_factory=list,
+        description="Evidence snippets supporting retained/excluded decisions"
+    )
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="Normalization decisions and caveats captured during extraction"
+    )
+    exclusions: List[ExclusionRecord] = Field(
+        default_factory=list,
+        description="Excluded candidates with explicit reason codes"
+    )
+    ambiguities: List[AmbiguityRecord] = Field(
+        default_factory=list,
+        description="Ambiguous candidates requiring curator follow-up"
+    )
+    run_summary: ExtractionRunSummary = Field(
+        default_factory=ExtractionRunSummary,
+        description="Run-level extraction counters and warnings"
+    )
+
+
+# ============================================================================
 # Gene Curation Structured Output Models
 # ============================================================================
 
