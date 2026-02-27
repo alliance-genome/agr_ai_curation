@@ -394,19 +394,32 @@ async def create_prompt(
                 )
 
             # Version collision (UniqueViolation) - retry
-            if attempt < max_retries - 1:
-                logger.warning(
-                    f"Version collision on attempt {attempt + 1} for "
-                    f"{request.agent_name}:{request.prompt_type}:{request.group_id or 'base'}, retrying..."
-                )
-                continue
-            else:
-                logger.error(
-                    'Version collision persisted after %s attempts: %s', max_retries, e)
-                raise HTTPException(
-                    status_code=409,
-                    detail="Version collision occurred. Please try again.",
-                )
+            if isinstance(e.orig, UniqueViolation):
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Version collision on attempt {attempt + 1} for "
+                        f"{request.agent_name}:{request.prompt_type}:{request.group_id or 'base'}, retrying..."
+                    )
+                    continue
+                else:
+                    logger.error(
+                        'Version collision persisted after %s attempts: %s', max_retries, e)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Version collision occurred. Please try again.",
+                    )
+
+            logger.error(
+                "Prompt create failed with non-retryable integrity error for %s:%s:%s: %s",
+                request.agent_name,
+                request.prompt_type,
+                request.group_id or "base",
+                e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create prompt due to database integrity error.",
+            )
 
     # Should never reach here, but just in case
     raise HTTPException(
