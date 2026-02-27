@@ -177,6 +177,8 @@ find_*.py
 docs/plans/
 external_review_prompt.md
 /AGENT_REWORK_EXTRACTOR_PLAN.md
+/TESTING_TODO.md
+/docs/developer/TEST_STRATEGY.md
 
 # Sensitive local files - NEVER commit to public repo
 # PDFs (grant reviews, application docs, etc.)
