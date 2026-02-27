@@ -260,8 +260,9 @@ def verify_document_ownership(
     db_user = provision_user(db, principal_from_claims(auth_user))
 
     # Query document from PostgreSQL
+    document_uuid = _parse_document_uuid(document_id)
     doc = db.query(ViewerPDFDocument).filter(
-        ViewerPDFDocument.id == uuid.UUID(document_id)
+        ViewerPDFDocument.id == document_uuid
     ).first()
 
     if not doc:
@@ -278,6 +279,17 @@ def verify_document_ownership(
         )
 
     return doc
+
+
+def _parse_document_uuid(document_id: str) -> uuid.UUID:
+    """Parse document_id and raise a client error for malformed UUID values."""
+    try:
+        return uuid.UUID(document_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid document ID format: {document_id}",
+        ) from exc
 
 
 def validate_user_file_path(
@@ -1443,6 +1455,7 @@ async def get_download_info(
     """
     try:
         from ..config import get_pdf_storage_path
+        document_uuid = _parse_document_uuid(document_id)
 
         # Get document from database to check file paths
         session = SessionLocal()
@@ -1451,7 +1464,7 @@ async def get_download_info(
             db_user = provision_user(session, principal_from_claims(user))
 
             doc = session.query(ViewerPDFDocument).filter(
-                ViewerPDFDocument.id == uuid.UUID(document_id)
+                ViewerPDFDocument.id == document_uuid
             ).first()
 
             if not doc:
@@ -1545,6 +1558,7 @@ async def download_document_file(
     """
     try:
         from ..config import get_pdf_storage_path
+        document_uuid = _parse_document_uuid(document_id)
 
         if file_type not in ['pdf', 'docling_json', 'processed_json']:
             raise HTTPException(
@@ -1559,7 +1573,7 @@ async def download_document_file(
             db_user = provision_user(session, principal_from_claims(user))
 
             doc = session.query(ViewerPDFDocument).filter(
-                ViewerPDFDocument.id == uuid.UUID(document_id)
+                ViewerPDFDocument.id == document_uuid
             ).first()
 
             if not doc:

@@ -135,6 +135,68 @@ async def test_pdfx_auth_headers_cognito_refreshes_expired_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pdfx_auth_headers_cognito_uses_domain_fallback_for_token_url(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "cognito_client_credentials")
+    monkeypatch.delenv("PDF_EXTRACTION_COGNITO_TOKEN_URL", raising=False)
+    monkeypatch.setenv("COGNITO_DOMAIN", "https://auth.example.org/")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_SCOPE", "pdfx/read")
+
+    called_urls = []
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, data=None, headers=None):
+            del data, headers
+            called_urls.append(url)
+            return _DummyResponse(200, {"access_token": "domain-token", "expires_in": 3600})
+
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    headers = await documents._build_pdf_extraction_service_headers()
+    assert headers == {"Authorization": "Bearer domain-token"}
+    assert called_urls == ["https://auth.example.org/oauth2/token"]
+
+
+@pytest.mark.asyncio
+async def test_pdfx_auth_headers_cognito_invalid_expires_in_defaults(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "cognito_client_credentials")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_TOKEN_URL", "https://cognito.local/oauth2/token")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("PDF_EXTRACTION_COGNITO_SCOPE", "pdfx/read")
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, _url, data=None, headers=None):
+            del data, headers
+            return _DummyResponse(200, {"access_token": "token-a", "expires_in": "not-an-int"})
+
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    headers = await documents._build_pdf_extraction_service_headers()
+    assert headers == {"Authorization": "Bearer token-a"}
+    assert documents._pdf_extraction_service_token_expires_at > 0
+
+
+@pytest.mark.asyncio
 async def test_pdfx_auth_headers_cognito_raises_on_token_error(monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "cognito_client_credentials")
     monkeypatch.setenv("PDF_EXTRACTION_COGNITO_TOKEN_URL", "https://cognito.local/oauth2/token")

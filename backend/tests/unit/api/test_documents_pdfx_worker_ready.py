@@ -26,6 +26,12 @@ class _DummyListJsonResponse(_DummyResponse):
         return ["not-a-dict"]
 
 
+class _DummyEmptyContentResponse(_DummyResponse):
+    def __init__(self, status_code: int, payload: dict | None = None):
+        super().__init__(status_code, payload)
+        self.content = b""
+
+
 @pytest.mark.asyncio
 async def test_require_pdfx_worker_ready_no_service_url(monkeypatch):
     monkeypatch.delenv("PDF_EXTRACTION_SERVICE_URL", raising=False)
@@ -91,7 +97,9 @@ async def test_require_pdfx_worker_ready_no_auth_uses_health_endpoint(monkeypatc
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     await documents._require_pdf_extraction_worker_ready()
-    assert called_urls == [("https://pdfx.example.org/api/v1/health", None)]
+    assert len(called_urls) == 1
+    assert called_urls[0][0] == "https://pdfx.example.org/api/v1/health"
+    assert called_urls[0][1] in (None, {})
 
 
 @pytest.mark.asyncio
@@ -272,6 +280,38 @@ async def test_require_pdfx_worker_ready_handles_non_dict_json_payload(monkeypat
             del headers
             if url.endswith("/api/v1/status"):
                 return _DummyListJsonResponse(200, {})
+            raise AssertionError(f"Unexpected URL: {url}")
+
+    async def _service_headers():
+        return {"Authorization": "Bearer service-token"}
+
+    monkeypatch.setattr(documents, "_build_pdf_extraction_service_headers", _service_headers)
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents._require_pdf_extraction_worker_ready()
+    assert exc.value.status_code == 503
+    assert exc.value.detail["worker_state"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_require_pdfx_worker_ready_handles_empty_status_body(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            del headers
+            if url.endswith("/api/v1/status"):
+                return _DummyEmptyContentResponse(200, {"state": "ready"})
             raise AssertionError(f"Unexpected URL: {url}")
 
     async def _service_headers():

@@ -198,7 +198,7 @@ async def test_pdf_extraction_health_captures_auth_header_builder_error(monkeypa
             return False
 
         async def get(self, url, headers=None):
-            assert headers is None
+            assert headers in (None, {})
             if url.endswith("/api/v1/health"):
                 return _DummyResponse(200, {"status": "healthy", "ec2": "ready"})
             if url.endswith("/api/v1/health/deep"):
@@ -289,3 +289,84 @@ async def test_pdf_extraction_health_status_endpoint_http_error_keeps_worker_unk
     assert result["worker_state"] == "unknown"
     assert result["worker_available"] is False
     assert result["status_error"] == "Status endpoint returned 503"
+
+
+@pytest.mark.asyncio
+async def test_pdf_extraction_health_returns_misconfigured_without_service_url(monkeypatch):
+    monkeypatch.delenv("PDF_EXTRACTION_SERVICE_URL", raising=False)
+
+    result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
+    assert result["status"] == "misconfigured"
+    assert result["service_url"] == ""
+    assert "not configured" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_extraction_health_surfaces_status_error_when_other_checks_healthy(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+
+    async def _service_headers():
+        return {}
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            del headers
+            if url.endswith("/api/v1/health"):
+                return _DummyResponse(200, {"status": "healthy", "ec2": "ready"})
+            if url.endswith("/api/v1/health/deep"):
+                return _DummyResponse(200, {"status": "healthy"})
+            if url.endswith("/api/v1/status"):
+                req = documents.httpx.Request("GET", url)
+                raise documents.httpx.RequestError("status network error", request=req)
+            raise AssertionError(f"Unexpected URL called: {url}")
+
+    monkeypatch.setattr(documents, "_build_pdf_extraction_service_headers", _service_headers)
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
+    assert result["status"] == "healthy"
+    assert result["worker_state"] == "ready"
+    assert result["worker_available"] is True
+    assert "status network error" in result["status_error"]
+    assert "status network error" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_extraction_health_handles_request_error(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+
+    async def _service_headers():
+        return {"Authorization": "Bearer service-token"}
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            del headers
+            req = documents.httpx.Request("GET", url)
+            raise documents.httpx.RequestError("proxy timeout", request=req)
+
+    monkeypatch.setattr(documents, "_build_pdf_extraction_service_headers", _service_headers)
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
+    assert result["status"] == "unreachable"
+    assert result["worker_state"] == "unknown"
+    assert result["worker_available"] is False
+    assert "proxy timeout" in result["error"]

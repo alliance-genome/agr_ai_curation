@@ -232,17 +232,17 @@ async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_download_document_file_invalid_uuid_returns_500(monkeypatch):
+async def test_download_document_file_invalid_uuid_returns_400(monkeypatch):
     _mock_session(monkeypatch, doc=None)
 
-    with pytest.raises(HTTPException, match="Failed to download file") as exc:
+    with pytest.raises(HTTPException, match="Invalid document ID format") as exc:
         await documents.download_document_file(
             document_id="not-a-uuid",
             file_type="pdf",
             user={"sub": "user123"},
         )
 
-    assert exc.value.status_code == 500
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -259,16 +259,16 @@ async def test_get_download_info_returns_404_when_document_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_download_info_invalid_uuid_returns_500(monkeypatch):
+async def test_get_download_info_invalid_uuid_returns_400(monkeypatch):
     _mock_session(monkeypatch, doc=None)
 
-    with pytest.raises(HTTPException, match="Failed to get download info") as exc:
+    with pytest.raises(HTTPException, match="Invalid document ID format") as exc:
         await documents.get_download_info(
             document_id="not-a-uuid",
             user={"sub": "user123"},
         )
 
-    assert exc.value.status_code == 500
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio

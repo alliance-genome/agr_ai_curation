@@ -195,3 +195,40 @@ async def test_wake_pdfx_returns_ready_worker(monkeypatch):
     assert result["worker_state"] == "ready"
     assert result["worker_available"] is True
     assert result["wake_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_wake_pdfx_handles_empty_wake_and_status_bodies(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+
+    async def _service_headers():
+        return {"Authorization": "Bearer service-token"}
+
+    class _DummyClient:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, _url, headers=None):
+            del headers
+            return _DummyResponse(202, payload=None, content=b"")
+
+        async def get(self, _url, headers=None):
+            del headers
+            return _DummyResponse(200, payload=None, content=b"")
+
+    monkeypatch.setattr(documents, "_build_pdf_extraction_service_headers", _service_headers)
+    monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
+
+    result = await documents.wake_pdf_extraction_worker({"sub": "dev-user-123"})
+    assert result["wake_response_code"] == 202
+    assert result["wake_details"] == {}
+    assert result["status_details"] == {}
+    assert result["worker_state"] == "unknown"
+    assert result["worker_available"] is False
+    assert result["wake_required"] is True
