@@ -134,3 +134,94 @@ def test_log_used_prompts_returns_zero_when_db_write_fails(monkeypatch):
     monkeypatch.setattr(runner, "SessionLocal", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
 
     assert runner._log_used_prompts_to_db(trace_id="trace-3") == 0
+
+
+def test_safe_langfuse_wrapper_sanitizes_none_metadata_for_responses():
+    captured = {}
+
+    class _Responses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+    client = object.__new__(runner.SafeLangfuseAsyncOpenAI)
+    client.responses = _Responses()
+    client._wrap_responses_api()
+
+    import asyncio
+
+    result = asyncio.run(client.responses.create(metadata=None, input="hello"))
+    assert result == {"ok": True}
+    assert captured["metadata"] == {}
+
+
+def test_safe_langfuse_wrapper_preserves_dict_metadata_for_responses():
+    captured = {}
+
+    class _Responses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+    client = object.__new__(runner.SafeLangfuseAsyncOpenAI)
+    client.responses = _Responses()
+    client._wrap_responses_api()
+
+    import asyncio
+
+    asyncio.run(client.responses.create(metadata={"trace": "x"}, input="hello"))
+    assert captured["metadata"] == {"trace": "x"}
+
+
+def test_safe_langfuse_wrapper_sanitizes_none_metadata_for_chat():
+    captured = {}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+    chat = SimpleNamespace(completions=_Completions())
+    client = object.__new__(runner.SafeLangfuseAsyncOpenAI)
+    client.chat = chat
+    client._wrap_chat_api()
+
+    import asyncio
+
+    result = asyncio.run(client.chat.completions.create(metadata=None, messages=[]))
+    assert result == {"ok": True}
+    assert captured["metadata"] == {}
+
+
+def test_log_used_prompts_continues_when_span_update_fails(monkeypatch):
+    used_prompt = SimpleNamespace(
+        agent_name="Supervisor",
+        prompt_type="base",
+        group_id=None,
+        version=4,
+        id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+    )
+    monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+
+    class _BadSpan:
+        def update(self, metadata):
+            raise RuntimeError("span write failed")
+
+    class _FakePromptService:
+        def __init__(self, _db):
+            pass
+
+        def log_all_used_prompts(self, prompts, trace_id, session_id):
+            return [SimpleNamespace(id=1)]
+
+    class _FakeDB:
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runner, "PromptService", _FakePromptService)
+    monkeypatch.setattr(runner, "SessionLocal", lambda: _FakeDB())
+
+    assert runner._log_used_prompts_to_db(trace_id="trace-4", span=_BadSpan()) == 1
