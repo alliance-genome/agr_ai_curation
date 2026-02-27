@@ -1,6 +1,7 @@
 """Unit tests for Agent Studio test-agent endpoint and workshop prompt context."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 import uuid
 
@@ -200,6 +201,199 @@ class TestAgentTestEndpoint:
         assert isinstance(response, StreamingResponse)
         assert observed["metadata_agent_id"] == custom_agent_id
         assert observed["factory_agent_id"] == custom_agent_id
+
+    def test_endpoint_rejects_invalid_custom_agent_id(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id="ca_invalid",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_endpoint_maps_custom_agent_lookup_errors(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        custom_uuid = uuid.uuid4()
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_uuid)
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(api_module.CustomAgentNotFoundError("missing")),
+        )
+        with pytest.raises(HTTPException) as not_found_exc:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id=f"ca_{custom_uuid}",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert not_found_exc.value.status_code == 404
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(api_module.CustomAgentAccessError("forbidden")),
+        )
+        with pytest.raises(HTTPException) as access_exc:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id=f"ca_{custom_uuid}",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert access_exc.value.status_code == 403
+
+    def test_endpoint_maps_metadata_lookup_and_init_errors(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_metadata",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("unknown agent")),
+        )
+        with pytest.raises(HTTPException) as metadata_exc:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id="gene",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert metadata_exc.value.status_code == 404
+
+        monkeypatch.setattr(api_module, "get_agent_metadata", lambda *_args, **_kwargs: {"requires_document": False})
+        monkeypatch.setattr(
+            api_module,
+            "get_agent_by_id",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("init failed")),
+        )
+        with pytest.raises(HTTPException) as init_exc:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id="gene",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert init_exc.value.status_code == 400
+        assert "Failed to initialize agent" in str(init_exc.value.detail)
+
+    def test_endpoint_requires_user_identifier(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub=None),
+        )
+        monkeypatch.setattr(api_module, "get_agent_metadata", lambda *_args, **_kwargs: {"requires_document": False})
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.test_agent_endpoint(
+                    agent_id="gene",
+                    request=api_module.AgentTestRequest(input="test"),
+                    user={},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 401
+
+    def test_endpoint_stream_emits_error_events_on_cancel_and_exception(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "set_current_session_id", lambda _sid: None)
+        monkeypatch.setattr(api_module, "set_current_user_id", lambda _uid: None)
+        monkeypatch.setattr(api_module, "get_agent_metadata", lambda *_args, **_kwargs: {"requires_document": False})
+        monkeypatch.setattr(api_module, "get_agent_by_id", lambda *_args, **_kwargs: object())
+
+        async def _consume(response: StreamingResponse) -> str:
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+            return "".join(chunks)
+
+        def _parse_sse_payloads(stream_text: str):
+            payloads = []
+            for line in stream_text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                payloads.append(json.loads(line[6:]))
+            return payloads
+
+        async def _cancelled_stream(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "cancel-trace"}}
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _cancelled_stream)
+        response = asyncio.run(
+            api_module.test_agent_endpoint(
+                agent_id="gene",
+                request=api_module.AgentTestRequest(input="test", session_id="sess-cancel"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        cancelled_events = _parse_sse_payloads(asyncio.run(_consume(response)))
+        assert cancelled_events[-1]["type"] == "RUN_ERROR"
+        assert cancelled_events[-1]["error_type"] == "StreamCancelled"
+        assert not any(event.get("type") == "DONE" for event in cancelled_events)
+
+        async def _error_stream(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "error-trace"}}
+            raise RuntimeError("boom stream")
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _error_stream)
+        response = asyncio.run(
+            api_module.test_agent_endpoint(
+                agent_id="gene",
+                request=api_module.AgentTestRequest(input="test", session_id="sess-error"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        error_events = _parse_sse_payloads(asyncio.run(_consume(response)))
+        assert error_events[-1]["type"] == "RUN_ERROR"
+        assert error_events[-1]["error_type"] == "RuntimeError"
+        assert "boom stream" in error_events[-1]["message"]
+        assert not any(event.get("type") == "DONE" for event in error_events)
 
 
 class TestAgentWorkshopSystemPrompt:
