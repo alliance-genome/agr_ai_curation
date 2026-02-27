@@ -274,3 +274,218 @@ def test_create_dynamic_specialist_tools_continues_after_agent_construction_fail
 
     tools = supervisor_agent._create_dynamic_specialist_tools()
     assert tools == ["wrapped::ask_good_specialist"]
+
+
+def test_fetch_document_sections_sync_uses_asyncio_run_without_running_loop(monkeypatch):
+    import asyncio
+
+    async def _fake_get_document_sections(_document_id, _user_id):
+        return [{"name": "intro"}]
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections",
+        _fake_get_document_sections,
+    )
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    def _fake_run(coro):
+        coro.close()
+        return [{"name": "intro"}]
+
+    monkeypatch.setattr(asyncio, "run", _fake_run)
+
+    sections = supervisor_agent._fetch_document_sections_sync("doc-1", "user-1")
+    assert sections == [{"name": "intro"}]
+
+
+def test_fetch_document_sections_sync_uses_threadpool_when_loop_running(monkeypatch):
+    import asyncio
+    import concurrent.futures
+
+    async def _fake_get_document_sections(_document_id, _user_id):
+        return [{"name": "methods"}]
+
+    class _FakeFuture:
+        def __init__(self, coro):
+            self._coro = coro
+
+        def result(self, timeout=None):
+            assert timeout == 10
+            self._coro.close()
+            return [{"name": "methods"}]
+
+    class _FakePool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, coro):
+            assert fn is asyncio.run
+            return _FakeFuture(coro)
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections",
+        _fake_get_document_sections,
+    )
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: object())
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", lambda: _FakePool())
+
+    sections = supervisor_agent._fetch_document_sections_sync("doc-1", "user-1")
+    assert sections == [{"name": "methods"}]
+
+
+def test_fetch_document_sections_sync_returns_empty_on_exception(monkeypatch):
+    import asyncio
+
+    async def _fake_get_document_sections(_document_id, _user_id):
+        return [{"name": "ignored"}]
+
+    def _failing_run(coro):
+        coro.close()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections",
+        _fake_get_document_sections,
+    )
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(asyncio, "run", _failing_run)
+
+    assert supervisor_agent._fetch_document_sections_sync("doc-1", "user-1") == []
+
+
+def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch):
+    import asyncio
+
+    async def _fake_get_hierarchy(_document_id, _user_id):
+        return {"sections": [{"name": "ignored"}]}
+
+    def _failing_run(coro):
+        coro.close()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.get_document_sections_hierarchical",
+        _fake_get_hierarchy,
+    )
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(asyncio, "run", _failing_run)
+
+    assert supervisor_agent.fetch_document_hierarchy_sync("doc-1", "user-1") is None
+
+
+def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypatch):
+    captured_agent = {}
+    captured_pending = {}
+    captured_langfuse = {}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_agent_config",
+        lambda _name: SimpleNamespace(model="gpt-4o", temperature=None, reasoning=None),
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_model_for_agent",
+        lambda model, provider_override=None: model,
+    )
+    monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_dynamic_specialist_tools",
+        lambda **_kwargs: [SimpleNamespace(name="ask_gene_specialist")],
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "get_prompt",
+        lambda _name: SimpleNamespace(content="Base prompt", version=7),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "set_pending_prompts",
+        lambda name, prompts: captured_pending.update({"name": name, "prompts": prompts}),
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.log_agent_config",
+        lambda **kwargs: captured_langfuse.update(kwargs),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                fn,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "Agent",
+        lambda **kwargs: captured_agent.update(kwargs) or SimpleNamespace(**kwargs),
+    )
+
+    created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
+
+    assert "No PDF document is currently loaded." in created.instructions
+    assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
+    assert captured_pending["name"] == "Query Supervisor"
+    assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
+
+
+def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):
+    captured_dynamic = {}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_agent_config",
+        lambda _name: SimpleNamespace(model="gpt-4o", temperature=0.0, reasoning="low"),
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_model_for_agent",
+        lambda model, provider_override=None: model,
+    )
+    monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_dynamic_specialist_tools",
+        lambda **kwargs: captured_dynamic.update(kwargs) or [],
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "get_prompt",
+        lambda _name: SimpleNamespace(content="Base prompt", version=9),
+    )
+    monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.langfuse_client.log_agent_config", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                fn,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(supervisor_agent, "safety_guardrail", "safety")
+    monkeypatch.setattr(supervisor_agent, "GUARDRAILS_AVAILABLE", True)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "Agent",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    created = supervisor_agent.create_supervisor_agent(
+        document_id="doc-2",
+        user_id="user-2",
+        hierarchy={"sections": [{"name": "Introduction"}, {"name": "Methods"}]},
+        enable_guardrails=True,
+    )
+
+    assert "**DOCUMENT CONTEXT**" in created.instructions
+    assert created.input_guardrails == ["safety"]
+    assert captured_dynamic["sections"] == ["Introduction", "Methods"]
