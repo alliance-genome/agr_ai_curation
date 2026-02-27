@@ -11,51 +11,61 @@ from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumen
 class TestBatchService:
     """Tests for BatchService."""
 
-    def test_list_batches_returns_empty_for_new_user(self, test_db):
+    def test_list_batches_returns_empty_for_new_user(self):
         """List batches returns empty list for user with no batches."""
-        service = BatchService(test_db)
+        mock_db = Mock()
+        mock_db.scalars.return_value.all.return_value = []
+        service = BatchService(mock_db)
         user_id = 99999  # Non-existent user
 
         result = service.list_batches(user_id)
 
         assert result == []
 
-    def test_get_batch_returns_none_for_nonexistent(self, test_db):
+    def test_get_batch_returns_none_for_nonexistent(self):
         """Get batch returns None for non-existent batch."""
-        service = BatchService(test_db)
+        mock_db = Mock()
+        mock_db.scalars.return_value.first.return_value = None
+        service = BatchService(mock_db)
 
         result = service.get_batch(uuid4(), user_id=1)
 
         assert result is None
 
 
-    def test_is_batch_cancelled_returns_false_for_nonexistent(self, test_db):
+    def test_is_batch_cancelled_returns_false_for_nonexistent(self):
         """Is batch cancelled returns False for non-existent batch."""
-        service = BatchService(test_db)
+        mock_db = Mock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
+        service = BatchService(mock_db)
 
         result = service.is_batch_cancelled(uuid4())
 
         assert result is False
 
-    def test_cancel_batch_returns_none_for_nonexistent(self, test_db):
+    def test_cancel_batch_returns_none_for_nonexistent(self):
         """Cancel batch returns None for non-existent batch."""
-        service = BatchService(test_db)
+        mock_db = Mock()
+        service = BatchService(mock_db)
 
-        result = service.cancel_batch(uuid4(), user_id=1)
+        with patch.object(service, 'get_batch', return_value=None):
+            result = service.cancel_batch(uuid4(), user_id=1)
 
         assert result is None
 
-    def test_get_flow_name_returns_none_for_nonexistent(self, test_db):
+    def test_get_flow_name_returns_none_for_nonexistent(self):
         """Get flow name returns None for non-existent flow."""
-        service = BatchService(test_db)
+        mock_db = Mock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
+        service = BatchService(mock_db)
 
         result = service.get_flow_name(uuid4())
 
         assert result is None
 
-    def test_get_document_titles_returns_empty_for_empty_list(self, test_db):
+    def test_get_document_titles_returns_empty_for_empty_list(self):
         """Get document titles returns empty dict for empty list."""
-        service = BatchService(test_db)
+        service = BatchService(Mock())
 
         result = service.get_document_titles([])
 
