@@ -147,3 +147,325 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
     assert response.media_type == "application/pdf"
     assert response.filename == "paper.pdf"
     assert "attachment" in response.headers.get("content-disposition", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_returns_docling_json_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    user_dir = tmp_path / "user123" / "docling_json"
+    user_dir.mkdir(parents=True)
+    (user_dir / "doc.json").write_text('{"raw": true}')
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path="user123/docling_json/doc.json",
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    response = await documents.download_document_file(
+        document_id=_DOC_ID,
+        file_type="docling_json",
+        user={"sub": "user123"},
+    )
+
+    assert isinstance(response, FileResponse)
+    assert response.media_type == "application/json"
+    assert response.filename == "paper_docling.json"
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_returns_processed_json_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    user_dir = tmp_path / "user123" / "processed_json"
+    user_dir.mkdir(parents=True)
+    (user_dir / "doc.json").write_text('{"processed": true}')
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path=None,
+        processed_json_path="user123/processed_json/doc.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    response = await documents.download_document_file(
+        document_id=_DOC_ID,
+        file_type="processed_json",
+        user={"sub": "user123"},
+    )
+
+    assert isinstance(response, FileResponse)
+    assert response.media_type == "application/json"
+    assert response.filename == "paper_processed.json"
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="../outside.pdf",
+        docling_json_path=None,
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="pdf",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_invalid_uuid_returns_500(monkeypatch):
+    _mock_session(monkeypatch, doc=None)
+
+    with pytest.raises(HTTPException, match="Failed to download file") as exc:
+        await documents.download_document_file(
+            document_id="not-a-uuid",
+            file_type="pdf",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_returns_404_when_document_missing(monkeypatch):
+    _mock_session(monkeypatch, doc=None)
+
+    with pytest.raises(HTTPException, match="not found") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_invalid_uuid_returns_500(monkeypatch):
+    _mock_session(monkeypatch, doc=None)
+
+    with pytest.raises(HTTPException, match="Failed to get download info") as exc:
+        await documents.get_download_info(
+            document_id="not-a-uuid",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_returns_403_for_cross_user_access(monkeypatch):
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=99,
+        file_path="user123/original.pdf",
+        docling_json_path="user123/docling_json/doc.json",
+        processed_json_path="user123/processed_json/doc.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="permission") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    user_dir = tmp_path / "user123"
+    (user_dir / "docling_json").mkdir(parents=True)
+    (user_dir / "processed_json").mkdir(parents=True)
+    (user_dir / "original.pdf").write_bytes(b"%PDF-1.7")
+    (user_dir / "docling_json" / "doc.json").write_text('{"raw": true}')
+    (user_dir / "processed_json" / "doc.json").write_text('{"processed": true}')
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="user123/original.pdf",
+        docling_json_path="user123/docling_json/doc.json",
+        processed_json_path="user123/processed_json/doc.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    payload = await documents.get_download_info(
+        document_id=_DOC_ID,
+        user={"sub": "user123"},
+    )
+
+    assert payload["pdf_available"] is True
+    assert payload["docling_json_available"] is True
+    assert payload["processed_json_available"] is True
+    assert payload["pdf_size"] > 0
+    assert payload["docling_json_size"] > 0
+    assert payload["processed_json_size"] > 0
+    assert payload["filename"] == "paper.pdf"
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path=None,
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    payload = await documents.get_download_info(
+        document_id=_DOC_ID,
+        user={"sub": "user123"},
+    )
+
+    assert payload["pdf_available"] is False
+    assert payload["docling_json_available"] is False
+    assert payload["processed_json_available"] is False
+    assert payload["pdf_size"] is None
+    assert payload["docling_json_size"] is None
+    assert payload["processed_json_size"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="../outside.pdf",
+        docling_json_path=None,
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_blocks_docling_json_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path="../outside.json",
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="docling_json",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path=None,
+        processed_json_path="../outside.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="processed_json",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_blocks_docling_json_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path="../outside.json",
+        processed_json_path=None,
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path=None,
+        docling_json_path=None,
+        processed_json_path="../outside.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
