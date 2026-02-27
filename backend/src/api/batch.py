@@ -275,6 +275,7 @@ async def download_batch_zip(
 
     # Create ZIP in memory
     zip_buffer = io.BytesIO()
+    files_added = 0
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for doc in completed_docs:
@@ -335,7 +336,7 @@ async def download_batch_zip(
                     )
                     continue
 
-                if not file_path.exists():
+                if not resolved_path.exists():
                     logger.warning(
                         "File not found on disk: doc_id=%s, path=%s",
                         doc.document_id, file_output.file_path
@@ -343,19 +344,26 @@ async def download_batch_zip(
                     continue
 
                 # Read file content
-                file_content = file_path.read_bytes()
+                file_content = resolved_path.read_bytes()
 
                 # Use original filename with position prefix
                 filename = f"{doc.position + 1:03d}_{file_output.filename}"
 
                 zip_file.writestr(filename, file_content)
                 logger.info("Added to ZIP: %s (%d bytes)", filename, len(file_content))
+                files_added += 1
 
             except Exception as e:
                 logger.warning(
                     "Error reading result file: doc_id=%s, error=%s",
                     doc.document_id, str(e)
                 )
+
+    if files_added == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No downloadable result files available for this batch",
+        )
 
     zip_buffer.seek(0)
 
@@ -417,17 +425,19 @@ async def stream_batch_progress(
         """
         # Get broadcaster and subscribe to events
         broadcaster = get_batch_broadcaster()
-        event_queue = await broadcaster.subscribe(batch_id)
-
+        event_queue = None
         # Create a new session for the generator to avoid request session issues
-        stream_db = SessionLocal()
+        stream_db = None
         try:
+            event_queue = await broadcaster.subscribe(batch_id)
+            stream_db = SessionLocal()
             stream_service = BatchService(stream_db)
 
             # Track last known state to detect changes
             last_completed = -1
             last_failed = -1
             last_doc_statuses = {}
+            last_poll_at = 0.0
 
             # Send initial batch status
             batch = stream_service.get_batch(batch_id, user_id)
@@ -469,8 +479,13 @@ async def stream_batch_progress(
                 # Small sleep to avoid busy-waiting
                 await asyncio.sleep(0.1)
 
-                # Poll database for status changes (every ~1 second worth of iterations)
-                # This catches status changes even if events are missed
+                # Poll database for status changes approximately once per second.
+                # This catches status changes even if events are missed.
+                now = asyncio.get_running_loop().time()
+                if now - last_poll_at < 1.0:
+                    continue
+                last_poll_at = now
+
                 stream_db.expire_all()  # Clear SQLAlchemy cache
                 batch = stream_service.get_batch(batch_id, user_id)
 
@@ -535,13 +550,15 @@ async def stream_batch_progress(
             logger.exception("Error streaming batch progress: batch_id=%s", batch_id)
             error_event = {
                 "type": "ERROR",
-                "message": str(e)
+                "message": "Batch stream encountered an internal error"
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         finally:
             # Cleanup: unsubscribe and close session
-            await broadcaster.unsubscribe(batch_id, event_queue)
-            stream_db.close()
+            if event_queue is not None:
+                await broadcaster.unsubscribe(batch_id, event_queue)
+            if stream_db is not None:
+                stream_db.close()
 
     return StreamingResponse(
         generate_stream(),
