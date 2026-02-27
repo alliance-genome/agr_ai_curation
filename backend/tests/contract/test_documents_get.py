@@ -62,7 +62,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestGetDocumentEndpoint:
@@ -179,8 +179,8 @@ class TestGetDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -282,8 +282,8 @@ class TestGetDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             response = client.get(
@@ -352,8 +352,8 @@ class TestGetDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             response = client.get(
@@ -434,8 +434,8 @@ class TestGetDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             response = client.get(
@@ -537,8 +537,8 @@ class TestGetDocumentEndpointEdgeCases:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             response = client.get(
@@ -596,8 +596,8 @@ class TestGetDocumentEndpointEdgeCases:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             response = client.get(

@@ -1,0 +1,6 @@
+# Stable contract-core suite (legacy contract tests excluded)
+tests/contract/test_auth_health.py
+tests/contract/test_auth_users_me.py
+tests/contract/test_auth_logout.py
+tests/contract/test_admin_llm_providers_health.py
+tests/contract/test_pdf_extraction_health_auth.py

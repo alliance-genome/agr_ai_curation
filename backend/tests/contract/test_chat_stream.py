@@ -47,7 +47,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestChatStreamEndpoint:

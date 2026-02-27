@@ -54,7 +54,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestDownloadProcessedJsonEndpoint:
@@ -131,8 +131,8 @@ class TestDownloadProcessedJsonEndpoint:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -178,8 +178,8 @@ class TestDownloadProcessedJsonEndpoint:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -233,8 +233,8 @@ class TestDownloadProcessedJsonEndpoint:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Try to download document owned by another user (e.g., document uploaded by user 456)
@@ -284,8 +284,8 @@ class TestDownloadProcessedJsonEndpoint:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Try to download non-existent document
@@ -364,8 +364,8 @@ class TestDownloadProcessedJsonEndpointEdgeCases:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Test with various special characters in document ID

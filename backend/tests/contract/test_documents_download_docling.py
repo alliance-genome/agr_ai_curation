@@ -60,7 +60,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestDownloadDoclingJsonEndpoint:
@@ -151,8 +151,8 @@ class TestDownloadDoclingJsonEndpoint:
         mock_db_session.query.side_effect = mock_query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -208,8 +208,8 @@ class TestDownloadDoclingJsonEndpoint:
         mock_db_session.query.side_effect = mock_query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -274,8 +274,8 @@ class TestDownloadDoclingJsonEndpoint:
         mock_db_session.query.side_effect = mock_query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint
@@ -327,8 +327,8 @@ class TestDownloadDoclingJsonEndpoint:
         mock_db_session.query.side_effect = mock_query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint with non-existent document_id

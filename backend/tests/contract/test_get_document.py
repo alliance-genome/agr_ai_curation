@@ -53,7 +53,7 @@ class TestGetDocumentEndpoint:
     def client(self):
         """Create a test client for the FastAPI app."""
         try:
-            from api.main import app
+            from main import app
             return TestClient(app)
         except ImportError:
             # If API not implemented yet, create a mock client for contract definition

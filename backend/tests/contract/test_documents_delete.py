@@ -57,7 +57,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestDeleteDocumentEndpoint:
@@ -153,8 +153,8 @@ class TestDeleteDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Delete document
@@ -215,8 +215,8 @@ class TestDeleteDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Try to delete non-existent document
@@ -289,8 +289,8 @@ class TestDeleteDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Try to delete another user's document
@@ -370,8 +370,8 @@ class TestDeleteDocumentEndpoint:
         mock_db_session.query.side_effect = query_side_effect
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Delete document (should cascade all data)

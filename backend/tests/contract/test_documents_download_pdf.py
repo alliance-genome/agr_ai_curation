@@ -50,7 +50,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 class TestDocumentsDownloadPdfEndpoint:
@@ -148,8 +148,8 @@ class TestDocumentsDownloadPdfEndpoint:
         mock_pdf_content = b"%PDF-1.4 mock pdf content"
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Mock file reading
@@ -218,8 +218,8 @@ class TestDocumentsDownloadPdfEndpoint:
         mock_pdf_content = b"%PDF-1.4\n%mock binary pdf content\x00\x01\x02"
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Mock file reading
@@ -292,8 +292,8 @@ class TestDocumentsDownloadPdfEndpoint:
         mock_db_session.query.side_effect = mock_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint - user 123 trying to access user 456's document
@@ -351,8 +351,8 @@ class TestDocumentsDownloadPdfEndpoint:
         mock_db_session.query.side_effect = mock_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call endpoint with non-existent document ID
@@ -430,8 +430,8 @@ class TestDocumentsDownloadPdfEndpoint:
         mock_pdf_content = b"%PDF-1.4 test content"
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Track which path was accessed
@@ -543,8 +543,8 @@ class TestDocumentsDownloadPdfEdgeCases:
 
         mock_db_session.query.side_effect = mock_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             with patch("builtins.open", MagicMock(return_value=MagicMock(__enter__=lambda self: self, __exit__=lambda *args: None, read=lambda: b"%PDF-1.4"))):

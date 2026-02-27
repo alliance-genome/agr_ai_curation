@@ -88,6 +88,60 @@ jobs:
           echo "- \`test_files.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
           echo "- \`test_batch_service.py\` - Requires PostgreSQL" >> $GITHUB_STEP_SUMMARY
 
+  backend-contract-core-tests:
+    name: Backend Contract Core Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build unit test image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./backend/Dockerfile.unit-test
+          push: false
+          load: true
+          tags: ai-curation-unit-tests:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate contract-core test paths
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/backend:/app/backend" \
+            ai-curation-unit-tests:latest \
+            bash /app/backend/tests/contract/run_ci_contract_core_tests.sh --validate-only
+
+      - name: Run contract-core tests
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/backend:/app/backend" \
+            -e PYTHONUNBUFFERED=1 \
+            -e OPENAI_API_KEY=test-key-for-contract-tests \
+            -e TESTING_API_KEY=contract-test-key \
+            -e LANGFUSE_PUBLIC_KEY=test-key \
+            -e LANGFUSE_SECRET_KEY=test-key \
+            -e EMBEDDING_MODEL=text-embedding-3-small \
+            -e EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true \
+            -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 \
+            -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 \
+            -e CONTENT_PREVIEW_CHARS=1600 \
+            ai-curation-unit-tests:latest \
+            bash /app/backend/tests/contract/run_ci_contract_core_tests.sh
+
+      - name: Contract-core Summary
+        if: always()
+        run: |
+          echo "## Contract Core Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Contract-core tests completed." >> $GITHUB_STEP_SUMMARY
+          echo "Legacy/stale contract tests remain out-of-scope for this gate and are tracked in docs/developer/TEST_STRATEGY.md." >> $GITHUB_STEP_SUMMARY
+
   backend-persistence-tests:
     name: Backend Persistence Tests
     runs-on: ubuntu-latest

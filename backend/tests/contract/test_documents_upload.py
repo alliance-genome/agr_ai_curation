@@ -61,7 +61,7 @@ def client(monkeypatch):
 
 def get_valid_auth_header():
     """Generate mock Authorization header with valid JWT token."""
-    return {"Authorization": "Bearer mock_valid_token_12345"}
+    return {"X-API-Key": "contract-test-key"}
 
 
 def create_test_pdf_bytes(filename="test.pdf"):
@@ -225,8 +225,8 @@ class TestDocumentsUploadEndpoint:
         mock_db_session.query.return_value = mock_db_query
 
         # Override dependencies
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Create test PDF
@@ -320,8 +320,8 @@ class TestDocumentsUploadEndpoint:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             pdf_file = create_test_pdf_bytes()
@@ -377,8 +377,8 @@ class TestDocumentsUploadEndpoint:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Create a text file (not PDF)
@@ -425,8 +425,8 @@ class TestDocumentsUploadEndpoint:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Call without file parameter
@@ -495,8 +495,8 @@ class TestDocumentsUploadEndpointEdgeCases:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             pdf_file = create_test_pdf_bytes()
@@ -534,8 +534,8 @@ class TestDocumentsUploadEndpointEdgeCases:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             # Create empty file
@@ -577,8 +577,8 @@ class TestDocumentsUploadEndpointEdgeCases:
         mock_db_query.filter_by.return_value.one_or_none.return_value = db_user
         mock_db_session.query.return_value = mock_db_query
 
-        app.dependency_overrides[auth.get_user] = lambda *args, **kwargs: mock_user
-        app.dependency_overrides[get_db] = lambda *args, **kwargs: mock_db_session
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
 
         try:
             pdf_file = create_test_pdf_bytes()

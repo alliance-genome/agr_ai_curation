@@ -1,6 +1,6 @@
 # Testing Strategy Master Plan
 
-Date: 2026-02-26  
+Date: 2026-02-27  
 Branch context: `agent-rework` (pre-merge hardening)  
 Status: Active (single source of truth)  
 Supersedes: `TEST_OVERHAUL_PLAN.md`, `TESTING_TODO.md`
@@ -15,21 +15,21 @@ This plan prioritizes catching breakage before curator discovery, with explicit 
 3. Real-provider integration confidence (OpenAI + Groq).
 4. Coverage visibility and enforceable CI gates.
 
-## 2) Current state snapshot (verified 2026-02-26)
+## 2) Current state snapshot (verified 2026-02-27)
 
 1. Test inventory:
    - ~116 test files under `backend/tests/`
    - ~1325 test functions
 2. CI reality:
    - Unit job now runs coverage with published artifacts (`.coverage`, `coverage.xml`, `htmlcov`) via shared runner script.
-   - Current backend unit coverage baseline is ~`58.24%` (`891` passing unit tests in latest local run).
-   - PR CI does not run full integration/contract suites; only persistence integration runs.
+   - Current backend unit coverage baseline is ~`58.24%` (latest coverage-measured run) with `901` passing backend unit tests in latest local run.
+   - PR CI now includes a stable `backend-contract-core` gate (35 contract tests) in addition to unit + persistence.
    - Frontend tests now run in PR CI but are temporarily non-blocking due legacy failures (`113` failing tests across `13` files on latest local run).
 3. Drift/debt indicators:
    - Stale ignore paths in CI/compose reference missing test files.
    - `TESTING_TODO.md` references missing `docs/developer/TEST_HEALTH_REPORT.md`.
    - Flow API endpoints exist with little/no direct test coverage.
-   - Existing chat contract/integration tests still patch outdated `generate_chat_response` path.
+   - Legacy full contract suite remains heavily stale against current runtime (`170 failed, 136 passed, 5 errors` in latest full run) and is being modernized incrementally.
 
 ## 3) Quality goals and hard gates
 
@@ -247,8 +247,8 @@ Status:
      - `backend/tests/unit/pipeline/test_store.py`
      - `backend/tests/unit/test_weaviate_client.py`
 2. Remaining Phase 2 backlog:
-   - Add/expand provider-health contract assertions for `/api/admin/health/llm-providers`.
-   - Keep replacing stale chat contract/integration patching of removed internals.
+   - Continue migrating legacy contract tests to current runtime/API contracts (chat route semantics, documents/session fixtures, and strategy/chunk model schema updates).
+   - Replace document endpoint direct `SessionLocal()` usage with injectable DB dependency where practical to improve contract/integration testability.
 
 ## Phase 3: Live provider integration suite (Week 2-3)
 Create `backend/tests/integration/live_llm/` with markers:
