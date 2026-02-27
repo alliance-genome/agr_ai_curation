@@ -1506,9 +1506,9 @@ async def run_specialist_with_events(
                     # the guardrail to trip and return final_output=None immediately.
                     # Solution: Create a minimal agent that only focuses on structured output generation.
 
-                    # Get model from original agent, or fall back to default specialist model from config
-                    from .config import DEFAULT_SPECIALIST_MODEL
-                    retry_model = getattr(agent, 'model', DEFAULT_SPECIALIST_MODEL)
+                    # Get model from original agent, or fall back to configured default model.
+                    from .config import get_default_model
+                    retry_model = getattr(agent, 'model', None) or get_default_model()
 
                     retry_agent = Agent(
                         name=f"{specialist_name} (Retry)",
