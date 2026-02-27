@@ -4,6 +4,7 @@ import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
+from uuid import UUID
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -277,3 +278,134 @@ async def test_delete_document_failure_returns_error_payload():
 
     assert result["success"] is False
     assert result["error"]["code"] == "DELETE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
+    doc_uuid = "00000000-0000-0000-0000-000000000999"
+    doc_response = SimpleNamespace(
+        uuid=doc_uuid,
+        properties={
+            "filename": "paper.pdf",
+            "chunkCount": 0,
+            "vectorCount": 0,
+            "metadata": {},
+            "schemaVersion": "1.2.3",
+        },
+    )
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.side_effect = [
+        RuntimeError("primary chunk query failed"),
+        SimpleNamespace(objects=[]),
+    ]
+    pdf_collection = MagicMock()
+    pdf_collection.query.fetch_object_by_id.return_value = doc_response
+    connection = _connection_with_client(MagicMock())
+
+    db_user = MagicMock()
+    db_user.id = 101
+    db_lookup = MagicMock()
+    db_lookup.scalar_one_or_none.return_value = db_user
+    db_session = MagicMock()
+    db_session.execute.return_value = db_lookup
+    db_session.close = MagicMock()
+
+    def _mock_get_db():
+        yield db_session
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_client.documents.get_db", _mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-1"):
+        result = await documents.get_document("user-1", doc_uuid)
+
+    assert result["document"]["id"] == doc_uuid
+    assert result["chunks"] == []
+    assert result["total_chunks"] == 0
+    assert result["embedding_summary"]["coverage_percentage"] is None
+    assert result["schema_version"] == "1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_get_document_parses_metadata_and_embedding_summary_fields():
+    doc_uuid = "00000000-0000-0000-0000-000000000998"
+    chunk_uuid_1 = "00000000-0000-0000-0000-000000000111"
+    chunk_uuid_2 = "00000000-0000-0000-0000-000000000222"
+
+    doc_response = SimpleNamespace(
+        uuid=doc_uuid,
+        properties={
+            "filename": "paper.pdf",
+            "chunkCount": 4,
+            "vectorCount": 2,
+            "metadata": '{"schema_version":"2.4.0","species":"WB"}',
+            "schemaVersion": "1.0.0",
+        },
+    )
+    chunks_response = SimpleNamespace(
+        objects=[
+            SimpleNamespace(
+                uuid=chunk_uuid_1,
+                properties={
+                    "documentId": UUID(doc_uuid),
+                    "chunkIndex": 0,
+                    "content": "intro",
+                    "elementType": "paragraph",
+                    "pageNumber": 1,
+                    "sectionTitle": "Intro",
+                    "metadata": '{"section":"intro"}',
+                    "embeddingModel": "text-embedding-3-large",
+                    "embeddingTimestamp": "2026-02-01T00:00:00Z",
+                },
+            ),
+            SimpleNamespace(
+                uuid=chunk_uuid_2,
+                properties={
+                    "documentId": doc_uuid,
+                    "chunkIndex": 1,
+                    "content": "methods",
+                    "elementType": "paragraph",
+                    "pageNumber": 2,
+                    "sectionTitle": "Methods",
+                    "metadata": "not-json",
+                    "embeddingModel": "text-embedding-3-small",
+                    "embeddingTimestamp": "bad-timestamp",
+                },
+            ),
+        ]
+    )
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = chunks_response
+    pdf_collection = MagicMock()
+    pdf_collection.query.fetch_object_by_id.return_value = doc_response
+    connection = _connection_with_client(MagicMock())
+
+    db_user = MagicMock()
+    db_user.id = 202
+    db_lookup = MagicMock()
+    db_lookup.scalar_one_or_none.return_value = db_user
+    db_session = MagicMock()
+    db_session.execute.return_value = db_lookup
+    db_session.close = MagicMock()
+
+    def _mock_get_db():
+        yield db_session
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_client.documents.get_db", _mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-2"):
+        result = await documents.get_document("user-2", doc_uuid)
+
+    assert result["document"]["metadata"]["schema_version"] == "2.4.0"
+    assert result["chunks"][0]["document_id"] == doc_uuid
+    assert result["chunks"][0]["metadata"] == {"section": "intro"}
+    assert result["chunks"][1]["metadata"] is None
+    assert result["embedding_summary"]["primary_model"] == "text-embedding-3-large"
+    assert result["embedding_summary"]["last_embedded_at"] == "2026-02-01T00:00:00+00:00"
+    assert result["embedding_summary"]["coverage_percentage"] == 50.0
+    assert result["schema_version"] == "2.4.0"

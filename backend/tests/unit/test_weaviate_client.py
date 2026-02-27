@@ -156,3 +156,130 @@ async def test_update_document_status_detailed_success():
 
     assert result["success"] is True
     assert result["updates"]["embeddingStatus"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_async_list_documents_returns_empty_for_unprovisioned_user():
+    mock_connection = MagicMock()
+
+    mock_db_session = MagicMock()
+    user_lookup_result = MagicMock()
+    user_lookup_result.scalar_one_or_none.return_value = None
+    mock_db_session.execute.return_value = user_lookup_result
+    mock_db_session.close = MagicMock()
+
+    def mock_get_db():
+        yield mock_db_session
+
+    filter_obj = SimpleNamespace(
+        search_term=None,
+        embedding_status=None,
+        min_vector_count=None,
+        max_vector_count=None,
+    )
+    pagination = {"page": 3, "page_size": 7}
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.get_db", mock_get_db):
+        result = await async_list_documents("missing-user", filter_obj, pagination)
+
+    assert result == {"documents": [], "total": 0, "limit": 7, "offset": 14}
+    mock_connection.session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults():
+    owned_uuid = UUID("00000000-0000-0000-0000-000000000111")
+    other_uuid = UUID("00000000-0000-0000-0000-000000000222")
+    fetch_result = SimpleNamespace(
+        objects=[
+            SimpleNamespace(
+                uuid=owned_uuid,
+                properties={
+                    "filename": "owned-paper.pdf",
+                    "creationDate": "2026-02-10T00:00:00",
+                    "chunkCount": 4,
+                },
+            ),
+            SimpleNamespace(
+                uuid=other_uuid,
+                properties={
+                    "filename": "other-paper.pdf",
+                    "processingStatus": "completed",
+                    "embeddingStatus": "completed",
+                    "creationDate": "2026-02-11T00:00:00",
+                    "chunkCount": 9,
+                },
+            ),
+        ]
+    )
+    aggregate_result = SimpleNamespace(total_count=2)
+    pdf_collection = DummyCollection(fetch_result, aggregate_result)
+    chunk_collection = MagicMock()
+    mock_client = MagicMock()
+
+    @contextmanager
+    def fake_session():
+        yield mock_client
+
+    mock_connection = MagicMock()
+    mock_connection.session.side_effect = fake_session
+
+    mock_db_user = MagicMock()
+    mock_db_user.id = 42
+
+    mock_pg_doc = MagicMock()
+    mock_pg_doc.id = owned_uuid
+    mock_pg_doc.upload_timestamp = None
+    mock_pg_doc.file_size = 5120
+
+    user_lookup_result = MagicMock()
+    user_lookup_result.scalar_one_or_none.return_value = mock_db_user
+    ownership_lookup_result = MagicMock()
+    ownership_lookup_result.scalars.return_value.all.return_value = [mock_pg_doc]
+
+    mock_db_session = MagicMock()
+    mock_db_session.execute.side_effect = [user_lookup_result, ownership_lookup_result]
+    mock_db_session.close = MagicMock()
+
+    def mock_get_db():
+        yield mock_db_session
+
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    filter_obj = SimpleNamespace(
+        search_term="paper",
+        embedding_status=["pending", "completed"],
+        min_vector_count=1,
+        max_vector_count=10,
+    )
+    pagination = {"page": 3, "page_size": 5, "sort_by": "creationDate", "sort_order": "desc"}
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
+        result = await async_list_documents("auth-sub-1", filter_obj, pagination)
+
+    assert result["total"] == 2
+    assert result["limit"] == 5
+    assert result["offset"] == 10
+    assert len(result["documents"]) == 1
+    owned = result["documents"][0]
+    assert owned["document_id"] == str(owned_uuid)
+    assert owned["user_id"] == "auth-sub-1"
+    assert owned["weaviate_tenant"] == "tenant-owned"
+    assert owned["status"] == "PENDING"
+    assert owned["embedding_status"] == "pending"
+    assert owned["upload_timestamp"] == "2026-02-10T00:00:00"
+
+    fetch_call = pdf_collection.query.fetch_objects.call_args.kwargs
+    assert fetch_call["limit"] == 5
+    assert fetch_call["offset"] == 10
+    assert fetch_call["filters"] is not None
+
+    count_call = pdf_collection.aggregate.over_all.call_args.kwargs
+    assert count_call["filters"] is fetch_call["filters"]
+    assert count_call["total_count"] is True

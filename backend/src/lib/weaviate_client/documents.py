@@ -447,6 +447,9 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 else:
                     logger.warning("No chunks found in the entire collection")
 
+            if chunks_response is None:
+                chunks_response = type('obj', (object,), {'objects': []})()
+
             logger.info(
                 "Final chunk count for document %s: %s",
                 document_id,
