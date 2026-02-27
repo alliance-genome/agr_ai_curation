@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import asyncio
 
@@ -43,6 +43,22 @@ class PipelineTracker:
         self.pipeline_states: Dict[str, PipelineStatus] = {}
         self.stage_results: Dict[str, List[StageResult]] = {}
         self.processing_errors: Dict[str, List[ProcessingError]] = {}
+        self.retry_attempts: Dict[Tuple[str, ProcessingStage], int] = {}
+        self._retry_locks: Dict[Tuple[str, ProcessingStage], asyncio.Lock] = {}
+
+    @staticmethod
+    def _clamp_progress(progress_percentage: Optional[int]) -> Optional[int]:
+        """Clamp user-supplied progress values into valid bounds."""
+        if progress_percentage is None:
+            return None
+        return max(0, min(100, progress_percentage))
+
+    @staticmethod
+    def _normalize_stage(stage: ProcessingStage | str) -> ProcessingStage:
+        """Normalize stage values regardless of enum/string serialization."""
+        if isinstance(stage, ProcessingStage):
+            return stage
+        return ProcessingStage(stage)
 
     async def track_pipeline_progress(
         self,
@@ -62,23 +78,43 @@ class PipelineTracker:
         Returns:
             Updated PipelineStatus
         """
+        stage = self._normalize_stage(stage)
         logger.info('Tracking progress for document %s at stage %s', document_id, stage.value)
+        now = datetime.now()
+        progress_percentage = self._clamp_progress(progress_percentage)
+        terminal_stages = {ProcessingStage.COMPLETED, ProcessingStage.FAILED}
 
         # Get or create pipeline status
         if document_id not in self.pipeline_states:
+            stage_progress = {
+                ProcessingStage.PENDING: 0,
+                ProcessingStage.UPLOAD: 10,
+                ProcessingStage.PARSING: 30,
+                ProcessingStage.CHUNKING: 50,
+                ProcessingStage.EMBEDDING: 70,
+                ProcessingStage.STORING: 85,
+                ProcessingStage.COMPLETED: 100,
+                ProcessingStage.FAILED: 0,
+            }
             self.pipeline_states[document_id] = PipelineStatus(
                 document_id=document_id,
                 current_stage=stage,
-                started_at=datetime.now(),
-                updated_at=datetime.now(),
-                progress_percentage=progress_percentage or 0,
+                started_at=now,
+                updated_at=now,
+                progress_percentage=(
+                    progress_percentage
+                    if progress_percentage is not None
+                    else stage_progress.get(stage, 0)
+                ),
                 message=message
             )
+            if stage in terminal_stages:
+                self.pipeline_states[document_id].completed_at = now
         else:
             # Update existing status
             status = self.pipeline_states[document_id]
             status.current_stage = stage
-            status.updated_at = datetime.now()
+            status.updated_at = now
             if progress_percentage is not None:
                 status.progress_percentage = progress_percentage
             if message:
@@ -97,6 +133,11 @@ class PipelineTracker:
                     ProcessingStage.FAILED: status.progress_percentage,
                 }
                 status.progress_percentage = stage_progress.get(stage, status.progress_percentage)
+
+            if stage in terminal_stages and status.completed_at is None:
+                status.completed_at = now
+            elif stage not in terminal_stages and status.completed_at is not None:
+                status.completed_at = None
 
         return self.pipeline_states[document_id]
 
@@ -146,22 +187,30 @@ class PipelineTracker:
         Returns:
             ProcessingError object
         """
-        logger.error('Pipeline failure for document %s: %s', document_id, str(error))
+        logger.error(
+            'Pipeline failure for document %s: %s',
+            document_id,
+            str(error),
+            exc_info=(type(error), error, error.__traceback__) if error.__traceback__ else False,
+        )
 
         # Determine current stage if not provided
         if stage is None and document_id in self.pipeline_states:
             stage = self.pipeline_states[document_id].current_stage
         elif stage is None:
             stage = ProcessingStage.FAILED
+        stage = self._normalize_stage(stage)
 
         # Create error record
+        retry_key = (document_id, stage)
+        prior_retry_count = self.retry_attempts.get(retry_key, 0)
         processing_error = ProcessingError(
             stage=stage,
             error_code=f"{stage.value.upper()}_ERROR",
             error_message=str(error),
             timestamp=datetime.now(),
             document_id=document_id,
-            retry_count=0,
+            retry_count=prior_retry_count,
             is_retryable=stage in self.retry_config.retryable_stages
         )
 
@@ -175,6 +224,8 @@ class PipelineTracker:
             status = self.pipeline_states[document_id]
             status.current_stage = ProcessingStage.FAILED
             status.updated_at = datetime.now()
+            if status.completed_at is None:
+                status.completed_at = status.updated_at
             status.message = f"Failed at {stage.value}: {str(error)}"
             status.error_count = len(self.processing_errors[document_id])
 
@@ -194,6 +245,7 @@ class PipelineTracker:
         Returns:
             Retry result dictionary
         """
+        stage = self._normalize_stage(stage)
         logger.info('Attempting retry for document %s, stage %s', document_id, stage.value)
 
         # Check if stage is retryable
@@ -205,7 +257,7 @@ class PipelineTracker:
 
         # Get error history
         errors = self.processing_errors.get(document_id, [])
-        stage_errors = [e for e in errors if e.stage == stage]
+        stage_errors = [e for e in errors if self._normalize_stage(e.stage) == stage]
 
         if not stage_errors:
             return {
@@ -214,40 +266,47 @@ class PipelineTracker:
             }
 
         latest_error = stage_errors[-1]
-        retry_count = latest_error.retry_count
+        retry_key = (document_id, stage)
+        lock = self._retry_locks.setdefault(retry_key, asyncio.Lock())
 
-        # Check retry limit
-        if retry_count >= self.retry_config.max_retries:
+        async with lock:
+            retry_count = self.retry_attempts.get(retry_key, latest_error.retry_count)
+
+            # Check retry limit
+            if retry_count >= self.retry_config.max_retries:
+                return {
+                    "success": False,
+                    "message": f"Maximum retries ({self.retry_config.max_retries}) exceeded"
+                }
+
+            # Calculate retry delay
+            if self.retry_config.exponential_backoff:
+                delay = self.retry_config.retry_delay_seconds * (2 ** retry_count)
+            else:
+                delay = self.retry_config.retry_delay_seconds
+
+            # Reserve this retry attempt under lock.
+            next_attempt = retry_count + 1
+            self.retry_attempts[retry_key] = next_attempt
+            latest_error.retry_count = next_attempt
+
+            # Wait before retry
+            await asyncio.sleep(delay)
+
+            # Update pipeline status
+            if document_id in self.pipeline_states:
+                status = self.pipeline_states[document_id]
+                status.current_stage = stage
+                status.updated_at = datetime.now()
+                status.completed_at = None
+                status.message = f"Retrying {stage.value} (attempt {next_attempt})"
+
             return {
-                "success": False,
-                "message": f"Maximum retries ({self.retry_config.max_retries}) exceeded"
+                "success": True,
+                "message": f"Ready to retry {stage.value}",
+                "retry_attempt": next_attempt,
+                "delay_seconds": delay
             }
-
-        # Calculate retry delay
-        if self.retry_config.exponential_backoff:
-            delay = self.retry_config.retry_delay_seconds * (2 ** retry_count)
-        else:
-            delay = self.retry_config.retry_delay_seconds
-
-        # Wait before retry
-        await asyncio.sleep(delay)
-
-        # Update retry count
-        latest_error.retry_count += 1
-
-        # Update pipeline status
-        if document_id in self.pipeline_states:
-            status = self.pipeline_states[document_id]
-            status.current_stage = stage
-            status.updated_at = datetime.now()
-            status.message = f"Retrying {stage.value} (attempt {retry_count + 1})"
-
-        return {
-            "success": True,
-            "message": f"Ready to retry {stage.value}",
-            "retry_attempt": retry_count + 1,
-            "delay_seconds": delay
-        }
 
     def record_stage_result(
         self,
@@ -278,7 +337,7 @@ class PipelineTracker:
             completed_at=datetime.now(),
             duration_seconds=duration_seconds,
             message=message,
-            metadata=metadata
+            metadata=metadata or {}
         )
 
         # Store result
@@ -356,6 +415,10 @@ class PipelineTracker:
                 del self.stage_results[doc_id]
             if doc_id in self.processing_errors:
                 del self.processing_errors[doc_id]
+            retry_keys = [key for key in self.retry_attempts if key[0] == doc_id]
+            for key in retry_keys:
+                self.retry_attempts.pop(key, None)
+                self._retry_locks.pop(key, None)
             cleared_count += 1
 
         if cleared_count > 0:
