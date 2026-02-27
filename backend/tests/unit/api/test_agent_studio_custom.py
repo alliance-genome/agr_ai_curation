@@ -4,11 +4,13 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 
 class TestCustomAgentTestEndpoint:
@@ -332,3 +334,438 @@ class TestCustomAgentCrudContract:
         )
 
         assert isinstance(response, StreamingResponse)
+
+
+def _db_mock():
+    return SimpleNamespace(
+        commit=MagicMock(),
+        refresh=MagicMock(),
+        rollback=MagicMock(),
+    )
+
+
+class TestCustomAgentCrudErrorsAndBranches:
+    def test_create_endpoint_returns_409_for_duplicate_name_value_error(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "create_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError("custom agent already exists")),
+        )
+
+        db = _db_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.create_custom_agent_endpoint(
+                    request=api_module.CreateCustomAgentRequest(name="My Agent"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        db.rollback.assert_called_once()
+
+    def test_create_endpoint_returns_409_for_unique_integrity_error(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        duplicate_exc = IntegrityError(
+            statement="insert",
+            params={},
+            orig=Exception("duplicate key value violates unique constraint"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "create_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(duplicate_exc),
+        )
+
+        db = _db_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.create_custom_agent_endpoint(
+                    request=api_module.CreateCustomAgentRequest(name="My Agent"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        db.rollback.assert_called_once()
+
+    def test_create_endpoint_returns_500_for_non_unique_integrity_error(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        db_exc = IntegrityError(statement="insert", params={}, orig=Exception("db write failed"))
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "create_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(db_exc),
+        )
+
+        db = _db_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.create_custom_agent_endpoint(
+                    request=api_module.CreateCustomAgentRequest(name="My Agent"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        db.rollback.assert_called_once()
+
+    def test_list_endpoint_value_error_maps_to_400(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid template source")),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.list_custom_agents_endpoint(
+                    template_source="invalid",
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_get_endpoint_maps_not_found_and_access_errors(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        from src.lib.agent_studio.custom_agent_service import CustomAgentAccessError, CustomAgentNotFoundError
+
+        custom_agent_id = uuid.uuid4()
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentNotFoundError("not found")),
+        )
+        with pytest.raises(HTTPException) as not_found_exc:
+            asyncio.run(
+                api_module.get_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert not_found_exc.value.status_code == 404
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentAccessError("forbidden")),
+        )
+        with pytest.raises(HTTPException) as access_exc:
+            asyncio.run(
+                api_module.get_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert access_exc.value.status_code == 403
+
+    def test_update_endpoint_success_commits_refreshes_and_returns_payload(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        custom_agent = SimpleNamespace(id=uuid.uuid4())
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
+        monkeypatch.setattr(api_module, "update_custom_agent", lambda **_kwargs: None)
+        monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
+
+        db = _db_mock()
+        response = asyncio.run(
+            api_module.update_custom_agent_endpoint(
+                custom_agent_id=custom_agent.id,
+                request=api_module.UpdateCustomAgentRequest(name="Updated name"),
+                user={"sub": "auth-sub"},
+                db=db,
+            )
+        )
+
+        assert response.template_source == "gene"
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(custom_agent)
+
+    def test_update_endpoint_maps_value_and_integrity_errors(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        custom_agent = SimpleNamespace(id=uuid.uuid4())
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
+
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError("name already exists")),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as conflict_exc:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(name="Dup"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert conflict_exc.value.status_code == 409
+        db.rollback.assert_called_once()
+
+        db_unique = IntegrityError(
+            statement="update",
+            params={},
+            orig=Exception("duplicate key value violates unique constraint"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(db_unique),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as integrity_exc:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(name="Dup"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert integrity_exc.value.status_code == 409
+        db.rollback.assert_called_once()
+
+    def test_delete_and_versions_endpoints_map_access_errors(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        from src.lib.agent_studio.custom_agent_service import CustomAgentAccessError, CustomAgentNotFoundError
+
+        custom_agent_id = uuid.uuid4()
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentAccessError("forbidden")),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as delete_exc:
+            asyncio.run(
+                api_module.delete_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert delete_exc.value.status_code == 403
+        db.rollback.assert_called_once()
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentNotFoundError("missing")),
+        )
+        with pytest.raises(HTTPException) as versions_exc:
+            asyncio.run(
+                api_module.list_custom_agent_versions_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert versions_exc.value.status_code == 404
+
+    def test_revert_endpoint_success_and_404(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        from src.lib.agent_studio.custom_agent_service import CustomAgentNotFoundError
+
+        custom_agent = SimpleNamespace(id=uuid.uuid4())
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
+        monkeypatch.setattr(api_module, "revert_custom_agent_to_version", lambda **_kwargs: None)
+        monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
+
+        db = _db_mock()
+        response = asyncio.run(
+            api_module.revert_custom_agent_endpoint(
+                custom_agent_id=custom_agent.id,
+                version=2,
+                request=api_module.RevertCustomAgentRequest(notes="rollback"),
+                user={"sub": "auth-sub"},
+                db=db,
+            )
+        )
+        assert response.template_source == "gene"
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(custom_agent)
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentNotFoundError("missing")),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as revert_exc:
+            asyncio.run(
+                api_module.revert_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    version=99,
+                    request=api_module.RevertCustomAgentRequest(),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert revert_exc.value.status_code == 404
+        db.rollback.assert_called_once()
+
+    def test_test_endpoint_runtime_and_stream_error_branches(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        custom_agent_id = uuid.uuid4()
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: SimpleNamespace(id=custom_agent_id),
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_runtime_info",
+            lambda *_args, **_kwargs: None,
+        )
+        with pytest.raises(HTTPException) as missing_runtime_exc:
+            asyncio.run(
+                api_module.test_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    request=api_module.TestCustomAgentRequest(input="hello"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert missing_runtime_exc.value.status_code == 404
+
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_runtime_info",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                parent_exists=True,
+                requires_document=False,
+                parent_agent_key="gene",
+            ),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub=None),
+        )
+        with pytest.raises(HTTPException) as missing_user_exc:
+            asyncio.run(
+                api_module.test_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    request=api_module.TestCustomAgentRequest(input="hello"),
+                    user={},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert missing_user_exc.value.status_code == 401
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_agent_by_id", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("init failed")))
+        with pytest.raises(HTTPException) as init_exc:
+            asyncio.run(
+                api_module.test_custom_agent_endpoint(
+                    custom_agent_id=custom_agent_id,
+                    request=api_module.TestCustomAgentRequest(input="hello"),
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+        assert init_exc.value.status_code == 400
+
+        monkeypatch.setattr(api_module, "get_agent_by_id", lambda *_args, **_kwargs: object())
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-x"}}
+            raise RuntimeError("stream exploded")
+
+        monkeypatch.setattr(api_module, "run_agent_streamed", _fake_run_agent_streamed)
+        response = asyncio.run(
+            api_module.test_custom_agent_endpoint(
+                custom_agent_id=custom_agent_id,
+                request=api_module.TestCustomAgentRequest(input="hello"),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+        assert isinstance(response, StreamingResponse)
+
+        async def _consume_stream() -> str:
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+            return "".join(chunks)
+
+        stream_text = asyncio.run(_consume_stream())
+        assert '"type": "RUN_ERROR"' in stream_text
+        assert "stream exploded" in stream_text
