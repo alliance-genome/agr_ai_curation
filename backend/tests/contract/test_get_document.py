@@ -6,19 +6,18 @@ They test valid/invalid document IDs, chunk preview inclusion, and response sche
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock
 import sys
 from pathlib import Path
 
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Add the backend root directory to the Python path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.api_schemas import (
+from src.models.api_schemas import (
     DocumentDetailResponse
 )
-from models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
-from models.chunk import DocumentChunk, ElementType
-from models.strategy import ChunkingStrategy, ChunkingMethod
+from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
+from src.models.chunk import ChunkMetadata, DocumentChunk, ElementType
+from src.models.strategy import ChunkingStrategy, ChunkingMethod, StrategyName
 from datetime import datetime
 
 
@@ -52,14 +51,21 @@ class TestGetDocumentEndpoint:
     @pytest.fixture
     def client(self):
         """Create a test client for the FastAPI app."""
+        from main import app
+        from src.api.auth import auth
+
+        app.dependency_overrides[auth.get_user] = lambda: {
+            "sub": "contract-user",
+            "uid": "contract-user",
+            "email": "contract@test.local",
+            "name": "Contract User",
+            "groups": ["developers"],
+            "cognito:groups": ["developers"],
+        }
         try:
-            from main import app
-            return TestClient(app)
-        except ImportError:
-            # If API not implemented yet, create a mock client for contract definition
-            mock_client = Mock()
-            mock_client.get = Mock()
-            return mock_client
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.pop(auth.get_user, None)
 
     @pytest.fixture
     def sample_document(self) -> PDFDocument:
@@ -81,18 +87,20 @@ class TestGetDocumentEndpoint:
         """Create sample chunks for testing."""
         return [
             DocumentChunk(
-                chunk_id=f"chunk{i}",
+                id=f"chunk{i}",
                 document_id="doc123",
                 chunk_index=i,
                 content=f"This is the content of chunk {i}. It contains important information about the document.",
                 page_number=i // 5 + 1,
-                character_count=85,
                 element_type=ElementType.NARRATIVE_TEXT,
-                metadata={
-                    "section": f"Section {i // 5 + 1}",
-                    "confidence": 0.95
-                },
-                embedding_vector=None  # Not included in preview
+                metadata=ChunkMetadata(
+                    character_count=85,
+                    word_count=14,
+                    has_table=False,
+                    has_image=False,
+                    chunking_strategy=StrategyName.RESEARCH.value,
+                    content_type="narrative",
+                ),
             )
             for i in range(10)
         ]
@@ -101,10 +109,11 @@ class TestGetDocumentEndpoint:
     def sample_strategy(self) -> ChunkingStrategy:
         """Create a sample chunking strategy."""
         return ChunkingStrategy(
-            name="research",
-            method=ChunkingMethod.BY_TITLE,
+            strategy_name=StrategyName.RESEARCH,
+            chunking_method=ChunkingMethod.BY_TITLE,
             max_characters=1500,
             overlap_characters=200,
+            include_metadata=True,
             exclude_element_types=[]
         )
 

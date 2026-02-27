@@ -6,16 +6,15 @@ They test reprocessing with different strategies, force reparse option, and conc
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock
 import sys
 from pathlib import Path
 
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Add the backend root directory to the Python path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.api_schemas import OperationResult
-from models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
-from models.strategy import ChunkingStrategy, ChunkingMethod
+from src.models.api_schemas import OperationResult
+from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
+from src.models.strategy import ChunkingStrategy, ChunkingMethod, StrategyName
 from datetime import datetime
 
 
@@ -49,15 +48,21 @@ class TestReprocessDocumentEndpoint:
     @pytest.fixture
     def client(self):
         """Create a test client for the FastAPI app."""
+        from main import app
+        from src.api.auth import auth
+
+        app.dependency_overrides[auth.get_user] = lambda: {
+            "sub": "contract-user",
+            "uid": "contract-user",
+            "email": "contract@test.local",
+            "name": "Contract User",
+            "groups": ["developers"],
+            "cognito:groups": ["developers"],
+        }
         try:
-            from main import app
-            return TestClient(app)
-        except ImportError:
-            # If API not implemented yet, create a mock client for contract definition
-            mock_client = Mock()
-            mock_client.post = Mock()
-            mock_client.get = Mock()
-            return mock_client
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.pop(auth.get_user, None)
 
     @pytest.fixture
     def completed_document(self) -> PDFDocument:
@@ -109,31 +114,35 @@ class TestReprocessDocumentEndpoint:
         """Create list of available chunking strategies."""
         return [
             ChunkingStrategy(
-                name="research",
-                method=ChunkingMethod.BY_TITLE,
+                strategy_name=StrategyName.RESEARCH,
+                chunking_method=ChunkingMethod.BY_TITLE,
                 max_characters=1500,
                 overlap_characters=200,
+                include_metadata=True,
                 exclude_element_types=[]
             ),
             ChunkingStrategy(
-                name="legal",
-                method=ChunkingMethod.BY_PARAGRAPH,
+                strategy_name=StrategyName.RESEARCH,
+                chunking_method=ChunkingMethod.BY_PARAGRAPH,
                 max_characters=1000,
                 overlap_characters=100,
+                include_metadata=True,
                 exclude_element_types=[]
             ),
             ChunkingStrategy(
-                name="technical",
-                method=ChunkingMethod.BY_CHARACTER,
+                strategy_name=StrategyName.RESEARCH,
+                chunking_method=ChunkingMethod.BY_CHARACTER,
                 max_characters=2000,
                 overlap_characters=400,
+                include_metadata=True,
                 exclude_element_types=[]
             ),
             ChunkingStrategy(
-                name="general",
-                method=ChunkingMethod.BY_PARAGRAPH,
+                strategy_name=StrategyName.RESEARCH,
+                chunking_method=ChunkingMethod.BY_PARAGRAPH,
                 max_characters=1500,
                 overlap_characters=200,
+                include_metadata=True,
                 exclude_element_types=[]
             )
         ]

@@ -7,15 +7,15 @@ They test chunk pagination, metadata inclusion, and response schema compliance.
 import pytest
 from typing import List
 from fastapi.testclient import TestClient
-from unittest.mock import Mock
 import sys
 from pathlib import Path
 
-# Add the backend/src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Add the backend root directory to the Python path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.api_schemas import ChunkListResponse
-from models.chunk import DocumentChunk, ElementType
+from src.models.api_schemas import ChunkListResponse
+from src.models.chunk import ChunkMetadata, DocumentChunk, ElementType
+from src.models.strategy import StrategyName
 
 
 class TestGetDocumentChunksEndpoint:
@@ -24,14 +24,21 @@ class TestGetDocumentChunksEndpoint:
     @pytest.fixture
     def client(self):
         """Create a test client for the FastAPI app."""
+        from main import app
+        from src.api.auth import auth
+
+        app.dependency_overrides[auth.get_user] = lambda: {
+            "sub": "contract-user",
+            "uid": "contract-user",
+            "email": "contract@test.local",
+            "name": "Contract User",
+            "groups": ["developers"],
+            "cognito:groups": ["developers"],
+        }
         try:
-            from main import app
-            return TestClient(app)
-        except ImportError:
-            # If API not implemented yet, create a mock client for contract definition
-            mock_client = Mock()
-            mock_client.get = Mock()
-            return mock_client
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.pop(auth.get_user, None)
 
     @pytest.fixture
     def sample_chunks(self) -> List[DocumentChunk]:
@@ -39,23 +46,22 @@ class TestGetDocumentChunksEndpoint:
         chunks = []
         for i in range(50):  # Create 50 chunks for pagination testing
             chunk = DocumentChunk(
-                chunk_id=f"chunk_{i:03d}",
+                id=f"chunk_{i:03d}",
                 document_id="doc123",
                 chunk_index=i,
                 content=f"This is the content of chunk {i}. It contains detailed information " +
                          f"extracted from page {i // 5 + 1} of the document. This chunk represents " +
                          "important data that has been processed and stored in Weaviate.",
                 page_number=i // 5 + 1,
-                character_count=150,
                 element_type=self._get_element_type(i),
-                metadata={
-                    "section": f"Section {i // 10 + 1}",
-                    "confidence": 0.90 + (i % 10) * 0.01,
-                    "language": "en",
-                    "has_tables": i % 7 == 0,
-                    "has_figures": i % 5 == 0
-                },
-                embedding_vector=[0.1 * i for _ in range(10)]  # Simplified vector
+                metadata=ChunkMetadata(
+                    character_count=150,
+                    word_count=24,
+                    has_table=i % 7 == 0,
+                    has_image=i % 5 == 0,
+                    chunking_strategy=StrategyName.RESEARCH.value,
+                    content_type="narrative",
+                ),
             )
             chunks.append(chunk)
         return chunks
@@ -67,7 +73,7 @@ class TestGetDocumentChunksEndpoint:
             ElementType.TITLE,
             ElementType.LIST_ITEM,
             ElementType.TABLE,
-            ElementType.FIGURE_CAPTION
+            ElementType.IMAGE,
         ]
         return types[index % len(types)]
 
@@ -129,20 +135,19 @@ class TestGetDocumentChunksEndpoint:
 
             for chunk in chunks:
                 # Verify all expected fields are present
-                assert "chunk_id" in chunk
+                assert "id" in chunk
                 assert "document_id" in chunk
                 assert "chunk_index" in chunk
                 assert "content" in chunk
                 assert "page_number" in chunk
-                assert "character_count" in chunk
                 assert "element_type" in chunk
                 assert "metadata" in chunk
 
                 # Verify metadata structure
                 metadata = chunk["metadata"]
                 assert isinstance(metadata, dict)
-                assert "section" in metadata
-                assert "confidence" in metadata
+                assert "character_count" in metadata
+                assert "word_count" in metadata
 
                 # Verify embedding vector is included (if requested)
                 if "include_embeddings" in response.url.query:
