@@ -20,6 +20,27 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from src.models.sql.database import Base, get_db
+from src.models.sql.file_output import FileOutput
+
+
+@compiles(PostgresUUID, "sqlite")
+def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
+    """Allow file output UUID columns in sqlite test database."""
+    return "CHAR(36)"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
+    """Allow file metadata JSONB columns in sqlite test database."""
+    return "JSON"
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +123,30 @@ def client(temp_storage_dir):
     # Now import the app fresh
     from main import app
 
-    yield TestClient(app)
+    # Use an in-memory sqlite DB for unit tests instead of external postgres.
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine, tables=[FileOutput.__table__])
+
+    def _override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        Base.metadata.drop_all(bind=engine, tables=[FileOutput.__table__])
 
 
 class TestRecordFileEndpoint:
