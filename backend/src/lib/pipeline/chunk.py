@@ -373,6 +373,9 @@ def _chunk_by_character(
             "metadata": {"start_char": start, "end_char": end}
         })
 
+        if end >= len(full_text):
+            break
+
         # Move start position with overlap
         start = end - strategy.overlap_characters if strategy.overlap_characters > 0 else end
 
