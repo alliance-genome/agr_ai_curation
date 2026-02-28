@@ -21,7 +21,7 @@ openai
 tiktoken  # Token preflight checks for embedding limits
 openai-agents[litellm]  # OpenAI Agents SDK for multi-agent orchestration (with LiteLLM for Gemini support)
 anthropic>=0.40.0  # Anthropic SDK for Opus 4.5 chat in Prompt Explorer
-aiohttp  # Async HTTP client for Docling service
+aiohttp  # Async HTTP client for PDFX service
 langfuse>=3.0.0  # Observability for LLM applications (v3 has start_as_current_span for OTEL context)
 
 # Database dependencies
@@ -44,7 +44,7 @@ redis>=5.0
 # AWS Services (Feature 005-user-feedback-system SNS notifications)
 # boto3>=1.34.0  # Moved to Authentication section for Cognito support
 
-# PDF processing is done remotely by Docling service (configure DOCLING_SERVICE_URL)
+# PDF processing is done remotely by PDFX service (configure PDF_EXTRACTION_SERVICE_URL)
 
 # CLI support
 click

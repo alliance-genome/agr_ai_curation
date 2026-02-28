@@ -124,11 +124,11 @@ class DocumentPipelineOrchestrator:
 
             # Extract elements and file paths from the result
             elements = parse_result["elements"]
-            docling_json_path = parse_result.get("docling_json_path")
+            pdfx_json_path = parse_result.get("pdfx_json_path")
             processed_json_path = parse_result.get("processed_json_path")
 
             # Update database with file paths
-            await self._update_file_paths(document_id, docling_json_path, processed_json_path)
+            await self._update_file_paths(document_id, pdfx_json_path, processed_json_path)
 
             stages_completed.append(ProcessingStage.PARSING)
             parse_duration_ms = (time.monotonic() - parse_start) * 1000
@@ -384,7 +384,7 @@ class DocumentPipelineOrchestrator:
         finally:
             session.close()
 
-    async def _update_file_paths(self, document_id: str, docling_json_path: str, processed_json_path: str):
+    async def _update_file_paths(self, document_id: str, pdfx_json_path: str, processed_json_path: str):
         """Update file paths in the database."""
         from src.models.sql.database import SessionLocal
         from src.models.sql.pdf_document import PDFDocument
@@ -395,7 +395,7 @@ class DocumentPipelineOrchestrator:
             # Find and update the document
             doc = session.query(PDFDocument).filter(PDFDocument.id == UUID(document_id)).first()
             if doc:
-                doc.docling_json_path = docling_json_path
+                doc.pdfx_json_path = pdfx_json_path
                 doc.processed_json_path = processed_json_path
                 session.commit()
                 logger.info("Updated file paths for document %s", document_id)

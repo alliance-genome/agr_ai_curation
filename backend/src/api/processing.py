@@ -102,7 +102,7 @@ async def reprocess_document_endpoint(
                 # Determine start stage based on force_reparse
                 # If not force_reparse, we might skip parsing, but DocumentPipelineOrchestrator
                 # currently runs full pipeline.
-                # However, parse_pdf_document in docling_parser checks for existing json 
+                # However, parse_pdf_document in pdfx_parser checks for existing json
                 # if we implement caching properly.
                 # For now, we'll run the full pipeline as requested, relying on orchestrator logic.
                 
@@ -110,7 +110,7 @@ async def reprocess_document_endpoint(
                 # If we want to skip parsing, we'd need to modify the orchestrator or 
                 # rely on the parser to skip if output exists (and force_reparse is False).
                 
-                # Since docling is expensive, let's assume orchestrator handles it or we are fine reprocessing.
+                # Since pdfx is expensive, let's assume orchestrator handles it or we are fine reprocessing.
                 # Actually, parse_pdf_document takes 'extraction_strategy' but not 'force'.
                 # But let's pass the request parameters if possible.
                 # The current process_pdf_document signature doesn't explicitly support 'skip_parsing'.

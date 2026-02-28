@@ -112,7 +112,7 @@ async def chunk_parsed_document(
     """Chunk parsed document elements according to strategy.
 
     Args:
-        elements: Parsed elements from Docling
+        elements: Parsed elements from PDFX
         strategy: Chunking strategy to apply
         document_id: Document UUID
 
@@ -520,14 +520,14 @@ def _create_document_chunk(
 
         element_id = metadata.get("element_id") or metadata.get("doc_item_id")
         if not element_id:
-            # Fallback to deterministic identifier if Docling metadata lacks one
+            # Fallback to deterministic identifier if PDFX metadata lacks one
             element_id = f"{document_id}_element_{element.get('index', len(doc_items))}"
 
         doc_item_label = metadata.get("doc_item_label")
         provenance_entries = metadata.get("provenance") or []
 
         if not provenance_entries:
-            # Some Docling responses include bbox at metadata root
+            # Some PDFX responses include bbox at metadata root
             if metadata.get("bbox"):
                 provenance_entries = [{
                     "page_no": metadata.get("page_number", page_number),

@@ -416,12 +416,12 @@ class TestDocumentIsolation:
             f"Expected 403 Forbidden for cross-user download-info, got {response.status_code}"
         )
 
-        # Attempt to download docling_json as User B
-        response = client.get(f"/weaviate/documents/{document_id_a}/download/docling_json")
+        # Attempt to download pdfx_json as User B
+        response = client.get(f"/weaviate/documents/{document_id_a}/download/pdfx_json")
 
         # Should return 403 Forbidden
         assert response.status_code == 403, (
-            f"Expected 403 Forbidden for cross-user docling_json download, got {response.status_code}"
+            f"Expected 403 Forbidden for cross-user pdfx_json download, got {response.status_code}"
         )
 
         # Attempt to download processed_json as User B

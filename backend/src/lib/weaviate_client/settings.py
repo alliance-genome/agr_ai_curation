@@ -238,7 +238,7 @@ def update_schema(schema_config: Dict[str, Any]) -> Dict[str, Any]:
                         {
                             "name": "docItemProvenance",
                             "dataType": ["text"],
-                            "description": "Docling provenance entries (JSON string) - matches main.py schema",
+                            "description": "PDFX provenance entries (JSON string) - matches main.py schema",
                         },
                         {
                             "name": "metadata",

@@ -1,4 +1,4 @@
-"""Normalization utilities for Docling service responses."""
+"""Normalization utilities for PDFX service responses."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ _LIGATURE_PATTERN = re.compile(r"/?uniFB0([0-4])", re.IGNORECASE)
 _UNICODE_ESCAPE_PATTERN = re.compile(r"/u([0-9A-Fa-f]{4})")
 
 
-class DoclingElement(BaseModel):
-    """Single element returned by the Docling service."""
+class PDFXElement(BaseModel):
+    """Single element returned by the PDFX service."""
 
     index: int
     type: str
@@ -58,16 +58,16 @@ class DoclingElement(BaseModel):
             return None
 
 
-class DoclingResponse(BaseModel):
-    """Full response envelope from the Docling service."""
+class PDFXResponse(BaseModel):
+    """Full response envelope from the PDFX service."""
 
     success: bool
-    elements: List[DoclingElement]
+    elements: List[PDFXElement]
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class NormalizedElement(BaseModel):
-    """Embedding-ready representation of a Docling element."""
+    """Embedding-ready representation of a PDFX element."""
 
     index: int
     content_type: str
@@ -115,8 +115,8 @@ def _normalize_text(value: str) -> str:
     return normalized
 
 
-def normalize_elements(response: DoclingResponse) -> List[NormalizedElement]:
-    """Convert raw Docling elements into embedding-ready objects."""
+def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
+    """Convert raw PDFX elements into embedding-ready objects."""
 
     normalized: List[NormalizedElement] = []
     active_section: Optional[str] = None
@@ -136,7 +136,7 @@ def normalize_elements(response: DoclingResponse) -> List[NormalizedElement]:
             )
             continue
 
-        # Also check the type field for Footer/Header markers from Docling service
+        # Also check the type field for Footer/Header markers from PDFX service
         element_type = element.type
         if element_type in {"Footer", "Header"}:
             logger.debug(
@@ -213,7 +213,7 @@ def normalize_elements(response: DoclingResponse) -> List[NormalizedElement]:
             original = element.original_type or element.type
             if original and original not in warned_types:
                 logger.warning(
-                    "Encountered unhandled Docling element type '%s'; treating as narrative text",
+                    "Encountered unhandled PDFX element type '%s'; treating as narrative text",
                     original,
                 )
                 warned_types.add(original)

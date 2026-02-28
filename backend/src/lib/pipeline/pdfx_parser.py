@@ -14,8 +14,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import aiohttp
 
 from ..exceptions import ConfigurationError, PDFParsingError
-from ...schemas.docling_schema import (  # noqa: F401 - re-exported for fixture tooling
-    DoclingResponse,
+from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
+    PDFXResponse,
     build_pipeline_elements,
     normalize_elements,
 )
@@ -163,12 +163,12 @@ class PDFXParser:
             "content_format": f"{self.download_variant}_markdown",
         }
 
-        docling_json_path = await self._save_docling_json(raw_payload, document_id, user_id)
+        pdfx_json_path = await self._save_pdfx_json(raw_payload, document_id, user_id)
         processed_json_path = await self._save_processed_json(cleaned_elements, document_id, user_id)
 
         return {
             "elements": cleaned_elements,
-            "docling_json_path": str(docling_json_path),
+            "pdfx_json_path": str(pdfx_json_path),
             "processed_json_path": str(processed_json_path),
         }
 
@@ -390,14 +390,14 @@ class PDFXParser:
             )
         return markdown
 
-    async def _save_docling_json(self, result: Dict[str, Any], document_id: str, user_id: str) -> Path:
+    async def _save_pdfx_json(self, result: Dict[str, Any], document_id: str, user_id: str) -> Path:
         """Save raw extraction response to user-specific directory."""
         from ...config import get_pdf_storage_path
 
         pdf_storage = get_pdf_storage_path()
-        user_docling_path = pdf_storage / user_id / "docling_json"
-        user_docling_path.mkdir(parents=True, exist_ok=True)
-        file_path = user_docling_path / f"{document_id}.json"
+        user_pdfx_path = pdf_storage / user_id / "pdfx_json"
+        user_pdfx_path.mkdir(parents=True, exist_ok=True)
+        file_path = user_pdfx_path / f"{document_id}.json"
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: file_path.write_text(json.dumps(result, indent=2)))
@@ -600,10 +600,6 @@ async def parse_pdf_document(
         enable_table_extraction=enable_table_extraction,
         progress_callback=progress_callback,
     )
-
-
-# Backwards compatibility for legacy imports/tests still referencing the old class name.
-DoclingParser = PDFXParser
 
 
 def validate_pdf_file(file_path: Path) -> Dict[str, Any]:

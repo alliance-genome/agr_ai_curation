@@ -8,7 +8,7 @@ This test validates that the DELETE endpoint:
 2. Returns 204 No Content on successful deletion
 3. Returns 404 for non-existent documents
 4. Returns 403 when trying to delete another user's document (FR-016)
-5. Cascades deletion to all associated data (PDF, Docling JSON, processed JSON, Weaviate embeddings)
+5. Cascades deletion to all associated data (PDF, PDFX JSON, processed JSON, Weaviate embeddings)
 
 NOTE: This test will FAIL until T025 implements document deletion endpoint.
 
@@ -314,7 +314,7 @@ class TestDeleteDocumentEndpoint:
         """Test DELETE endpoint cascades deletion to all associated data.
 
         Contract requirement:
-        "Delete a document and all associated data (PDF, Docling JSON,
+        "Delete a document and all associated data (PDF, PDFX JSON,
         processed JSON, Weaviate embeddings)"
 
         This test DOCUMENTS the cascade deletion requirement but does NOT
@@ -324,7 +324,7 @@ class TestDeleteDocumentEndpoint:
         The endpoint should trigger deletion of:
         1. Database record (documents table)
         2. PDF file (pdf_storage/pdfs/<user_id>/<document_id>.pdf)
-        3. Docling JSON (pdf_storage/docling_json/<user_id>/<document_id>.json)
+        3. PDFX JSON (pdf_storage/pdfx_json/<user_id>/<document_id>.json)
         4. Processed JSON (pdf_storage/processed_json/<user_id>/<document_id>.json)
         5. Weaviate collection/embeddings (user-specific collection)
 

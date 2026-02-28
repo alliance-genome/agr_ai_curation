@@ -196,7 +196,7 @@ async def test_cognito_token_error_branches(parser_env, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_parse_pdf_document_wrapper_delegates(monkeypatch):
-    expected = {"elements": [{"index": 0}], "docling_json_path": "u/doc.json", "processed_json_path": "u/proc.json"}
+    expected = {"elements": [{"index": 0}], "pdfx_json_path": "u/doc.json", "processed_json_path": "u/proc.json"}
     observed = {}
 
     class _FakeParser:

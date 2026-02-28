@@ -20,7 +20,7 @@ class ElementType(str, Enum):
 
 
 class ChunkBoundingBox(BaseModel):
-    """Docling-provided bounding box for a document item."""
+    """PDFX-provided bounding box for a document item."""
 
     left: float
     top: float
@@ -87,11 +87,11 @@ class ChunkBoundingBox(BaseModel):
 
 
 class ChunkDocItemProvenance(BaseModel):
-    """Provenance entry referencing a Docling document item."""
+    """Provenance entry referencing a PDFX document item."""
 
-    element_id: str = Field(..., description="Docling element identifier")
+    element_id: str = Field(..., description="PDFX element identifier")
     page: int = Field(..., ge=1, description="1-indexed page number")
-    doc_item_label: Optional[str] = Field(None, description="Docling doc_item_label for this element")
+    doc_item_label: Optional[str] = Field(None, description="PDFX doc_item_label for this element")
     bbox: ChunkBoundingBox
 
 
@@ -107,7 +107,7 @@ class ChunkMetadata(BaseModel):
     content_type: Optional[str] = None
     doc_items: List[ChunkDocItemProvenance] = Field(
         default_factory=list,
-        description="Docling provenance entries contributing to this chunk",
+        description="PDFX provenance entries contributing to this chunk",
     )
 
 

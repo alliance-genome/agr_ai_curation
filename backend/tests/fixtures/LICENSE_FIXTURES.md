@@ -10,7 +10,7 @@
 - **License URL**: https://creativecommons.org/licenses/by/4.0/
 - **Pages**: 6
 - **Retrieved**: 2026-02-12
-- **Usage**: End-to-end pipeline integration testing (Docling parsing, chunking, Weaviate storage)
+- **Usage**: End-to-end pipeline integration testing (PDFX parsing, chunking, Weaviate storage)
 
 ## sample_fly_publication.pdf
 

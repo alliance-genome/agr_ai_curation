@@ -121,7 +121,7 @@ class TestProtectedEndpoints:
             ("DELETE", "/weaviate/documents/fake-id", None),
             ("GET", "/weaviate/documents/fake-id/status", None),
             ("GET", "/weaviate/documents/fake-id/download/pdf", None),
-            ("GET", "/weaviate/documents/fake-id/download/docling_json", None),
+            ("GET", "/weaviate/documents/fake-id/download/pdfx_json", None),
             ("GET", "/weaviate/documents/fake-id/download/processed_json", None),
         ]
 
@@ -323,7 +323,7 @@ class TestProtectedEndpoints:
             ("DELETE", "/weaviate/documents/{id}"),
             ("GET", "/weaviate/documents/{id}/status"),
             ("GET", "/weaviate/documents/{id}/download/pdf"),
-            ("GET", "/weaviate/documents/{id}/download/docling_json"),
+            ("GET", "/weaviate/documents/{id}/download/pdfx_json"),
             ("GET", "/weaviate/documents/{id}/download/processed_json"),
 
             # Chat endpoints

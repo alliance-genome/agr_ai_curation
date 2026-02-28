@@ -115,9 +115,9 @@ def get_pdf_storage_path() -> Path:
     return (REPO_ROOT / path).resolve()
 
 
-def get_docling_json_storage_path() -> Path:
-    """Return filesystem path used for storing raw Docling JSON outputs."""
-    raw_path = os.getenv('DOCLING_JSON_STORAGE_PATH', 'pdf_storage/docling_json')
+def get_pdfx_json_storage_path() -> Path:
+    """Return filesystem path used for storing raw PDFX JSON outputs."""
+    raw_path = os.getenv('PDFX_JSON_STORAGE_PATH', 'pdf_storage/pdfx_json')
     path = Path(raw_path)
 
     if path.is_absolute():

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""One-time script to generate the Docling fixture from raw API response.
+"""One-time script to generate the PDFX fixture from raw API response.
 
 Usage (from inside the backend Docker container):
-    python tests/fixtures/generate_docling_fixture.py /path/to/docling_response.json
+    python tests/fixtures/generate_pdfx_fixture.py /path/to/pdfx_response.json
 
 Or via docker compose:
     docker compose -f docker-compose.test.yml run --rm \
-      -v /tmp/docling_response.json:/tmp/docling_response.json \
+      -v /tmp/pdfx_response.json:/tmp/pdfx_response.json \
       backend-persistence-tests \
-      python tests/fixtures/generate_docling_fixture.py /tmp/docling_response.json
+      python tests/fixtures/generate_pdfx_fixture.py /tmp/pdfx_response.json
 """
 
 import json
@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.lib.pipeline.pdfx_parser import (
-    DoclingResponse,
+    PDFXResponse,
     normalize_elements,
     build_pipeline_elements,
 )
@@ -27,7 +27,7 @@ from src.lib.pipeline.pdfx_parser import (
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python generate_docling_fixture.py <raw_docling_response.json>")
+        print("Usage: python generate_pdfx_fixture.py <raw_pdfx_response.json>")
         sys.exit(1)
 
     raw_path = Path(sys.argv[1])
@@ -40,15 +40,15 @@ def main():
 
     print(f"Raw response: {len(raw_result.get('elements', []))} elements")
 
-    # Run the same normalization pipeline as DoclingParser
-    response_model = DoclingResponse.model_validate(raw_result)
+    # Run the same normalization pipeline as PDFXParser
+    response_model = PDFXResponse.model_validate(raw_result)
     normalized = normalize_elements(response_model)
     cleaned_elements = build_pipeline_elements(normalized)
 
     print(f"After normalization: {len(cleaned_elements)} elements")
 
     # Save to fixture location
-    fixture_path = Path(__file__).parent / "micropub-biology-001725_docling.json"
+    fixture_path = Path(__file__).parent / "micropub-biology-001725_pdfx.json"
     with open(fixture_path, "w") as f:
         json.dump(cleaned_elements, f, indent=2, default=str)
 

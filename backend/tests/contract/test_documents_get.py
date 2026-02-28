@@ -580,7 +580,7 @@ class TestGetDocumentEndpointEdgeCases:
         db_document.weaviate_tenant = "00u1abc2_def3_ghi4_jkl5"
         db_document.processing_started_at = datetime(2025, 1, 25, 10, 30, 5)
         db_document.processing_completed_at = None
-        db_document.error_message = "Docling extraction failed: PDF is password-protected"
+        db_document.error_message = "PDFX extraction failed: PDF is password-protected"
 
         mock_db_session = MagicMock()
         mock_db_query = MagicMock()
@@ -611,6 +611,6 @@ class TestGetDocumentEndpointEdgeCases:
             assert data["status"] == "FAILED"
             assert "error_message" in data
             assert data["error_message"] is not None
-            assert "Docling extraction failed" in data["error_message"]
+            assert "PDFX extraction failed" in data["error_message"]
         finally:
             app.dependency_overrides.clear()

@@ -929,12 +929,12 @@ async def delete_document_endpoint(
                             shutil.rmtree(doc_dir)
                             logger.info('Deleted filesystem artifacts for document %s', document_id)
 
-                    # 2. Delete Docling JSON: {user_id}/docling_json/{doc_id}.json
-                    if doc_to_delete.docling_json_path:
-                        docling_path = FilePath(base_storage) / doc_to_delete.docling_json_path
-                        if docling_path.exists() and base_storage in docling_path.parents:
-                            docling_path.unlink()
-                            logger.info('Deleted Docling JSON for %s', document_id)
+                    # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
+                    if doc_to_delete.pdfx_json_path:
+                        pdfx_path = FilePath(base_storage) / doc_to_delete.pdfx_json_path
+                        if pdfx_path.exists() and base_storage in pdfx_path.parents:
+                            pdfx_path.unlink()
+                            logger.info('Deleted PDFX JSON for %s', document_id)
 
                     # 3. Delete Processed JSON: {user_id}/processed_json/{doc_id}.json
                     if doc_to_delete.processed_json_path:
@@ -1447,7 +1447,7 @@ async def get_download_info(
     """
     Get information about downloadable files for a document.
 
-    Returns availability and sizes of PDF, Docling JSON, and processed JSON files.
+    Returns availability and sizes of PDF, PDFX JSON, and processed JSON files.
 
     Requirements:
         - FR-014: Verify document ownership before serving download info
@@ -1492,17 +1492,17 @@ async def get_download_info(
                 pdf_available = pdf_path.exists()
                 pdf_size = pdf_path.stat().st_size if pdf_available else None
 
-            # Check Docling JSON file with path validation (T032)
-            # Note: docling_json_path is stored relative to pdf_storage: {user_id}/docling_json/{doc_id}.json
-            docling_json_available = False
-            docling_json_size = None
-            if doc.docling_json_path:
+            # Check PDFX JSON file with path validation (T032)
+            # Note: pdfx_json_path is stored relative to pdf_storage: {user_id}/pdfx_json/{doc_id}.json
+            pdfx_json_available = False
+            pdfx_json_size = None
+            if doc.pdfx_json_path:
                 # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                docling_path = FilePath(pdf_storage) / doc.docling_json_path
+                pdfx_path = FilePath(pdf_storage) / doc.pdfx_json_path
                 # Validate path stays within user's storage directory (pdf_storage/{user_id})
-                docling_path = validate_user_file_path(docling_path, FilePath(pdf_storage), user["sub"])
-                docling_json_available = docling_path.exists()
-                docling_json_size = docling_path.stat().st_size if docling_json_available else None
+                pdfx_path = validate_user_file_path(pdfx_path, FilePath(pdf_storage), user["sub"])
+                pdfx_json_available = pdfx_path.exists()
+                pdfx_json_size = pdfx_path.stat().st_size if pdfx_json_available else None
 
             # Check processed JSON file with path validation (T032)
             # Note: processed_json_path is stored relative to pdf_storage: {user_id}/processed_json/{doc_id}.json
@@ -1519,8 +1519,8 @@ async def get_download_info(
             return {
                 "pdf_available": pdf_available,
                 "pdf_size": pdf_size,
-                "docling_json_available": docling_json_available,
-                "docling_json_size": docling_json_size,
+                "pdfx_json_available": pdfx_json_available,
+                "pdfx_json_size": pdfx_json_size,
                 "processed_json_available": processed_json_available,
                 "processed_json_size": processed_json_size,
                 "filename": doc.filename
@@ -1541,7 +1541,7 @@ async def get_download_info(
 @router.get("/documents/{document_id}/download/{file_type}")
 async def download_document_file(
     document_id: str = Path(..., description="Document ID"),
-    file_type: str = Path(..., description="File type to download (pdf, docling_json, processed_json)"),
+    file_type: str = Path(..., description="File type to download (pdf, pdfx_json, processed_json)"),
     user: Dict[str, Any] = get_auth_dependency()
 ):
     """
@@ -1549,7 +1549,7 @@ async def download_document_file(
 
     Available file types:
     - pdf: Original PDF document
-    - docling_json: Raw Docling extraction output
+    - pdfx_json: Raw PDFX extraction output
     - processed_json: Cleaned document ready for embedding
 
     Requirements:
@@ -1560,7 +1560,7 @@ async def download_document_file(
         from ..config import get_pdf_storage_path
         document_uuid = _parse_document_uuid(document_id)
 
-        if file_type not in ['pdf', 'docling_json', 'processed_json']:
+        if file_type not in ['pdf', 'pdfx_json', 'processed_json']:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid file type: {file_type}"
@@ -1603,15 +1603,15 @@ async def download_document_file(
                     filename = doc.filename
                     media_type = "application/pdf"
 
-            elif file_type == 'docling_json':
-                # Note: docling_json_path is stored relative to pdf_storage: {user_id}/docling_json/{doc_id}.json
-                if doc.docling_json_path:
+            elif file_type == 'pdfx_json':
+                # Note: pdfx_json_path is stored relative to pdf_storage: {user_id}/pdfx_json/{doc_id}.json
+                if doc.pdfx_json_path:
                     pdf_storage = get_pdf_storage_path()
                     # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                    file_path = FilePath(pdf_storage) / doc.docling_json_path
+                    file_path = FilePath(pdf_storage) / doc.pdfx_json_path
                     # Validate path stays within user's storage directory (pdf_storage/{user_id})
                     file_path = validate_user_file_path(file_path, FilePath(pdf_storage), user["sub"])
-                    filename = f"{doc.filename.rsplit('.', 1)[0]}_docling.json"
+                    filename = f"{doc.filename.rsplit('.', 1)[0]}_pdfx.json"
                     media_type = "application/json"
 
             elif file_type == 'processed_json':

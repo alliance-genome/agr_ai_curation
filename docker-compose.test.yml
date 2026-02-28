@@ -65,7 +65,7 @@ services:
       - OPENAI_API_KEY=test-key-for-unit-tests
       - LANGFUSE_PUBLIC_KEY=test-key
       - LANGFUSE_SECRET_KEY=test-key
-      - DOCLING_TIMEOUT=300
+      - PDF_EXTRACTION_TIMEOUT=300
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191

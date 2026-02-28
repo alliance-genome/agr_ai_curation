@@ -2,14 +2,14 @@
 Document Hierarchy Resolution using LLM.
 
 This module analyzes document elements to reconstruct section hierarchy.
-It uses an LLM to classify section titles (from Docling) as top-level
+It uses an LLM to classify section titles (from PDFX) as top-level
 sections or subsections, storing structured metadata for intelligent
 section/subsection reading.
 
 The hierarchy is stored both in element metadata and as a document-level
 structure for injection into Langfuse traces.
 
-Docling already assigns a `section_title` to every element indicating
+PDFX already assigns a `section_title` to every element indicating
 which section it belongs to. We extract unique section_titles and ask
 the LLM to determine the hierarchy relationships between them. This is
 more reliable than trying to find headers in the document.
@@ -99,7 +99,7 @@ async def resolve_document_hierarchy(
     - section_title: Concatenated path for backward compatibility (e.g., "Methods > Fly Strains")
 
     Args:
-        elements: List of document elements from Docling parser
+        elements: List of document elements from PDFX parser
         store_metadata: Whether to return hierarchy metadata for storage/tracing
 
     Returns:

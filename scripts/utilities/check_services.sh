@@ -53,15 +53,15 @@ else
     echo -e "${RED}✗${NC} Not responding"
 fi
 
-# Check Docling service (if configured)
-DOCLING_URL="${DOCLING_SERVICE_URL:-}"
-echo -n "  Docling Service: "
-if [ -z "$DOCLING_URL" ]; then
-    echo -e "${YELLOW}⚠${NC} Not configured (set DOCLING_SERVICE_URL)"
-elif curl -s --max-time 2 "${DOCLING_URL}/health" > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} ${DOCLING_URL}"
+# Check PDF extraction service (if configured)
+PDF_EXTRACTION_URL="${PDF_EXTRACTION_SERVICE_URL:-}"
+echo -n "  PDF Extraction Service: "
+if [ -z "$PDF_EXTRACTION_URL" ]; then
+    echo -e "${YELLOW}⚠${NC} Not configured (set PDF_EXTRACTION_SERVICE_URL)"
+elif curl -s --max-time 2 "${PDF_EXTRACTION_URL}/health" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} ${PDF_EXTRACTION_URL}"
 else
-    echo -e "${YELLOW}⚠${NC} Not reachable (${DOCLING_URL})"
+    echo -e "${YELLOW}⚠${NC} Not reachable (${PDF_EXTRACTION_URL})"
 fi
 
 echo ""

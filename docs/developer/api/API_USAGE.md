@@ -33,7 +33,7 @@ cp .env.example .env
 sed -i 's/DEV_MODE=.*/DEV_MODE=true/' .env
 
 # 2. Launch backend stack
-docker compose up backend docling-service weaviate postgres -d
+docker compose up backend weaviate postgres -d
 
 # 3. Confirm backend is serving
 curl http://localhost:8000/weaviate/health
@@ -41,7 +41,7 @@ curl http://localhost:8000/weaviate/health
 
 - **Default base URL**: `http://localhost:8000`
 - **Static uploads**: served from `http://localhost:8000/uploads/<tenant>/<filename>`
-- **Docling service**: reachable at `http://docling-internal.alliancegenome.org:8000` (VPN required)
+- **PDF extraction service**: reachable at `https://pdfx.alliancegenome.org` (VPN/network policy permitting)
 
 > All cURL snippets assume DEV mode (auth bypass). For Cognito-protected deployments see [Base URLs & Auth Modes](#base-urls--auth-modes).
 
@@ -338,7 +338,7 @@ Events are JSON blobs with `stage`, `progress`, `message`, `timestamp`, and `fin
 # Discover availability + sizes
 curl http://localhost:8000/weaviate/documents/$DOC_ID/download-info | jq
 
-# Download specific asset (pdf | docling_json | processed_json)
+# Download specific asset (pdf | pdfx_json | processed_json)
 curl -OJ http://localhost:8000/weaviate/documents/$DOC_ID/download/pdf
 ```
 Ownership is re-checked against PostgreSQL before any file is read from disk.
@@ -373,7 +373,7 @@ curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reprocess \
   -d '{"strategy_name": "research", "force_reparse": false}' | jq
 ```
 - `strategy_name`: must match one of `/weaviate/chunking-strategies` (e.g., `research` default).
-- `force_reparse`: true to re-run Docling parsing instead of reusing stored JSON.
+- `force_reparse`: true to re-run PDF extraction parsing instead of reusing stored JSON.
 
 ### 2. Re-embed
 ```bash

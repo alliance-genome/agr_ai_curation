@@ -672,7 +672,7 @@ pdf_storage/
   ├── <user_id>/
   │   ├── <document_id>/
   │   │   ├── <filename>.pdf
-  │   │   ├── docling_json/
+  │   │   ├── pdfx_json/
   │   │   └── processed_json/
 ```
 

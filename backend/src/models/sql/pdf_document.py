@@ -45,7 +45,7 @@ class PDFDocument(Base):
     processing_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # New fields for storing processed file versions
-    docling_json_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    pdfx_json_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     processed_json_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Hierarchy metadata from LLM-based section resolution

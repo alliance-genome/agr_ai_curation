@@ -1,4 +1,4 @@
-"""End-to-end pipeline test: Docling fixture -> chunking -> Weaviate storage."""
+"""End-to-end pipeline test: PDFX fixture -> chunking -> Weaviate storage."""
 
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ from src.models.strategy import ChunkingStrategy
 from .conftest import TEST_USER_ID, count_persisted_chunks, fetch_persisted_chunks
 
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
-DOCLING_FIXTURE = FIXTURES_DIR / "micropub-biology-001725_docling.json"
+PDFX_FIXTURE = FIXTURES_DIR / "micropub-biology-001725_pdfx.json"
 
 
 @pytest.mark.integration
@@ -21,15 +21,15 @@ class TestPipelineE2E:
     """End-to-end pipeline test with real Weaviate."""
 
     @pytest.fixture
-    def docling_elements(self):
-        """Load pre-computed Docling elements from fixture."""
-        if not DOCLING_FIXTURE.exists():
+    def pdfx_elements(self):
+        """Load pre-computed PDFX elements from fixture."""
+        if not PDFX_FIXTURE.exists():
             pytest.skip(
-                f"Docling fixture not found: {DOCLING_FIXTURE}. "
-                "Generate it by running the test PDF through Docling. "
+                f"PDFX fixture not found: {PDFX_FIXTURE}. "
+                "Generate it by running the test PDF through PDFX. "
                 "See PLAN_chunk_persistence_tests.md Step 5."
             )
-        with open(DOCLING_FIXTURE, encoding="utf-8") as fixture_file:
+        with open(PDFX_FIXTURE, encoding="utf-8") as fixture_file:
             return json.load(fixture_file)
 
     @pytest.mark.asyncio
@@ -38,15 +38,15 @@ class TestPipelineE2E:
         weaviate_connection,
         setup_collections,
         clean_chunks,
-        docling_elements,
+        pdfx_elements,
     ):
         """Full pipeline: parse fixture -> chunk -> store -> verify persistence."""
         document_id = "test-e2e-pipeline-001"
 
         strategy = ChunkingStrategy.get_research_strategy()
-        chunks = await chunk_parsed_document(docling_elements, strategy, document_id)
+        chunks = await chunk_parsed_document(pdfx_elements, strategy, document_id)
         expected_count = len(chunks)
-        assert expected_count > 0, "Chunking produced zero chunks from Docling fixture"
+        assert expected_count > 0, "Chunking produced zero chunks from PDFX fixture"
 
         with patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()):
             stats = await store_to_weaviate(

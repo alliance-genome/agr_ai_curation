@@ -29,7 +29,7 @@ interface DocumentDownloadDialogProps {
 }
 
 interface DownloadableFile {
-  type: 'pdf' | 'docling_json' | 'processed_json';
+  type: 'pdf' | 'pdfx_json' | 'processed_json';
   label: string;
   description: string;
   icon: React.ReactNode;
@@ -77,12 +77,12 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
           size: data.pdf_size,
         },
         {
-          type: 'docling_json',
+          type: 'pdfx_json',
           label: 'Raw Extraction JSON',
           description: 'Raw output from the PDF extraction service',
           icon: <Code color="primary" />,
-          available: data.docling_json_available || false,
-          size: data.docling_json_size,
+          available: data.pdfx_json_available || false,
+          size: data.pdfx_json_size,
         },
         {
           type: 'processed_json',

@@ -1,17 +1,17 @@
-"""Contract tests for GET /weaviate/documents/{document_id}/download/docling_json.
+"""Contract tests for GET /weaviate/documents/{document_id}/download/pdfx_json.
 
-Task: T018 - Contract test GET /weaviate/documents/{document_id}/download/docling_json
+Task: T018 - Contract test GET /weaviate/documents/{document_id}/download/pdfx_json
 Contract: specs/007-okta-login/contracts/document_endpoints.yaml lines 253-285
 
-This test validates that the /weaviate/documents/{document_id}/download/docling_json endpoint:
+This test validates that the /weaviate/documents/{document_id}/download/pdfx_json endpoint:
 1. Requires valid JWT token (returns 401 if missing/invalid)
-2. Returns raw Docling JSON output (application/json Content-Type)
+2. Returns raw PDFX JSON output (application/json Content-Type)
 3. Returns valid JSON object (not array or primitive)
 4. Returns 403 when user attempts to download another user's document (FR-014)
 5. Returns 404 when document doesn't exist
 
 NOTE: This test will FAIL until endpoint implementation is complete.
-This is the RAW Docling output, not the processed JSON.
+This is the RAW PDFX output, not the processed JSON.
 
 IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properly
 mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
@@ -63,29 +63,29 @@ def get_valid_auth_header():
     return {"X-API-Key": "contract-test-key"}
 
 
-class TestDownloadDoclingJsonEndpoint:
-    """Contract tests for GET /weaviate/documents/{document_id}/download/docling_json endpoint."""
+class TestDownloadPDFXJsonEndpoint:
+    """Contract tests for GET /weaviate/documents/{document_id}/download/pdfx_json endpoint."""
 
-    def test_download_docling_json_endpoint_exists(self, client):
-        """Test /weaviate/documents/{document_id}/download/docling_json endpoint exists.
+    def test_download_pdfx_json_endpoint_exists(self, client):
+        """Test /weaviate/documents/{document_id}/download/pdfx_json endpoint exists.
 
         This test will FAIL until endpoint is implemented.
         Expected failure: 404 Not Found (endpoint doesn't exist yet)
         """
-        response = client.get("/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json")
+        response = client.get("/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json")
 
         # Should NOT be 404 after implementation
         # Will be 401 (auth required) until we add auth header
-        assert response.status_code != 404, "/weaviate/documents/{document_id}/download/docling_json endpoint not found - not implemented yet"
+        assert response.status_code != 404, "/weaviate/documents/{document_id}/download/pdfx_json endpoint not found - not implemented yet"
 
-    def test_download_docling_json_requires_authentication(self, client):
+    def test_download_pdfx_json_requires_authentication(self, client):
         """Test endpoint requires valid authentication token.
 
         Contract requirement: Must validate JWT token.
         Without token, should return 401 Unauthorized.
         """
         # Call without Authorization header
-        response = client.get("/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json")
+        response = client.get("/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json")
 
         # Should return 401
         assert response.status_code == 401
@@ -99,20 +99,20 @@ class TestDownloadDoclingJsonEndpoint:
             "Token has expired"
         ]
 
-    def test_download_docling_json_with_invalid_token(self, client):
+    def test_download_pdfx_json_with_invalid_token(self, client):
         """Test endpoint rejects invalid JWT tokens."""
         response = client.get(
-            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
             headers={"Authorization": "Bearer invalid_malformed_token"}
         )
 
         assert response.status_code == 401
 
-    def test_download_docling_json_content_type(self, client):
+    def test_download_pdfx_json_content_type(self, client):
         """Test endpoint returns application/json Content-Type.
 
         Contract requirement: Response must be application/json.
-        This is the raw Docling extraction output in JSON format.
+        This is the raw PDFX extraction output in JSON format.
         """
         from main import app
         from src.api.auth import auth, get_db
@@ -133,7 +133,7 @@ class TestDownloadDoclingJsonEndpoint:
         db_document.user_id = 123  # Same as mock_user.user_id
         db_document.filename = "test.pdf"
         db_document.status = "completed"
-        db_document.docling_json_path = "/tmp/test_docling.json"
+        db_document.pdfx_json_path = "/tmp/test_pdfx.json"
 
         mock_db_session = MagicMock()
         mock_db_query = MagicMock()
@@ -157,7 +157,7 @@ class TestDownloadDoclingJsonEndpoint:
         try:
             # Call endpoint
             response = client.get(
-                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
                 headers=get_valid_auth_header()
             )
 
@@ -167,7 +167,7 @@ class TestDownloadDoclingJsonEndpoint:
         finally:
             app.dependency_overrides.clear()
 
-    def test_download_docling_json_is_valid_json(self, client):
+    def test_download_pdfx_json_is_valid_json(self, client):
         """Test endpoint returns valid JSON object.
 
         Contract requirement: Response schema is 'type: object'.
@@ -192,7 +192,7 @@ class TestDownloadDoclingJsonEndpoint:
         db_document.user_id = 123
         db_document.filename = "test.pdf"
         db_document.status = "completed"
-        db_document.docling_json_path = "/tmp/test_docling.json"
+        db_document.pdfx_json_path = "/tmp/test_pdfx.json"
 
         mock_db_session = MagicMock()
 
@@ -214,7 +214,7 @@ class TestDownloadDoclingJsonEndpoint:
         try:
             # Call endpoint
             response = client.get(
-                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
                 headers=get_valid_auth_header()
             )
 
@@ -233,7 +233,7 @@ class TestDownloadDoclingJsonEndpoint:
         finally:
             app.dependency_overrides.clear()
 
-    def test_download_docling_json_forbidden_for_other_user(self, client):
+    def test_download_pdfx_json_forbidden_for_other_user(self, client):
         """Test endpoint returns 403 when user attempts to download another user's document.
 
         Contract requirement (FR-014): "User can only download their own documents"
@@ -258,7 +258,7 @@ class TestDownloadDoclingJsonEndpoint:
         db_document.user_id = 456  # Different user!
         db_document.filename = "other_user_document.pdf"
         db_document.status = "completed"
-        db_document.docling_json_path = "/tmp/other_docling.json"
+        db_document.pdfx_json_path = "/tmp/other_pdfx.json"
 
         mock_db_session = MagicMock()
 
@@ -280,7 +280,7 @@ class TestDownloadDoclingJsonEndpoint:
         try:
             # Call endpoint
             response = client.get(
-                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+                "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
                 headers=get_valid_auth_header()
             )
 
@@ -294,7 +294,7 @@ class TestDownloadDoclingJsonEndpoint:
         finally:
             app.dependency_overrides.clear()
 
-    def test_download_docling_json_not_found(self, client):
+    def test_download_pdfx_json_not_found(self, client):
         """Test endpoint returns 404 when document doesn't exist.
 
         Contract requirement: Return 404 when document_id doesn't exist in database.
@@ -333,7 +333,7 @@ class TestDownloadDoclingJsonEndpoint:
         try:
             # Call endpoint with non-existent document_id
             response = client.get(
-                "/weaviate/documents/925e41a8-c4e4-484b-92eb-4028d8543623/download/docling_json",
+                "/weaviate/documents/925e41a8-c4e4-484b-92eb-4028d8543623/download/pdfx_json",
                 headers=get_valid_auth_header()
             )
 
@@ -348,22 +348,22 @@ class TestDownloadDoclingJsonEndpoint:
             app.dependency_overrides.clear()
 
 
-class TestDownloadDoclingJsonEdgeCases:
-    """Edge case tests for /weaviate/documents/{document_id}/download/docling_json endpoint."""
+class TestDownloadPDFXJsonEdgeCases:
+    """Edge case tests for /weaviate/documents/{document_id}/download/pdfx_json endpoint."""
 
-    def test_download_docling_json_without_bearer_prefix(self, client):
+    def test_download_pdfx_json_without_bearer_prefix(self, client):
         """Test endpoint rejects tokens without 'Bearer' prefix."""
         response = client.get(
-            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
             headers={"Authorization": "mock_token_no_bearer"}
         )
 
         assert response.status_code == 401
 
-    def test_download_docling_json_with_empty_authorization_header(self, client):
+    def test_download_pdfx_json_with_empty_authorization_header(self, client):
         """Test endpoint rejects empty Authorization header."""
         response = client.get(
-            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/docling_json",
+            "/weaviate/documents/f35596eb-618d-4904-822f-a15eacc5ec94/download/pdfx_json",
             headers={"Authorization": ""}
         )
 

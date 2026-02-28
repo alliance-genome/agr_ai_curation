@@ -1,6 +1,6 @@
-"""PDF Processing Library - now using Docling service."""
+"""PDF Processing Library - now using PDFX service."""
 
-# NOTE: Unstructured imports commented out - now using Docling service
+# NOTE: Unstructured imports commented out - now using PDFX service
 # from .unstructured_wrapper import (
 #     partition_pdf_with_strategy,
 #     extract_elements,

@@ -78,7 +78,7 @@ async def test_download_document_file_returns_403_for_cross_user_access(monkeypa
         id=_DOC_ID,
         user_id=99,
         file_path="user123/original.pdf",
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -102,7 +102,7 @@ async def test_download_document_file_returns_404_when_file_missing(monkeypatch,
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -131,7 +131,7 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -150,10 +150,10 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_download_document_file_returns_docling_json_response(monkeypatch, tmp_path):
+async def test_download_document_file_returns_pdfx_json_response(monkeypatch, tmp_path):
     monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
 
-    user_dir = tmp_path / "user123" / "docling_json"
+    user_dir = tmp_path / "user123" / "pdfx_json"
     user_dir.mkdir(parents=True)
     (user_dir / "doc.json").write_text('{"raw": true}')
 
@@ -161,7 +161,7 @@ async def test_download_document_file_returns_docling_json_response(monkeypatch,
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path="user123/docling_json/doc.json",
+        pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -169,13 +169,13 @@ async def test_download_document_file_returns_docling_json_response(monkeypatch,
 
     response = await documents.download_document_file(
         document_id=_DOC_ID,
-        file_type="docling_json",
+        file_type="pdfx_json",
         user={"sub": "user123"},
     )
 
     assert isinstance(response, FileResponse)
     assert response.media_type == "application/json"
-    assert response.filename == "paper_docling.json"
+    assert response.filename == "paper_pdfx.json"
 
 
 @pytest.mark.asyncio
@@ -190,7 +190,7 @@ async def test_download_document_file_returns_processed_json_response(monkeypatc
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
     )
@@ -215,7 +215,7 @@ async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_pat
         id=_DOC_ID,
         user_id=1,
         file_path="../outside.pdf",
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -277,7 +277,7 @@ async def test_get_download_info_returns_403_for_cross_user_access(monkeypatch):
         id=_DOC_ID,
         user_id=99,
         file_path="user123/original.pdf",
-        docling_json_path="user123/docling_json/doc.json",
+        pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
     )
@@ -297,17 +297,17 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
     monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
 
     user_dir = tmp_path / "user123"
-    (user_dir / "docling_json").mkdir(parents=True)
+    (user_dir / "pdfx_json").mkdir(parents=True)
     (user_dir / "processed_json").mkdir(parents=True)
     (user_dir / "original.pdf").write_bytes(b"%PDF-1.7")
-    (user_dir / "docling_json" / "doc.json").write_text('{"raw": true}')
+    (user_dir / "pdfx_json" / "doc.json").write_text('{"raw": true}')
     (user_dir / "processed_json" / "doc.json").write_text('{"processed": true}')
 
     doc = SimpleNamespace(
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
-        docling_json_path="user123/docling_json/doc.json",
+        pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
     )
@@ -319,10 +319,10 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
     )
 
     assert payload["pdf_available"] is True
-    assert payload["docling_json_available"] is True
+    assert payload["pdfx_json_available"] is True
     assert payload["processed_json_available"] is True
     assert payload["pdf_size"] > 0
-    assert payload["docling_json_size"] > 0
+    assert payload["pdfx_json_size"] > 0
     assert payload["processed_json_size"] > 0
     assert payload["filename"] == "paper.pdf"
 
@@ -335,7 +335,7 @@ async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -347,10 +347,10 @@ async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp
     )
 
     assert payload["pdf_available"] is False
-    assert payload["docling_json_available"] is False
+    assert payload["pdfx_json_available"] is False
     assert payload["processed_json_available"] is False
     assert payload["pdf_size"] is None
-    assert payload["docling_json_size"] is None
+    assert payload["pdfx_json_size"] is None
     assert payload["processed_json_size"] is None
 
 
@@ -362,7 +362,7 @@ async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
         id=_DOC_ID,
         user_id=1,
         file_path="../outside.pdf",
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -378,14 +378,14 @@ async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_download_document_file_blocks_docling_json_path_traversal(monkeypatch, tmp_path):
+async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
     monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
 
     doc = SimpleNamespace(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path="../outside.json",
+        pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -394,7 +394,7 @@ async def test_download_document_file_blocks_docling_json_path_traversal(monkeyp
     with pytest.raises(HTTPException, match="Access denied") as exc:
         await documents.download_document_file(
             document_id=_DOC_ID,
-            file_type="docling_json",
+            file_type="pdfx_json",
             user={"sub": "user123"},
         )
 
@@ -409,7 +409,7 @@ async def test_download_document_file_blocks_processed_json_path_traversal(monke
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
     )
@@ -426,14 +426,14 @@ async def test_download_document_file_blocks_processed_json_path_traversal(monke
 
 
 @pytest.mark.asyncio
-async def test_get_download_info_blocks_docling_json_path_traversal(monkeypatch, tmp_path):
+async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
     monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
 
     doc = SimpleNamespace(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path="../outside.json",
+        pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
     )
@@ -456,7 +456,7 @@ async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatc
         id=_DOC_ID,
         user_id=1,
         file_path=None,
-        docling_json_path=None,
+        pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
     )

@@ -597,7 +597,7 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
                 if not chunk_id:
                     continue
 
-                # Get doc_items with bounding boxes from the chunk (from Docling)
+                # Get doc_items with bounding boxes from the chunk (from PDFX)
                 # These contain page, bbox coordinates for PDF highlighting
                 doc_items = hit.get("doc_items") or []
 

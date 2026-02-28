@@ -16,7 +16,7 @@ IMPORTANT: Uses app.dependency_overrides instead of @patch decorators to properl
 mock FastAPI dependencies. Also mocks requests.get to prevent real JWKS fetches.
 
 This endpoint serves the PROCESSED/CLEANED JSON ready for embedding, which is different
-from the raw Docling output. The processed JSON has been cleaned and formatted.
+from the raw PDFX output. The processed JSON has been cleaned and formatted.
 """
 
 import pytest
@@ -152,7 +152,7 @@ class TestDownloadProcessedJsonEndpoint:
         """Test processed JSON download endpoint returns valid JSON object.
 
         Contract requirement: Response must be valid JSON object (type: object)
-        This is the PROCESSED/CLEANED JSON ready for embedding, not raw Docling output.
+        This is the PROCESSED/CLEANED JSON ready for embedding, not raw PDFX output.
         """
         from main import app
         from src.api.auth import auth, get_db

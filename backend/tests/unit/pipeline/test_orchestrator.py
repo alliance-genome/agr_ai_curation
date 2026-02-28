@@ -34,7 +34,7 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
 
     with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [{"text": "Foo"}],
-        "docling_json_path": "docling/doc.json",
+        "pdfx_json_path": "pdfx/doc.json",
         "processed_json_path": "processed/doc.json",
     })) as mock_parser, patch(
         "src.lib.pipeline.chunk.chunk_parsed_document",
@@ -104,7 +104,7 @@ def test_validate_pipeline_requirements(orchestrator):
 async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
     with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [],
-        "docling_json_path": None,
+        "pdfx_json_path": None,
         "processed_json_path": None,
     })), patch("src.lib.pipeline.chunk.chunk_parsed_document", new=AsyncMock(return_value=[])), patch(
         "src.lib.pipeline.store.store_to_weaviate",

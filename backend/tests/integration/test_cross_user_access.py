@@ -551,12 +551,12 @@ class TestCrossUserAccessPrevention:
         test_db.add(document)
         test_db.commit()
 
-        # Test docling_json download
+        # Test pdfx_json download
         response = client_as_curator2.get(
-            f"/weaviate/documents/{doc_id}/download/docling_json"
+            f"/weaviate/documents/{doc_id}/download/pdfx_json"
         )
         assert response.status_code == 403, \
-            f"Expected 403 for docling_json download, got {response.status_code}"
+            f"Expected 403 for pdfx_json download, got {response.status_code}"
 
         # Test processed_json download
         response = client_as_curator2.get(
