@@ -1,6 +1,7 @@
 """Unit tests for the Weaviate document helpers."""
 
 import asyncio
+import importlib
 from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import UUID
@@ -8,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.lib.weaviate_client.documents import list_documents, async_list_documents, update_document_status_detailed
+
+def _documents_module():
+    """Resolve current documents module to avoid stale references across reloads."""
+    return importlib.import_module("src.lib.weaviate_client.documents")
 
 
 class DummyCollection:
@@ -89,7 +93,7 @@ async def test_async_list_documents_normalises_results():
         filter_model = DocumentFilter()
         pagination = PaginationParams(page=1, page_size=10).model_dump()
 
-        result = await async_list_documents("test_user_user_id", filter_model, pagination)
+        result = await _documents_module().async_list_documents("test_user_user_id", filter_model, pagination)
 
     assert result["total"] == 1
     assert result["limit"] == 10
@@ -103,7 +107,14 @@ async def test_async_list_documents_normalises_results():
 def test_list_documents_wrapper_converts_arguments(async_mock):
     async_mock.return_value = {"documents": [], "total": 0, "pagination": {"currentPage": 1, "totalPages": 0, "totalItems": 0, "pageSize": 20}}
 
-    result = list_documents("test_user_user_id", page=2, page_size=15, embedding_status=["completed"], sort_by="vectorCount", sort_order="asc")
+    result = _documents_module().list_documents(
+        "test_user_user_id",
+        page=2,
+        page_size=15,
+        embedding_status=["completed"],
+        sort_by="vectorCount",
+        sort_order="asc",
+    )
 
     assert result["documents"] == []
     async_mock.assert_awaited_once()
@@ -119,7 +130,11 @@ def test_list_documents_wrapper_converts_arguments(async_mock):
 @pytest.mark.asyncio
 async def test_update_document_status_detailed_invalid_status():
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=MagicMock()):
-        outcome = await update_document_status_detailed("doc-1", "test_user_user_id", embedding_status="unknown")
+        outcome = await _documents_module().update_document_status_detailed(
+            "doc-1",
+            "test_user_user_id",
+            embedding_status="unknown",
+        )
     assert outcome["success"] is False
     assert outcome["error"]["code"] == "INVALID_STATUS"
 
@@ -152,7 +167,11 @@ async def test_update_document_status_detailed_success():
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop):
-        result = await update_document_status_detailed("doc-1", "test_user_user_id", embedding_status="completed")
+        result = await _documents_module().update_document_status_detailed(
+            "doc-1",
+            "test_user_user_id",
+            embedding_status="completed",
+        )
 
     assert result["success"] is True
     assert result["updates"]["embeddingStatus"] == "completed"
@@ -181,7 +200,7 @@ async def test_async_list_documents_returns_empty_for_unprovisioned_user():
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db):
-        result = await async_list_documents("missing-user", filter_obj, pagination)
+        result = await _documents_module().async_list_documents("missing-user", filter_obj, pagination)
 
     assert result == {"documents": [], "total": 0, "limit": 7, "offset": 14}
     mock_connection.session.assert_not_called()
@@ -261,7 +280,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
          patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
          patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
-        result = await async_list_documents("auth-sub-1", filter_obj, pagination)
+        result = await _documents_module().async_list_documents("auth-sub-1", filter_obj, pagination)
 
     assert result["total"] == 2
     assert result["limit"] == 5

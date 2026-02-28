@@ -1,5 +1,6 @@
 """Unit tests covering the FastAPI startup sequence."""
 
+import importlib
 import os
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 
-import main
+
+def _main_module():
+    """Always resolve the current main module to avoid stale reload references."""
+    return importlib.import_module("main")
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +41,7 @@ class TestInitializeWeaviateCollections:
     async def test_creates_missing_collections(self):
         connection, client = make_connection(list_all_return=["PDFDocument"])
 
-        await main.initialize_weaviate_collections(connection)
+        await _main_module().initialize_weaviate_collections(connection)
 
         created = client.collections.create.call_args_list
         assert len(created) == 1
@@ -47,14 +51,14 @@ class TestInitializeWeaviateCollections:
     async def test_skips_existing_collections(self):
         connection, client = make_connection(list_all_return=["DocumentChunk", "PDFDocument"])
 
-        await main.initialize_weaviate_collections(connection)
+        await _main_module().initialize_weaviate_collections(connection)
         client.collections.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_creates_all_when_none_exist(self):
         connection, client = make_connection(list_all_return=[])
 
-        await main.initialize_weaviate_collections(connection)
+        await _main_module().initialize_weaviate_collections(connection)
         created_names = {call.kwargs["name"] for call in client.collections.create.call_args_list}
         assert created_names == {"DocumentChunk", "PDFDocument"}
 
@@ -121,7 +125,7 @@ class TestLifespan:
 
         app = FastAPI()
 
-        async with main.lifespan(app):
+        async with _main_module().lifespan(app):
             mock_conn_cls.assert_called_once()
             connection.connect_to_weaviate.assert_awaited_once()
             client.collections.list_all.assert_called()
@@ -137,7 +141,7 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="boom"):
-            async with main.lifespan(app):
+            async with _main_module().lifespan(app):
                 pass
 
     @pytest.mark.asyncio
@@ -150,7 +154,7 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="bad collections"):
-            async with main.lifespan(app):
+            async with _main_module().lifespan(app):
                 pass
         connection.close.assert_not_called()
 
@@ -168,7 +172,7 @@ class TestLifespan:
 
         app = FastAPI()
 
-        async with main.lifespan(app):
+        async with _main_module().lifespan(app):
             mock_conn_cls.assert_called_with(url="https://example:9090")
             mock_init.assert_awaited_once()
 
@@ -181,7 +185,7 @@ class TestLifespan:
 
         app = FastAPI()
 
-        async with main.lifespan(app):
+        async with _main_module().lifespan(app):
             pass
 
         connection.close.assert_awaited_once()
@@ -195,7 +199,7 @@ class TestLifespan:
 
         app = FastAPI()
 
-        async with main.lifespan(app):
+        async with _main_module().lifespan(app):
             pass
 
         mock_subsystems["validate_schemas"].assert_called_once_with(mock_subsystems["db"])
@@ -209,7 +213,7 @@ class TestLifespan:
 
         app = FastAPI()
 
-        async with main.lifespan(app):
+        async with _main_module().lifespan(app):
             pass
 
         mock_subsystems["validate_agents"].assert_called_once()
@@ -224,7 +228,7 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="unknown output schema"):
-            async with main.lifespan(app):
+            async with _main_module().lifespan(app):
                 pass
 
     @pytest.mark.asyncio
@@ -239,7 +243,7 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="LLM provider validation failed"):
-            async with main.lifespan(app):
+            async with _main_module().lifespan(app):
                 pass
         mock_conn_cls.assert_not_called()
         _mock_init.assert_not_awaited()
@@ -256,5 +260,5 @@ class TestLifespan:
         app = FastAPI()
 
         with pytest.raises(RuntimeError, match="Agent runtime validation failed"):
-            async with main.lifespan(app):
+            async with _main_module().lifespan(app):
                 pass
