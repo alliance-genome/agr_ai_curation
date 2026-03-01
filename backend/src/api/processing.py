@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 
 
+def _stage_value(stage: object) -> str:
+    """Return a stable stage label for enums/strings in status payloads."""
+    return getattr(stage, "value", str(stage))
+
+
 @router.post("/documents/{document_id}/reprocess", response_model=OperationResult)
 async def reprocess_document_endpoint(
     background_tasks: BackgroundTasks,
@@ -59,9 +64,10 @@ async def reprocess_document_endpoint(
             pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
             # Allow reprocessing if it's been stuck for a while or if we want to force it
             # For now, strict check
+            stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else "unknown"
             raise HTTPException(
                 status_code=409,
-                detail=f"Document is currently being processed (stage: {pipeline_status.current_stage.value if pipeline_status else 'unknown'})"
+                detail=f"Document is currently being processed (stage: {stage_label})"
             )
 
         # Get filename to construct path
@@ -184,9 +190,10 @@ async def reembed_document_endpoint(
 
         if doc_status == ProcessingStatus.PROCESSING:
             pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+            stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else "unknown"
             raise HTTPException(
                 status_code=409,
-                detail=f"Document is currently being processed (stage: {pipeline_status.current_stage.value if pipeline_status else 'unknown'})"
+                detail=f"Document is currently being processed (stage: {stage_label})"
             )
 
         if document.get("total_chunks", 0) == 0:

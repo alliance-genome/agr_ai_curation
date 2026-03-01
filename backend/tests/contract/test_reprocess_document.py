@@ -1,504 +1,116 @@
-"""Contract tests for reprocessDocument endpoint.
+"""Contract tests for POST /weaviate/documents/{document_id}/reprocess."""
 
-These tests verify the API contract for the document reprocessing endpoint.
-They test reprocessing with different strategies, force reparse option, and concurrent processing checks.
-"""
-
-import pytest
-from fastapi.testclient import TestClient
-import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-# Add the backend root directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from fastapi.testclient import TestClient
+import pytest
 
-from src.models.api_schemas import OperationResult
-from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
-from src.models.strategy import ChunkingStrategy, ChunkingMethod, StrategyName
-from datetime import datetime
-
-pytestmark = pytest.mark.skip(
-    reason="Legacy contract suite pending UUID/runtime refresh; excluded from default regression run."
-)
+from src.models.pipeline import PipelineStatus, ProcessingStage
 
 
-def _create_document_with_metadata(document_id: str, filename: str, file_size: int,
-                                     creation_date: str, last_accessed_date: str,
-                                     embedding_status, vector_count: int,
-                                     processing_status, error_message=None) -> PDFDocument:
-    """Helper to create PDFDocument with required metadata structure."""
-    metadata = DocumentMetadata(
-        page_count=10,
-        checksum="test-checksum",
-        document_type="pdf",
-        last_processed_stage=processing_status.value
-    )
-    return PDFDocument(
-        id=document_id,
-        filename=filename,
-        file_size=file_size,
-        creation_date=datetime.fromisoformat(creation_date),
-        last_accessed_date=datetime.fromisoformat(last_accessed_date),
-        processing_status=processing_status,
-        embedding_status=embedding_status,
-        vector_count=vector_count,
-        metadata=metadata
-    )
+@pytest.fixture
+def client():
+    from main import app
+    from src.api.auth import auth
+
+    app.dependency_overrides[auth.get_user] = lambda: {
+        "sub": "contract-user",
+        "uid": "contract-user",
+        "email": "contract@test.local",
+        "name": "Contract User",
+        "groups": ["developers"],
+        "cognito:groups": ["developers"],
+    }
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(auth.get_user, None)
 
 
-class TestReprocessDocumentEndpoint:
-    """Contract tests for POST /weaviate/documents/{document_id}/reprocess endpoint."""
+def _ready_document(processing_status: str = "completed", filename: str = "paper.pdf") -> dict:
+    return {
+        "document": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "filename": filename,
+            "processing_status": processing_status,
+        },
+        "total_chunks": 3,
+    }
 
-    @pytest.fixture
-    def client(self):
-        """Create a test client for the FastAPI app."""
-        from main import app
-        from src.api.auth import auth
 
-        app.dependency_overrides[auth.get_user] = lambda: {
-            "sub": "contract-user",
-            "uid": "contract-user",
-            "email": "contract@test.local",
-            "name": "Contract User",
-            "groups": ["developers"],
-            "cognito:groups": ["developers"],
-        }
-        try:
-            yield TestClient(app)
-        finally:
-            app.dependency_overrides.pop(auth.get_user, None)
+def test_reprocess_success_returns_operation_result(client: TestClient, tmp_path: Path):
+    document_id = "11111111-1111-1111-1111-111111111111"
+    base_storage = tmp_path / "pdf_storage"
+    file_path = base_storage / "contract-user" / document_id / "paper.pdf"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(b"%PDF-1.7")
 
-    @pytest.fixture
-    def completed_document(self) -> PDFDocument:
-        """Create a document that has completed processing."""
-        return _create_document_with_metadata(
-            document_id="doc_completed",
-            filename="completed.pdf",
-            file_size=1500000,
-            creation_date="2025-01-10T10:00:00",
-            last_accessed_date="2025-01-20T15:00:00",
-            embedding_status=EmbeddingStatus.COMPLETED,
-            vector_count=100,
-            processing_status=ProcessingStatus.COMPLETED,
-            error_message=None
-        )
-
-    @pytest.fixture
-    def failed_document(self) -> PDFDocument:
-        """Create a document that failed processing."""
-        return _create_document_with_metadata(
-            document_id="doc_failed",
-            filename="failed.pdf",
-            file_size=2000000,
-            creation_date="2025-01-12T09:00:00",
-            last_accessed_date="2025-01-20T14:00:00",
-            embedding_status=EmbeddingStatus.FAILED,
-            vector_count=0,
-            processing_status=ProcessingStatus.FAILED,
-            error_message="Processing failed: Invalid PDF structure"
-        )
-
-    @pytest.fixture
-    def processing_document(self) -> PDFDocument:
-        """Create a document currently being processed."""
-        return _create_document_with_metadata(
-            document_id="doc_processing",
-            filename="processing.pdf",
-            file_size=1800000,
-            creation_date="2025-01-20T09:00:00",
-            last_accessed_date="2025-01-20T16:30:00",
-            embedding_status=EmbeddingStatus.PROCESSING,
-            vector_count=50,
-            processing_status=ProcessingStatus.PROCESSING,
-            error_message=None
-        )
-
-    @pytest.fixture
-    def available_strategies(self) -> list:
-        """Create list of available chunking strategies."""
-        return [
-            ChunkingStrategy(
-                strategy_name=StrategyName.RESEARCH,
-                chunking_method=ChunkingMethod.BY_TITLE,
-                max_characters=1500,
-                overlap_characters=200,
-                include_metadata=True,
-                exclude_element_types=[]
-            ),
-            ChunkingStrategy(
-                strategy_name=StrategyName.RESEARCH,
-                chunking_method=ChunkingMethod.BY_PARAGRAPH,
-                max_characters=1000,
-                overlap_characters=100,
-                include_metadata=True,
-                exclude_element_types=[]
-            ),
-            ChunkingStrategy(
-                strategy_name=StrategyName.RESEARCH,
-                chunking_method=ChunkingMethod.BY_CHARACTER,
-                max_characters=2000,
-                overlap_characters=400,
-                include_metadata=True,
-                exclude_element_types=[]
-            ),
-            ChunkingStrategy(
-                strategy_name=StrategyName.RESEARCH,
-                chunking_method=ChunkingMethod.BY_PARAGRAPH,
-                max_characters=1500,
-                overlap_characters=200,
-                include_metadata=True,
-                exclude_element_types=[]
-            )
-        ]
-
-    def test_reprocessing_with_different_strategy(self, client, completed_document, available_strategies):
-        """Test reprocessing a document with a different chunking strategy."""
-        document_id = "doc_completed"
-
-        # Request reprocessing with different strategy
-        request_data = {
-            "strategy_name": "legal",
-            "force_reparse": False
-        }
-
+    with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.processing.get_pdf_storage_path", return_value=base_storage), \
+         patch("src.api.processing.update_document_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.api.processing.pipeline_tracker.track_pipeline_progress", new_callable=AsyncMock) as mock_track, \
+         patch("src.api.processing.BackgroundTasks.add_task", autospec=True, return_value=None):
+        mock_get_document.return_value = _ready_document()
         response = client.post(
             f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
+            json={"strategy_name": "research", "force_reparse": False},
         )
 
-        if hasattr(response, 'status_code'):
-            assert response.status_code == 200
-            data = response.json()
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["document_id"] == document_id
+    assert "reprocessing initiated" in data["message"].lower()
+    mock_update_status.assert_awaited_once()
+    mock_track.assert_awaited_once()
 
-            # Check success response
-            if isinstance(data, dict) and "success" in data:
-                assert data["success"] is True
-                assert "message" in data
-                assert "reprocess" in data["message"].lower() or "initiated" in data["message"].lower()
-                assert data.get("document_id") == document_id
 
-            # Verify document status changed to processing
-            response = client.get(f"/weaviate/documents/{document_id}")
-            if response.status_code == 200:
-                doc_data = response.json()
-                doc = doc_data.get("document", doc_data)
-                # Document should be in processing state
-                assert doc["processing_status"] in ["processing", "pending"]
+def test_reprocess_returns_404_when_document_missing(client: TestClient):
+    with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document:
+        mock_get_document.return_value = None
+        response = client.post(
+            "/weaviate/documents/doc-missing/reprocess",
+            json={"strategy_name": "research", "force_reparse": False},
+        )
 
-    def test_force_reparse_option(self, client, completed_document):
-        """Test force reparsing from original PDF."""
-        document_id = "doc_completed"
+    assert response.status_code == 404
 
-        # Request with force reparse
-        request_data = {
-            "strategy_name": "technical",
-            "force_reparse": True
-        }
 
+def test_reprocess_returns_409_when_processing_active(client: TestClient):
+    document_id = "11111111-1111-1111-1111-111111111111"
+    now = datetime.now(timezone.utc)
+    with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.processing.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_pipeline_status:
+        mock_get_document.return_value = _ready_document(processing_status="processing")
+        mock_pipeline_status.return_value = PipelineStatus(
+            document_id="doc-1",
+            current_stage=ProcessingStage.CHUNKING,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=50,
+            message="chunking",
+        )
         response = client.post(
             f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
+            json={"strategy_name": "research", "force_reparse": False},
         )
 
-        if hasattr(response, 'status_code'):
-            assert response.status_code == 200
-            data = response.json()
+    assert response.status_code == 409
+    assert "currently being processed" in response.json()["detail"].lower()
 
-            # Check that force reparse is acknowledged
-            if isinstance(data, dict):
-                assert data.get("success") is True
-                message = data.get("message", "")
-                # Message might indicate full reprocessing
-                assert "reprocess" in message.lower() or "reparse" in message.lower()
 
-    def test_concurrent_processing_check(self, client, processing_document):
-        """Test that concurrent reprocessing is prevented."""
-        document_id = "doc_processing"
-
-        # Try to reprocess a document that's already processing
-        request_data = {
-            "strategy_name": "general",
-            "force_reparse": False
-        }
-
+def test_reprocess_returns_404_when_source_file_missing(client: TestClient, tmp_path: Path):
+    document_id = "11111111-1111-1111-1111-111111111111"
+    base_storage = tmp_path / "pdf_storage"
+    with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.processing.get_pdf_storage_path", return_value=base_storage):
+        mock_get_document.return_value = _ready_document(filename="missing.pdf")
         response = client.post(
             f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
+            json={"strategy_name": "research", "force_reparse": True},
         )
 
-        if hasattr(response, 'status_code'):
-            # Should return 409 Conflict
-            assert response.status_code == 409
-            data = response.json()
-
-            # Check conflict response
-            if isinstance(data, dict) and "success" in data:
-                assert data["success"] is False
-                assert "already processing" in data["message"].lower() or "conflict" in data["message"].lower()
-                error = data.get("error", {})
-                assert error.get("code") == "PROCESSING_CONFLICT" or "conflict" in str(error).lower()
-            else:
-                assert "processing" in str(data).lower() or "conflict" in str(data).lower()
-
-    def test_reprocess_failed_document(self, client, failed_document):
-        """Test reprocessing a document that previously failed."""
-        document_id = "doc_failed"
-
-        request_data = {
-            "strategy_name": "research",
-            "force_reparse": True  # Often needed for failed documents
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            assert response.status_code == 200
-            data = response.json()
-
-            # Failed documents should be reprocessable
-            if isinstance(data, dict):
-                assert data.get("success") is True
-                assert data.get("document_id") == document_id
-
-    def test_invalid_strategy_name(self, client, completed_document):
-        """Test reprocessing with invalid strategy name."""
-        document_id = "doc_completed"
-
-        request_data = {
-            "strategy_name": "invalid_strategy",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            # Should return 400 Bad Request or 422 Validation Error
-            assert response.status_code in [400, 422]
-            data = response.json()
-
-            # Error should mention invalid strategy
-            error_msg = str(data).lower()
-            assert "invalid" in error_msg or "strategy" in error_msg or "not found" in error_msg
-
-    def test_reprocess_nonexistent_document(self, client):
-        """Test reprocessing a non-existent document."""
-        nonexistent_id = "nonexistent_doc"
-
-        request_data = {
-            "strategy_name": "general",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{nonexistent_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            assert response.status_code == 404
-            data = response.json()
-            assert "not found" in str(data).lower()
-
-    def test_request_validation(self, client):
-        """Test request body validation."""
-        document_id = "doc_completed"
-
-        # Missing required field
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json={}
-        )
-
-        if hasattr(response, 'status_code'):
-            assert response.status_code in [400, 422]
-
-        # Invalid data type
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json={
-                "strategy_name": 123,  # Should be string
-                "force_reparse": "yes"  # Should be boolean
-            }
-        )
-
-        if hasattr(response, 'status_code'):
-            assert response.status_code in [400, 422]
-
-    def test_reprocess_with_same_strategy(self, client, completed_document):
-        """Test reprocessing with the same strategy (might be useful for retries)."""
-        document_id = "doc_completed"
-
-        # Reprocess with same strategy
-        request_data = {
-            "strategy_name": "research",  # Assuming this was the original
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            # Should allow reprocessing even with same strategy
-            assert response.status_code == 200
-            data = response.json()
-
-            if isinstance(data, dict):
-                assert data.get("success") is True
-
-    def test_reprocess_response_schema(self, client, completed_document):
-        """Test that reprocess response matches expected schema."""
-        document_id = "doc_completed"
-
-        request_data = {
-            "strategy_name": "technical",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            assert response.status_code == 200
-            data = response.json()
-
-            # Try to parse as OperationResult
-            try:
-                result = OperationResult(**data)
-                assert result.success is True
-                assert result.message is not None
-                assert result.document_id == document_id
-                assert result.error is None
-            except Exception:
-                # Alternative response format
-                assert "success" in data or "status" in data
-
-    def test_reprocess_partial_document(self, client):
-        """Test reprocessing a document with partial embeddings."""
-        document_id = "doc_partial"
-
-        request_data = {
-            "strategy_name": "general",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            # Partial documents should be reprocessable
-            assert response.status_code == 200
-
-    def test_reprocess_status_tracking(self, client, completed_document):
-        """Test that reprocessing updates can be tracked."""
-        document_id = "doc_completed"
-
-        # Start reprocessing
-        request_data = {
-            "strategy_name": "legal",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code') and response.status_code == 200:
-            # Check document status
-            response = client.get(f"/weaviate/documents/{document_id}")
-            if response.status_code == 200:
-                doc_data = response.json()
-                doc = doc_data.get("document", doc_data)
-
-                # Should have processing-related status
-                assert doc["processing_status"] in ["pending", "processing", "completed", "failed"]
-
-    def test_reprocess_with_custom_parameters(self, client, completed_document):
-        """Test reprocessing with additional custom parameters (if supported)."""
-        document_id = "doc_completed"
-
-        # Request with extended parameters
-        request_data = {
-            "strategy_name": "technical",
-            "force_reparse": False,
-            # Additional parameters that might be supported
-            "priority": "high",
-            "notify_on_completion": True,
-            "preserve_metadata": True
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            # Should either accept or ignore extra parameters
-            assert response.status_code in [200, 400, 422]
-
-    def test_reprocess_queue_handling(self, client):
-        """Test that multiple reprocess requests are queued properly."""
-        # Request reprocessing for multiple documents
-        document_ids = ["doc1", "doc2", "doc3"]
-        responses = []
-
-        for doc_id in document_ids:
-            request_data = {
-                "strategy_name": "general",
-                "force_reparse": False
-            }
-            response = client.post(
-                f"/weaviate/documents/{doc_id}/reprocess",
-                json=request_data
-            )
-            if hasattr(response, 'status_code'):
-                responses.append(response.status_code)
-
-        # All should be accepted (200) or not found (404)
-        for status in responses:
-            assert status in [200, 404]
-
-    def test_reprocess_error_recovery(self, client, failed_document):
-        """Test that reprocessing can recover from previous errors."""
-        document_id = "doc_failed"
-
-        # First attempt without force reparse
-        request_data = {
-            "strategy_name": "research",
-            "force_reparse": False
-        }
-
-        response = client.post(
-            f"/weaviate/documents/{document_id}/reprocess",
-            json=request_data
-        )
-
-        if hasattr(response, 'status_code'):
-            first_attempt = response.status_code
-
-            # Second attempt with force reparse
-            request_data["force_reparse"] = True
-            response = client.post(
-                f"/weaviate/documents/{document_id}/reprocess",
-                json=request_data
-            )
-            second_attempt = response.status_code
-
-            # At least one attempt should succeed
-            assert 200 in [first_attempt, second_attempt]
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    assert response.status_code == 404
+    assert "source file not found" in response.json()["detail"].lower()
