@@ -45,7 +45,13 @@ from .audit_labels import (
     build_tool_complete_friendly_name as _shared_build_tool_complete_friendly_name,
 )
 from src.lib.config.providers_loader import get_default_runner_provider
-from .config import get_api_key, get_base_url
+from .config import (
+    get_api_key,
+    get_base_url,
+    get_groq_tool_call_max_retries,
+    get_groq_tool_call_retry_delay_seconds,
+    is_retryable_groq_tool_call_error,
+)
 
 # Prompt context tracking for execution logging
 from src.lib.prompts.context import clear_prompt_context, commit_pending_prompts, get_used_prompts
@@ -209,6 +215,95 @@ def _build_tool_start_friendly_name(tool_name: str, custom_display_names: Dict[s
 def _build_tool_complete_friendly_name(tool_name: str, custom_display_names: Dict[str, str]) -> str:
     """Build a stable TOOL_COMPLETE label and guarantee non-empty output."""
     return _shared_build_tool_complete_friendly_name(tool_name, custom_display_names)
+
+
+def _extract_model_identifier(model: Any) -> str:
+    """Best-effort model ID extraction from agent model config."""
+    if isinstance(model, str):
+        return model
+    return str(getattr(model, "model", "") or "").strip()
+
+
+def _is_groq_runtime_model(model: Any) -> bool:
+    """Detect whether runtime model appears to be Groq-backed."""
+    model_id = _extract_model_identifier(model).lower()
+    if model_id.startswith("groq/"):
+        return True
+    if "groq" in model_id and "/" in model_id:
+        return True
+
+    base_url = str(getattr(model, "base_url", "") or "").lower()
+    if "api.groq.com" in base_url:
+        return True
+
+    return False
+
+
+async def _run_agent_with_groq_retry(
+    *,
+    agent: Agent,
+    input_items: List[Dict[str, Any]],
+    user_id: str,
+    document_id: Optional[str],
+    document_name: Optional[str],
+    user_message: str,
+    trace_id: str,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Run tracing stream with Groq-specific retry on transient tool-call parse failures."""
+    max_retries = get_groq_tool_call_max_retries() if _is_groq_runtime_model(getattr(agent, "model", None)) else 0
+    retry_delay_seconds = get_groq_tool_call_retry_delay_seconds()
+    attempt = 0
+
+    while True:
+        try:
+            async for event in _run_agent_with_tracing(
+                agent=agent,
+                input_items=input_items,
+                user_id=user_id,
+                document_id=document_id,
+                document_name=document_name,
+                user_message=user_message,
+                trace_id=trace_id,
+            ):
+                yield event
+            return
+        except SpecialistOutputError:
+            raise
+        except Exception as exc:
+            if attempt >= max_retries or not is_retryable_groq_tool_call_error(exc):
+                raise
+
+            attempt += 1
+            sleep_seconds = retry_delay_seconds * attempt
+            logger.warning(
+                "Retrying Groq run after transient tool-call parse failure "
+                "(attempt %s/%s, delay=%ss): %s",
+                attempt,
+                max_retries,
+                round(sleep_seconds, 2),
+                exc,
+                extra={
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                },
+            )
+            yield {
+                "type": "SUPERVISOR_RETRY",
+                "timestamp": _now_iso(),
+                "details": {
+                    "attempt": attempt,
+                    "maxRetries": max_retries,
+                    "reason": "groq_tool_call_json_parse",
+                    "message": (
+                        "Transient Groq tool-call JSON parse failure detected. "
+                        "Retrying automatically."
+                    ),
+                },
+            }
+            if sleep_seconds > 0:
+                await asyncio.sleep(sleep_seconds)
 
 
 def _log_used_prompts_to_db(
@@ -1074,7 +1169,7 @@ async def run_agent_streamed(
                 try:
                     # Run agent inside the active span context
                     # All OpenAI calls will automatically be children of root_span
-                    async for event in _run_agent_with_tracing(
+                    async for event in _run_agent_with_groq_retry(
                         agent=agent,
                         input_items=input_items,
                         user_id=user_id,
@@ -1286,7 +1381,7 @@ async def run_agent_streamed(
                 "details": {"message": f"Processing query with {agent.name}"}
             }
             try:
-                async for event in _run_agent_with_tracing(
+                async for event in _run_agent_with_groq_retry(
                     agent=agent,
                     input_items=input_items,
                     user_id=user_id,
@@ -1322,7 +1417,7 @@ async def run_agent_streamed(
             "details": {"message": f"Processing query with {agent.name}"}
         }
         try:
-            async for event in _run_agent_with_tracing(
+            async for event in _run_agent_with_groq_retry(
                 agent=agent,
                 input_items=input_items,
                 user_id=user_id,

@@ -11,7 +11,7 @@ Requirements from quickstart.md:59-72 and tasks.md:T047:
 - Verify /weaviate/health is accessible without auth (returns 200)
 - Test document endpoints (/weaviate/documents, /weaviate/documents/upload, etc.)
 - Test chat endpoints (/api/chat, /api/chat/history)
-- Test user profile endpoint (/users/me)
+- Test user profile endpoint (/api/users/me)
 - Verify 401 responses include appropriate error message
 
 CRITICAL: This test MUST PASS after T039-T046 implementation (Cognito authentication).
@@ -57,6 +57,15 @@ def client(monkeypatch):
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
+
+    # Ensure patching get_auth_dependency takes effect even when another module
+    # imported `main` earlier in this pytest process.
+    modules_to_clear = [
+        name for name in list(sys.modules.keys())
+        if name == "main" or name.startswith("src.")
+    ]
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
 
     class MockUnauthenticatedAuth:
         def __init__(self, *args, **kwargs):
@@ -110,8 +119,8 @@ class TestAuthenticationRequired:
             # Success case - verify proper health check response
             data = response.json()
             assert "status" in data, "Health response should include status"
-            assert data["status"] in ["ok", "degraded"], \
-                f"Health status should be 'ok' or 'degraded', got {data['status']}"
+            assert data["status"] in ["ok", "degraded", "healthy"], \
+                f"Health status should be ok/degraded/healthy, got {data['status']}"
         elif response.status_code == 503:
             # Service unavailable case - verify proper error structure
             data = response.json()
@@ -240,13 +249,13 @@ class TestAuthenticationRequired:
                "not authenticated" in data["detail"].lower()
 
     def test_user_profile_requires_auth(self, client):
-        """Test that GET /users/me returns 401 without auth.
+        """Test that GET /api/users/me returns 401 without auth.
 
         User profile endpoint requires authentication to identify the user.
 
         Validates: FR-001, FR-008 - User profile requires authentication
         """
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
 
         assert response.status_code == 401, \
             f"Expected 401 Unauthorized, got {response.status_code}"
@@ -400,7 +409,7 @@ class TestAuthenticationRequired:
             ("GET", "/weaviate/documents", None),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
             ("GET", "/api/chat/history", None),
-            ("GET", "/users/me", None),
+            ("GET", "/api/users/me", None),
             ("POST", "/api/feedback/submit", {
                 "session_id": "test",
                 "curator_id": "test",

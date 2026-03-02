@@ -467,7 +467,7 @@ A FastAPI `BackgroundTask` then enriches the payload with Langfuse traces, store
 
 ## User & Auth Utilities
 
-- `GET /api/users/me` – returns the auto-provisioned PostgreSQL record (`user_id`, `email`, `display_name`, timestamps). Triggers provisioning if the user does not exist.
+- `GET /api/users/me` – returns the auto-provisioned PostgreSQL record (`id`, `auth_sub`, `email`, `display_name`, timestamps). Triggers provisioning if the user does not exist.
 - `GET /api/auth/login` – redirects to Cognito Hosted UI. Requires browser interaction.
 - `GET /api/auth/callback` – exchanges the authorization code, sets the `cognito_token` cookie.
 - `POST /api/auth/logout` – clears cookies + performs Cognito global logout.

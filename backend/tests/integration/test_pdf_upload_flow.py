@@ -43,7 +43,7 @@ def seeded_document():
         id=document_id,
         filename="integration.pdf",
         file_path=f"{document_id}/integration.pdf",
-        file_hash="f" * 32,
+        file_hash="f" * 64,
         file_size=4096,
         page_count=7,
     )

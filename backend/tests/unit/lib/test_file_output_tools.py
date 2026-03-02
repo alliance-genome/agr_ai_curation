@@ -3,16 +3,31 @@
 Tests the tool implementation functions and their context variable integration.
 """
 import json
+import importlib
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from src.lib.context import (
-    set_current_trace_id,
-    set_current_session_id,
-    set_current_user_id,
-    clear_context,
-)
+
+def _context_module():
+    """Load context helpers lazily to avoid stale module references in full-suite runs."""
+    return importlib.import_module("src.lib.context")
+
+
+def clear_context():
+    _context_module().clear_context()
+
+
+def set_current_trace_id(value: str):
+    _context_module().set_current_trace_id(value)
+
+
+def set_current_session_id(value: str):
+    _context_module().set_current_session_id(value)
+
+
+def set_current_user_id(value: str):
+    _context_module().set_current_user_id(value)
 
 
 class TestGetContextFromContextvars:

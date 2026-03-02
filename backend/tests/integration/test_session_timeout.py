@@ -90,6 +90,13 @@ def client_with_expired_token(monkeypatch, mock_expired_auth):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     # Patch get_auth_dependency BEFORE importing app
     with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
         mock_get_auth_dep.return_value = Security(mock_expired_auth.get_user)
@@ -153,16 +160,24 @@ def client_with_valid_token(monkeypatch, mock_valid_auth):
 
     import sys
     import os
+    from fastapi import Security
 
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Patch the auth object itself BEFORE importing app
-    # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", mock_valid_auth):
-        # Also mock provision_weaviate_tenants to prevent real tenant creation
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+        mock_get_auth_dep.return_value = Security(mock_valid_auth.get_user)
+
+        # Also mock provisioning side effects to keep timeout tests focused on auth.
         with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
             with patch("src.services.user_service.get_connection"):
                 from main import app
@@ -236,7 +251,7 @@ class TestSessionTimeout:
 
         Validates FR-018: User profile endpoint enforces timeout.
         """
-        response = client_with_expired_token.get("/users/me")
+        response = client_with_expired_token.get("/api/users/me")
 
         assert response.status_code == 401, \
             f"Expected 401 for expired token, got {response.status_code}"
@@ -254,7 +269,7 @@ class TestSessionTimeout:
         Note: This test uses a mocked valid token to verify that
         tokens within the timeout window are still accepted.
         """
-        response = client_with_valid_token.get("/users/me")
+        response = client_with_valid_token.get("/api/users/me")
 
         # Valid token should be accepted (200 or appropriate success code)
         assert response.status_code in [200, 201], \
@@ -284,7 +299,7 @@ class TestSessionTimeout:
         """
         protected_endpoints = [
             ("GET", "/weaviate/documents", None),
-            ("GET", "/users/me", None),
+            ("GET", "/api/users/me", None),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
             ("GET", "/api/chat/history", None),
         ]

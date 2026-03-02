@@ -56,7 +56,7 @@ jobs:
             -e OPENAI_API_KEY=test-key-for-unit-tests \
             -e LANGFUSE_PUBLIC_KEY=test-key \
             -e LANGFUSE_SECRET_KEY=test-key \
-            -e DOCLING_TIMEOUT=300 \
+            -e PDF_EXTRACTION_TIMEOUT=300 \
             -e EMBEDDING_MODEL=text-embedding-3-small \
             -e EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true \
             -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 \

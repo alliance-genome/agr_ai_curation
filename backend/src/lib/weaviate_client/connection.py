@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
 import asyncio
+import os
 from urllib.parse import urlparse
 
 import weaviate
@@ -66,14 +67,29 @@ class WeaviateConnection:
                 # For remote connections, use custom connection
                 secure = parsed.scheme == "https"
                 auth_config = Auth.api_key(self.api_key) if self.api_key else None
+                grpc_host = os.getenv("WEAVIATE_GRPC_HOST", host)
+                grpc_port_raw = os.getenv("WEAVIATE_GRPC_PORT", "50051")
+                try:
+                    grpc_port = int(grpc_port_raw)
+                except ValueError:
+                    logger.warning(
+                        "Invalid WEAVIATE_GRPC_PORT=%s; falling back to 50051",
+                        grpc_port_raw,
+                    )
+                    grpc_port = 50051
+                grpc_secure_raw = os.getenv("WEAVIATE_GRPC_SECURE")
+                if grpc_secure_raw is None or grpc_secure_raw == "":
+                    grpc_secure = secure
+                else:
+                    grpc_secure = grpc_secure_raw.strip().lower() in {"1", "true", "yes", "on"}
 
                 self._client = weaviate.connect_to_custom(
                     http_host=host,
                     http_port=port,
                     http_secure=secure,
-                    grpc_host=host,
-                    grpc_port=50051,  # Standard gRPC port
-                    grpc_secure=secure,
+                    grpc_host=grpc_host,
+                    grpc_port=grpc_port,
+                    grpc_secure=grpc_secure,
                     auth_credentials=auth_config,
                     skip_init_checks=False
                 )

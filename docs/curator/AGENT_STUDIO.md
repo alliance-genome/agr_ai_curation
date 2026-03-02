@@ -262,6 +262,10 @@ Yes! That's the main purpose of the Agents tab. Browse all agent prompts and see
 
 Each Model Organism Database has decades of curated data and organism-specific conventions. MOD rules customize the AI to respect these conventions - for example, using WormBase anatomy terms (WBbt) for C. elegans or FlyBase allele naming patterns.
 
+### How do prompts layer together? Can they conflict?
+
+Each agent has a base prompt, optional MOD-specific rules, and optional flow custom instructions. These combine in a defined priority order: flow custom instructions (highest) > base prompt > MOD rules. Flow instructions override everything else for that step. See **[How Prompts Layer Together](CURATION_FLOWS.md#how-prompts-layer-together)** in the Curation Flows guide for full details.
+
 ### What's the difference between Agent Studio's Opus and the main chat?
 
 The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's Opus is for discussing how the AI works, understanding specific responses, and improving the system.

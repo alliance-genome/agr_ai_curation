@@ -1,14 +1,14 @@
 # =============================================================================
-# AGENT DEFINITION: phenotype
+# AGENT DEFINITION: phenotype_extractor
 # =============================================================================
 # Extracts experimentally supported phenotype assertions from uploaded PDFs.
-# Tool name generated at runtime: ask_phenotype_specialist
+# Tool name generated at runtime: ask_phenotype_extractor_specialist
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: phenotype_extraction
+agent_id: phenotype_extractor
 
 name: "Phenotype Extraction Agent"
 

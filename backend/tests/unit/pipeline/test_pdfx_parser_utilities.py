@@ -32,7 +32,7 @@ def parser_env(monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "http://pdfx.local")
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "60")
     monkeypatch.setenv("PDF_EXTRACTION_POLL_INTERVAL_SECONDS", "1")
-    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,docling")
+    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,marker")
     monkeypatch.delenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", raising=False)
     monkeypatch.delenv("PDF_EXTRACTION_AUTH_MODE", raising=False)
 
@@ -68,10 +68,10 @@ def test_parser_init_validation_branches(parser_env, monkeypatch):
 
 def test_parser_download_variant_selection(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
-    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,docling")
-    monkeypatch.setenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", "docling")
+    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,marker")
+    monkeypatch.setenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", "marker")
     parser = PDFXParser()
-    assert parser.download_variant == "docling"
+    assert parser.download_variant == "marker"
 
 
 @pytest.mark.asyncio

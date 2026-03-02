@@ -5,6 +5,80 @@
 # docker compose -f docker-compose.test.yml build backend-tests
 
 services:
+  reranker-transformers-test:
+    image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
+    environment:
+      ENABLE_CUDA: 0
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - test-network
+
+  redis-test:
+    image: redis:7-alpine
+    command: >
+      --requirepass ${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - test-network
+
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${TEST_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${TEST_DB_NAME:-ai_curation}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEST_DB_USER:-postgres} -d ${TEST_DB_NAME:-ai_curation}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    ports:
+      - "${TEST_DB_PORT_HOST:-15434}:5432"
+    networks:
+      - test-network
+
+  # Test-specific Weaviate instance
+  weaviate-test:
+    image: semitechnologies/weaviate:latest
+    depends_on:
+      reranker-transformers-test:
+        condition: service_healthy
+    environment:
+      QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: text2vec-openai
+      ENABLE_MODULES: "text2vec-openai,reranker-transformers"
+      OPENAI_APIKEY: ${OPENAI_API_KEY:-}
+      RERANKER_INFERENCE_API: http://reranker-transformers-test:8080
+      CLUSTER_HOSTNAME: weaviate-test
+      LOG_LEVEL: debug
+      GRPC_HOST: weaviate-test
+      GRPC_PORT: 50051
+      GRPC_SECURE: "false"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "${TEST_WEAVIATE_PORT_HOST:-18080}:8080"
+      - "${TEST_WEAVIATE_GRPC_PORT_HOST:-15051}:50051"
+    networks:
+      - test-network
+
   backend-tests:
     image: ai-curation-backend-tests:latest
     build:
@@ -16,37 +90,28 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=test-key
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
+      - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+      - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_GRPC_SECURE=false
     depends_on:
+      postgres-test:
+        condition: service_healthy
       weaviate-test:
         condition: service_healthy
+      redis-test:
+        condition: service_healthy
     command: python -m pytest tests/ -v --tb=short
-    networks:
-      - test-network
-
-  # Test-specific Weaviate instance
-  weaviate-test:
-    image: semitechnologies/weaviate:latest
-    environment:
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: /var/lib/weaviate
-      DEFAULT_VECTORIZER_MODULE: none
-      ENABLE_MODULES: ''
-      CLUSTER_HOSTNAME: weaviate-test
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
     networks:
       - test-network
 
@@ -62,7 +127,9 @@ services:
       - ./config:/app/config
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - OPENAI_API_KEY=test-key-for-unit-tests
+      - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - LANGFUSE_PUBLIC_KEY=test-key
       - LANGFUSE_SECRET_KEY=test-key
       - PDF_EXTRACTION_TIMEOUT=300
@@ -72,6 +139,16 @@ services:
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+      - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_GRPC_SECURE=false
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      weaviate-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
     # Unit tests use shared CI runner script for validated ignore paths + coverage settings.
     command: bash /app/backend/tests/unit/run_ci_unit_tests.sh
     networks:
@@ -87,17 +164,55 @@ services:
       - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
+      - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - GROQ_BASE_URL=${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      - LLM_PROVIDER_STRICT_MODE=${LLM_PROVIDER_STRICT_MODE:-false}
+      - HEALTH_CHECK_STRICT_MODE=${HEALTH_CHECK_STRICT_MODE:-false}
+      - TESTING_API_KEY=${TESTING_API_KEY:-}
+      - TESTING_API_KEY_USER=${TESTING_API_KEY_USER:-}
+      - TESTING_API_KEY_EMAIL=${TESTING_API_KEY_EMAIL:-}
+      - TESTING_API_KEY_GROUPS=${TESTING_API_KEY_GROUPS:-}
+      - PDF_EXTRACTION_SERVICE_URL=${PDF_EXTRACTION_SERVICE_URL:-}
+      - PDF_EXTRACTION_TIMEOUT=${PDF_EXTRACTION_TIMEOUT:-3600}
+      - PDF_EXTRACTION_POLL_INTERVAL_SECONDS=${PDF_EXTRACTION_POLL_INTERVAL_SECONDS:-2}
+      - PDF_EXTRACTION_METHODS=${PDF_EXTRACTION_METHODS:-}
+      - PDF_EXTRACTION_MERGE=${PDF_EXTRACTION_MERGE:-}
+      - PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD=${PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD:-}
+      - PDF_EXTRACTION_AUTH_MODE=${PDF_EXTRACTION_AUTH_MODE:-none}
+      - PDF_EXTRACTION_BEARER_TOKEN=${PDF_EXTRACTION_BEARER_TOKEN:-}
+      - PDF_EXTRACTION_COGNITO_TOKEN_URL=${PDF_EXTRACTION_COGNITO_TOKEN_URL:-}
+      - PDF_EXTRACTION_COGNITO_CLIENT_ID=${PDF_EXTRACTION_COGNITO_CLIENT_ID:-}
+      - PDF_EXTRACTION_COGNITO_CLIENT_SECRET=${PDF_EXTRACTION_COGNITO_CLIENT_SECRET:-}
+      - PDF_EXTRACTION_COGNITO_SCOPE=${PDF_EXTRACTION_COGNITO_SCOPE:-}
+      - LIVE_BACKEND_PDFX_ENABLE=${LIVE_BACKEND_PDFX_ENABLE:-0}
+      - LIVE_BACKEND_PDFX_TIMEOUT_SECONDS=${LIVE_BACKEND_PDFX_TIMEOUT_SECONDS:-900}
+      - LIVE_BACKEND_PDFX_POLL_INTERVAL_SECONDS=${LIVE_BACKEND_PDFX_POLL_INTERVAL_SECONDS:-2}
+      - LIVE_LLM_ENABLE=${LIVE_LLM_ENABLE:-0}
+      - LIVE_LLM_OPENAI_MODEL=${LIVE_LLM_OPENAI_MODEL:-gpt-5-mini}
+      - LIVE_LLM_GROQ_MODEL=${LIVE_LLM_GROQ_MODEL:-openai/gpt-oss-120b}
+      - PDFX_LIVE_SAMPLE_PDF=${PDFX_LIVE_SAMPLE_PDF:-}
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+      - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_GRPC_SECURE=false
     depends_on:
+      postgres-test:
+        condition: service_healthy
       weaviate-test:
+        condition: service_healthy
+      redis-test:
         condition: service_healthy
     command: python -m pytest tests/integration/ -v --tb=short
     networks:
@@ -115,17 +230,26 @@ services:
       - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
+      - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=false
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+      - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_GRPC_SECURE=false
     depends_on:
+      postgres-test:
+        condition: service_healthy
       weaviate-test:
+        condition: service_healthy
+      redis-test:
         condition: service_healthy
     command: python -m pytest tests/integration/persistence/ -v --tb=short --confcutdir=tests/integration/persistence
     networks:
@@ -141,10 +265,12 @@ services:
       - ./config:/app/config:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - OPENAI_API_KEY=test-key
+      - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - UNSTRUCTURED_API_URL=http://test-unstructured
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true
@@ -152,8 +278,15 @@ services:
       - EMBEDDING_TOKEN_SAFETY_MARGIN=500
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
+      - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_GRPC_SECURE=false
     depends_on:
+      postgres-test:
+        condition: service_healthy
       weaviate-test:
+        condition: service_healthy
+      redis-test:
         condition: service_healthy
     command: python -m pytest tests/contract/ -v --tb=short
     networks:

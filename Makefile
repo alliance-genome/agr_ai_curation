@@ -186,11 +186,13 @@ test-unit: ## Run unit tests only
 .PHONY: test-integration
 test-integration: ## Run integration tests only
 	@echo "$(GREEN)Running integration tests...$(NC)"
+	@./scripts/testing/prepare-test-stack.sh
 	@docker compose -f docker-compose.test.yml run --rm backend-integration-tests
 
 .PHONY: test-contract
 test-contract: ## Run contract tests only
 	@echo "$(GREEN)Running contract tests...$(NC)"
+	@./scripts/testing/prepare-test-stack.sh
 	@docker compose -f docker-compose.test.yml run --rm backend-contract-tests
 
 .PHONY: test-build
@@ -198,11 +200,43 @@ test-build: ## Build test image
 	@echo "$(GREEN)Building test image...$(NC)"
 	@docker compose -f docker-compose.test.yml build backend-tests
 
+.PHONY: test-prepare
+test-prepare: ## Start isolated test infra (postgres/weaviate) and run migrations
+	@echo "$(GREEN)Preparing isolated test infrastructure...$(NC)"
+	@./scripts/testing/prepare-test-stack.sh
+
+.PHONY: test-stack-down
+test-stack-down: ## Stop isolated test infrastructure
+	@echo "$(YELLOW)Stopping isolated test infrastructure...$(NC)"
+	@docker compose -f docker-compose.test.yml down
+
 .PHONY: smoke-llm-local
 smoke-llm-local: check-env ## Run local LLM provider smoke checks and capture evidence JSON
 	@echo "$(GREEN)Starting backend with sourced env and running local LLM smoke checks...$(NC)"
 	@docker compose --env-file "$(ENV_FILE)" up -d backend
 	@./scripts/testing/llm_provider_smoke_local.sh
+
+.PHONY: test-live
+LIVE_TEST_PATH ?= backend/tests/live_integration/
+LIVE_TEST_EXPR ?= manual_only
+test-live: ## Run live backend tests (override with LIVE_TEST_PATH=... LIVE_TEST_EXPR=...)
+	@echo "$(GREEN)Running live tests: path=$(LIVE_TEST_PATH) marker='$(LIVE_TEST_EXPR)'...$(NC)"
+	@bash -lc 'set -euo pipefail; \
+		set -a; source scripts/testing/load-home-test-env.sh; set +a; \
+		if [[ "$${DATABASE_URL:-}" == *"@postgres:"* || "$${DATABASE_URL:-}" == *"@postgres-test:"* ]]; then \
+			export DATABASE_URL="postgresql://$${TEST_DB_USER:-postgres}:$${TEST_DB_PASSWORD:-postgres}@$${TEST_DB_HOST:-127.0.0.1}:$${TEST_DB_PORT:-15434}/$${TEST_DB_NAME:-ai_curation}"; \
+			echo "Using host DATABASE_URL override for local live tests."; \
+		fi; \
+		export LIVE_LLM_ENABLE=1 LIVE_BACKEND_PDFX_ENABLE=1 LIVE_BATCH_ENABLE=1; \
+		PYTHONPATH=backend .venv/bin/pytest "$(LIVE_TEST_PATH)" -m "$(LIVE_TEST_EXPR)" -q -s'
+
+.PHONY: test-live-integration
+test-live-integration: ## Run all manual live backend integration tests (OpenAI/PDFX/Batch)
+	@$(MAKE) test-live LIVE_TEST_PATH=backend/tests/live_integration/ LIVE_TEST_EXPR=manual_only
+
+.PHONY: test-live-batch
+test-live-batch: ## Run live batch processing integration test only
+	@$(MAKE) test-live LIVE_TEST_PATH=backend/tests/live_integration/test_backend_batch_live_processing.py LIVE_TEST_EXPR=manual_only
 
 # =============================================================================
 # DATABASE

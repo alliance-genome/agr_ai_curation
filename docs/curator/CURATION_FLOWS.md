@@ -178,6 +178,31 @@ The Flow Builder validates your flow and shows error indicators when there are i
 
 Validation errors appear as a red banner in the Properties Panel when you select the affected node.
 
+## How Prompts Layer Together
+
+Each agent has multiple prompt layers that combine when the agent runs. Understanding these layers helps you write effective custom instructions and avoid conflicts.
+
+```
+Flow Custom Instructions   ← HIGHEST priority (prepended, overrides everything)
+Base Prompt                ← Core agent behavior (from config/YAML)
+MOD-Specific Rules         ← Appended when your MOD groups are active
+Document Context           ← Auto-injected (document hierarchy, sections, abstract)
+Output Schema              ← Auto-injected when structured output is configured
+```
+
+**Layer 1 — Base Prompt:** The core instructions that define the agent's role, mission, and workflow. You can view these in the Agent Browser on the Agents tab.
+
+**Layer 2 — MOD-Specific Rules:** Customizations for each Model Organism Database (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your MOD groups are active. You can view these via the "Combined View" in the Agent Browser or via "View base prompt & MOD rules" in the node Properties Panel.
+
+**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a node in the flow Properties Panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and MOD rules for that flow step.
+
+**What this means in practice:**
+- If the base prompt says "extract all genes" but your flow custom instructions say "only extract C. elegans genes," the flow instructions win.
+- MOD rules and the base prompt still apply for anything your flow instructions don't address.
+- Each layer has its place: base prompts define core behavior, MOD rules add organism-specific conventions, and flow instructions give you fine-grained control for specific workflows.
+
+> **Tip:** When writing flow custom instructions, you don't need to repeat what's already in the base prompt or MOD rules. Just add what's different or more specific for this particular workflow step.
+
 ## How Flows Execute
 
 Understanding how flows run helps you build effective workflows:
@@ -186,7 +211,7 @@ Understanding how flows run helps you build effective workflows:
 2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
 3. Each step's output is stored under its **output variable name** and available to later steps via `{{variable}}` references
 4. When a step produces a final output (e.g., a file formatter generates a CSV, or Chat Output displays results), the flow **terminates**
-5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step
+5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
 
 **Important:** Because the flow terminates when it reaches an output agent, place your output agent at the end of the chain. Only one output agent will produce results per flow run.
 

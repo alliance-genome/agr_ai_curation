@@ -1,12 +1,12 @@
 """Unit tests for document file download endpoint."""
 
+import importlib
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-import src.config as app_config
 from src.api import documents
 
 
@@ -42,6 +42,12 @@ def _mock_session(monkeypatch, doc, user_id=1):
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user123"))
     monkeypatch.setattr(documents, "provision_user", lambda _session, _principal: SimpleNamespace(id=user_id))
     return session
+
+
+def _patch_runtime_pdf_storage_path(monkeypatch, path):
+    """Patch whichever src.config module instance is currently active."""
+    runtime_config = importlib.import_module("src.config")
+    monkeypatch.setattr(runtime_config, "get_pdf_storage_path", lambda: str(path))
 
 
 @pytest.mark.asyncio
@@ -96,7 +102,7 @@ async def test_download_document_file_returns_403_for_cross_user_access(monkeypa
 
 @pytest.mark.asyncio
 async def test_download_document_file_returns_404_when_file_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -120,7 +126,7 @@ async def test_download_document_file_returns_404_when_file_missing(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     user_dir = tmp_path / "user123"
     user_dir.mkdir(parents=True)
@@ -151,7 +157,7 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_download_document_file_returns_pdfx_json_response(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     user_dir = tmp_path / "user123" / "pdfx_json"
     user_dir.mkdir(parents=True)
@@ -180,7 +186,7 @@ async def test_download_document_file_returns_pdfx_json_response(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_download_document_file_returns_processed_json_response(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     user_dir = tmp_path / "user123" / "processed_json"
     user_dir.mkdir(parents=True)
@@ -209,7 +215,7 @@ async def test_download_document_file_returns_processed_json_response(monkeypatc
 
 @pytest.mark.asyncio
 async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -294,7 +300,7 @@ async def test_get_download_info_returns_403_for_cross_user_access(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     user_dir = tmp_path / "user123"
     (user_dir / "pdfx_json").mkdir(parents=True)
@@ -329,7 +335,7 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
 
 @pytest.mark.asyncio
 async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -356,7 +362,7 @@ async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp
 
 @pytest.mark.asyncio
 async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -379,7 +385,7 @@ async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -403,7 +409,7 @@ async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatc
 
 @pytest.mark.asyncio
 async def test_download_document_file_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -427,7 +433,7 @@ async def test_download_document_file_blocks_processed_json_path_traversal(monke
 
 @pytest.mark.asyncio
 async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,
@@ -450,7 +456,7 @@ async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_config, "get_pdf_storage_path", lambda: str(tmp_path))
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     doc = SimpleNamespace(
         id=_DOC_ID,

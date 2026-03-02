@@ -9,6 +9,8 @@ because store.py validates them at module level.
 """
 
 import os
+import inspect
+import asyncio
 
 import pytest
 from weaviate.classes.config import Configure, DataType, Property
@@ -26,7 +28,8 @@ os.environ.setdefault("CONTENT_PREVIEW_CHARS", "1600")
 os.environ.setdefault("WEAVIATE_BATCH_REQUESTS_PER_MINUTE", "5000")
 os.environ["EMBEDDING_TOKEN_PREFLIGHT_ENABLED"] = "false"
 
-TEST_WEAVIATE_HOST = os.environ.get("WEAVIATE_HOST", "weaviate-test")
+default_weaviate_host = "weaviate-test" if os.path.exists("/.dockerenv") else "127.0.0.1"
+TEST_WEAVIATE_HOST = os.environ.get("WEAVIATE_HOST", default_weaviate_host)
 TEST_WEAVIATE_PORT = int(os.environ.get("WEAVIATE_PORT", "8080"))
 TEST_WEAVIATE_SCHEME = os.environ.get("WEAVIATE_SCHEME", "http")
 TEST_TENANT_NAME = "test_persistence_user"
@@ -56,7 +59,9 @@ def weaviate_connection(weaviate_url):
     yield connection
 
     try:
-        connection.close()
+        close_result = connection.close()
+        if inspect.isawaitable(close_result):
+            asyncio.run(close_result)
     except Exception:
         pass
     finally:

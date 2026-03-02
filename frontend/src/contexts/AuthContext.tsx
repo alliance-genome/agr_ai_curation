@@ -36,9 +36,9 @@ const isDevMode = (): boolean => getEnvFlag(['VITE_DEV_MODE', 'REACT_APP_DEV_MOD
  *
  * Design:
  * - No client-side token storage (XSS protection)
- * - Auth state fetched from /users/me endpoint
- * - Login redirects to backend /auth/login
- * - Logout calls /auth/logout endpoint
+ * - Auth state fetched from /api/users/me endpoint
+ * - Login redirects to backend /api/auth/login
+ * - Logout calls /api/auth/logout endpoint
  *
  * DEV MODE:
  * - When REACT_APP_DEV_MODE=true, bypasses authentication checks

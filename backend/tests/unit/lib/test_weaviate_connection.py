@@ -53,6 +53,11 @@ def test_connect_uses_remote_custom_connection_with_auth(monkeypatch):
     called = {}
     client = SimpleNamespace(is_ready=lambda: True)
 
+    # Ensure service-level defaults from docker-compose env do not leak into this unit expectation.
+    monkeypatch.delenv("WEAVIATE_GRPC_HOST", raising=False)
+    monkeypatch.delenv("WEAVIATE_GRPC_PORT", raising=False)
+    monkeypatch.delenv("WEAVIATE_GRPC_SECURE", raising=False)
+
     monkeypatch.setattr(wc.Auth, "api_key", lambda key: f"auth:{key}")
 
     def _fake_connect_to_custom(**kwargs):
@@ -69,6 +74,29 @@ def test_connect_uses_remote_custom_connection_with_auth(monkeypatch):
     assert called["grpc_port"] == 50051
     assert called["grpc_secure"] is True
     assert called["auth_credentials"] == "auth:secret"
+
+
+def test_connect_uses_env_overrides_for_grpc_in_custom_mode(monkeypatch):
+    conn = wc.WeaviateConnection(url="http://127.0.0.1:18080")
+    called = {}
+    client = SimpleNamespace(is_ready=lambda: True)
+
+    monkeypatch.setenv("WEAVIATE_GRPC_HOST", "127.0.0.1")
+    monkeypatch.setenv("WEAVIATE_GRPC_PORT", "15051")
+    monkeypatch.setenv("WEAVIATE_GRPC_SECURE", "false")
+
+    def _fake_connect_to_custom(**kwargs):
+        called.update(kwargs)
+        return client
+
+    monkeypatch.setattr(wc.weaviate, "connect_to_custom", _fake_connect_to_custom)
+
+    assert conn.connect() is client
+    assert called["http_host"] == "127.0.0.1"
+    assert called["http_port"] == 18080
+    assert called["grpc_host"] == "127.0.0.1"
+    assert called["grpc_port"] == 15051
+    assert called["grpc_secure"] is False
 
 
 def test_connect_wraps_connection_errors(monkeypatch):

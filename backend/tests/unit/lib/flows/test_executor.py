@@ -1,19 +1,40 @@
 """Tests for flow executor custom_instructions wiring."""
 import asyncio
+import importlib
 import json
 import pytest
 from unittest.mock import MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
 
-from src.lib.flows.executor import (
-    _count_agent_ids,
-    flow_requires_document,
-    get_all_agent_tools,
-    build_supervisor_instructions,
-    create_flow_supervisor,
-    execute_flow,
-)
+def _executor_module():
+    """Load flow executor lazily so monkeypatches target the active module instance."""
+    return importlib.import_module("src.lib.flows.executor")
+
+
+def _count_agent_ids(*args, **kwargs):
+    return _executor_module()._count_agent_ids(*args, **kwargs)
+
+
+def flow_requires_document(*args, **kwargs):
+    return _executor_module().flow_requires_document(*args, **kwargs)
+
+
+def get_all_agent_tools(*args, **kwargs):
+    return _executor_module().get_all_agent_tools(*args, **kwargs)
+
+
+def build_supervisor_instructions(*args, **kwargs):
+    return _executor_module().build_supervisor_instructions(*args, **kwargs)
+
+
+def create_flow_supervisor(*args, **kwargs):
+    return _executor_module().create_flow_supervisor(*args, **kwargs)
+
+
+async def execute_flow(*args, **kwargs):
+    async for event in _executor_module().execute_flow(*args, **kwargs):
+        yield event
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import os
 import re
 import json
 import inspect
+from collections import defaultdict
 from typing import Optional, List, Dict, Any, Tuple
 
 from pydantic import BaseModel
@@ -255,6 +256,155 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
     return _err(msg)
 
 
+def _chunk_values(values: List[str], chunk_size: int = 200) -> List[List[str]]:
+    """Return fixed-size chunks to keep SQL IN clauses bounded."""
+    return [values[i:i + chunk_size] for i in range(0, len(values), chunk_size)]
+
+
+def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch gene details in one query when possible, fallback to per-CURIE fetches."""
+    unique_curies = list(dict.fromkeys(curie for curie in gene_curies if curie))
+    if not unique_curies:
+        return {}
+
+    # Best path: one SQL batch lookup via db_methods session internals.
+    if hasattr(db, "_create_session"):
+        try:
+            from sqlalchemy import text
+
+            details: Dict[str, Dict[str, Any]] = {}
+            session = db._create_session()
+            try:
+                sql_query = text(
+                    """
+                SELECT
+                    be.primaryexternalid,
+                    symbol.displaytext as gene_symbol,
+                    fullname.displaytext as gene_fullname,
+                    taxon.curie as taxon_curie,
+                    gt.name as gene_type_name
+                FROM biologicalentity be
+                JOIN gene g ON be.id = g.id
+                LEFT JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+                LEFT JOIN ontologyterm gt ON g.genetype_id = gt.id
+                LEFT JOIN slotannotation symbol ON g.id = symbol.singlegene_id
+                    AND symbol.slotannotationtype = 'GeneSymbolSlotAnnotation'
+                    AND symbol.obsolete = false
+                LEFT JOIN slotannotation fullname ON g.id = fullname.singlegene_id
+                    AND fullname.slotannotationtype = 'GeneFullNameSlotAnnotation'
+                    AND fullname.obsolete = false
+                WHERE be.primaryexternalid IN :gene_ids
+                """
+                )
+                for chunk in _chunk_values(unique_curies):
+                    rows = session.execute(sql_query, {"gene_ids": tuple(chunk)}).fetchall()
+                    for row in rows:
+                        details[row[0]] = {
+                            "curie": row[0],
+                            "symbol": row[1],
+                            "name": row[2],
+                            "taxon": row[3],
+                            "gene_type": row[4],
+                        }
+            finally:
+                session.close()
+
+            if details:
+                return details
+        except Exception as exc:
+            logger.warning("Batch gene detail fetch failed, falling back to per-CURIE lookups: %s", exc)
+
+    details: Dict[str, Dict[str, Any]] = {}
+    for curie in unique_curies:
+        try:
+            gene = db.get_gene(curie)
+        except Exception as exc:
+            logger.warning("Failed to fetch gene details for %s: %s", curie, exc)
+            continue
+        if not gene:
+            continue
+        details[curie] = {
+            "curie": getattr(gene, "primaryExternalId", curie),
+            "symbol": gene.geneSymbol.displayText if getattr(gene, "geneSymbol", None) else None,
+            "name": gene.geneFullName.displayText if getattr(gene, "geneFullName", None) else None,
+            "taxon": getattr(gene, "taxon", None),
+            "gene_type": (
+                gene.geneType.get("name")
+                if getattr(gene, "geneType", None) and isinstance(gene.geneType, dict)
+                else str(gene.geneType) if getattr(gene, "geneType", None) else None
+            ),
+        }
+    return details
+
+
+def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch allele details in one query when possible, fallback to per-CURIE fetches."""
+    unique_curies = list(dict.fromkeys(curie for curie in allele_curies if curie))
+    if not unique_curies:
+        return {}
+
+    # Best path: one SQL batch lookup via db_methods session internals.
+    if hasattr(db, "_create_session"):
+        try:
+            from sqlalchemy import text
+
+            details: Dict[str, Dict[str, Any]] = {}
+            session = db._create_session()
+            try:
+                sql_query = text(
+                    """
+                SELECT
+                    be.primaryexternalid,
+                    symbol.displaytext as allele_symbol,
+                    fullname.displaytext as allele_fullname,
+                    taxon.curie as taxon_curie
+                FROM biologicalentity be
+                JOIN allele a ON be.id = a.id
+                LEFT JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+                LEFT JOIN slotannotation symbol ON a.id = symbol.singleallele_id
+                    AND symbol.slotannotationtype = 'AlleleSymbolSlotAnnotation'
+                    AND symbol.obsolete = false
+                LEFT JOIN slotannotation fullname ON a.id = fullname.singleallele_id
+                    AND fullname.slotannotationtype = 'AlleleFullNameSlotAnnotation'
+                    AND fullname.obsolete = false
+                WHERE be.primaryexternalid IN :allele_ids
+                """
+                )
+                for chunk in _chunk_values(unique_curies):
+                    rows = session.execute(sql_query, {"allele_ids": tuple(chunk)}).fetchall()
+                    for row in rows:
+                        details[row[0]] = {
+                            "curie": row[0],
+                            "symbol": row[1],
+                            "name": row[2],
+                            "taxon": row[3],
+                        }
+            finally:
+                session.close()
+
+            if details:
+                return details
+        except Exception as exc:
+            logger.warning("Batch allele detail fetch failed, falling back to per-CURIE lookups: %s", exc)
+
+    details: Dict[str, Dict[str, Any]] = {}
+    for curie in unique_curies:
+        try:
+            allele = db.get_allele(curie)
+        except Exception as exc:
+            logger.warning("Failed to fetch allele details for %s: %s", curie, exc)
+            continue
+        if not allele:
+            continue
+        details[curie] = {
+            "curie": getattr(allele, "primaryExternalId", curie),
+            "symbol": allele.alleleSymbol.displayText if getattr(allele, "alleleSymbol", None) else None,
+            "name": allele.alleleFullName.displayText if getattr(allele, "alleleFullName", None) else None,
+            "taxon": getattr(allele, "taxon", None),
+        }
+    return details
+
+
 @function_tool(strict_mode=False)
 def agr_curation_query(
     method: str,
@@ -470,6 +620,11 @@ def agr_curation_query(
             if not normalized_symbols:
                 return _err("search_genes_bulk received no valid symbols")
 
+            if force:
+                force_valid, force_error = check_force_parameters(force, force_reason)
+                if not force_valid:
+                    return _err(force_error)
+
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
@@ -478,29 +633,20 @@ def agr_curation_query(
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
-            bulk_items: List[Dict[str, Any]] = []
-            total_matches = 0
+            pending_matches: Dict[str, List[Dict[str, Any]]] = {}
+            validation_messages: Dict[str, str] = {}
+            gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
 
             for symbol in normalized_symbols:
-                item_warnings: List[str] = []
                 if not force:
                     validation = validate_search_symbol(symbol, 'gene')
                     if not validation.is_valid:
-                        bulk_items.append({
-                            "input": symbol,
-                            "status": "validation_warning",
-                            "message": validation.warning_message,
-                            "results": [],
-                            "count": 0,
-                        })
+                        validation_messages[symbol] = validation.warning_message
                         continue
                 else:
-                    force_valid, force_error = check_force_parameters(force, force_reason)
-                    if not force_valid:
-                        return _err(force_error)
                     log_validation_override(symbol, 'gene', force_reason)
 
-                genes_data: List[Dict[str, Any]] = []
+                symbol_matches: List[Dict[str, Any]] = []
                 for tid in taxon_ids:
                     try:
                         results = db.search_entities(
@@ -511,31 +657,61 @@ def agr_curation_query(
                             limit=limit_value
                         )
                         for result in results:
-                            try:
-                                gene = db.get_gene(result['entity_curie'])
-                                if gene:
-                                    matched_entity = result['entity']
-                                    primary_symbol = (
-                                        gene.geneSymbol.displayText if gene.geneSymbol else matched_entity
-                                    )
-                                    gene_entry = {
-                                        "curie": gene.primaryExternalId,
-                                        "symbol": primary_symbol,
-                                        "name": gene.geneFullName.displayText if gene.geneFullName else None,
-                                        "taxon": tid,
-                                        "match_type": result.get('match_type', 'unknown'),
-                                    }
-                                    enrich_with_match_context(
-                                        gene_entry,
-                                        matched_entity,
-                                        primary_symbol,
-                                        'gene'
-                                    )
-                                    genes_data.append(gene_entry)
-                            except Exception as e:
-                                logger.warning("Failed to fetch gene details in bulk for '%s': %s", symbol, e)
+                            curie = result.get('entity_curie')
+                            if not curie:
+                                continue
+                            symbol_matches.append({
+                                "curie": curie,
+                                "taxon": tid,
+                                "matched_entity": result.get('entity', symbol),
+                                "match_type": result.get('match_type', 'unknown'),
+                            })
+                            gene_curies_by_taxon[tid].append(curie)
                     except Exception as e:
                         logger.warning("Failed to fuzzy search genes in bulk for '%s' taxon %s: %s", symbol, tid, e)
+                pending_matches[symbol] = symbol_matches
+
+            gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in gene_curies_by_taxon.items():
+                gene_details_by_taxon[tid] = _fetch_gene_details_bulk(db, curies)
+
+            bulk_items: List[Dict[str, Any]] = []
+            total_matches = 0
+
+            for symbol in normalized_symbols:
+                if symbol in validation_messages:
+                    bulk_items.append({
+                        "input": symbol,
+                        "status": "validation_warning",
+                        "message": validation_messages[symbol],
+                        "results": [],
+                        "count": 0,
+                    })
+                    continue
+
+                item_warnings: List[str] = []
+                genes_data: List[Dict[str, Any]] = []
+                for match in pending_matches.get(symbol, []):
+                    detail = gene_details_by_taxon.get(match["taxon"], {}).get(match["curie"])
+                    if not detail:
+                        continue
+                    primary_symbol = detail.get("symbol") or match["matched_entity"]
+                    gene_entry = {
+                        "curie": detail.get("curie", match["curie"]),
+                        "symbol": primary_symbol,
+                        "name": detail.get("name"),
+                        "taxon": match["taxon"],
+                        "match_type": match["match_type"],
+                    }
+                    if detail.get("gene_type"):
+                        gene_entry["gene_type"] = detail["gene_type"]
+                    enrich_with_match_context(
+                        gene_entry,
+                        match["matched_entity"],
+                        primary_symbol,
+                        'gene'
+                    )
+                    genes_data.append(gene_entry)
 
                 validated_data = genes_data[:limit_value]
                 validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -755,6 +931,11 @@ def agr_curation_query(
             if not normalized_symbols:
                 return _err("search_alleles_bulk received no valid symbols")
 
+            if force:
+                force_valid, force_error = check_force_parameters(force, force_reason)
+                if not force_valid:
+                    return _err(force_error)
+
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
@@ -763,30 +944,20 @@ def agr_curation_query(
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
-            bulk_items: List[Dict[str, Any]] = []
-            total_matches = 0
+            pending_matches: Dict[str, List[Dict[str, Any]]] = {}
+            validation_messages: Dict[str, str] = {}
+            allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
 
             for symbol in normalized_symbols:
-                item_warnings: List[str] = []
                 if not force:
                     validation = validate_search_symbol(symbol, 'allele')
                     if not validation.is_valid:
-                        bulk_items.append({
-                            "input": symbol,
-                            "status": "validation_warning",
-                            "message": validation.warning_message,
-                            "results": [],
-                            "count": 0,
-                        })
+                        validation_messages[symbol] = validation.warning_message
                         continue
                 else:
-                    force_valid, force_error = check_force_parameters(force, force_reason)
-                    if not force_valid:
-                        return _err(force_error)
                     log_validation_override(symbol, 'allele', force_reason)
 
-                alleles_data: List[Dict[str, Any]] = []
-                seen_curies = set()
+                symbol_matches: List[Dict[str, Any]] = []
                 for tid in taxon_ids:
                     try:
                         results = db.search_entities(
@@ -797,43 +968,68 @@ def agr_curation_query(
                             limit=limit_value
                         )
                         for result in results:
-                            try:
-                                curie = result['entity_curie']
-                                if curie in seen_curies:
-                                    continue
-                                seen_curies.add(curie)
-                                allele = db.get_allele(curie)
-                                if allele:
-                                    matched_entity = result['entity']
-                                    primary_symbol = (
-                                        allele.alleleSymbol.displayText
-                                        if allele.alleleSymbol
-                                        else matched_entity
-                                    )
-                                    fullname = (
-                                        allele.alleleFullName.displayText
-                                        if allele.alleleFullName
-                                        else None
-                                    )
-                                    allele_entry = {
-                                        "curie": allele.primaryExternalId,
-                                        "symbol": primary_symbol,
-                                        "name": fullname,
-                                        "taxon": tid,
-                                        "match_type": result.get('match_type', 'unknown'),
-                                        "fullname_attribution": _extract_fullname_attribution(fullname, tid),
-                                    }
-                                    enrich_with_match_context(
-                                        allele_entry,
-                                        matched_entity,
-                                        primary_symbol,
-                                        'allele'
-                                    )
-                                    alleles_data.append(allele_entry)
-                            except Exception as e:
-                                logger.warning("Failed to fetch allele details in bulk for '%s': %s", symbol, e)
+                            curie = result.get('entity_curie')
+                            if not curie:
+                                continue
+                            symbol_matches.append({
+                                "curie": curie,
+                                "taxon": tid,
+                                "matched_entity": result.get('entity', symbol),
+                                "match_type": result.get('match_type', 'unknown'),
+                            })
+                            allele_curies_by_taxon[tid].append(curie)
                     except Exception as e:
                         logger.warning("Failed to fuzzy search alleles in bulk for '%s' taxon %s: %s", symbol, tid, e)
+                pending_matches[symbol] = symbol_matches
+
+            allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in allele_curies_by_taxon.items():
+                allele_details_by_taxon[tid] = _fetch_allele_details_bulk(db, curies)
+
+            bulk_items: List[Dict[str, Any]] = []
+            total_matches = 0
+
+            for symbol in normalized_symbols:
+                if symbol in validation_messages:
+                    bulk_items.append({
+                        "input": symbol,
+                        "status": "validation_warning",
+                        "message": validation_messages[symbol],
+                        "results": [],
+                        "count": 0,
+                    })
+                    continue
+
+                item_warnings: List[str] = []
+                alleles_data: List[Dict[str, Any]] = []
+                seen_curies = set()
+                for match in pending_matches.get(symbol, []):
+                    curie = match["curie"]
+                    if curie in seen_curies:
+                        continue
+                    seen_curies.add(curie)
+
+                    detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
+                    if not detail:
+                        continue
+
+                    primary_symbol = detail.get("symbol") or match["matched_entity"]
+                    fullname = detail.get("name")
+                    allele_entry = {
+                        "curie": detail.get("curie", curie),
+                        "symbol": primary_symbol,
+                        "name": fullname,
+                        "taxon": match["taxon"],
+                        "match_type": match["match_type"],
+                        "fullname_attribution": _extract_fullname_attribution(fullname, match["taxon"]),
+                    }
+                    enrich_with_match_context(
+                        allele_entry,
+                        match["matched_entity"],
+                        primary_symbol,
+                        'allele'
+                    )
+                    alleles_data.append(allele_entry)
 
                 validated_data = alleles_data[:limit_value]
                 validated_data, invalid_curie_count = _validate_curie_list(validated_data)

@@ -9,10 +9,32 @@ Key fixtures:
 - get_mock_user: Helper to get mock users by ID
 """
 
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock
 from typing import Dict, Any
 from dataclasses import dataclass, field
+
+def _default_database_url() -> str:
+    """Build integration-test DB URL with host/container-aware defaults."""
+    db_user = os.environ.get("TEST_DB_USER", "postgres")
+    db_password = os.environ.get("TEST_DB_PASSWORD", "postgres")
+    db_name = os.environ.get("TEST_DB_NAME", "ai_curation")
+    if os.path.exists("/.dockerenv"):
+        db_host = os.environ.get("TEST_DB_HOST", "postgres-test")
+        db_port = os.environ.get("TEST_DB_PORT", "5432")
+    else:
+        db_host = os.environ.get("TEST_DB_HOST", "127.0.0.1")
+        db_port = os.environ.get("TEST_DB_PORT", "15434")
+    return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+
+# Integration tests run from the host (.venv) should target the Docker-mapped
+# Postgres port instead of the in-network hostname, which is not resolvable
+# from the host namespace.
+if "DATABASE_URL" not in os.environ:
+    os.environ["DATABASE_URL"] = _default_database_url()
 
 
 @dataclass
@@ -22,13 +44,42 @@ class MockCognitoUser:
     sub: str  # Email/subject
     groups: list = field(default_factory=list)  # cognito:groups claim
 
+    def _claims(self) -> Dict[str, Any]:
+        """Return canonical claims dict expected by auth/provider code."""
+        return {
+            "uid": self.uid,
+            "sub": self.uid,
+            "email": self.sub,
+            "name": self.sub,
+            "groups": self.groups,
+            "cognito:groups": self.groups,
+        }
+
     def __getitem__(self, key: str) -> Any:
         """Allow dict-like access for backward compatibility."""
-        return getattr(self, key)
+        return self._claims()[key]
 
     def get(self, key: str, default: Any = None) -> Any:
         """Allow dict-like .get() for backward compatibility."""
-        return getattr(self, key, default)
+        return self._claims().get(key, default)
+
+    @property
+    def email(self) -> str:
+        """Compatibility accessor used by legacy tests."""
+        return self.sub
+
+    def __iter__(self):
+        """Support dict(MockCognitoUser) conversion in service code."""
+        return iter(self._claims().items())
+
+    def __len__(self):
+        return len(self._claims())
+
+    def keys(self):
+        return self._claims().keys()
+
+    def items(self):
+        return self._claims().items()
 
 
 # Registry of mock users for the test suite
@@ -38,7 +89,7 @@ MOCK_USERS: Dict[str, MockCognitoUser] = {}
 def register_mock_user(user_id: str, email: str, uid: str) -> MockCognitoUser:
     """Register a mock user for the test suite."""
     user = MockCognitoUser(
-        uid=user_id,
+        uid=uid,
         sub=email,
         groups=[]
     )
@@ -93,7 +144,7 @@ class UnifiedAuthMock:
 _unified_auth = UnifiedAuthMock()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 def mock_auth_system():
     """Unified auth mock system that runs once for the entire test session.
 
@@ -111,6 +162,9 @@ def mock_auth_system():
     os.environ["UNSTRUCTURED_API_URL"] = "http://test-unstructured"
     # Note: Cognito configuration is handled via environment variables in .env
     # No mock Cognito config needed here - auth is fully mocked
+
+    # Reset mutable auth state between tests.
+    _unified_auth.set_user("valid_user")
 
     # Patch auth BEFORE any imports of main
     with patch("src.api.auth.auth", _unified_auth):

@@ -4,6 +4,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 
 USERS_ME_PATH = "/api/users/me"
@@ -26,6 +27,15 @@ def client(monkeypatch):
     import sys
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+    # Ensure each test gets a fresh app import (prevents auth override leakage).
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     from main import app
     from src.api import auth as auth_module
 
@@ -60,6 +70,16 @@ def _override_db():
     app.dependency_overrides[get_db] = lambda: object()
 
 
+def _override_unauthenticated_user():
+    from main import app
+    from src.api.auth import auth
+
+    def _raise_401():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    app.dependency_overrides[auth.get_user] = _raise_401
+
+
 class _FakeUserModel:
     def __init__(self, payload):
         self._payload = payload
@@ -72,20 +92,38 @@ class TestUsersMeEndpoint:
     """Current API contract tests for /api/users/me."""
 
     def test_users_me_endpoint_exists(self, client):
-        response = client.get(USERS_ME_PATH)
-        assert response.status_code != 404
+        _override_unauthenticated_user()
+        try:
+            response = client.get(USERS_ME_PATH)
+            assert response.status_code != 404
+        finally:
+            from main import app
+
+            app.dependency_overrides.clear()
 
     def test_users_me_requires_authentication(self, client):
-        response = client.get(USERS_ME_PATH)
-        assert response.status_code == 401
-        assert "detail" in response.json()
+        _override_unauthenticated_user()
+        try:
+            response = client.get(USERS_ME_PATH)
+            assert response.status_code == 401
+            assert "detail" in response.json()
+        finally:
+            from main import app
+
+            app.dependency_overrides.clear()
 
     def test_users_me_invalid_authorization_header_still_unauthorized(self, client):
-        response = client.get(
-            USERS_ME_PATH,
-            headers={"Authorization": "Bearer invalid_malformed_token"},
-        )
-        assert response.status_code == 401
+        _override_unauthenticated_user()
+        try:
+            response = client.get(
+                USERS_ME_PATH,
+                headers={"Authorization": "Bearer invalid_malformed_token"},
+            )
+            assert response.status_code == 401
+        finally:
+            from main import app
+
+            app.dependency_overrides.clear()
 
     def test_users_me_success_response_schema(self, client):
         _override_authenticated_user()

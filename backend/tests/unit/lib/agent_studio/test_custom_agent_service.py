@@ -108,7 +108,7 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
     )
     monkeypatch.setattr(service, "get_model", lambda _model_id: SimpleNamespace(model_id=_model_id))
 
-    custom = create_custom_agent(
+    custom = service.create_custom_agent(
         db=FakeDB(),
         user_id=7,
         template_source="gene",
@@ -121,6 +121,8 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
 
 
 def test_create_custom_agent_requires_model_for_scratch_mode():
+    import src.lib.agent_studio.custom_agent_service as service
+
     class FakeQuery:
         def filter(self, *_args, **_kwargs):
             return self
@@ -139,7 +141,7 @@ def test_create_custom_agent_requires_model_for_scratch_mode():
             return FakeQuery()
 
     with pytest.raises(ValueError, match="model_id is required when template_source is not provided"):
-        create_custom_agent(
+        service.create_custom_agent(
             db=FakeDB(),
             user_id=7,
             name="Scratch Agent",
@@ -181,7 +183,7 @@ def test_create_custom_agent_rejects_non_attachable_tool_ids(monkeypatch):
     monkeypatch.setattr(service, "get_model", lambda _model_id: SimpleNamespace(model_id=_model_id))
 
     with pytest.raises(ValueError, match="not attachable"):
-        create_custom_agent(
+        service.create_custom_agent(
             db=FakeDB(),
             user_id=7,
             name="Tool Guardrail Agent",
@@ -291,7 +293,7 @@ def test_create_custom_agent_rejects_unknown_model_id(monkeypatch):
     monkeypatch.setattr(service, "get_model", lambda _model_id: None)
 
     with pytest.raises(ValueError, match="Unknown model_id"):
-        create_custom_agent(
+        service.create_custom_agent(
             db=FakeDB(),
             user_id=7,
             name="Bad Model Agent",
@@ -389,7 +391,7 @@ def test_set_custom_agent_visibility_sets_project_membership(monkeypatch):
         shared_at=None,
     )
 
-    updated = set_custom_agent_visibility(
+    updated = service.set_custom_agent_visibility(
         db=SimpleNamespace(),
         custom_agent=custom_agent,
         user_id=7,
@@ -433,7 +435,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
 
     monkeypatch.setattr(service, "create_custom_agent", _fake_create_custom_agent)
 
-    clone_visible_agent_for_user(
+    service.clone_visible_agent_for_user(
         db=SimpleNamespace(),
         user_id=7,
         source_agent_key="ca_source",

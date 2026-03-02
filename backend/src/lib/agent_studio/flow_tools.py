@@ -415,7 +415,7 @@ def _validate_flow_handler():
                 "chemical",
                 "chemical_extractor",
                 "gene_expression",
-                "phenotype",
+                "phenotype_extractor",
             ]
         ):
             suggestions.append(
@@ -524,7 +524,7 @@ def _get_flow_templates_handler():
                 "description": "Extract experimentally supported phenotype assertions from papers",
                 "steps": [
                     {"agent_id": "pdf", "step_goal": "Find phenotype-related result sections"},
-                    {"agent_id": "phenotype", "step_goal": "Extract phenotype assertions with evidence"},
+                    {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
                     {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results"}
                 ]
             },

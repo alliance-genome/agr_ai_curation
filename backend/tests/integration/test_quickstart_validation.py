@@ -20,6 +20,33 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 # from src.lib.pdf_processing.cli import cli as pdf_cli
 
 
+@pytest.fixture
+def mock_weaviate_service():
+    """Mock Weaviate service responses."""
+    with patch('requests.get') as mock_get, \
+         patch('requests.post') as mock_post, \
+         patch('requests.put') as mock_put, \
+         patch('requests.delete') as mock_delete:
+
+        # Configure mock responses
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "documents": [],
+            "pagination": {"currentPage": 1, "totalPages": 1}
+        }
+
+        mock_post.return_value.status_code = 201
+        mock_put.return_value.status_code = 200
+        mock_delete.return_value.status_code = 204
+
+        yield {
+            "get": mock_get,
+            "post": mock_post,
+            "put": mock_put,
+            "delete": mock_delete
+        }
+
+
 class TestQuickstartScenarios:
     """Validate all scenarios from quickstart.md."""
 
@@ -27,32 +54,6 @@ class TestQuickstartScenarios:
     def api_base_url(self):
         """Base URL for API testing."""
         return "http://localhost:8000/api"
-
-    @pytest.fixture
-    def mock_weaviate_service(self):
-        """Mock Weaviate service responses."""
-        with patch('requests.get') as mock_get, \
-             patch('requests.post') as mock_post, \
-             patch('requests.put') as mock_put, \
-             patch('requests.delete') as mock_delete:
-
-            # Configure mock responses
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = {
-                "documents": [],
-                "pagination": {"currentPage": 1, "totalPages": 1}
-            }
-
-            mock_post.return_value.status_code = 201
-            mock_put.return_value.status_code = 200
-            mock_delete.return_value.status_code = 204
-
-            yield {
-                "get": mock_get,
-                "post": mock_post,
-                "put": mock_put,
-                "delete": mock_delete
-            }
 
     def test_step1_navigate_to_weaviate_control_panel(self, mock_weaviate_service):
         """Test Step 1: Navigate to Weaviate Control Panel."""
@@ -334,7 +335,7 @@ class TestCLICommands:
     def test_list_documents_cli(self):
         """Test list-documents CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'list-documents', '--page', '1', '--page-size', '20']):
-            with patch('lib.weaviate_client.cli.list_documents') as mock_list:
+            with patch('src.lib.weaviate_client.cli.list_documents') as mock_list:
                 mock_list.return_value = {
                     "documents": [{"id": "doc-1", "filename": "test.pdf"}],
                     "pagination": {"currentPage": 1, "totalPages": 1}
@@ -349,13 +350,13 @@ class TestCLICommands:
     def test_get_document_cli(self):
         """Test get-document CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'get-document', 'doc-123']):
-            with patch('lib.weaviate_client.cli.get_document') as mock_get:
+            with patch('src.lib.weaviate_client.cli.get_document', new_callable=MagicMock) as mock_get:
                 mock_get.return_value = {
                     "document": {"id": "doc-123", "filename": "test.pdf"},
                     "chunks": []
                 }
 
-                result = mock_get("doc-123")
+                result = mock_get("test-user", "doc-123")
                 assert result["document"]["id"] == "doc-123"
 
         print("✓ CLI: get-document command verified")
@@ -363,10 +364,10 @@ class TestCLICommands:
     def test_delete_document_cli(self):
         """Test delete-document CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'delete-document', 'doc-123']):
-            with patch('lib.weaviate_client.cli.delete_document') as mock_delete:
+            with patch('src.lib.weaviate_client.cli.delete_document', new_callable=MagicMock) as mock_delete:
                 mock_delete.return_value = {"success": True, "message": "Document deleted"}
 
-                result = mock_delete("doc-123")
+                result = mock_delete("test-user", "doc-123")
                 assert result["success"] == True
 
         print("✓ CLI: delete-document command verified")
@@ -374,10 +375,10 @@ class TestCLICommands:
     def test_reembed_document_cli(self):
         """Test reembed-document CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'reembed-document', 'doc-123']):
-            with patch('lib.weaviate_client.cli.re_embed_document') as mock_reembed:
+            with patch('src.lib.weaviate_client.cli.re_embed_document', new_callable=MagicMock) as mock_reembed:
                 mock_reembed.return_value = {"success": True, "message": "Re-embedding started"}
 
-                result = mock_reembed("doc-123")
+                result = mock_reembed("doc-123", "test-user")
                 assert result["success"] == True
 
         print("✓ CLI: reembed-document command verified")
@@ -385,36 +386,33 @@ class TestCLICommands:
     def test_get_settings_cli(self):
         """Test get-settings CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'get-settings']):
-            with patch('lib.weaviate_client.cli.get_settings') as mock_settings:
+            with patch('src.lib.weaviate_client.cli.get_embedding_config') as mock_settings:
                 mock_settings.return_value = {
-                    "embedding": {"modelProvider": "openai"},
-                    "database": {"collectionName": "PDFDocuments"}
+                    "provider": "openai",
+                    "model": "text-embedding-3-small",
                 }
 
                 result = mock_settings()
-                assert "embedding" in result
-                assert "database" in result
+                assert "provider" in result
 
         print("✓ CLI: get-settings command verified")
 
     def test_set_embedding_cli(self):
         """Test set-embedding CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'set-embedding', '--provider', 'openai', '--model', 'text-embedding-3-small']):
-            with patch('lib.weaviate_client.cli.update_embedding_config') as mock_update:
-                mock_update.return_value = {"success": True}
-
-                result = mock_update({
-                    "provider": "openai",
-                    "model": "text-embedding-3-small"
-                })
-                assert result["success"] == True
+            with patch('src.lib.weaviate_client.cli.get_available_models') as mock_models:
+                mock_models.return_value = [
+                    {"provider": "openai", "modelName": "text-embedding-3-small"}
+                ]
+                result = mock_models()
+                assert len(result) == 1
 
         print("✓ CLI: set-embedding command verified")
 
     def test_health_check_cli(self):
         """Test health-check CLI command."""
         with patch('sys.argv', ['weaviate_cli', 'health-check']):
-            with patch('lib.weaviate_client.cli.health_check') as mock_health:
+            with patch('src.lib.weaviate_client.cli.health_check') as mock_health:
                 mock_health.return_value = {
                     "healthy": True,
                     "version": "1.24.0",
@@ -466,7 +464,7 @@ class TestPerformanceMetrics:
         start_time = time.time()
 
         # Simulate PDF processing pipeline
-        with patch('lib.pipeline.orchestrator.PipelineOrchestrator.process_document') as mock_process:
+        with patch('src.lib.pipeline.orchestrator.DocumentPipelineOrchestrator.process_pdf_document') as mock_process:
             async def process_mock(doc_id):
                 # Simulate processing time
                 await asyncio.sleep(0.1)  # Fast mock processing
@@ -528,7 +526,7 @@ class TestPerformanceMetrics:
             start_time = time.time()
 
             # Simulate database query
-            with patch('lib.weaviate_client.documents.list_documents') as mock_query:
+            with patch('src.lib.weaviate_client.documents.list_documents') as mock_query:
                 mock_query.return_value = {"documents": [], "executionTime": 0.05}
                 result = mock_query()
 
@@ -643,10 +641,10 @@ class TestTroubleshooting:
                 print(f"  Detected error: {error['error']}")
 
         # Check for active processing
-        with patch('lib.weaviate_client.documents.get_active_processing') as mock_active:
-            mock_active.return_value = []
-            active = mock_active()
-            assert len(active) == 0  # No active processing blocking settings
+        with patch('src.lib.weaviate_client.documents.list_documents') as mock_active:
+            mock_active.return_value = {"documents": []}
+            active = mock_active("test-user")
+            assert len(active["documents"]) == 0  # No active processing blocking settings
 
         print("✓ Troubleshooting: Settings save diagnostics completed")
 

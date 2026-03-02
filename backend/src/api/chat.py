@@ -31,7 +31,7 @@ from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
-from config.group_rules import get_groups_from_cognito
+from ..lib.group_rules import get_groups_from_cognito
 from ..lib.redis_client import (
     set_cancel_signal,
     check_cancel_signal,
@@ -727,8 +727,7 @@ async def execute_flow_endpoint(
             extra={"session_id": request.session_id, "user_id": user_id},
             exc_info=True,
         )
-        if hasattr(db, "rollback"):
-            db.rollback()
+        db.rollback()
         await _cleanup_stream_state(request.session_id)
         raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
 

@@ -29,8 +29,6 @@ import time
 from typing import Optional, List, Literal, Dict, Any, Callable
 
 from agents import Agent, ModelSettings, Runner, RunConfig, function_tool
-from agents.models.openai_provider import OpenAIProvider
-from openai.types.shared import Reasoning
 
 from ..streaming_tools import run_specialist_with_events
 
@@ -177,34 +175,16 @@ def _build_model_settings(
     Returns:
         ModelSettings instance or None if no settings needed
     """
-    from ..config import supports_reasoning, supports_temperature, resolve_model_provider
+    from ..config import build_model_settings
 
-    # Build reasoning config for models that support it
-    reasoning = None
-    if reasoning_effort and supports_reasoning(model):
-        reasoning = Reasoning(effort=reasoning_effort)
-
-    # GPT-5 models don't support temperature parameter, others do
-    effective_temperature = temperature if supports_temperature(model) else None
-
-    # Provider-level capability gates (configured in providers.yaml)
-    model_provider = resolve_model_provider(model, provider_override)
-    from src.lib.config.providers_loader import get_provider
-
-    provider_def = get_provider(model_provider)
-    if provider_def is None:
-        raise ValueError(f"Unknown provider_id: {model_provider}")
-    parallel_tool_calls = bool(provider_def.supports_parallel_tool_calls)
-
-    # Only create ModelSettings if we have something to set
-    if reasoning is not None or effective_temperature is not None or not parallel_tool_calls:
-        return ModelSettings(
-            temperature=effective_temperature,
-            reasoning=reasoning,
-            parallel_tool_calls=parallel_tool_calls
-        )
-
-    return None
+    # Delegate to shared builder so provider-specific safeguards (e.g., Groq
+    # tool-call stability controls) stay consistent across all agent surfaces.
+    return build_model_settings(
+        model=model,
+        temperature=temperature,
+        reasoning_effort=reasoning_effort,
+        provider_override=provider_override,
+    )
 
 
 def get_supervisor_agent_tools() -> List[str]:
@@ -559,12 +539,12 @@ The tool returns file information including a download URL that will render as a
         instructions += "\n\n**DOCUMENT CONTEXT**: A PDF document is loaded. When users ask to \"create annotation\", \"extract\", or request curation tasks, use the loaded document as the source."
     else:
         # No document - inform supervisor that PDF tools are unavailable
-        instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist, ask_gene_extractor_specialist, ask_gene_expression_specialist, ask_phenotype_specialist, ask_allele_extractor_specialist, ask_disease_extractor_specialist, and ask_chemical_extractor_specialist tools are not available."
+        instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist, ask_gene_extractor_specialist, ask_gene_expression_specialist, ask_phenotype_extractor_specialist, ask_allele_extractor_specialist, ask_disease_extractor_specialist, and ask_chemical_extractor_specialist tools are not available."
 
     # Inject group-specific rules for supervisor dispatch behavior
     if active_groups:
         try:
-            from config.group_rules import inject_group_rules
+            from ...group_rules import inject_group_rules
 
             instructions = inject_group_rules(
                 base_prompt=instructions,

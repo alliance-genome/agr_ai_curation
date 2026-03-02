@@ -17,7 +17,7 @@ class PhenotypeExtractionEnvelope(StructuredMessageEnvelope):
     __envelope_class__ = True
 
     actor: str = Field(
-        default="phenotype_extraction_specialist",
+        default="phenotype_extractor_specialist",
         description="The phenotype extraction agent"
     )
     findings: str = Field(

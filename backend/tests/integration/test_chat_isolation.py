@@ -24,11 +24,12 @@ Implementation Notes:
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
+from src.lib.weaviate_helpers import get_tenant_name
 from conftest import MockCognitoUser
 
 # Note: test_db and cleanup_db fixtures are now in conftest.py
@@ -103,13 +104,24 @@ def client_as_curator1(get_auth_mock, test_db):
     # Configure shared auth mock for chat1 user
     get_auth_mock.set_user("chat1")
 
+    import sys
+
+    modules_to_clear = [
+        name for name in list(sys.modules.keys())
+        if name == "main" or name.startswith("src.")
+    ]
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     from main import app
+    from src.api.auth import _get_user_from_cookie_impl
     from src.models.sql.database import get_db
 
     def override_get_db():
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
 
     yield TestClient(app)
 
@@ -122,13 +134,24 @@ def client_as_curator2(get_auth_mock, test_db):
     # Configure shared auth mock for chat2 user
     get_auth_mock.set_user("chat2")
 
+    import sys
+
+    modules_to_clear = [
+        name for name in list(sys.modules.keys())
+        if name == "main" or name.startswith("src.")
+    ]
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     from main import app
+    from src.api.auth import _get_user_from_cookie_impl
     from src.models.sql.database import get_db
 
     def override_get_db():
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
 
     yield TestClient(app)
 
@@ -182,7 +205,8 @@ class TestChatIsolation:
             # Verify mock was called with authenticated user_id
             if mock_execute.called:
                 call_kwargs = mock_execute.call_args.kwargs if mock_execute.call_args else {}
-                assert call_kwargs.get("user_id") == curator1_user.uid, \
+                # Chat endpoints currently use token "sub" as canonical user_id.
+                assert call_kwargs.get("user_id") == curator1_user["sub"], \
                     "Chat flow should receive authenticated user's ID as user_id"
 
     def test_chat_queries_isolated_between_users(
@@ -221,7 +245,7 @@ class TestChatIsolation:
         doc1_id = str(uuid.uuid4())
         doc1 = PDFDocument(
             id=doc1_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_user1_doc.pdf",
             file_path=f"/test/path/{doc1_id}.pdf",
             file_hash="hash1",
@@ -230,11 +254,12 @@ class TestChatIsolation:
             upload_timestamp=datetime.now(timezone.utc)
         )
         test_db.add(doc1)
+        test_db.commit()
 
         doc2_id = str(uuid.uuid4())
         doc2 = PDFDocument(
             id=doc2_id,
-            user_id=user2.user_id,
+            user_id=user2.id,
             filename="test_user2_doc.pdf",
             file_path=f"/test/path/{doc2_id}.pdf",
             file_hash="hash2",
@@ -268,8 +293,8 @@ class TestChatIsolation:
             # The key is that they should use different tenants
 
             # Verify tenants are different
-            expected_tenant1 = "test_chat1_00u1abc2def"
-            expected_tenant2 = "test_chat2_00u4ghi5jkl"
+            expected_tenant1 = get_tenant_name(curator1_user["sub"])
+            expected_tenant2 = get_tenant_name(curator2_user["sub"])
 
             tenant_calls = mock_weaviate_with_tenant_tracking["tenant_calls"]["calls"]
 
@@ -321,15 +346,15 @@ class TestChatIsolation:
 
         # Simulate User 1 selecting a document
         doc1_data = {"id": "doc1", "title": "User 1 Doc"}
-        document_state.set_document(curator1_user.uid, doc1_data)
+        document_state.set_document(curator1_user["sub"], doc1_data)
 
         # Simulate User 2 selecting a different document
         doc2_data = {"id": "doc2", "title": "User 2 Doc"}
-        document_state.set_document(curator2_user.uid, doc2_data)
+        document_state.set_document(curator2_user["sub"], doc2_data)
 
         # Verify both users' selections are isolated
-        user1_doc = document_state.get_document(curator1_user.uid)
-        user2_doc = document_state.get_document(curator2_user.uid)
+        user1_doc = document_state.get_document(curator1_user["sub"])
+        user2_doc = document_state.get_document(curator2_user["sub"])
 
         assert user1_doc is not None, "User 1's document should be set"
         assert user2_doc is not None, "User 2's document should be set"
@@ -339,8 +364,8 @@ class TestChatIsolation:
             "Users' document selections should be isolated"
 
         # Cleanup
-        document_state.clear_document(curator1_user.uid)
-        document_state.clear_document(curator2_user.uid)
+        document_state.clear_document(curator1_user["sub"])
+        document_state.clear_document(curator2_user["sub"])
 
     def test_chat_history_is_user_specific(
         self, test_db, curator1_user, curator2_user,
@@ -390,9 +415,11 @@ class TestChatIsolation:
         history1 = response1.json()
         history2 = response2.json()
 
-        # Verify both are lists (or appropriate structure)
-        assert isinstance(history1, list), "Chat history should be a list"
-        assert isinstance(history2, list), "Chat history should be a list"
+        # /api/chat/history returns a stats object.
+        assert isinstance(history1, dict), "Chat history response should be an object"
+        assert isinstance(history2, dict), "Chat history response should be an object"
+        assert "sessions" in history1
+        assert "sessions" in history2
 
         # If there's any session data, verify it's user-specific
         # (This would require actual chat sessions to be created,
@@ -420,35 +447,21 @@ class TestChatIsolation:
         test_db.add(user)
         test_db.commit()
 
-        # Import SupervisorState to test validation
-        from src.lib.chat.flows.state import SupervisorState
+        # Verify the chat endpoint forwards an authenticated user_id into runtime.
+        with patch("src.api.chat.run_agent_streamed") as mock_execute:
+            async def mock_chat_generator():
+                yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
 
-        # Test that SupervisorState requires user_id
-        try:
-            # This should fail validation (user_id is required)
-            state_without_user = SupervisorState(
-                query="test query",
-                # user_id intentionally omitted
+            mock_execute.return_value = mock_chat_generator()
+
+            response = client_as_curator1.post(
+                "/api/chat",
+                json={"message": "test query", "session_id": "state_test_session"},
             )
-            pytest.fail(
-                "SupervisorState MUST require user_id field. "
-                "If this test fails, user_id is not properly enforced!"
-            )
-        except (ValueError, TypeError) as e:
-            # Expected - user_id is required
-            assert "user_id" in str(e).lower(), \
-                f"Error should mention user_id: {str(e)}"
-
-        # Test that SupervisorState accepts valid user_id
-        state_with_user = SupervisorState(
-            query="test query",
-            user_id=curator1_user.uid
-        )
-
-        assert state_with_user.user_id == curator1_user.uid
-        assert state_with_user.user_id is not None
-        assert state_with_user.user_id.strip() != "", \
-            "user_id should not be empty string"
+            assert response.status_code in [200, 422, 500]
+            assert mock_execute.called
+            call_kwargs = mock_execute.call_args.kwargs if mock_execute.call_args else {}
+            assert call_kwargs.get("user_id") == curator1_user["sub"]
 
     def test_weaviate_queries_must_use_with_tenant(
         self, mock_weaviate_with_tenant_tracking

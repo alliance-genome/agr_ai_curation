@@ -5,8 +5,8 @@ Requirements: FR-009, FR-010
 
 Tests the complete logout workflow:
 1. Authenticate user with mock Cognito credentials
-2. Verify authenticated access to protected endpoint (GET /users/me)
-3. Call POST /auth/logout to terminate session
+2. Verify authenticated access to protected endpoint (GET /api/users/me)
+3. Call POST /api/auth/logout to terminate session
 4. Verify subsequent requests without re-auth return 401 Unauthorized
 5. Verify httpOnly cookies are cleared (where applicable)
 6. Verify user must re-authenticate after logout
@@ -25,7 +25,7 @@ CRITICAL PATTERN:
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
-from fastapi import Depends, HTTPException
+from fastapi import HTTPException
 
 from src.models.sql.user import User
 from conftest import MockCognitoUser
@@ -47,7 +47,7 @@ def test_db():
 
     # Cleanup: delete any test users created during test
     db.query(User).filter(
-        User.user_id.like("test_logout_%")
+        User.auth_sub.like("test_logout_%")
     ).delete(synchronize_session=False)
     db.commit()
     db.close()
@@ -103,10 +103,11 @@ def client(test_db, monkeypatch):
     """
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
+    monkeypatch.setenv("AUTH_PROVIDER", "dev")
+    monkeypatch.setenv("DEV_MODE", "true")
 
     import sys
     import os
-    from fastapi import Security
 
     sys.path.insert(
         0,
@@ -145,21 +146,21 @@ def client(test_db, monkeypatch):
     for module_name in modules_to_clear:
         del sys.modules[module_name]
 
-    # Patch get_auth_dependency BEFORE importing the app
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-
-        mock_auth_instance = MockAuth()
-        mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
-
-        # Now import the app
+    # Avoid real tenant provisioning/network calls in logout tests.
+    with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
+        # Now import the app and override auth dependency at the callable level.
         from main import app
         from src.models.sql.database import get_db
+        from src.api.auth import _get_user_from_cookie_impl
+
+        mock_auth_instance = MockAuth()
 
         # Override database dependency
         def override_get_db():
             yield test_db
 
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth_instance.get_user
 
         test_client = TestClient(app)
 
@@ -188,21 +189,21 @@ class TestLogoutFlowIntegration:
 
         Workflow:
         1. User is authenticated via fixture (auth_state["authenticated"] = True)
-        2. Access protected endpoint (GET /users/me) → should succeed (200)
-        3. Call POST /auth/logout → should return 200 with status="logged_out"
+        2. Access protected endpoint (GET /api/users/me) → should succeed (200)
+        3. Call POST /api/auth/logout → should return 200 with status="logged_out"
         4. Call client.simulate_logout() to set auth_state["authenticated"] = False
         5. Access protected endpoint again → should fail with 401
         6. Verify error message indicates authentication required
         """
         # Step 1: Verify authenticated access works
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         user_data = response.json()
-        assert user_data["user_id"] == "test_logout_user_00u1abc"
+        assert user_data["auth_sub"] == "test_logout_user_00u1abc"
         assert user_data["email"] == "test.curator.logout@alliancegenome.org"
 
         # Step 2: Call logout endpoint (contract compliance)
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200, f"Expected 200, got {logout_response.status_code}: {logout_response.text}"
         logout_data = logout_response.json()
         assert logout_data["status"] == "logged_out"
@@ -212,7 +213,7 @@ class TestLogoutFlowIntegration:
         client.simulate_logout()
 
         # Step 4: Attempt to access protected endpoint without authentication
-        unauth_response = client.get("/users/me")
+        unauth_response = client.get("/api/users/me")
         assert unauth_response.status_code == 401, f"Expected 401 after logout, got {unauth_response.status_code}: {unauth_response.text}"
         error_data = unauth_response.json()
         assert "detail" in error_data
@@ -224,11 +225,11 @@ class TestLogoutFlowIntegration:
         Requirements: FR-009, FR-010
         """
         # Verify initial access works
-        initial_response = client.get("/users/me")
+        initial_response = client.get("/api/users/me")
         assert initial_response.status_code == 200, f"Expected 200, got {initial_response.status_code}"
 
         # Logout (contract compliance)
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200, f"Expected 200, got {logout_response.status_code}"
         assert logout_response.json()["status"] == "logged_out"
 
@@ -236,21 +237,17 @@ class TestLogoutFlowIntegration:
         client.simulate_logout()
 
         # Verify subsequent requests fail with 401
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 401, f"Expected 401 after logout, got {response.status_code}"
 
-    def test_logout_without_authentication_fails(self, client, test_db):
-        """Test that logout endpoint requires authentication.
-
-        Requirements: Contract requirement that POST /auth/logout requires valid token
-        """
+    def test_logout_without_authentication_requires_auth(self, client, test_db):
+        """Test unauthenticated logout returns 401 per current API contract."""
         # Simulate unauthenticated state
         client.simulate_logout()
 
         # Call logout WITHOUT authentication
-        response = client.post("/auth/logout")
+        response = client.post("/api/auth/logout")
 
-        # Should fail with 401
         assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
         data = response.json()
         assert "detail" in data
@@ -267,7 +264,7 @@ class TestLogoutFlowIntegration:
         }
         """
         # Call logout (user is authenticated via fixture)
-        response = client.post("/auth/logout")
+        response = client.post("/api/auth/logout")
 
         # Verify status code
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
@@ -289,28 +286,28 @@ class TestLogoutFlowIntegration:
         Requirements: FR-009, FR-010
         """
         # Step 1: Verify initial access
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
         # Step 2: Logout
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200, f"Expected 200, got {logout_response.status_code}"
 
         # Step 3: Simulate session termination
         client.simulate_logout()
 
         # Verify access denied
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 401, f"Expected 401, got {response.status_code}"
 
         # Step 4: Re-authenticate (simulates new login)
         client.simulate_login()
 
         # Verify access restored
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 200, f"Expected 200 after re-auth, got {response.status_code}"
         user_data = response.json()
-        assert user_data["user_id"] == "test_logout_user_00u1abc"
+        assert user_data["auth_sub"] == "test_logout_user_00u1abc"
 
     def test_logout_with_database_user_auto_provisioning(self, client, test_db, mock_weaviate):
         """Test logout flow with auto-provisioned database user.
@@ -323,34 +320,34 @@ class TestLogoutFlowIntegration:
         - User record persists after logout
         """
         # Trigger auto-provisioning
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
         # Verify user created in database
         db_user = test_db.query(User).filter(
-            User.user_id == "test_logout_user_00u1abc"
+            User.auth_sub == "test_logout_user_00u1abc"
         ).first()
         assert db_user is not None, "User should be auto-provisioned"
         assert db_user.email == "test.curator.logout@alliancegenome.org"
-        user_id = db_user.user_id
+        user_id = db_user.auth_sub
 
         # Logout
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200, f"Expected 200, got {logout_response.status_code}"
 
         # Verify user record still exists after logout
         test_db.expire_all()  # Force fresh query
         db_user_after = test_db.query(User).filter(
-            User.user_id == "test_logout_user_00u1abc"
+            User.auth_sub == "test_logout_user_00u1abc"
         ).first()
         assert db_user_after is not None, "User should persist after logout"
-        assert db_user_after.user_id == user_id, "User ID should not change"
+        assert db_user_after.auth_sub == user_id, "User ID should not change"
 
         # Simulate session termination
         client.simulate_logout()
 
         # Verify access denied after logout
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 401, f"Expected 401, got {response.status_code}"
 
 
@@ -364,14 +361,14 @@ class TestLogoutFlowEdgeCases:
         """
         # Verify access to multiple endpoints works when authenticated
         # Only test auth-protected endpoints that don't require Weaviate/DB setup
-        endpoints = ["/users/me"]
+        endpoints = ["/api/users/me"]
         for endpoint in endpoints:
             response = client.get(endpoint)
             # Should succeed with 200
             assert response.status_code == 200, f"{endpoint} should return 200 when authenticated, got {response.status_code}"
 
         # Logout
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200, f"Expected 200, got {logout_response.status_code}"
 
         # Simulate session termination
@@ -383,21 +380,23 @@ class TestLogoutFlowEdgeCases:
             assert response.status_code == 401, f"{endpoint} should return 401 after logout, got {response.status_code}"
 
     def test_multiple_logout_calls(self, client, test_db):
-        """Test that calling logout multiple times is idempotent.
+        """Test that repeated logout after session termination requires auth.
 
-        While the first logout succeeds, subsequent calls without re-auth
-        should fail with 401.
+        Current behavior: first authenticated logout succeeds; once the session
+        is terminated, subsequent logout calls return 401 until re-auth.
         """
         # First logout succeeds
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200
 
         # Simulate session termination
         client.simulate_logout()
 
-        # Second logout fails (no authentication)
-        logout_response2 = client.post("/auth/logout")
-        assert logout_response2.status_code == 401, f"Second logout should fail with 401, got {logout_response2.status_code}"
+        # Second logout now requires authentication
+        logout_response2 = client.post("/api/auth/logout")
+        assert logout_response2.status_code == 401, (
+            f"Second logout should return 401, got {logout_response2.status_code}"
+        )
 
     def test_logout_preserves_database_integrity(self, client, test_db):
         """Test that logout does not corrupt database state.
@@ -405,29 +404,29 @@ class TestLogoutFlowEdgeCases:
         Requirements: FR-009 (logout should not affect data integrity)
         """
         # Create user
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 200
 
         # Get initial user count
         initial_count = test_db.query(User).filter(
-            User.user_id == "test_logout_user_00u1abc"
+            User.auth_sub == "test_logout_user_00u1abc"
         ).count()
         assert initial_count == 1
 
         # Logout
-        logout_response = client.post("/auth/logout")
+        logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200
 
         # Verify user count unchanged
         test_db.expire_all()
         final_count = test_db.query(User).filter(
-            User.user_id == "test_logout_user_00u1abc"
+            User.auth_sub == "test_logout_user_00u1abc"
         ).count()
         assert final_count == initial_count, "Logout should not delete user from database"
 
         # Verify user data unchanged
         db_user = test_db.query(User).filter(
-            User.user_id == "test_logout_user_00u1abc"
+            User.auth_sub == "test_logout_user_00u1abc"
         ).first()
         assert db_user is not None
         assert db_user.email == "test.curator.logout@alliancegenome.org"
@@ -439,15 +438,15 @@ class TestLogoutFlowEdgeCases:
         and the actual session termination is simulated separately.
         """
         # Call logout endpoint twice while still authenticated
-        logout1 = client.post("/auth/logout")
+        logout1 = client.post("/api/auth/logout")
         assert logout1.status_code == 200
 
-        logout2 = client.post("/auth/logout")
+        logout2 = client.post("/api/auth/logout")
         assert logout2.status_code == 200  # Both succeed while authenticated
 
         # Now simulate the session termination
         client.simulate_logout()
 
         # Subsequent access fails
-        response = client.get("/users/me")
+        response = client.get("/api/users/me")
         assert response.status_code == 401

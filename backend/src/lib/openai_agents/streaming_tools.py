@@ -101,6 +101,7 @@ def _build_json_only_instruction(output_type: Any) -> str:
         return (
             "IMPORTANT OUTPUT FORMAT REQUIREMENT:\n"
             "After completing tool calls, respond with ONLY valid JSON (no markdown, no backticks).\n"
+            "Do NOT return markdown tables, prose explanations, or fenced code blocks.\n"
             "Your JSON MUST match this schema exactly:\n"
             f"{schema_blob}\n"
         )
@@ -108,7 +109,70 @@ def _build_json_only_instruction(output_type: Any) -> str:
     return (
         "IMPORTANT OUTPUT FORMAT REQUIREMENT:\n"
         "After completing tool calls, respond with ONLY valid JSON (no markdown, no backticks).\n"
+        "Do NOT return markdown tables, prose explanations, or fenced code blocks.\n"
     )
+
+
+def _try_parse_markdown_field_table(raw_text: str) -> Optional[Dict[str, Any]]:
+    """Parse simple markdown field tables into a JSON object candidate.
+
+    Some Groq responses return a 3-column markdown table like:
+    | Field | Type | Content |
+    | **answer** | string | ... |
+    | **citations** | array | [...] |
+    | **sources** | array | [...] |
+    """
+    if not raw_text:
+        return None
+
+    candidate: Dict[str, Any] = {}
+    saw_table_row = False
+
+    for raw_line in str(raw_text).splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|") or line.count("|") < 3:
+            continue
+        # Skip markdown separator rows like |-----|-----|-----|
+        if re.match(r"^\|\s*[-:]+\s*(\|\s*[-:]+\s*)+\|?$", line):
+            continue
+
+        saw_table_row = True
+        body = line[1:-1] if line.endswith("|") else line[1:]
+        parts = [p.strip() for p in body.split("|")]
+        if len(parts) < 3:
+            continue
+
+        field = parts[0].strip().strip("*").strip().lower()
+        if field not in {"answer", "citations", "sources"}:
+            continue
+
+        content = "|".join(parts[2:]).strip()
+        if not content:
+            continue
+
+        if field == "answer":
+            # Drop surrounding quotes for plain answer strings.
+            if (content.startswith('"') and content.endswith('"')) or (
+                content.startswith("'") and content.endswith("'")
+            ):
+                content = content[1:-1]
+            candidate["answer"] = content
+            continue
+
+        # citations/sources should be JSON arrays when possible.
+        try:
+            parsed = json.loads(content)
+            candidate[field] = parsed
+        except Exception:
+            # Conservative fallback: keep minimally valid shape.
+            if field == "citations":
+                candidate[field] = []
+            else:
+                candidate[field] = [content]
+
+    if not saw_table_row or not candidate:
+        return None
+    return candidate
 
 
 def _try_validate_json_output(raw_text: str, output_type: Any) -> Optional[str]:
@@ -131,6 +195,17 @@ def _try_validate_json_output(raw_text: str, output_type: Any) -> Optional[str]:
     try:
         parsed = json.loads(json_candidate)
         validated = output_type.model_validate(parsed)
+        return json.dumps(validated.model_dump())
+    except Exception:
+        pass
+
+    # Groq sometimes emits markdown field tables instead of raw JSON.
+    markdown_candidate = _try_parse_markdown_field_table(text)
+    if markdown_candidate is None:
+        return None
+
+    try:
+        validated = output_type.model_validate(markdown_candidate)
         return json.dumps(validated.model_dump())
     except Exception:
         return None
@@ -1253,6 +1328,23 @@ async def run_specialist_with_events(
             # String output
             final_output = str(result.final_output)
             logger.info("%s final_output is string: %s...", specialist_name, final_output[:200])
+
+            # PDF specialist may emit a markdown field table (answer/citations/sources).
+            # Normalize to plain answer text so supervisor receives concise tool output.
+            if expected_output_type is None:
+                markdown_candidate = _try_parse_markdown_field_table(final_output)
+                answer_text = (
+                    str(markdown_candidate.get("answer", "")).strip()
+                    if isinstance(markdown_candidate, dict)
+                    else ""
+                )
+                if answer_text:
+                    final_output = answer_text
+                    logger.info(
+                        "%s normalized markdown table output to plain answer text (%s chars)",
+                        specialist_name,
+                        len(final_output),
+                    )
 
             # Groq compatibility path: we intentionally disabled SDK-level structured
             # outputs when tools are present; recover structure by validating text JSON.

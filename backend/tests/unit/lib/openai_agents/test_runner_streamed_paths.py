@@ -202,3 +202,46 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
     assert "SPECIALIST_ERROR" in event_types
     assert "RUN_ERROR" in event_types
     assert captured["logged"][0][0] == "trace-specialist"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_retries_transient_groq_tool_call_parse_failure(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    monkeypatch.setattr(runner, "get_groq_tool_call_max_retries", lambda: 1)
+    monkeypatch.setattr(runner, "get_groq_tool_call_retry_delay_seconds", lambda: 0.0)
+
+    attempts = {"count": 0}
+
+    async def _flaky_run(**_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            if False:
+                yield {}
+            raise RuntimeError(
+                "GroqException - Failed to parse tool call arguments as JSON"
+            )
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response_length": 3, "tool_calls": 0, "agents_used": ["Supervisor"]},
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _flaky_run)
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            user_message="hello",
+            user_id="user-5",
+            agent=SimpleNamespace(
+                name="Flow Supervisor",
+                model=SimpleNamespace(model="groq/openai/gpt-oss-120b"),
+                tools=[],
+            ),
+        )
+    )
+
+    event_types = [event["type"] for event in events]
+    assert "SUPERVISOR_RETRY" in event_types
+    assert event_types[-1] == "RUN_FINISHED"
+    assert attempts["count"] == 2

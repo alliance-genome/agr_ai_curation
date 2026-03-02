@@ -97,7 +97,10 @@ def test_build_model_settings_returns_none_when_no_overrides(monkeypatch):
         reasoning_effort=None,
     )
 
-    assert settings is None
+    assert settings is not None
+    assert settings.temperature is None
+    assert settings.reasoning is None
+    assert settings.parallel_tool_calls is True
 
 
 def test_build_model_settings_raises_for_unknown_provider(monkeypatch):

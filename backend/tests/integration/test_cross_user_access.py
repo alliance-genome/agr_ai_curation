@@ -24,7 +24,7 @@ Implementation Notes:
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timezone
 
 from src.models.sql.user import User
@@ -46,7 +46,7 @@ def cleanup_test_data():
 
         # Then delete test users
         db.query(User).filter(
-            User.user_id.like("test_%")
+            User.auth_sub.like("test_%")
         ).delete(synchronize_session=False)
 
         db.commit()
@@ -65,7 +65,7 @@ def cleanup_test_data():
             PDFDocument.filename.like("test_%")
         ).delete(synchronize_session=False)
         db.query(User).filter(
-            User.user_id.like("test_%")
+            User.auth_sub.like("test_%")
         ).delete(synchronize_session=False)
         db.commit()
     except Exception:
@@ -82,12 +82,18 @@ def test_db():
     db = SessionLocal()
     yield db
 
+    # Reset failed transaction state before cleanup to avoid PendingRollbackError.
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     # Cleanup: delete test users and documents
     db.query(PDFDocument).filter(
         PDFDocument.filename.like("test_%")
     ).delete(synchronize_session=False)
     db.query(User).filter(
-        User.user_id.like("test_%")
+        User.auth_sub.like("test_%")
     ).delete(synchronize_session=False)
     db.commit()
     db.close()
@@ -170,32 +176,34 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockCurator1Auth:
-        def __init__(self, *args, **kwargs):
-            pass
+    # Ensure fresh app/module state so auth patch is captured per-client fixture.
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
 
-        async def get_user(self):
-            """Mock get_user that returns curator1."""
-            return curator1_user
+    async def override_user():
+        return curator1_user
 
-    # Patch the auth object itself BEFORE importing app
-    # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", MockCurator1Auth()):
-        # Also mock provision_weaviate_tenants to prevent real tenant creation
-        with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-            with patch("src.services.user_service.get_connection"):
-                with patch("src.lib.weaviate_helpers.get_connection"):
-                    from main import app
-                    from src.models.sql.database import get_db
+    # Also mock provision_weaviate_tenants to prevent real tenant creation
+    with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
+        with patch("src.services.user_service.get_connection"):
+            with patch("src.lib.weaviate_helpers.get_connection"):
+                from main import app
+                from src.api.auth import _get_user_from_cookie_impl
+                from src.models.sql.database import get_db
 
-                    def override_get_db():
-                        yield test_db
+                def override_get_db():
+                    yield test_db
 
-                    app.dependency_overrides[get_db] = override_get_db
+                app.dependency_overrides[get_db] = override_get_db
+                app.dependency_overrides[_get_user_from_cookie_impl] = override_user
 
-                    yield TestClient(app)
+                yield TestClient(app)
 
-                    app.dependency_overrides.clear()
+                app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -212,32 +220,34 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    class MockCurator2Auth:
-        def __init__(self, *args, **kwargs):
-            pass
+    # Ensure fresh app/module state so auth patch is captured per-client fixture.
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
 
-        async def get_user(self):
-            """Mock get_user that returns curator2."""
-            return curator2_user
+    async def override_user():
+        return curator2_user
 
-    # Patch the auth object itself BEFORE importing app
-    # This ensures routes capture the mocked auth at import time
-    with patch("src.api.auth.auth", MockCurator2Auth()):
-        # Also mock provision_weaviate_tenants to prevent real tenant creation
-        with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-            with patch("src.services.user_service.get_connection"):
-                with patch("src.lib.weaviate_helpers.get_connection"):
-                    from main import app
-                    from src.models.sql.database import get_db
+    # Also mock provision_weaviate_tenants to prevent real tenant creation
+    with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
+        with patch("src.services.user_service.get_connection"):
+            with patch("src.lib.weaviate_helpers.get_connection"):
+                from main import app
+                from src.api.auth import _get_user_from_cookie_impl
+                from src.models.sql.database import get_db
 
-                    def override_get_db():
-                        yield test_db
+                def override_get_db():
+                    yield test_db
 
-                    app.dependency_overrides[get_db] = override_get_db
+                app.dependency_overrides[get_db] = override_get_db
+                app.dependency_overrides[_get_user_from_cookie_impl] = override_user
 
-                    yield TestClient(app)
+                yield TestClient(app)
 
-                    app.dependency_overrides.clear()
+                app.dependency_overrides.clear()
 
 
 class TestCrossUserAccessPrevention:
@@ -257,7 +267,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create User 1 in database
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -270,7 +280,7 @@ class TestCrossUserAccessPrevention:
 
         # Create User 2 in database
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -286,7 +296,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,  # Owned by User 1
+            user_id=user1.id,  # Owned by User 1
             filename="test_curator1_document.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="test_hash_123",
@@ -320,7 +330,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create users
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -332,7 +342,7 @@ class TestCrossUserAccessPrevention:
         test_db.refresh(user1)
 
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -348,7 +358,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_curator1_document.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="test_hash_456",
@@ -381,7 +391,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create users
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -393,7 +403,7 @@ class TestCrossUserAccessPrevention:
         test_db.refresh(user1)
 
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -409,7 +419,7 @@ class TestCrossUserAccessPrevention:
         doc1_id = str(uuid.uuid4())
         doc1 = PDFDocument(
             id=doc1_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_curator1_doc.pdf",
             file_path=f"/test/path/{doc1_id}.pdf",
             file_hash="hash_curator1",
@@ -418,12 +428,13 @@ class TestCrossUserAccessPrevention:
             upload_timestamp=datetime.now(timezone.utc)
         )
         test_db.add(doc1)
+        test_db.commit()
 
         # Create document for User 2
         doc2_id = str(uuid.uuid4())
         doc2 = PDFDocument(
             id=doc2_id,
-            user_id=user2.user_id,
+            user_id=user2.id,
             filename="test_curator2_doc.pdf",
             file_path=f"/test/path/{doc2_id}.pdf",
             file_hash="hash_curator2",
@@ -434,14 +445,33 @@ class TestCrossUserAccessPrevention:
         test_db.add(doc2)
         test_db.commit()
 
-        # Curator 2 lists documents
-        response = client_as_curator2.get("/weaviate/documents")
+        # Curator 2 lists documents (mock Weaviate-backed listing path).
+        mock_list_payload = {
+            "documents": [
+                {
+                    "document_id": str(doc2_id),
+                    "user_id": user2.id,
+                    "filename": "test_curator2_doc.pdf",
+                    "status": "PENDING",
+                    "upload_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "file_size_bytes": 2048,
+                    "weaviate_tenant": "test_curator2_00u4ghi5jkl6",
+                }
+            ],
+            "total": 1,
+            "limit": 20,
+            "offset": 0,
+        }
+
+        with patch("src.api.documents.cleanup_phantom_documents", new=AsyncMock(return_value=0)):
+            with patch("src.api.documents.list_documents", new=AsyncMock(return_value=mock_list_payload)):
+                response = client_as_curator2.get("/weaviate/documents")
 
         assert response.status_code == 200
         data = response.json()
 
         # Should only see their own document (doc2)
-        document_ids = [doc["id"] for doc in data]
+        document_ids = [doc["document_id"] for doc in data["documents"]]
         assert doc2_id in document_ids, "User should see their own document"
         assert doc1_id not in document_ids, \
             "User should NOT see other user's documents"
@@ -455,7 +485,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create users
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -467,7 +497,7 @@ class TestCrossUserAccessPrevention:
         test_db.refresh(user1)
 
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -483,7 +513,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_curator1_doc.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="hash_123",
@@ -512,7 +542,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create users
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -524,7 +554,7 @@ class TestCrossUserAccessPrevention:
         test_db.refresh(user1)
 
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -540,7 +570,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_curator1_doc.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="hash_789",
@@ -577,7 +607,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create users
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -589,7 +619,7 @@ class TestCrossUserAccessPrevention:
         test_db.refresh(user1)
 
         user2 = User(
-            user_id=curator2_user.uid,
+            auth_sub=curator2_user.uid,
             email=curator2_user.email,
             display_name=curator2_user.email,
             created_at=datetime.now(timezone.utc),
@@ -605,7 +635,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_doc.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="hash_abc",
@@ -635,7 +665,7 @@ class TestCrossUserAccessPrevention:
         """
         # Create user
         user1 = User(
-            user_id=curator1_user.uid,
+            auth_sub=curator1_user.uid,
             email=curator1_user.email,
             display_name=curator1_user.email,
             created_at=datetime.now(timezone.utc),
@@ -651,7 +681,7 @@ class TestCrossUserAccessPrevention:
         doc_id = str(uuid.uuid4())
         document = PDFDocument(
             id=doc_id,
-            user_id=user1.user_id,
+            user_id=user1.id,
             filename="test_own_doc.pdf",
             file_path=f"/test/path/{doc_id}.pdf",
             file_hash="hash_own",
@@ -662,13 +692,17 @@ class TestCrossUserAccessPrevention:
         test_db.add(document)
         test_db.commit()
 
-        # User 1 accesses their own document
-        response = client_as_curator1.get(f"/weaviate/documents/{doc_id}")
+        # User 1 accesses their own document (mock Weaviate document fetch).
+        with patch(
+            "src.api.documents.get_document",
+            new=AsyncMock(return_value={"document": {"processing_status": "pending", "chunk_count": 0}}),
+        ):
+            response = client_as_curator1.get(f"/weaviate/documents/{doc_id}")
 
         # Should succeed (200) or appropriate success code
         assert response.status_code == 200, \
             f"User should be able to access their own document, got {response.status_code}"
 
         data = response.json()
-        assert data["id"] == doc_id
+        assert data["document_id"] == doc_id
         assert data["filename"] == "test_own_doc.pdf"

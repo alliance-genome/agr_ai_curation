@@ -32,7 +32,7 @@ def test_live_pdfx_health_and_extract_smoke():
 
     timeout_seconds = int(os.getenv("PDFX_LIVE_TIMEOUT_SECONDS", "300"))
     poll_interval_seconds = float(os.getenv("PDFX_LIVE_POLL_INTERVAL_SECONDS", "2"))
-    methods = os.getenv("PDFX_LIVE_METHODS", "grobid,docling,marker")
+    methods = os.getenv("PDFX_LIVE_METHODS", "grobid,marker")
 
     headers = {}
     if bearer_token:

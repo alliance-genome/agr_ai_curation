@@ -238,7 +238,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
             <Typography variant="caption" fontWeight={600}>
               Custom Instructions (Optional)
             </Typography>
-            <Tooltip title="Additional context or constraints for this step">
+            <Tooltip title="These instructions take the highest priority — they override the agent's base prompt and MOD rules for this flow step. Use them to add constraints or focus the agent's behavior.">
               <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
             </Tooltip>
           </FieldLabel>

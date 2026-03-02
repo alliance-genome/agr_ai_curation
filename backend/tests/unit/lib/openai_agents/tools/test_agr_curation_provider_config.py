@@ -133,17 +133,18 @@ def test_module_load_fallback_on_missing_groups_file(monkeypatch):
     """Module should not crash when groups config path is invalid at import time."""
     from src.lib.config import groups_loader as gl_module
 
+    module = importlib.import_module("src.lib.openai_agents.tools.agr_curation")
     monkeypatch.setenv("GROUPS_CONFIG_PATH", "/tmp/does-not-exist-groups.yaml")
     gl_module.reset_cache()
     # Force DEFAULT_GROUPS_PATH to update for the reload
     monkeypatch.setattr(gl_module, "DEFAULT_GROUPS_PATH", gl_module._get_default_groups_path())
-    reloaded = importlib.reload(agr_curation)
+    reloaded = importlib.reload(module)
 
     assert reloaded.PROVIDER_TO_TAXON == {}
     assert reloaded._GROUP_MAPPING_LOAD_ERROR is not None
     monkeypatch.delenv("GROUPS_CONFIG_PATH", raising=False)
     gl_module.reset_cache()
-    importlib.reload(agr_curation)
+    importlib.reload(module)
 
 
 def test_query_returns_db_not_configured_error(monkeypatch):
@@ -295,3 +296,129 @@ def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch
     assert len(result.data["items"]) == 2
     assert result.data["items"][0]["status"] == "ok"
     assert result.data["items"][1]["status"] == "validation_warning"
+
+
+def test_search_genes_bulk_uses_batched_detail_lookup(monkeypatch):
+    """Gene bulk query should aggregate CURIE detail lookup into one batched call per taxon."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    captured = {"calls": []}
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type != "gene" or taxon_curie != "NCBITaxon:7227":
+                return []
+            if search_pattern == "crb":
+                return [{"entity_curie": "FB:FBgn0000117", "entity": "crb", "match_type": "exact"}]
+            if search_pattern == "ninaE":
+                return [{"entity_curie": "FB:FBgn0002942", "entity": "ninaE", "match_type": "exact"}]
+            return []
+
+        @staticmethod
+        def get_gene(_curie):
+            raise AssertionError("Per-CURIE get_gene should not be used in batched bulk path")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_batch_fetch(_db, curies):
+        captured["calls"].append(list(curies))
+        return {
+            "FB:FBgn0000117": {
+                "curie": "FB:FBgn0000117",
+                "symbol": "crb",
+                "name": "crumbs",
+                "taxon": "NCBITaxon:7227",
+                "gene_type": "protein_coding_gene",
+            },
+            "FB:FBgn0002942": {
+                "curie": "FB:FBgn0002942",
+                "symbol": "ninaE",
+                "name": "neither inactivation nor afterpotential E",
+                "taxon": "NCBITaxon:7227",
+                "gene_type": "protein_coding_gene",
+            },
+        }
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_gene_details_bulk", _fake_batch_fetch)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["crb", "ninaE"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert len(captured["calls"]) == 1
+    assert set(captured["calls"][0]) == {"FB:FBgn0000117", "FB:FBgn0002942"}
+    assert result.data["items"][0]["results"][0]["name"] == "crumbs"
+    assert result.data["items"][1]["results"][0]["symbol"] == "ninaE"
+
+
+def test_search_alleles_bulk_uses_batched_detail_lookup(monkeypatch):
+    """Allele bulk query should aggregate CURIE detail lookup into one batched call per taxon."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    captured = {"calls": []}
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type != "allele" or taxon_curie != "NCBITaxon:7227":
+                return []
+            if search_pattern == "e1370":
+                return [{"entity_curie": "FB:FBal0000001", "entity": "e1370", "match_type": "exact"}]
+            if search_pattern == "let-23":
+                return [{"entity_curie": "FB:FBal0000002", "entity": "let-23", "match_type": "exact"}]
+            return []
+
+        @staticmethod
+        def get_allele(_curie):
+            raise AssertionError("Per-CURIE get_allele should not be used in batched bulk path")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_batch_fetch(_db, curies):
+        captured["calls"].append(list(curies))
+        return {
+            "FB:FBal0000001": {
+                "curie": "FB:FBal0000001",
+                "symbol": "e1370",
+                "name": "e1370",
+                "taxon": "NCBITaxon:7227",
+            },
+            "FB:FBal0000002": {
+                "curie": "FB:FBal0000002",
+                "symbol": "let-23",
+                "name": "let-23",
+                "taxon": "NCBITaxon:7227",
+            },
+        }
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", _fake_batch_fetch)
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["e1370", "let-23"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert len(captured["calls"]) == 1
+    assert set(captured["calls"][0]) == {"FB:FBal0000001", "FB:FBal0000002"}
+    assert result.data["items"][0]["results"][0]["curie"] == "FB:FBal0000001"
+    assert result.data["items"][1]["results"][0]["symbol"] == "let-23"

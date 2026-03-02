@@ -33,11 +33,11 @@ def _default_database_url() -> str:
     db_password = os.environ.get("TEST_DB_PASSWORD", "postgres")
     db_name = os.environ.get("TEST_DB_NAME", "ai_curation")
     if _running_in_docker():
-        db_host = os.environ.get("TEST_DB_HOST", "postgres")
+        db_host = os.environ.get("TEST_DB_HOST", "postgres-test")
         db_port = os.environ.get("TEST_DB_PORT", "5432")
     else:
         db_host = os.environ.get("TEST_DB_HOST", "127.0.0.1")
-        db_port = os.environ.get("TEST_DB_PORT", "5434")
+        db_port = os.environ.get("TEST_DB_PORT", "15434")
     return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
 
@@ -73,6 +73,7 @@ def _bootstrap_weaviate_schema() -> None:
     host = os.environ.get("WEAVIATE_HOST", "127.0.0.1")
     port = int(os.environ.get("WEAVIATE_PORT", "8080"))
     scheme = os.environ.get("WEAVIATE_SCHEME", "http")
+    url = f"{scheme}://{host}:{port}"
     if not _is_tcp_reachable(host, port):
         return
 
@@ -80,7 +81,6 @@ def _bootstrap_weaviate_schema() -> None:
         from weaviate.classes.config import Configure, DataType, Property
         from src.lib.weaviate_client.connection import WeaviateConnection
 
-        url = f"{scheme}://{host}:{port}"
         conn = WeaviateConnection(url=url)
         conn.connect()
     except Exception as exc:

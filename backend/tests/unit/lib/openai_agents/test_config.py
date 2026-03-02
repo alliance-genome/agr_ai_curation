@@ -12,7 +12,10 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_api_key,
     get_base_url,
+    get_groq_tool_call_max_retries,
+    get_groq_tool_call_retry_delay_seconds,
     get_model_for_agent,
+    is_retryable_groq_tool_call_error,
     resolve_model_provider,
     supports_reasoning,
     supports_temperature,
@@ -104,6 +107,32 @@ def test_support_flags_read_model_catalog(monkeypatch):
     assert supports_temperature("custom-model") is True
 
 
+def test_is_retryable_groq_tool_call_error_matches_known_signatures():
+    assert is_retryable_groq_tool_call_error(
+        RuntimeError("GroqException - Failed to parse tool call arguments as JSON")
+    ) is True
+    assert is_retryable_groq_tool_call_error(
+        RuntimeError("tool_use_failed: Tool call arguments are not valid JSON")
+    ) is True
+    assert is_retryable_groq_tool_call_error(RuntimeError("something else entirely")) is False
+
+
+def test_groq_tool_call_retry_settings_parse_env(monkeypatch):
+    monkeypatch.setenv("GROQ_TOOL_CALL_MAX_RETRIES", "3")
+    monkeypatch.setenv("GROQ_TOOL_CALL_RETRY_DELAY_SECONDS", "1.5")
+
+    assert get_groq_tool_call_max_retries() == 3
+    assert get_groq_tool_call_retry_delay_seconds() == pytest.approx(1.5)
+
+
+def test_groq_tool_call_retry_settings_clamp_invalid_values(monkeypatch):
+    monkeypatch.setenv("GROQ_TOOL_CALL_MAX_RETRIES", "-8")
+    monkeypatch.setenv("GROQ_TOOL_CALL_RETRY_DELAY_SECONDS", "-3.0")
+
+    assert get_groq_tool_call_max_retries() == 0
+    assert get_groq_tool_call_retry_delay_seconds() == pytest.approx(0.0)
+
+
 def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
@@ -128,6 +157,95 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
     )
     assert settings is not None
     assert settings.parallel_tool_calls is False
+
+
+def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="groq",
+            supports_reasoning=False,
+            supports_temperature=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            if provider_id == "groq"
+            else None
+        ),
+    )
+    monkeypatch.delenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
+    monkeypatch.delenv("GROQ_TOOL_TEMPERATURE_MAX", raising=False)
+
+    settings = build_model_settings(
+        model="openai/gpt-oss-120b",
+        temperature=0.9,
+        parallel_tool_calls=True,
+    )
+    assert settings is not None
+    assert settings.parallel_tool_calls is False
+    assert settings.temperature == pytest.approx(0.0)
+
+
+def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="groq",
+            supports_reasoning=False,
+            supports_temperature=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(provider_id="groq", supports_parallel_tool_calls=True)
+            if provider_id == "groq"
+            else None
+        ),
+    )
+    monkeypatch.setenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", "true")
+
+    settings = build_model_settings(
+        model="openai/gpt-oss-120b",
+        temperature=0.2,
+        parallel_tool_calls=True,
+    )
+    assert settings is not None
+    assert settings.parallel_tool_calls is True
+    assert settings.temperature == pytest.approx(0.0)
+
+
+def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="openai",
+            supports_reasoning=False,
+            supports_temperature=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            if provider_id == "openai"
+            else None
+        ),
+    )
+    monkeypatch.setenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", "false")
+    monkeypatch.setenv("GROQ_TOOL_TEMPERATURE_MAX", "0.1")
+
+    settings = build_model_settings(
+        model="gpt-4o",
+        temperature=0.8,
+        parallel_tool_calls=True,
+    )
+    assert settings is not None
+    assert settings.parallel_tool_calls is True
+    assert settings.temperature == pytest.approx(0.8)
 
 
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):

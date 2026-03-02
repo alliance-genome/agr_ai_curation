@@ -112,11 +112,16 @@ def client(temp_storage_dir):
     # Set environment variable BEFORE importing the app
     os.environ["FILE_OUTPUT_STORAGE_PATH"] = str(temp_storage_dir)
     os.environ["OPENAI_API_KEY"] = "test-key"
+    os.environ["TESTING_API_KEY"] = "test-key"
     os.environ["DEV_MODE"] = "true"
 
     # Clear any cached imports
     import sys
-    modules_to_remove = [k for k in sys.modules.keys() if k.startswith('src.api.files') or k.startswith('src.lib.file_outputs')]
+    modules_to_remove = [
+        k for k in sys.modules.keys()
+        if k == "main"
+        or k.startswith("src.")
+    ]
     for mod in modules_to_remove:
         del sys.modules[mod]
 

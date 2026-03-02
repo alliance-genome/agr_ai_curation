@@ -278,26 +278,30 @@ class TestCheckServiceHealth:
 
     def setup_method(self):
         """Reset cache before each test."""
-        reset_cache()
+        import src.lib.config.connections_loader as connections_loader
+        connections_loader.reset_cache()
 
     @pytest.mark.asyncio
     async def test_returns_false_for_unknown_service(self):
         """Should return False for services not in registry."""
-        load_connections()  # Ensure registry is loaded
+        import src.lib.config.connections_loader as connections_loader
 
-        result = await check_service_health("nonexistent_service_xyz")
+        connections_loader.load_connections()  # Ensure registry is loaded
+
+        result = await connections_loader.check_service_health("nonexistent_service_xyz")
         assert result is False
 
     @pytest.mark.asyncio
     async def test_updates_health_status_after_check(self):
         """Should update connection's is_healthy field after check."""
-        load_connections()
+        import src.lib.config.connections_loader as connections_loader
 
-        with patch("src.lib.config.connections_loader._check_http_health", new=AsyncMock(return_value=(True, None))):
-            await check_service_health("weaviate")
+        connections_loader.load_connections()
 
-        from src.lib.config.connections_loader import get_connection
-        conn = get_connection("weaviate")
+        with patch.object(connections_loader, "_check_http_health", new=AsyncMock(return_value=(True, None))):
+            await connections_loader.check_service_health("weaviate")
+
+        conn = connections_loader.get_connection("weaviate")
 
         # Status should be updated (either True or False, not None)
         assert conn is not None
@@ -310,15 +314,18 @@ class TestCheckAllHealth:
 
     def setup_method(self):
         """Reset cache before each test."""
-        reset_cache()
+        import src.lib.config.connections_loader as connections_loader
+        connections_loader.reset_cache()
 
     @pytest.mark.asyncio
     async def test_returns_dict_with_all_services(self):
         """Should return health status for all configured services."""
-        load_connections()
+        import src.lib.config.connections_loader as connections_loader
 
-        with patch("src.lib.config.connections_loader.check_service_health", new=AsyncMock(return_value=True)):
-            result = await check_all_health()
+        connections_loader.load_connections()
+
+        with patch.object(connections_loader, "check_service_health", new=AsyncMock(return_value=True)):
+            result = await connections_loader.check_all_health()
 
         assert isinstance(result, dict)
         # Should have entries for configured services
@@ -333,10 +340,12 @@ class TestCheckAllHealth:
     @pytest.mark.asyncio
     async def test_includes_overall_status(self):
         """Should include overall system status."""
-        load_connections()
+        import src.lib.config.connections_loader as connections_loader
 
-        with patch("src.lib.config.connections_loader.check_service_health", new=AsyncMock(return_value=True)):
-            result = await check_all_health()
+        connections_loader.load_connections()
+
+        with patch.object(connections_loader, "check_service_health", new=AsyncMock(return_value=True)):
+            result = await connections_loader.check_all_health()
 
         # The overall status is returned separately, check any service has expected structure
         for status in result.values():
@@ -595,7 +604,10 @@ class TestCurationResolver:
         monkeypatch.delenv("AWS_REGION", raising=False)
         reset_cache()
         reset_curation_resolver()
-        yield
+        # Keep "not configured" scenarios deterministic even when connections.yaml
+        # includes a concrete curation_db.url in local/dev environments.
+        with patch("src.lib.config.connections_loader.get_connection", return_value=None):
+            yield
         reset_cache()
         reset_curation_resolver()
 

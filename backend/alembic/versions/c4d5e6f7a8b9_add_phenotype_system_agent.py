@@ -28,8 +28,8 @@ depends_on = None
 
 
 _MODEL_ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+):-([^}]+)\}$")
-_AGENT_KEY = "phenotype"
-_AGENT_ID = "phenotype_extraction"
+_AGENT_KEY = "phenotype_extractor"
+_AGENT_ID = "phenotype_extractor"
 _CREATED_BY = "alembic:c4d5e6f7a8b9"
 
 

@@ -14,17 +14,19 @@ Requirements from quickstart.md:141-180 and tasks.md:T049:
 
 CRITICAL: This test MUST FAIL before T049 implementation!
 
-This test uses the CORRECT dependency override pattern from test_login_provisioning.py:
-1. Patch get_auth_dependency BEFORE importing main.py
+This test uses dependency_overrides for auth and DB dependencies:
+1. Override _get_user_from_cookie_impl with a mutable current-user provider
 2. Use a mutable container to hold current user (allows switching between users)
 3. Add helper methods to client for user switching
 4. NO 503 errors - tests should only see 403 Forbidden or 200 OK responses
 """
 
+import os
 import pytest
 import io
+import uuid
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from conftest import MockCognitoUser
 
@@ -51,7 +53,7 @@ def test_db():
     db.close()
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_weaviate():
     """Mock Weaviate client for document upload tests."""
     # Patch get_connection in both user_service AND documents module
@@ -108,25 +110,29 @@ def mock_weaviate():
 
 
 @pytest.fixture
-def client(test_db, monkeypatch):
+def client(test_db, monkeypatch, tmp_path):
     """Create test client with mocked authentication for two users.
 
-    This fixture uses the CORRECT pattern:
-    1. Patches get_auth_dependency BEFORE importing main.py
+    This fixture uses the current preferred pattern:
+    1. Overrides _get_user_from_cookie_impl via app.dependency_overrides
     2. Uses a mutable container to hold current user
     3. Adds helper methods to switch between users
-    4. No dependency_overrides for Security objects (they don't work)
+    4. Uses dependency overrides for both auth and DB dependencies
     """
     # Set required environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
-    monkeypatch.setenv("WEAVIATE_HOST", "weaviate")
+    in_docker = os.path.exists("/.dockerenv")
+    monkeypatch.setenv("WEAVIATE_HOST", "weaviate-test" if in_docker else "127.0.0.1")
     monkeypatch.setenv("WEAVIATE_PORT", "8080")
+    # Keep isolation tests focused on ownership boundaries, not external PDFX readiness.
+    monkeypatch.delenv("PDF_EXTRACTION_SERVICE_URL", raising=False)
+    storage_root = tmp_path / "pdf_storage"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PDF_STORAGE_PATH", str(storage_root))
 
 
     import sys
-    import os
-    from fastapi import Security
 
     sys.path.insert(
         0,
@@ -169,33 +175,43 @@ def client(test_db, monkeypatch):
     for module_name in modules_to_clear:
         del sys.modules[module_name]
 
-    # Patch get_auth_dependency BEFORE importing the app
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    mock_auth_instance = MockAuth()
 
-        mock_auth_instance = MockAuth()
-        mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
+    # Now import the app
+    from main import app
+    from src.api import documents as documents_api
+    from src.api.auth import _get_user_from_cookie_impl
+    from src.models.sql.database import get_db
 
-        # Now import the app
-        from main import app
-        from src.models.sql.database import get_db
+    # Isolation tests validate cross-user access controls, not PDFX worker lifecycle.
+    monkeypatch.setattr(
+        documents_api,
+        "_require_pdf_extraction_worker_ready",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.lib.pipeline.orchestrator.DocumentPipelineOrchestrator.process_pdf_document",
+        AsyncMock(return_value={"status": "completed", "chunks_created": 0}),
+    )
 
-        # Override database dependency
-        def override_get_db():
-            yield test_db
+    # Override dependencies
+    def override_get_db():
+        yield test_db
 
-        app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth_instance.get_user
 
-        client = TestClient(app)
+    client = TestClient(app)
 
-        # Add helper methods to switch users
-        client.switch_to_user_a = lambda: current_user.update({"user": user_a})
-        client.switch_to_user_b = lambda: current_user.update({"user": user_b})
-        client.user_a = user_a
-        client.user_b = user_b
+    # Add helper methods to switch users
+    client.switch_to_user_a = lambda: current_user.update({"user": user_a})
+    client.switch_to_user_b = lambda: current_user.update({"user": user_b})
+    client.user_a = user_a
+    client.user_b = user_b
 
-        yield client
+    yield client
 
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -252,7 +268,8 @@ startxref
 306
 %%EOF
 """
-    return io.BytesIO(pdf_content)
+    # Add a unique trailer comment so repeated test runs don't hit duplicate-file checks.
+    return io.BytesIO(pdf_content + f"\n%test-{uuid.uuid4()}".encode("utf-8"))
 
 
 class TestDocumentIsolation:
@@ -455,9 +472,10 @@ class TestDocumentIsolation:
         client.switch_to_user_b()
 
         test_pdf.seek(0)
+        user_b_pdf = io.BytesIO(test_pdf.getvalue() + b"\n%user-b-upload")
         response = client.post(
             "/weaviate/documents/upload",
-            files={"file": ("user_b_doc.pdf", test_pdf, "application/pdf")},
+            files={"file": ("user_b_doc.pdf", user_b_pdf, "application/pdf")},
         )
 
         assert response.status_code == 201, f"User B should be able to upload. Got {response.status_code}"

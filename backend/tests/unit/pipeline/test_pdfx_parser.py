@@ -140,7 +140,7 @@ async def test_download_markdown_uses_merged_variant_when_merge_enabled(parser_e
 @pytest.mark.asyncio
 async def test_download_markdown_uses_first_method_when_merge_disabled(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
-    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,docling,marker")
+    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,marker")
 
     parser = PDFXParser()
     session = _DummySession(_DummyResponse(200, "# grobid markdown\n"))
@@ -154,8 +154,8 @@ async def test_download_markdown_uses_first_method_when_merge_disabled(parser_en
 
 def test_primary_download_method_must_be_in_configured_methods(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
-    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,docling")
-    monkeypatch.setenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", "marker")
+    monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,marker")
+    monkeypatch.setenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", "legacy")
 
     with pytest.raises(ConfigurationError, match="PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD"):
         PDFXParser()

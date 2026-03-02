@@ -42,6 +42,105 @@ def _normalize_provider_id(provider: Optional[str]) -> str:
     return str(provider or "").strip().lower()
 
 
+def _get_env_bool(key: str, default: bool) -> bool:
+    """Parse boolean environment variable with resilient fallback."""
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+
+    logger.warning("Invalid boolean value for %s: %s, using default %s", key, raw, default)
+    return default
+
+
+def _get_env_float_with_fallback(key: str, default: float) -> float:
+    """Parse float environment variable with resilient fallback."""
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid float value for %s: %s, using default %s", key, raw, default)
+        return default
+
+
+def _get_env_int_with_fallback(key: str, default: int) -> int:
+    """Parse int environment variable with resilient fallback."""
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid int value for %s: %s, using default %s", key, raw, default)
+        return default
+
+
+def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
+    """Return True when an exception matches known transient Groq tool-call parse failures."""
+    text = str(exc or "").lower()
+    if not text:
+        return False
+
+    markers = (
+        "failed to parse tool call arguments as json",
+        "tool call arguments are not valid json",
+        "invalid json in tool arguments",
+        "tool_use_failed",
+        "midstreamfallbackerror",
+        "groqexception",
+    )
+    return any(marker in text for marker in markers)
+
+
+def get_groq_tool_call_max_retries() -> int:
+    """Max retries for transient Groq tool-call parse failures."""
+    retries = _get_env_int_with_fallback("GROQ_TOOL_CALL_MAX_RETRIES", 2)
+    return max(0, retries)
+
+
+def get_groq_tool_call_retry_delay_seconds() -> float:
+    """Base delay in seconds between Groq tool-call retry attempts."""
+    delay = _get_env_float_with_fallback("GROQ_TOOL_CALL_RETRY_DELAY_SECONDS", 1.0)
+    return max(0.0, delay)
+
+
+def _apply_provider_tool_call_overrides(
+    *,
+    provider: str,
+    temperature: Optional[float],
+    parallel_tool_calls: bool,
+) -> tuple[Optional[float], bool]:
+    """Apply provider-specific safeguards without affecting other providers."""
+    if provider != "groq":
+        return temperature, parallel_tool_calls
+
+    # Groq local tool-calling guidance favors low temperatures and retries.
+    # Keep this provider-specific so OpenAI/Gemini behavior is unchanged.
+    temperature_cap = _get_env_float_with_fallback("GROQ_TOOL_TEMPERATURE_MAX", 0.0)
+    effective_temperature = temperature
+    if effective_temperature is not None and effective_temperature > temperature_cap:
+        logger.info(
+            "Capping Groq temperature from %s to %s for tool-calling stability",
+            effective_temperature,
+            temperature_cap,
+        )
+        effective_temperature = temperature_cap
+
+    parallel_enabled = _get_env_bool("GROQ_PARALLEL_TOOL_CALLS_ENABLED", False)
+    effective_parallel = parallel_tool_calls and parallel_enabled
+
+    return effective_temperature, effective_parallel
+
+
 def _get_provider_definition(provider_id: str):
     """Return provider definition or raise a strict validation error."""
     from src.lib.config.providers_loader import get_provider
@@ -271,6 +370,12 @@ def build_model_settings(
     provider_def = _get_provider_definition(provider)
     effective_parallel_tool_calls = (
         parallel_tool_calls if provider_def.supports_parallel_tool_calls else False
+    )
+
+    effective_temperature, effective_parallel_tool_calls = _apply_provider_tool_call_overrides(
+        provider=provider,
+        temperature=effective_temperature,
+        parallel_tool_calls=effective_parallel_tool_calls,
     )
 
     return ModelSettings(

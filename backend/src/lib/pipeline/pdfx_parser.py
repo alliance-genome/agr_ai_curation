@@ -58,7 +58,7 @@ class PDFXParser:
         if self.poll_interval_seconds <= 0:
             raise ConfigurationError("PDF_EXTRACTION_POLL_INTERVAL_SECONDS must be greater than 0")
 
-        methods_raw = os.getenv("PDF_EXTRACTION_METHODS", "grobid,docling,marker")
+        methods_raw = os.getenv("PDF_EXTRACTION_METHODS", "grobid,marker")
         self._method_list = [part.strip() for part in methods_raw.split(",") if part.strip()]
         self.methods = ",".join(self._method_list)
         if not self.methods:

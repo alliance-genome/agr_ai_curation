@@ -8,6 +8,7 @@ from src.lib.openai_agents.streaming_tools import (
     _adapt_tools_for_groq_schema_constraints,
     _compute_adaptive_specialist_max_turns,
     _estimate_bulk_entity_count,
+    _try_parse_markdown_field_table,
     _required_tool_failure_message,
     _required_tool_names_for_agent,
     _should_use_groq_tool_json_compat,
@@ -51,6 +52,40 @@ def test_try_validate_json_output_returns_none_for_invalid_shape():
     raw = '{"unexpected":"field"}'
 
     assert _try_validate_json_output(raw, _Envelope) is None
+
+
+def test_try_validate_json_output_recovers_markdown_field_table():
+    class _AnswerEnvelope(BaseModel):
+        answer: str
+        citations: list[dict] = []
+        sources: list[str] = []
+
+    raw = """| Field | Type | Content |
+|---|---|---|
+| **answer** | string | The title is Alliance AI curation test document. |
+| **citations** | array | [{"section_title":"TITLE","page_number":1}] |
+| **sources** | array | ["read_section"] |
+"""
+    validated = _try_validate_json_output(raw, _AnswerEnvelope)
+
+    assert validated is not None
+    assert '"answer": "The title is Alliance AI curation test document."' in validated
+    assert '"sources": ["read_section"]' in validated
+
+
+def test_try_parse_markdown_field_table_extracts_expected_fields():
+    raw = """| Field | Type | Content |
+|---|---|---|
+| **answer** | string | Concise summary |
+| **citations** | array | [{"section_title":"TITLE","page_number":1}] |
+| **sources** | array | ["read_section"] |
+"""
+    parsed = _try_parse_markdown_field_table(raw)
+
+    assert parsed is not None
+    assert parsed["answer"] == "Concise summary"
+    assert parsed["citations"][0]["section_title"] == "TITLE"
+    assert parsed["sources"] == ["read_section"]
 
 
 def test_required_tool_names_prefers_document_tools_over_agr():

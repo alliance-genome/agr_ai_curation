@@ -65,7 +65,7 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["agr_curation_query"]),
     ])
-    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene", "phenotype"}, None))
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene", "phenotype_extractor"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
     monkeypatch.setattr(
@@ -83,7 +83,7 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
     assert report["status"] == "unhealthy"
     assert report["summary"]["missing_system_agent_count"] == 1
     assert any(
-        "Missing active system agents in unified agents table: phenotype" in msg
+        "Missing active system agents in unified agents table: phenotype_extractor" in msg
         for msg in report["errors"]
     )
 

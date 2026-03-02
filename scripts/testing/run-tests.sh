@@ -18,6 +18,10 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 
 # Parse command line arguments
 TEST_TYPE="${1:-all}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Ensure scripts in this folder are executable when checked out without +x.
+chmod +x "${SCRIPT_DIR}/prepare-test-stack.sh" "${SCRIPT_DIR}/load-home-test-env.sh" 2>/dev/null || true
 
 # Handle build command
 if [ "$TEST_TYPE" = "build" ]; then
@@ -37,6 +41,12 @@ if [ "$TEST_TYPE" = "build" ]; then
     exit 0
 fi
 
+if [ "$TEST_TYPE" = "prepare" ]; then
+    echo -e "${BLUE}Preparing isolated test infrastructure...${NC}"
+    "${SCRIPT_DIR}/prepare-test-stack.sh"
+    exit 0
+fi
+
 echo -e "${GREEN}Running tests via Docker Compose...${NC}"
 
 case $TEST_TYPE in
@@ -46,21 +56,25 @@ case $TEST_TYPE in
     ;;
   integration)
     echo -e "${YELLOW}Running integration tests with sample PDF...${NC}"
+    "${SCRIPT_DIR}/prepare-test-stack.sh"
     docker compose -f docker-compose.test.yml run --rm backend-integration-tests
     ;;
   contract)
     echo -e "${YELLOW}Running contract tests...${NC}"
+    "${SCRIPT_DIR}/prepare-test-stack.sh"
     docker compose -f docker-compose.test.yml run --rm backend-contract-tests
     ;;
   all)
     echo -e "${YELLOW}Running all tests...${NC}"
+    "${SCRIPT_DIR}/prepare-test-stack.sh"
     docker compose -f docker-compose.test.yml run --rm backend-tests
     ;;
   *)
     echo -e "${RED}Unknown test type: $TEST_TYPE${NC}"
-    echo "Usage: $0 [build|unit|integration|contract|all]"
+    echo "Usage: $0 [build|prepare|unit|integration|contract|all]"
     echo ""
     echo "  build       - Build the test Docker image"
+    echo "  prepare     - Start isolated test infra (Postgres + Weaviate) and run migrations"
     echo "  unit        - Run unit tests"
     echo "  integration - Run integration tests with sample PDF"
     echo "  contract    - Run contract tests for API endpoints"

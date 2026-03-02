@@ -1,21 +1,44 @@
 """Unit tests for the Weaviate storage helpers."""
 
 import asyncio
+import importlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import src.lib.pipeline.store as store_module
-from src.lib.pipeline.store import (
-    store_to_weaviate,
-    store_chunks_to_weaviate,
-    update_document_metadata,
-    generate_deterministic_uuid,
-    StorageError,
-)
-from src.lib.exceptions import CollectionNotFoundError, BatchInsertError
+class _StoreModuleProxy:
+    """Resolve pipeline.store lazily so patches hit the active module instance."""
+
+    @staticmethod
+    def _module():
+        return importlib.import_module("src.lib.pipeline.store")
+
+    def __getattr__(self, name):
+        return getattr(self._module(), name)
+
+    def __setattr__(self, name, value):
+        setattr(self._module(), name, value)
+
+
+store_module = _StoreModuleProxy()
+
+
+def store_to_weaviate(*args, **kwargs):
+    return store_module.store_to_weaviate(*args, **kwargs)
+
+
+def store_chunks_to_weaviate(*args, **kwargs):
+    return store_module.store_chunks_to_weaviate(*args, **kwargs)
+
+
+def update_document_metadata(*args, **kwargs):
+    return store_module.update_document_metadata(*args, **kwargs)
+
+
+def generate_deterministic_uuid(*args, **kwargs):
+    return store_module.generate_deterministic_uuid(*args, **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +55,7 @@ def test_generate_deterministic_uuid_is_stable():
 
 @pytest.mark.asyncio
 async def test_store_to_weaviate_requires_chunks():
-    with pytest.raises(StorageError, match="No chunks to store"):
+    with pytest.raises(store_module.StorageError, match="No chunks to store"):
         await store_to_weaviate([], "doc-1", user_id="test_user")
 
 
@@ -71,7 +94,7 @@ async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
     with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store), patch(
         "src.lib.pipeline.store.update_document_metadata", new=AsyncMock()
     ) as mock_metadata, patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()) as mock_status:
-        with pytest.raises(StorageError):
+        with pytest.raises(store_module.StorageError):
             await store_to_weaviate(chunks, document_id, weaviate_client, user_id="test_user")
 
     assert mock_status.await_count == 2
@@ -103,7 +126,7 @@ async def test_store_chunks_to_weaviate_raises_when_collection_missing():
     event_loop.run_in_executor.side_effect = run_executor
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop):
-        with pytest.raises(CollectionNotFoundError):
+        with pytest.raises(store_module.CollectionNotFoundError):
             await store_chunks_to_weaviate([], "doc-1", weaviate_client, "test_user")
 
 
@@ -201,7 +224,7 @@ async def test_store_chunks_to_weaviate_raises_when_batch_reports_failed_objects
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        with pytest.raises(BatchInsertError):
+        with pytest.raises(store_module.BatchInsertError):
             await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
 
     assert batch_ctx.add_object.call_count == 2
@@ -231,7 +254,7 @@ async def test_store_chunks_to_weaviate_raises_when_batch_add_object_fails():
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        with pytest.raises(BatchInsertError):
+        with pytest.raises(store_module.BatchInsertError):
             await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
 
 
@@ -264,7 +287,7 @@ async def test_store_chunks_to_weaviate_raises_when_token_preflight_exceeds_limi
 
     with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        with pytest.raises(BatchInsertError):
+        with pytest.raises(store_module.BatchInsertError):
             await store_chunks_to_weaviate(chunks, "doc-1", weaviate_client, "test_user")
 
     assert batch_ctx.add_object.call_count == 0

@@ -13,7 +13,7 @@ def test_resolve_tool_display_name_uses_builtin_map():
 
 
 def test_resolve_tool_display_name_uses_builtin_phenotype_map():
-    assert resolve_tool_display_name("ask_phenotype_specialist") == "Phenotype Extraction Agent"
+    assert resolve_tool_display_name("ask_phenotype_extractor_specialist") == "Phenotype Extraction Agent"
 
 
 def test_resolve_tool_display_name_uses_builtin_gene_extractor_map():

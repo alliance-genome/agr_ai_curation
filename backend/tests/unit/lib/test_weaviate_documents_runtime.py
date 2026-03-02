@@ -1,6 +1,7 @@
 """Additional runtime branch tests for Weaviate document helpers."""
 
 import asyncio
+import importlib
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -9,7 +10,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import src.lib.weaviate_client.documents as documents
+
+class _DocumentsModuleProxy:
+    """Resolve documents module lazily to avoid stale imports in full-suite runs."""
+
+    @staticmethod
+    def _module():
+        return importlib.import_module("src.lib.weaviate_client.documents")
+
+    def __getattr__(self, name):
+        return getattr(self._module(), name)
+
+    def __setattr__(self, name, value):
+        setattr(self._module(), name, value)
+
+
+documents = _DocumentsModuleProxy()
 
 
 def _event_loop_with_sync_executor():
