@@ -176,6 +176,7 @@ find_*.py
 
 # Local planning docs (private - not for public repo)
 docs/plans/
+docs/research/
 external_review_prompt.md
 /AGENT_REWORK_EXTRACTOR_PLAN.md
 /TESTING_TODO.md
