@@ -146,6 +146,15 @@ def client(test_db, monkeypatch):
     for module_name in modules_to_clear:
         del sys.modules[module_name]
 
+    # Disable EC2 detection for test isolation.  Docker containers on EC2
+    # can reach the instance metadata service (IMDSv2 hop-limit ≥ 2),
+    # which causes is_running_on_ec2() → True.  That blocks DEV_MODE even
+    # when monkeypatch has set it, because the security check refuses
+    # AUTH_PROVIDER=dev without the AllowDevMode EC2 tag.  Pre-importing
+    # src.config and pinning the cache to False prevents this.
+    import src.config as _test_config
+    _test_config._ec2_detection_cache = False
+
     # Avoid real tenant provisioning/network calls in logout tests.
     with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
         # Now import the app and override auth dependency at the callable level.
