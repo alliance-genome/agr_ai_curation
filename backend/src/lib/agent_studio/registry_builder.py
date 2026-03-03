@@ -546,8 +546,246 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "May return parent term instead of exact term when specificity is unavailable",
         ],
     },
-    # Additional documentation can be added here as needed
-    # For agents without custom documentation, defaults will be used
+    "gene_extractor": {
+        "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and database-assisted normalization.",
+        "capabilities": [
+            {
+                "name": "Gene candidate harvesting",
+                "description": "Scans the full paper for gene symbols, names, and synonyms across all sections including titles, abstracts, results, figure legends, and tables",
+                "example_query": "Extract all gene mentions from this paper",
+                "example_result": "Returns harvested candidates with exact mention text, species context, and supporting evidence",
+            },
+            {
+                "name": "Disambiguation and false-positive filtering",
+                "description": "Filters out common-word gene names (e.g., 'not', 'can', 'white'), gene families vs individual genes, and author/reagent names before validation",
+                "example_query": "Extract genes from this Drosophila paper",
+                "example_result": "Correctly excludes 'white' as background strain while retaining 'white' as a studied gene when experimentally supported",
+            },
+            {
+                "name": "Evidence-based validation",
+                "description": "Retains only genes with direct experimental support in the paper — genes cited from prior work or mentioned speculatively are excluded with reason codes",
+                "example_query": "Which genes have experimental data in this paper?",
+                "example_result": "Returns retained genes with evidence text and page numbers, plus explicit exclusions with reason codes",
+            },
+            {
+                "name": "Alliance database normalization",
+                "description": "Resolves retained gene symbols to Alliance identifiers (e.g., WB:WBGene00000912) using batch agr_curation_query calls",
+                "example_query": "Normalize extracted genes to Alliance IDs",
+                "example_result": "Returns normalized_id, normalized_symbol, and species for each retained gene",
+            },
+        ],
+        "data_sources": [
+            {
+                "name": "PDF Document Search (Weaviate)",
+                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "species_supported": None,
+                "data_types": ["PDF text chunks", "Section content", "Subsection content"],
+            },
+            {
+                "name": "Alliance Curation Database",
+                "description": "Validates and normalizes gene symbols to Alliance CURIEs",
+                "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"],
+                "data_types": ["Gene symbols", "Gene CURIEs", "Gene synonyms", "Cross-references"],
+            },
+        ],
+        "limitations": [
+            "Requires an uploaded PDF document — cannot extract genes from chat text alone",
+            "Genes mentioned only in references without experimental data in this paper are excluded",
+            "Multi-species disambiguation relies on context clues; ambiguous cases go to ambiguities[]",
+            "Cannot resolve genes not present in the Alliance database",
+        ],
+    },
+    "allele_extractor": {
+        "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers.",
+        "capabilities": [
+            {
+                "name": "Allele/variant candidate harvesting",
+                "description": "Scans the paper for allele symbols, variant notations, HGVS strings, and genotype descriptions across all sections",
+                "example_query": "Extract all alleles from this paper",
+                "example_result": "Returns allele candidates with exact notation as written, associated gene, and organism context",
+            },
+            {
+                "name": "Entity classification",
+                "description": "Distinguishes alleles from strains, transgene constructs, balancer chromosomes, and chromosomal deficiencies using organism-specific nomenclature rules",
+                "example_query": "Extract alleles from this C. elegans genetics paper",
+                "example_result": "Correctly classifies daf-2(e1370) as an allele while excluding N2 (strain) and muEx225 (transgene array)",
+            },
+            {
+                "name": "Genotype string parsing",
+                "description": "Parses composite genotype strings into individual alleles (e.g., 'daf-2(e1370); daf-16(mu86)' becomes two separate entries)",
+                "example_query": "Parse the genotypes in this paper's strain table",
+                "example_result": "Returns individual alleles with gene associations and allele type classification",
+            },
+            {
+                "name": "Alliance database normalization",
+                "description": "Resolves retained alleles to Alliance identifiers using batch agr_curation_query calls",
+                "example_query": "Normalize extracted alleles to Alliance IDs",
+                "example_result": "Returns normalized_id, normalized_symbol, and associated gene for each retained allele",
+            },
+        ],
+        "data_sources": [
+            {
+                "name": "PDF Document Search (Weaviate)",
+                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "species_supported": None,
+                "data_types": ["PDF text chunks", "Section content", "Subsection content"],
+            },
+            {
+                "name": "Alliance Curation Database",
+                "description": "Validates and normalizes allele/variant identifiers to Alliance CURIEs",
+                "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"],
+                "data_types": ["Allele symbols", "Allele CURIEs", "Gene associations"],
+            },
+        ],
+        "limitations": [
+            "Requires an uploaded PDF document — cannot extract alleles from chat text alone",
+            "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable",
+            "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles",
+            "Cannot resolve alleles not present in the Alliance database",
+        ],
+    },
+    "disease_extractor": {
+        "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
+        "capabilities": [
+            {
+                "name": "Disease mention harvesting",
+                "description": "Scans the paper for disease names, condition descriptions, and disease model references across all sections",
+                "example_query": "Extract all disease mentions from this paper",
+                "example_result": "Returns disease candidates with the name as written, role classification, and experimental context",
+            },
+            {
+                "name": "Role classification",
+                "description": "Categorizes each disease mention as primary subject, background context, comparative reference, or model context",
+                "example_query": "Extract diseases from this Alzheimer's model paper",
+                "example_result": "Classifies 'Alzheimer's disease' as primary and 'diabetes' as comparative, with supporting evidence",
+            },
+            {
+                "name": "Gene-disease association typing",
+                "description": "Determines the relationship type between genes and diseases using Alliance annotation types: is_implicated_in, is_marker_for, contributes_to, is_model_of",
+                "example_query": "What gene-disease relationships are reported?",
+                "example_result": "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)",
+            },
+            {
+                "name": "Disease ontology normalization",
+                "description": "Resolves retained diseases to DOID, MONDO, or OMIM identifiers using agr_curation_query",
+                "example_query": "Normalize extracted diseases to ontology IDs",
+                "example_result": "Returns DOID identifiers (e.g., DOID:10652 for Alzheimer's disease)",
+            },
+        ],
+        "data_sources": [
+            {
+                "name": "PDF Document Search (Weaviate)",
+                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "species_supported": None,
+                "data_types": ["PDF text chunks", "Section content", "Subsection content"],
+            },
+            {
+                "name": "Alliance Curation Database",
+                "description": "Resolves disease terms to Disease Ontology (DOID) identifiers",
+                "species_supported": None,
+                "data_types": ["Disease terms", "DOIDs", "MONDO IDs", "Synonyms"],
+            },
+        ],
+        "limitations": [
+            "Requires an uploaded PDF document — cannot extract diseases from chat text alone",
+            "Distinguishes diseases from phenotypes — observable traits in model organisms are phenotypes, not diseases",
+            "Diseases mentioned only in introduction/background without new experimental findings are excluded",
+            "Cannot resolve diseases not present in the Alliance disease ontology",
+        ],
+    },
+    "chemical_extractor": {
+        "summary": "Extracts experimentally relevant chemical and compound mentions from uploaded PDFs, classifying roles (treatment, reagent, control) and capturing dosage/timing context.",
+        "capabilities": [
+            {
+                "name": "Chemical candidate harvesting",
+                "description": "Scans the paper for chemical names, drug names, compound identifiers, and treatment descriptions across methods, results, and figure legends",
+                "example_query": "Extract all chemicals from this paper",
+                "example_result": "Returns chemical candidates with exact name as written, concentration, timing, and experimental role",
+            },
+            {
+                "name": "Role classification",
+                "description": "Categorizes each chemical as treatment (experimental variable), assay reagent, buffer/media, vehicle control, or other biologically relevant compound",
+                "example_query": "Extract chemicals from this drug treatment study",
+                "example_result": "Classifies rapamycin as 'treatment' at 10 nM for 24h, DMSO as 'control', and DAPI as 'assay_reagent'",
+            },
+            {
+                "name": "Dosage and context extraction",
+                "description": "Captures concentration, timing, and route of administration for retained chemicals exactly as written in the paper",
+                "example_query": "What treatments were used and at what doses?",
+                "example_result": "Returns concentration (e.g., '10 μM'), timing (e.g., '24 hours'), and route (e.g., 'i.p. injection')",
+            },
+            {
+                "name": "ChEBI normalization",
+                "description": "Resolves retained chemicals to ChEBI identifiers using agr_curation_query",
+                "example_query": "Normalize extracted chemicals to ChEBI IDs",
+                "example_result": "Returns ChEBI identifiers (e.g., CHEBI:9168 for rapamycin)",
+            },
+        ],
+        "data_sources": [
+            {
+                "name": "PDF Document Search (Weaviate)",
+                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "species_supported": None,
+                "data_types": ["PDF text chunks", "Section content", "Subsection content"],
+            },
+            {
+                "name": "Alliance Curation Database (ChEBI)",
+                "description": "Resolves chemical compound names to ChEBI ontology identifiers",
+                "species_supported": None,
+                "data_types": ["Chemical identifiers (ChEBI IDs)", "Compound names", "Synonyms"],
+            },
+        ],
+        "limitations": [
+            "Requires an uploaded PDF document — cannot extract chemicals from chat text alone",
+            "Standard lab buffers and media (PBS, DMEM, etc.) are excluded unless they are the experimental variable",
+            "Trade names may be ambiguous if they map to multiple compounds — these go to ambiguities[]",
+            "Cannot provide chemical-gene interaction data — only extracts chemical mentions and their experimental context",
+        ],
+    },
+    "phenotype_extractor": {
+        "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
+        "capabilities": [
+            {
+                "name": "Phenotype candidate harvesting",
+                "description": "Scans the paper for phenotype descriptions, observable traits, and mutant characterizations across results, figures, and tables",
+                "example_query": "Extract all phenotypes from this paper",
+                "example_result": "Returns phenotype candidates with the description as written, associated genotype, and experimental evidence",
+            },
+            {
+                "name": "Phenotype decomposition",
+                "description": "Splits composite phenotype descriptions into individual assertions (e.g., 'small body size and reduced fertility' becomes two separate phenotypes)",
+                "example_query": "Extract phenotypes from this C. elegans genetics paper",
+                "example_result": "Returns individual phenotype assertions with polarity (gain/loss), severity qualifiers, and penetrance when stated",
+            },
+            {
+                "name": "Genotype-phenotype linking",
+                "description": "Associates each phenotype with the specific genotype, allele, or experimental condition that causes it, including conditional and negative results",
+                "example_query": "Which alleles cause which phenotypes?",
+                "example_result": "Returns phenotype-genotype pairs with experimental context (e.g., daf-2(e1370) → extended lifespan)",
+            },
+            {
+                "name": "Ontology term hinting",
+                "description": "Provides best-candidate phenotype ontology terms when confidence is high, using organism-appropriate ontologies (MP, HPO, WBPhenotype, FBcv, ZP, APO)",
+                "example_query": "Map extracted phenotypes to ontology terms",
+                "example_result": "Returns suggested ontology terms with confidence scores, or places uncertain mappings in ambiguities[]",
+            },
+        ],
+        "data_sources": [
+            {
+                "name": "PDF Document Search (Weaviate)",
+                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "species_supported": None,
+                "data_types": ["PDF text chunks", "Section content", "Subsection content", "Figure legends"],
+            },
+        ],
+        "limitations": [
+            "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone",
+            "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent",
+            "Wild-type/control observations are baselines, not phenotype assertions",
+            "Ontology term mapping is suggestive only — a downstream ontology mapping agent handles formal ID resolution",
+            "Does not use agr_curation_query — phenotype ontology validation is deferred to the ontology mapping step",
+        ],
+    },
 }
 
 
