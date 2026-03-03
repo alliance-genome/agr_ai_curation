@@ -151,7 +151,7 @@ function Chat({
   sendMessage
 }: ChatProps) {
   // Initialize messages from localStorage if available
-  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage())
+  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(propSessionId))
   const [inputMessage, setInputMessage] = useState('')
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
@@ -182,9 +182,14 @@ function Chat({
   const latestMessagesRef = useRef<Message[]>(messages)
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restoredSessionRef = useRef<string | null>(null)
 
   // Track ALL trace IDs from this session for feedback
   const sessionTraceIds = useRef<string[]>([])
+
+  // Keep "latest" refs synchronized during render to avoid stale values during unmount cleanup.
+  latestMessagesRef.current = messages
+  latestSessionIdRef.current = propSessionId
 
   const persistMessagesToStorage = useCallback((nextMessages: Message[], sessionId: string | null) => {
     try {
@@ -324,18 +329,11 @@ function Chat({
     scrollToBottom()
   }, [messages])
 
+  // If session arrives after mount (or changes), restore persisted messages once per session.
   useEffect(() => {
-    latestMessagesRef.current = messages
-  }, [messages])
+    if (!propSessionId || messages.length > 0 || restoredSessionRef.current === propSessionId) return
 
-  useEffect(() => {
-    latestSessionIdRef.current = propSessionId
-  }, [propSessionId])
-
-  // If session arrives after mount (or changes), restore persisted messages for that session.
-  useEffect(() => {
-    if (!propSessionId || messages.length > 0) return
-
+    restoredSessionRef.current = propSessionId
     const restored = loadMessagesFromStorage(propSessionId)
     if (restored.length > 0) {
       setMessages(restored)
