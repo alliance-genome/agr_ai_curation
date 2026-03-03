@@ -88,10 +88,10 @@ interface StoredChatData {
 }
 
 // Helper to load messages from localStorage with session validation
-function loadMessagesFromStorage(): Message[] {
+function loadMessagesFromStorage(sessionId?: string | null): Message[] {
   try {
     const stored = localStorage.getItem(CHAT_MESSAGES_KEY)
-    const currentSessionId = localStorage.getItem(CHAT_SESSION_ID_KEY)
+    const currentSessionId = sessionId ?? localStorage.getItem(CHAT_SESSION_ID_KEY)
     debug.log('[Chat] loadMessagesFromStorage called:', {
       hasStoredMessages: !!stored,
       storedLength: stored?.length || 0,
@@ -117,9 +117,9 @@ function loadMessagesFromStorage(): Message[] {
             timestamp: new Date(msg.timestamp)
           }))
         } else {
-          // Session mismatch - clear stale messages
-          debug.log('[Chat] Session mismatch - clearing stale messages')
-          localStorage.removeItem(CHAT_MESSAGES_KEY)
+          // Session mismatch can happen transiently during route/session initialization.
+          // Do not delete stored chat here; keep it available if session state catches up.
+          debug.log('[Chat] Session mismatch - skipping restore for current session')
           return []
         }
       }
@@ -179,9 +179,35 @@ function Chat({
   const lastProgressUpdateRef = useRef<number>(0)
   const assistantMessageRef = useRef<string>('')
   const processedEventIdsRef = useRef<Set<number>>(new Set())
+  const latestMessagesRef = useRef<Message[]>(messages)
+  const latestSessionIdRef = useRef<string | null>(propSessionId)
+  const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Track ALL trace IDs from this session for feedback
   const sessionTraceIds = useRef<string[]>([])
+
+  const persistMessagesToStorage = useCallback((nextMessages: Message[], sessionId: string | null) => {
+    try {
+      if (!sessionId) return
+
+      if (nextMessages.length === 0) {
+        localStorage.removeItem(CHAT_MESSAGES_KEY)
+        return
+      }
+
+      const serialized: SerializedMessage[] = nextMessages.map(msg => ({
+        ...msg,
+        timestamp: msg.timestamp.toISOString()
+      }))
+      const storageData: StoredChatData = {
+        session_id: sessionId,
+        messages: serialized
+      }
+      localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(storageData))
+    } catch (error) {
+      console.warn('Failed to persist messages to localStorage:', error)
+    }
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -298,30 +324,56 @@ function Chat({
     scrollToBottom()
   }, [messages])
 
+  useEffect(() => {
+    latestMessagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => {
+    latestSessionIdRef.current = propSessionId
+  }, [propSessionId])
+
+  // If session arrives after mount (or changes), restore persisted messages for that session.
+  useEffect(() => {
+    if (!propSessionId || messages.length > 0) return
+
+    const restored = loadMessagesFromStorage(propSessionId)
+    if (restored.length > 0) {
+      setMessages(restored)
+    }
+  }, [propSessionId, messages.length])
+
   // Persist messages to localStorage whenever they change (debounced to avoid rapid writes during streaming)
   useEffect(() => {
-    if (messages.length === 0) return
+    if (!propSessionId || messages.length === 0) return
 
-    const timeoutId = setTimeout(() => {
-      try {
-        // Convert Date objects to ISO strings for JSON serialization
-        // Store with session_id for validation on restore
-        const serialized: SerializedMessage[] = messages.map(msg => ({
-          ...msg,
-          timestamp: msg.timestamp.toISOString()
-        }))
-        const storageData = {
-          session_id: propSessionId,
-          messages: serialized
-        }
-        localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(storageData))
-      } catch (error) {
-        console.warn('Failed to persist messages to localStorage:', error)
-      }
+    if (persistTimeoutRef.current) {
+      clearTimeout(persistTimeoutRef.current)
+      persistTimeoutRef.current = null
+    }
+
+    persistTimeoutRef.current = setTimeout(() => {
+      persistMessagesToStorage(messages, propSessionId)
+      persistTimeoutRef.current = null
     }, 500) // 500ms debounce to avoid excessive writes during streaming
 
-    return () => clearTimeout(timeoutId)
-  }, [messages, propSessionId])
+    return () => {
+      if (persistTimeoutRef.current) {
+        clearTimeout(persistTimeoutRef.current)
+        persistTimeoutRef.current = null
+      }
+    }
+  }, [messages, propSessionId, persistMessagesToStorage])
+
+  // Flush latest chat state on unmount so navigation does not lose pending debounced updates.
+  useEffect(() => {
+    return () => {
+      if (persistTimeoutRef.current) {
+        clearTimeout(persistTimeoutRef.current)
+        persistTimeoutRef.current = null
+      }
+      persistMessagesToStorage(latestMessagesRef.current, latestSessionIdRef.current)
+    }
+  }, [persistMessagesToStorage])
 
   useEffect(() => {
     if (isLoading) {
@@ -750,6 +802,7 @@ function Chat({
               onSessionChange(resetData.session_id)
             }
             // Clear messages from UI and localStorage
+            latestMessagesRef.current = []
             setMessages([])
             localStorage.removeItem(CHAT_MESSAGES_KEY)
             sessionTraceIds.current = []
@@ -873,6 +926,7 @@ function Chat({
         }
 
         // Clear messages from UI and localStorage
+        latestMessagesRef.current = []
         setMessages([])
         localStorage.removeItem(CHAT_MESSAGES_KEY)
         sessionTraceIds.current = [] // Clear accumulated trace IDs for new session
