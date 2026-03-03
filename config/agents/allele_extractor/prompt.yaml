@@ -22,7 +22,7 @@ content: |
      - Identify the allele type when stated: point mutation, deletion, insertion, substitution,
        transgene insertion, targeted mutation (knockout/knockin), CRISPR-engineered, EMS-induced, etc.
      - Parse composite genotype strings into individual alleles
-       (e.g., "daf-2(e1370); daf-16(mu86)" → two separate alleles).
+       (e.g., "geneA(allele1); geneB(allele2)" → two separate alleles).
   3) Validation pass: retain only alleles with direct experimental support in this paper.
      - An allele is "experimentally supported" when this paper uses it in an experiment
        (phenotype analysis, genetic cross, complementation test, molecular characterization, etc.).
@@ -44,60 +44,36 @@ content: |
   </tools>
 
   <nomenclature_guidance>
-  Allele naming conventions vary by organism. Use these patterns for recognition and validation:
+  Allele naming conventions vary by organism. Each MOD uses distinct notation patterns
+  for alleles, transgenes, and genetic tools. Use these general principles:
 
-  C. elegans:
-  - Format: gene(allele) — e.g., daf-2(e1370), unc-86(n846)
-  - Lab allele codes: 2-3 letter prefix + number (e.g., e = England/Brenner lab, mu = Bhatt lab)
-  - Transgene arrays: xxIs### (integrated) or xxEx### (extrachromosomal)
-    — e.g., qyIs369, muEx225. These are transgene constructs, NOT alleles.
-  - CRISPR alleles: often use lab code + "cas" or similar notation
+  - Allele notation formats differ between organisms (parentheses, brackets, superscripts, angle brackets).
+  - Lab allele codes identify the originating laboratory.
+  - Transgene constructs (reporters, drivers) are typically tools, NOT alleles — exclude unless
+    the transgene IS the experimental variable.
+  - Balancer chromosomes and chromosomal deficiencies/duplications are genetic tools, NOT alleles.
+  - HGVS notation (c., p., g. prefixes) is used for human/clinical variant descriptions.
 
-  Drosophila:
-  - Format: gene[allele] with brackets or superscript — e.g., w[1118], N[55e11], Df(3R)Exel6197
-  - P-element insertions: P{construct}insertion_site
-  - Balancers: FM7, CyO, TM3, TM6B — these are NOT alleles, they are balancer chromosomes
-  - Deficiencies: Df(chromosome)name — these are chromosomal deletions, not alleles
-
-  Mouse:
-  - Targeted mutations: gene<tm#Lab> — e.g., Trp53<tm1Tyj>, Brca1<tm1Brd>
-  - Gene-trap alleles: gene<Gt(construct)Lab>
-  - Transgenes: Tg(construct)### — e.g., Tg(Camk2a-cre)T29-1Stl. These are transgenes, NOT alleles.
-  - Spontaneous/induced: gene<allele> — e.g., Apc<Min>
-
-  Yeast:
-  - Format: gene-number or gene::marker — e.g., ade2-1, leu2Δ0, his3::kanMX
-  - Deletion notation: geneΔ or geneΔ::marker
-
-  Zebrafish:
-  - Format: gene<allele> — e.g., tp53<zdf1>, bmp2b<swirl>
-  - Lab codes follow ZFIN conventions
-
-  HGVS notation (human/clinical variants):
-  - Coding DNA: c.76A>T, c.1234delG, c.567_568insAA
-  - Protein: p.Arg25Trp, p.R25W (single-letter), p.Gly12Val
-  - Genomic: g.12345A>G
-  - Common errors in papers: missing prefix, incorrect numbering, mixed notation
+  MOD-specific group rules provide detailed nomenclature patterns, lab code conventions,
+  and organism-specific examples for recognition and validation.
   </nomenclature_guidance>
 
   <disambiguation_guidance>
   Common false positives in allele extraction:
 
   Strains vs alleles:
-  - N2, Bristol, Hawaiian, CB4856 are C. elegans strains, not alleles
-  - Canton-S, Oregon-R, w1118 are Drosophila strains (w1118 is debatable — it is a specific allele of white)
-  - C57BL/6, BALB/c, 129S1 are mouse strains, not alleles
-  - BY4741, W303, S288C are yeast strains, not alleles
-  - AB, TU, WIK are zebrafish strains, not alleles
+  - Standard wild-type and laboratory strains are NOT alleles.
+  - MOD-specific group rules list common strains for each organism.
+  - When a strain name also refers to a specific allele (rare), use experimental context to decide.
 
   Transgene constructs vs alleles:
-  - Reporter constructs (gene::GFP, gene::lacZ) are transgenes used as tools
-  - Capture them in raw_mentions[] but exclude from alleles[] unless they ARE the experimental variable
-  - Cre driver lines (Tg(promoter-Cre)) are tools, not alleles being studied
+  - Reporter constructs and expression driver systems are transgenes used as tools.
+  - Capture them in raw_mentions[] but exclude from alleles[] unless they ARE the experimental variable.
 
-  Balancers and deficiencies:
-  - These are chromosomal tools, not alleles of specific genes
-  - Mention them in raw_mentions[] for completeness but exclude from alleles[]
+  Balancers, deficiencies, and chromosomal tools:
+  - These are genetic tools for maintaining or mapping mutations, not alleles of specific genes.
+  - Capture in raw_mentions[] for completeness but exclude from alleles[].
+  - MOD-specific group rules identify common tool chromosomes for each organism.
 
   Wild-type designations:
   - "+", "wt", "wild-type" are reference states, not alleles

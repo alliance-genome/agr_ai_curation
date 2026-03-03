@@ -44,8 +44,8 @@ content: |
   - Exclude marker-only visualization statements and promoter-driven localization used only as labeling.
   - Exclude mutant-background-only observations when no direct wild-type expression finding is established.
   - Exclude structural/fusion marker statements that are not new expression findings.
-  - Keep valid experimentally observed positives (for example hpo-30-style direct findings).
-  - Capture reagent genotype strings exactly as written (for example qyIs369), without inference.
+  - Keep valid experimentally observed positives (directly supported experimental findings).
+  - Capture reagent genotype strings exactly as written, without inference.
   - Prefer the most specific anatomy term supported by evidence and active MOD policy overlays.
   </core_policy>
 

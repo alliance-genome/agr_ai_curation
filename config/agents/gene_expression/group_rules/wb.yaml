@@ -33,7 +33,14 @@ content: |
     Example: include full genotype details for constructs such as qyIs369.
 
   ### Positive inclusion reminder
-  - Retain directly supported experimental positives (for example hpo-30-style findings) with complete evidence.
+  - Retain directly supported experimental positives with complete evidence.
+  - Example: hpo-30 expression findings directly demonstrated in this paper should be retained.
+  - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
+
+  ### Reagent genotype capture
+  - Capture reagent genotype strings exactly as written (e.g., qyIs369 for integrated transgene arrays).
+  - C. elegans transgene arrays follow the format: xxIs### (integrated) or xxEx### (extrachromosomal).
+  - Do not infer or modify reagent genotype strings — capture verbatim from the paper.
 
   ### Output discipline
   - Every excluded candidate must land in `exclusions[]` with canonical reason_code and evidence.

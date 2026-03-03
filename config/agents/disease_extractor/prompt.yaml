@@ -74,12 +74,11 @@ content: |
   - When uncertain, include in ambiguities[] with a note.
 
   Disease models vs actual diseases:
-  - "APP/PS1 mouse model of Alzheimer's disease" — the disease is Alzheimer's disease;
-    the mouse model is the experimental system. Capture the disease and note model_context.
-  - "Drosophila model of polyglutamine disease" — capture the human disease,
-    note the model organism context.
+  - When a paper uses a model organism to study a human disease, the disease is the human condition;
+    the model organism provides the experimental system. Capture the disease and note model_context.
   - Do NOT exclude disease mentions just because they appear in model organism studies.
     Model organism evidence IS how Alliance curators annotate gene-disease associations.
+  - MOD-specific group rules provide organism-specific disease model examples and common disease areas.
 
   Drug mentions containing disease terms:
   - "anti-cancer drug X" — "cancer" here is an adjective, not a disease finding.

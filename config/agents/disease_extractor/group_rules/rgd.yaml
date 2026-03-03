@@ -1,0 +1,22 @@
+group_id: RGD
+content: |
+  ## RGD-SPECIFIC RULES (Rat Disease Extraction)
+
+  ### Disease model context
+  - Rat is a key mammalian model, particularly for pharmacological, behavioral, and cardiovascular disease studies.
+  - When a paper describes a rat model of a human disease, capture the human disease
+    and note model_context as the role.
+
+  ### Common rat disease model areas
+  - Cardiovascular: hypertension (SHR, Dahl salt-sensitive), atherosclerosis, cardiac disease.
+  - Metabolic: diabetes (ZDF, GK rat, STZ-induced), obesity (Zucker fatty rat), metabolic syndrome.
+  - Neurological: stroke models, epilepsy (kindling models), neuropathic pain, Parkinson's (6-OHDA).
+  - Behavioral/psychiatric: anxiety (elevated plus maze), depression (forced swim), addiction.
+  - Cancer: mammary tumor models, hepatocellular carcinoma.
+  - Renal: chronic kidney disease, glomerulonephritis.
+
+  ### Rat-specific considerations
+  - Many rat disease models use pharmacological induction (STZ for diabetes, 6-OHDA for Parkinson's).
+  - Capture the human disease being modeled, regardless of whether induction is genetic or pharmacological.
+  - Strain-associated diseases (e.g., SHR hypertension) represent genetic disease models.
+  - Drug efficacy studies in rat disease models provide therapeutic context for the human disease.

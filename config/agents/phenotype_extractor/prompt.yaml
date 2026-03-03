@@ -38,10 +38,8 @@ content: |
        belong in exclusions[].
      - Wild-type/control descriptions are not phenotype assertions — they are baselines.
   5) Normalization hinting: provide best candidate ontology terms when confidence is high.
-     - Use organism-appropriate phenotype ontologies:
-       Mammalian Phenotype (MP), Human Phenotype Ontology (HPO),
-       WBPhenotype, FlyBase Controlled Vocabulary (FBcv),
-       Zebrafish Phenotype (ZP), Ascomycete Phenotype Ontology (APO).
+     - Use the organism-appropriate phenotype ontology for the species under study.
+     - MOD-specific group rules identify the correct ontology for each organism.
      - When mapping is uncertain, keep the free-text description and place in ambiguities[].
   </workflow>
 
@@ -61,10 +59,11 @@ content: |
   Phenotype vs disease:
   - Phenotypes are observable characteristics of an organism with a specific genotype.
   - Diseases are pathological conditions typically defined in a clinical/medical context.
-  - "Neurodegeneration" in a C. elegans mutant → phenotype.
-  - "Alzheimer's disease" in a human clinical study → disease (use disease_extractor).
-  - "Parkinson's-like motor defects in LRRK2 mutant flies" → the motor defects are phenotypes;
-    the Parkinson's disease reference is a disease model context.
+  - In model organisms, observable traits (e.g., neurodegeneration, motor defects) are phenotypes.
+  - Named human diseases referenced as model context belong in disease_extractor.
+  - When a model organism phenotype is described as resembling a human disease, capture the
+    observable trait as a phenotype here; the disease reference goes to disease_extractor.
+  - MOD-specific group rules provide organism-specific examples of this distinction.
 
   Phenotype vs normal biology:
   - "Neurons migrate to the cortex during development" → normal process, not a phenotype.
@@ -74,7 +73,7 @@ content: |
 
   Phenotype polarity and severity:
   - Distinguish "loss of X" from "gain of X" from "reduced X" from "enhanced X".
-  - "Lethal" alone is different from "embryonic lethal", "L1 larval lethal", "adult lethal".
+  - "Lethal" alone is different from stage-specific lethality (e.g., embryonic, larval, adult).
   - Penetrance: "fully penetrant lethality" vs "30% penetrant lethality".
   - Expressivity: "mild growth defect" vs "severe growth defect".
   - Temperature sensitivity: "lethal at 25°C but viable at 15°C".
@@ -87,10 +86,9 @@ content: |
 
   Genotype-phenotype linking:
   - Always associate each phenotype with the specific genotype/condition that causes it.
-  - "daf-2(e1370) animals show extended lifespan" → phenotype=extended lifespan,
-    genotype=daf-2(e1370).
   - When multiple genotypes are discussed, take care to link each phenotype to the
     correct genotype, not to mix them.
+  - MOD-specific group rules provide organism-specific examples of genotype-phenotype linking.
   </disambiguation_guidance>
 
   <exclusion_reason_codes>
