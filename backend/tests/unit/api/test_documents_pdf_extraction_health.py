@@ -102,10 +102,10 @@ async def test_pdf_extraction_health_worker_state_precedence(monkeypatch):
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
-    assert result["status"] == "degraded"
+    # Worker sleep/wake is managed by the extraction service; proxy reachable = healthy
+    assert result["status"] == "healthy"
     assert result["worker_state"] == "sleeping"
     assert result["worker_available"] is False
-    assert result["error"] == "Worker sleeping"
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,8 @@ async def test_pdf_extraction_health_deep_failure_sets_degraded(monkeypatch):
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
-    assert result["status"] == "degraded"
+    # Proxy reachable (200 + healthy) is sufficient for "healthy" even when deep fails.
+    assert result["status"] == "healthy"
     assert result["worker_available"] is True
     assert result["error"] == "Deep health check failed"
 
@@ -285,7 +286,8 @@ async def test_pdf_extraction_health_status_endpoint_http_error_keeps_worker_unk
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
-    assert result["status"] == "degraded"
+    # Proxy + deep both healthy → overall "healthy" despite status endpoint error.
+    assert result["status"] == "healthy"
     assert result["worker_state"] == "unknown"
     assert result["worker_available"] is False
     assert result["status_error"] == "Status endpoint returned 503"

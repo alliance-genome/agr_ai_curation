@@ -649,7 +649,10 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
 
         # Deep health validates auth contract + downstream extract roundtrip and is
         # less susceptible to transient downstream health-flap noise.
-        status = "healthy" if auth_ok and worker_available and deep_ok else "degraded"
+        # The proxy being reachable with valid auth is sufficient for "healthy".
+        # Worker sleep/wake lifecycle is managed by the extraction service itself
+        # and should not surface as degraded to end users.
+        status = "healthy" if auth_ok and (proxy_ok or deep_ok) else "degraded"
         error_message = None
         if auth_header_error:
             error_message = auth_header_error
@@ -1002,10 +1005,6 @@ async def upload_document_endpoint(
                 status_code=400,
                 detail=f"File must be a PDF. Got: {file.filename}"
             )
-
-        # Require worker ready before accepting upload to avoid queueing documents
-        # into a known sleeping/stopped extraction backend.
-        await _require_pdf_extraction_worker_ready()
 
         # T029: Use user-specific storage path (FR-012)
         # Create: pdf_storage/{user_id}/
