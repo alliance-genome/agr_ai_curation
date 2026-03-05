@@ -1,12 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
-import { BrowserRouter } from 'react-router-dom';
+import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
 import { ThemeProvider, createTheme } from '@mui/material';
 import Sidebar from './Sidebar';
 
 // Mock react-router-dom navigation
 const mockNavigate = vi.fn();
-const mockLocation = { pathname: '/api/weaviate' };
+const mockLocation = { pathname: '/weaviate/documents' };
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -31,48 +30,57 @@ describe('Sidebar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseMediaQuery.mockReturnValue(false); // Default to desktop
-    mockLocation.pathname = '/api/weaviate';
+    mockLocation.pathname = '/weaviate/documents';
   });
 
   const renderWithTheme = (ui: React.ReactElement) => {
     const theme = createTheme();
     return render(
       <ThemeProvider theme={theme}>
-        <BrowserRouter>{ui}</BrowserRouter>
+        {ui}
       </ThemeProvider>
     );
+  };
+
+  const getNavButton = (label: string): HTMLElement => {
+    const buttons = screen.getAllByRole('button');
+    const match = buttons.find((button) => within(button).queryByText(label));
+    if (!match) {
+      throw new Error(`Could not find nav button for label: ${label}`);
+    }
+    return match;
   };
 
   it('renders all navigation items', () => {
     renderWithTheme(<Sidebar />);
 
-    expect(screen.getByText('Documents')).toBeInTheDocument();
-    expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(getNavButton('Documents')).toBeInTheDocument();
+    expect(getNavButton('Dashboard')).toBeInTheDocument();
+    expect(getNavButton('Settings')).toBeInTheDocument();
   });
 
   it('displays Weaviate title', () => {
     renderWithTheme(<Sidebar />);
 
-    expect(screen.getByText('Weaviate')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Documents' })).toBeInTheDocument();
   });
 
   it('navigates to documents page', () => {
     renderWithTheme(<Sidebar />);
 
-    const documentsButton = screen.getByText('Documents');
+    const documentsButton = getNavButton('Documents');
     fireEvent.click(documentsButton);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
   });
 
   it('navigates to dashboard page', () => {
     renderWithTheme(<Sidebar />);
 
-    const dashboardButton = screen.getByText('Dashboard');
+    const dashboardButton = getNavButton('Dashboard');
     fireEvent.click(dashboardButton);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/dashboard');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/dashboard');
   });
 
   it('expands settings submenu', async () => {
@@ -88,7 +96,7 @@ describe('Sidebar', () => {
   it('collapses and expands settings submenu', async () => {
     renderWithTheme(<Sidebar />);
 
-    const settingsButton = screen.getByText('Settings');
+    const settingsButton = getNavButton('Settings');
 
     // Click to collapse
     fireEvent.click(settingsButton);
@@ -109,32 +117,32 @@ describe('Sidebar', () => {
     renderWithTheme(<Sidebar />);
 
     // Navigate to Embeddings
-    const embeddingsButton = screen.getByText('Embeddings');
+    const embeddingsButton = getNavButton('Embeddings');
     fireEvent.click(embeddingsButton);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/settings/embeddings');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/settings/embeddings');
 
     // Navigate to Database
-    const databaseButton = screen.getByText('Database');
+    const databaseButton = getNavButton('Database');
     fireEvent.click(databaseButton);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/settings/database');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/settings/database');
 
     // Navigate to Schema
-    const schemaButton = screen.getByText('Schema');
+    const schemaButton = getNavButton('Schema');
     fireEvent.click(schemaButton);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/settings/schema');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/settings/schema');
 
     // Navigate to Chunking
-    const chunkingButton = screen.getByText('Chunking');
+    const chunkingButton = getNavButton('Chunking');
     fireEvent.click(chunkingButton);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/settings/chunking');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/settings/chunking');
   });
 
   it('highlights active route', () => {
-    mockLocation.pathname = '/api/weaviate/settings/embeddings';
+    mockLocation.pathname = '/weaviate/settings/embeddings';
     renderWithTheme(<Sidebar />);
 
     // Check that the Embeddings item is selected
-    const embeddingsButton = screen.getByText('Embeddings').closest('div[role="button"]');
+    const embeddingsButton = getNavButton('Embeddings');
     expect(embeddingsButton).toHaveClass('Mui-selected');
   });
 
@@ -147,7 +155,7 @@ describe('Sidebar', () => {
 
     // Title should be hidden when collapsed
     await waitFor(() => {
-      expect(screen.queryByText('Weaviate')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Documents' })).not.toBeInTheDocument();
     });
 
     // Button should change to expand icon
@@ -167,7 +175,7 @@ describe('Sidebar', () => {
 
     // Title should be visible again
     await waitFor(() => {
-      expect(screen.getByText('Weaviate')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Documents' })).toBeInTheDocument();
     });
   });
 
@@ -178,7 +186,7 @@ describe('Sidebar', () => {
 
     // Drawer should be temporary on mobile even if variant is permanent
     const drawer = document.querySelector('.MuiDrawer-root');
-    expect(drawer).toHaveClass('MuiDrawer-docked');
+    expect(drawer).toHaveClass('MuiDrawer-modal');
   });
 
   it('calls onToggle after navigation on mobile', () => {
@@ -187,10 +195,10 @@ describe('Sidebar', () => {
 
     renderWithTheme(<Sidebar open={true} onToggle={onToggle} />);
 
-    const documentsButton = screen.getByText('Documents');
+    const documentsButton = getNavButton('Documents');
     fireEvent.click(documentsButton);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
     expect(onToggle).toHaveBeenCalled();
   });
 
@@ -200,10 +208,10 @@ describe('Sidebar', () => {
 
     renderWithTheme(<Sidebar open={true} onToggle={onToggle} />);
 
-    const documentsButton = screen.getByText('Documents');
+    const documentsButton = getNavButton('Documents');
     fireEvent.click(documentsButton);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
     expect(onToggle).not.toHaveBeenCalled();
   });
 
@@ -211,18 +219,16 @@ describe('Sidebar', () => {
     const { rerender } = renderWithTheme(<Sidebar open={false} variant="temporary" />);
 
     // Content should not be visible when closed
-    expect(screen.queryByText('Documents')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Documents' })).not.toBeInTheDocument();
 
     rerender(
       <ThemeProvider theme={createTheme()}>
-        <BrowserRouter>
-          <Sidebar open={true} variant="temporary" />
-        </BrowserRouter>
+        <Sidebar open={true} variant="temporary" />
       </ThemeProvider>
     );
 
     // Content should be visible when open
-    expect(screen.getByText('Documents')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Documents' })).toBeInTheDocument();
   });
 
   it('uses custom width', () => {
@@ -244,7 +250,7 @@ describe('Sidebar', () => {
     renderWithTheme(<Sidebar />);
 
     expect(screen.getByTestId('CloudSyncIcon')).toBeInTheDocument(); // Embeddings
-    expect(screen.getByTestId('StorageIcon')).toBeInTheDocument(); // Database (also in header)
+    expect(screen.getAllByTestId('StorageIcon').length).toBeGreaterThan(0); // Database/header
     expect(screen.getByTestId('SchemaIcon')).toBeInTheDocument(); // Schema
     expect(screen.getByTestId('TuneIcon')).toBeInTheDocument(); // Chunking
   });
@@ -267,18 +273,18 @@ describe('Sidebar', () => {
   });
 
   it('applies selected styles to active route', () => {
-    mockLocation.pathname = '/api/weaviate/dashboard';
+    mockLocation.pathname = '/weaviate/dashboard';
     renderWithTheme(<Sidebar />);
 
-    const dashboardButton = screen.getByText('Dashboard').closest('div[role="button"]');
+    const dashboardButton = getNavButton('Dashboard');
     expect(dashboardButton).toHaveClass('Mui-selected');
   });
 
   it('detects nested active routes', () => {
-    mockLocation.pathname = '/api/weaviate/document/123'; // Nested under /weaviate
+    mockLocation.pathname = '/weaviate/documents/123'; // Nested under /weaviate/documents
     renderWithTheme(<Sidebar />);
 
-    const documentsButton = screen.getByText('Documents').closest('div[role="button"]');
+    const documentsButton = getNavButton('Documents');
     expect(documentsButton).toHaveClass('Mui-selected');
   });
 
@@ -290,9 +296,7 @@ describe('Sidebar', () => {
 
     rerender(
       <ThemeProvider theme={createTheme()}>
-        <BrowserRouter>
-          <Sidebar variant="persistent" />
-        </BrowserRouter>
+        <Sidebar variant="persistent" />
       </ThemeProvider>
     );
 
@@ -303,7 +307,7 @@ describe('Sidebar', () => {
   it('does not navigate for parent items with children', () => {
     renderWithTheme(<Sidebar />);
 
-    const settingsButton = screen.getByText('Settings');
+    const settingsButton = getNavButton('Settings');
     fireEvent.click(settingsButton);
 
     // Should not navigate, only expand/collapse
@@ -317,7 +321,7 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('ExpandLessIcon')).toBeInTheDocument();
 
     // Click to collapse
-    const settingsButton = screen.getByText('Settings');
+    const settingsButton = getNavButton('Settings');
     fireEvent.click(settingsButton);
 
     // Should show expand icon
@@ -343,8 +347,8 @@ describe('Sidebar', () => {
   it('applies correct indentation for nested items', () => {
     renderWithTheme(<Sidebar />);
 
-    const embeddingsButton = screen.getByText('Embeddings').closest('div[role="button"]');
-    const documentsButton = screen.getByText('Documents').closest('div[role="button"]');
+    const embeddingsButton = getNavButton('Embeddings');
+    const documentsButton = getNavButton('Documents');
 
     // Nested items should have more padding
     expect(embeddingsButton).toHaveStyle({ paddingLeft: '24px' });

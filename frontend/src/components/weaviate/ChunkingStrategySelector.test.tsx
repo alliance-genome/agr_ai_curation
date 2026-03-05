@@ -2,6 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
 import ChunkingStrategySelector from './ChunkingStrategySelector';
 
+const getSelectControl = (labelText: string) => {
+  const label = screen.getByText(labelText, { selector: 'label' });
+  const formControl = label.closest('.MuiFormControl-root');
+  if (!formControl) {
+    throw new Error(`Form control not found for label: ${labelText}`);
+  }
+  return within(formControl).getByRole('combobox');
+};
+
+const getSelectValueInput = (labelText: string): HTMLInputElement => {
+  const label = screen.getByText(labelText, { selector: 'label' });
+  const formControl = label.closest('.MuiFormControl-root');
+  if (!formControl) {
+    throw new Error(`Form control not found for label: ${labelText}`);
+  }
+  const input = formControl.querySelector('input.MuiSelect-nativeInput');
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`Select value input not found for label: ${labelText}`);
+  }
+  return input;
+};
+
 describe('ChunkingStrategySelector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -19,7 +41,7 @@ describe('ChunkingStrategySelector', () => {
   it('renders strategy preset selector', () => {
     render(<ChunkingStrategySelector />);
 
-    expect(screen.getByLabelText('Strategy Preset')).toBeInTheDocument();
+    expect(getSelectControl('Strategy Preset')).toBeInTheDocument();
     expect(screen.getByText('General Purpose')).toBeInTheDocument();
   });
 
@@ -34,8 +56,8 @@ describe('ChunkingStrategySelector', () => {
 
     render(<ChunkingStrategySelector initialStrategy={customStrategy} />);
 
-    expect(screen.getByDisplayValue('research')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('by_title')).toBeInTheDocument();
+    expect(getSelectValueInput('Strategy Preset')).toHaveValue('research');
+    expect(getSelectValueInput('Chunking Method')).toHaveValue('by_title');
     expect(screen.getByText('Maximum Characters: 2000')).toBeInTheDocument();
     expect(screen.getByText('Overlap Characters: 300')).toBeInTheDocument();
   });
@@ -43,15 +65,15 @@ describe('ChunkingStrategySelector', () => {
   it('changes strategy preset and applies predefined settings', async () => {
     render(<ChunkingStrategySelector />);
 
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
     fireEvent.mouseDown(strategySelect);
 
     const researchOption = await screen.findByText('Research Papers');
     fireEvent.click(researchOption);
 
     // Should apply research preset values
-    expect(screen.getByDisplayValue('research')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('by_title')).toBeInTheDocument();
+    expect(getSelectValueInput('Strategy Preset')).toHaveValue('research');
+    expect(getSelectValueInput('Chunking Method')).toHaveValue('by_title');
     expect(screen.getByText('Maximum Characters: 1500')).toBeInTheDocument();
     expect(screen.getByText('Overlap Characters: 200')).toBeInTheDocument();
   });
@@ -59,50 +81,50 @@ describe('ChunkingStrategySelector', () => {
   it('displays correct descriptions for each strategy', async () => {
     render(<ChunkingStrategySelector />);
 
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
 
     // Test Research strategy
     fireEvent.mouseDown(strategySelect);
     const researchOption = await screen.findByText('Research Papers');
     fireEvent.click(researchOption);
 
-    expect(screen.getByText(/Optimized for academic papers and research documents/))
-      .toBeInTheDocument();
+    expect(screen.getAllByText(/Optimized for academic papers and research documents/).length)
+      .toBeGreaterThan(0);
 
     // Test Legal strategy
     fireEvent.mouseDown(strategySelect);
     const legalOption = await screen.findByText('Legal Documents');
     fireEvent.click(legalOption);
 
-    expect(screen.getByText(/Designed for legal documents/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Designed for legal documents/).length).toBeGreaterThan(0);
 
     // Test Technical strategy
     fireEvent.mouseDown(strategySelect);
     const technicalOption = await screen.findByText('Technical Manuals');
     fireEvent.click(technicalOption);
 
-    expect(screen.getByText(/Best for technical manuals and documentation/))
-      .toBeInTheDocument();
+    expect(screen.getAllByText(/Best for technical manuals and documentation/).length)
+      .toBeGreaterThan(0);
 
     // Test General strategy
     fireEvent.mouseDown(strategySelect);
     const generalOption = await screen.findByText('General Purpose');
     fireEvent.click(generalOption);
 
-    expect(screen.getByText(/Balanced approach suitable for most document types/))
-      .toBeInTheDocument();
+    expect(screen.getAllByText(/Balanced approach suitable for most document types/).length)
+      .toBeGreaterThan(0);
   });
 
   it('changes chunking method', async () => {
     render(<ChunkingStrategySelector />);
 
-    const methodSelect = screen.getByLabelText('Chunking Method');
+    const methodSelect = getSelectControl('Chunking Method');
     fireEvent.mouseDown(methodSelect);
 
     const sentenceOption = await screen.findByText('By Sentence');
     fireEvent.click(sentenceOption);
 
-    expect(screen.getByDisplayValue('by_sentence')).toBeInTheDocument();
+    expect(getSelectValueInput('Chunking Method')).toHaveValue('by_sentence');
     expect(screen.getByText('Splits at sentence boundaries for natural breaks'))
       .toBeInTheDocument();
   });
@@ -110,7 +132,7 @@ describe('ChunkingStrategySelector', () => {
   it('displays descriptions for all chunking methods', async () => {
     render(<ChunkingStrategySelector />);
 
-    const methodSelect = screen.getByLabelText('Chunking Method');
+    const methodSelect = getSelectControl('Chunking Method');
 
     // Test By Title
     fireEvent.mouseDown(methodSelect);
@@ -197,7 +219,7 @@ describe('ChunkingStrategySelector', () => {
     render(<ChunkingStrategySelector onSave={onSave} />);
 
     // Change to research strategy
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
     fireEvent.mouseDown(strategySelect);
     const researchOption = await screen.findByText('Research Papers');
     fireEvent.click(researchOption);
@@ -222,14 +244,14 @@ describe('ChunkingStrategySelector', () => {
   it('applies correct preset values for legal strategy', async () => {
     render(<ChunkingStrategySelector />);
 
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
     fireEvent.mouseDown(strategySelect);
 
     const legalOption = await screen.findByText('Legal Documents');
     fireEvent.click(legalOption);
 
-    expect(screen.getByDisplayValue('legal')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('by_paragraph')).toBeInTheDocument();
+    expect(getSelectValueInput('Strategy Preset')).toHaveValue('legal');
+    expect(getSelectValueInput('Chunking Method')).toHaveValue('by_paragraph');
     expect(screen.getByText('Maximum Characters: 1000')).toBeInTheDocument();
     expect(screen.getByText('Overlap Characters: 100')).toBeInTheDocument();
   });
@@ -237,14 +259,14 @@ describe('ChunkingStrategySelector', () => {
   it('applies correct preset values for technical strategy', async () => {
     render(<ChunkingStrategySelector />);
 
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
     fireEvent.mouseDown(strategySelect);
 
     const technicalOption = await screen.findByText('Technical Manuals');
     fireEvent.click(technicalOption);
 
-    expect(screen.getByDisplayValue('technical')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('by_character')).toBeInTheDocument();
+    expect(getSelectValueInput('Strategy Preset')).toHaveValue('technical');
+    expect(getSelectValueInput('Chunking Method')).toHaveValue('by_character');
     expect(screen.getByText('Maximum Characters: 2000')).toBeInTheDocument();
     expect(screen.getByText('Overlap Characters: 400')).toBeInTheDocument();
   });
@@ -258,7 +280,7 @@ describe('ChunkingStrategySelector', () => {
     fireEvent.change(maxCharSlider, { target: { value: 3500 } });
 
     // Change chunking method
-    const methodSelect = screen.getByLabelText('Chunking Method');
+    const methodSelect = getSelectControl('Chunking Method');
     fireEvent.mouseDown(methodSelect);
     const sentenceOption = await screen.findByText('By Sentence');
     fireEvent.click(sentenceOption);
@@ -338,7 +360,7 @@ describe('ChunkingStrategySelector', () => {
     render(<ChunkingStrategySelector onSave={onSave} />);
 
     // Change strategy
-    const strategySelect = screen.getByLabelText('Strategy Preset');
+    const strategySelect = getSelectControl('Strategy Preset');
     fireEvent.mouseDown(strategySelect);
     const researchOption = await screen.findByText('Research Papers');
     fireEvent.click(researchOption);

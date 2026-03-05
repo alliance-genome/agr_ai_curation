@@ -98,22 +98,21 @@ describe('FileDownloadCard - Basic Rendering', () => {
 
 describe('FileDownloadCard - Download Functionality', () => {
   let mockLink: HTMLAnchorElement
-  let mockAppendChild: ReturnType<typeof vi.spyOn>
-  let mockRemoveChild: ReturnType<typeof vi.spyOn>
+  const originalCreateElement = document.createElement.bind(document)
 
   beforeEach(() => {
     vi.clearAllMocks()
 
-    // Mock the anchor element
-    mockLink = {
-      href: '',
-      download: '',
-      click: vi.fn(),
-    } as unknown as HTMLAnchorElement
+    // Use a real anchor element to avoid breaking DOM APIs in jsdom.
+    mockLink = originalCreateElement('a')
+    vi.spyOn(mockLink, 'click').mockImplementation(() => {})
 
-    vi.spyOn(document, 'createElement').mockReturnValue(mockLink)
-    mockAppendChild = vi.spyOn(document.body, 'appendChild').mockReturnValue(mockLink)
-    mockRemoveChild = vi.spyOn(document.body, 'removeChild').mockReturnValue(mockLink)
+    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === 'a') {
+        return mockLink
+      }
+      return originalCreateElement(tagName)
+    }) as typeof document.createElement)
   })
 
   afterEach(() => {

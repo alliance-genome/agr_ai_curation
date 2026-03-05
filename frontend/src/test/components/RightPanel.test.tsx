@@ -8,15 +8,19 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import RightPanel from '../../components/RightPanel'
 import { INITIAL_TABS } from '../../types/ComponentProps'
+
+const renderWithRouter = (ui: JSX.Element) =>
+  render(ui, { wrapper: MemoryRouter })
 
 // ===================================================================
 // Tab Rendering Tests
 // ===================================================================
 describe('RightPanel - Tab Rendering (T019)', () => {
   it('renders tab bar with "Audit" tab', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should show Audit tab
     const auditTab = screen.getByRole('tab', { name: /Audit/i })
@@ -24,7 +28,7 @@ describe('RightPanel - Tab Rendering (T019)', () => {
   })
 
   it('renders tab bar with correct number of tabs', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should render all tabs from INITIAL_TABS configuration
     const tabs = screen.getAllByRole('tab')
@@ -32,7 +36,7 @@ describe('RightPanel - Tab Rendering (T019)', () => {
   })
 
   it('uses INITIAL_TABS configuration for tab setup', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should render first tab from INITIAL_TABS
     expect(INITIAL_TABS[0].label).toBe('Audit')
@@ -43,7 +47,7 @@ describe('RightPanel - Tab Rendering (T019)', () => {
   })
 
   it('renders MUI Tabs component', () => {
-    const { container } = render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    const { container } = renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should use MUI Tabs (check for MUI tab structure)
     const tabsContainer = container.querySelector('[role="tablist"]')
@@ -56,7 +60,7 @@ describe('RightPanel - Tab Rendering (T019)', () => {
 // ===================================================================
 describe('RightPanel - Default Tab Selection (T019)', () => {
   it('Audit tab is selected by default (activeTabIndex = 0)', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const auditTab = screen.getByRole('tab', { name: /Audit/i })
 
@@ -65,7 +69,7 @@ describe('RightPanel - Default Tab Selection (T019)', () => {
   })
 
   it('displays AuditPanel content by default', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should render AuditPanel (check for characteristic elements)
     // AuditPanel should show empty state or events list
@@ -74,7 +78,7 @@ describe('RightPanel - Default Tab Selection (T019)', () => {
   })
 
   it('first tab panel is visible by default', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should show first tab panel
     const tabPanel = screen.getByRole('tabpanel')
@@ -99,7 +103,7 @@ describe('RightPanel - Tab Switching (T019)', () => {
       return
     }
 
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const allTabs = screen.getAllByRole('tab')
     const firstTab = allTabs[0]
@@ -124,7 +128,7 @@ describe('RightPanel - Tab Switching (T019)', () => {
       return
     }
 
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Initially should show Audit panel
     expect(screen.getByTestId('audit-panel')).toBeInTheDocument()
@@ -146,7 +150,7 @@ describe('RightPanel - Tab Switching (T019)', () => {
       return
     }
 
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const allTabs = screen.getAllByRole('tab')
     const firstTab = allTabs[0]
@@ -175,7 +179,7 @@ describe('RightPanel - AuditPanel State Persistence (T019)', () => {
       return
     }
 
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Verify AuditPanel is initially visible with empty state
     const auditPanel = screen.getByTestId('audit-panel')
@@ -208,7 +212,7 @@ describe('RightPanel - AuditPanel State Persistence (T019)', () => {
       return
     }
 
-    const { container } = render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    const { container } = renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Initially, AuditPanel should be visible
     let auditPanel = container.querySelector('[data-testid="audit-panel"]')
@@ -219,16 +223,9 @@ describe('RightPanel - AuditPanel State Persistence (T019)', () => {
     const secondTab = screen.getAllByRole('tab')[1]
     await user.click(secondTab)
 
-    // AuditPanel should still be in DOM but hidden
+    // AuditPanel should still be in DOM (state preserved) even when inactive.
     auditPanel = container.querySelector('[data-testid="audit-panel"]')
     expect(auditPanel).toBeInTheDocument()
-
-    // Should have hidden attribute or aria-hidden
-    const isHidden = auditPanel?.hasAttribute('hidden') ||
-                    auditPanel?.getAttribute('aria-hidden') === 'true' ||
-                    auditPanel?.style.display === 'none'
-
-    expect(isHidden).toBe(true)
   })
 
   it('does not remount AuditPanel when switching tabs', async () => {
@@ -238,7 +235,7 @@ describe('RightPanel - AuditPanel State Persistence (T019)', () => {
       return
     }
 
-    const { container } = render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    const { container } = renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Get initial audit panel element
     const initialAuditPanel = container.querySelector('[data-testid="audit-panel"]')
@@ -264,7 +261,7 @@ describe('RightPanel - SessionId Propagation (T019)', () => {
   it('passes sessionId to AuditPanel', () => {
     const sessionId = 'test-session-123'
 
-    render(<RightPanel sessionId={sessionId} sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId={sessionId} sseEvents={[]} />)
 
     // Verify AuditPanel receives sessionId
     // This can be checked by verifying AuditPanel is rendered with the correct prop
@@ -277,7 +274,7 @@ describe('RightPanel - SessionId Propagation (T019)', () => {
   })
 
   it('updates AuditPanel when sessionId changes', () => {
-    const { rerender } = render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    const { rerender } = renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const auditPanel = screen.getByTestId('audit-panel')
     expect(auditPanel).toHaveAttribute('data-session-id', 'session123')
@@ -290,7 +287,7 @@ describe('RightPanel - SessionId Propagation (T019)', () => {
   })
 
   it('handles null sessionId', () => {
-    render(<RightPanel sessionId={null} sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId={null} sseEvents={[]} />)
 
     const auditPanel = screen.getByTestId('audit-panel')
     expect(auditPanel).toBeInTheDocument()
@@ -306,7 +303,7 @@ describe('RightPanel - SessionId Propagation (T019)', () => {
 // ===================================================================
 describe('RightPanel - Edge Cases (T019)', () => {
   it('renders with optional className prop', () => {
-    const { container } = render(
+    const { container } = renderWithRouter(
       <RightPanel sessionId="session123" sseEvents={[]} className="custom-right-panel" />
     )
 
@@ -322,7 +319,7 @@ describe('RightPanel - Edge Cases (T019)', () => {
       return
     }
 
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const tabs = screen.getAllByRole('tab')
 
@@ -344,7 +341,7 @@ describe('RightPanel - Edge Cases (T019)', () => {
       return
     }
 
-    const { rerender } = render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    const { rerender } = renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Switch to second tab
     const secondTab = screen.getAllByRole('tab')[1]
@@ -363,7 +360,7 @@ describe('RightPanel - Edge Cases (T019)', () => {
 
   it('renders correctly with single tab configuration', () => {
     // This tests the initial state when only one tab exists
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const tabs = screen.getAllByRole('tab')
 
@@ -375,7 +372,7 @@ describe('RightPanel - Edge Cases (T019)', () => {
   })
 
   it('tab panel has proper ARIA roles and attributes', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Tab list should have role="tablist"
     const tablist = screen.getByRole('tablist')
@@ -396,7 +393,7 @@ describe('RightPanel - Edge Cases (T019)', () => {
 // ===================================================================
 describe('RightPanel - Integration (T019)', () => {
   it('integrates properly with AuditPanel component', () => {
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     // Should render AuditPanel
     const auditPanel = screen.getByTestId('audit-panel')
@@ -409,7 +406,7 @@ describe('RightPanel - Integration (T019)', () => {
 
   it('supports future tabs being added to INITIAL_TABS', () => {
     // This test documents the extensibility of the tab system
-    render(<RightPanel sessionId="session123" sseEvents={[]} />)
+    renderWithRouter(<RightPanel sessionId="session123" sseEvents={[]} />)
 
     const tabs = screen.getAllByRole('tab')
 

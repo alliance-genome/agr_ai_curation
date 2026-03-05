@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from src.api import batch as batch_api
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
@@ -33,6 +34,14 @@ def _make_batch_response(batch_id=None, flow_id=None, status=BatchStatus.PENDING
         completed_at=now if status in (BatchStatus.COMPLETED, BatchStatus.CANCELLED) else None,
         documents=[],
     )
+
+
+def test_batch_create_request_limits_document_ids_to_ten():
+    flow_id = uuid4()
+    doc_ids = [uuid4() for _ in range(11)]
+
+    with pytest.raises(ValidationError):
+        BatchCreateRequest(flow_id=flow_id, document_ids=doc_ids)
 
 
 @pytest.mark.asyncio

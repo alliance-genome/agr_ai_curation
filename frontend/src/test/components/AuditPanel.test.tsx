@@ -27,6 +27,10 @@ function createTestEvent(
   }
 }
 
+beforeEach(() => {
+  localStorage.clear()
+})
+
 // ===================================================================
 // Empty State Tests
 // ===================================================================
@@ -113,7 +117,7 @@ describe('AuditPanel - Event Display (T018)', () => {
     render(<AuditPanel sessionId="session123" sseEvents={[]} initialEvents={events} />)
 
     // Should show all event types
-    expect(screen.getByText(/Processing/)).toBeInTheDocument()
+    expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
     expect(screen.getByText(/Starting crew/)).toBeInTheDocument()
     expect(screen.getByText(/Agent completed/)).toBeInTheDocument()
     expect(screen.getByText(/Done/)).toBeInTheDocument()
@@ -135,13 +139,13 @@ describe('AuditPanel - Session Change (T018)', () => {
     )
 
     // Should initially show events
-    expect(screen.getByText(/Processing/)).toBeInTheDocument()
+    expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
 
     // Change sessionId
     rerender(<AuditPanel sessionId="session456" sseEvents={[]} />)
 
     // Events should be cleared
-    expect(screen.queryByText(/Processing/)).not.toBeInTheDocument()
+    expect(screen.queryByText('[SUPERVISOR] Processing')).not.toBeInTheDocument()
     expect(screen.getByText(/No audit events yet/i)).toBeInTheDocument()
   })
 
@@ -155,13 +159,13 @@ describe('AuditPanel - Session Change (T018)', () => {
     )
 
     // Should show event
-    expect(screen.getByText(/Processing/)).toBeInTheDocument()
+    expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
 
     // Change to null sessionId
     rerender(<AuditPanel sessionId={null} sseEvents={[]} />)
 
     // Should show empty state
-    expect(screen.queryByText(/Processing/)).not.toBeInTheDocument()
+    expect(screen.queryByText('[SUPERVISOR] Processing')).not.toBeInTheDocument()
     expect(screen.getByText(/No audit events yet/i)).toBeInTheDocument()
   })
 
@@ -175,13 +179,13 @@ describe('AuditPanel - Session Change (T018)', () => {
     )
 
     // Should show event
-    expect(screen.getByText(/Processing/)).toBeInTheDocument()
+    expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
 
     // Rerender with same sessionId
     rerender(<AuditPanel sessionId="session123" sseEvents={[]} initialEvents={events} />)
 
     // Event should still be there
-    expect(screen.getByText(/Processing/)).toBeInTheDocument()
+    expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
   })
 })
 

@@ -9,6 +9,7 @@ from .file_output import FileOutput, FileType
 from .ontology import Ontology
 from .ontology_term import OntologyTerm
 from .pdf_document import PDFDocument
+from .pdf_processing_job import PdfProcessingJob, PdfJobStatus
 from .prompts import PromptTemplate, PromptExecutionLog
 from .tool_policy import ToolPolicy
 from .tool_idea_request import ToolIdeaRequest
@@ -37,6 +38,8 @@ __all__ = [
     "Ontology",
     "OntologyTerm",
     "PDFDocument",
+    "PdfProcessingJob",
+    "PdfJobStatus",
     "PromptTemplate",
     "PromptExecutionLog",
     "ToolPolicy",

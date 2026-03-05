@@ -32,6 +32,7 @@ interface UploadProgressDialogProps {
   onClose: () => void;
   documentId?: string;
   onLoadForChat?: (documentId: string) => void;
+  allowBackgroundClose?: boolean;
 }
 
 const processingSteps = [
@@ -52,6 +53,7 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
   onClose,
   documentId,
   onLoadForChat,
+  allowBackgroundClose = true,
 }) => {
   const getActiveStep = () => {
     const index = processingSteps.findIndex((step) => step.stage === stage);
@@ -59,7 +61,8 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
   };
 
   const activeStep = getActiveStep();
-  const isError = stage === 'error' || stage === 'failed';
+  const isCancelled = stage === 'cancelled';
+  const isError = stage === 'error' || stage === 'failed' || stage === 'timeout' || isCancelled;
   const isComplete = stage === 'completed';
 
   // Clean up technical messages for a more professional display
@@ -72,13 +75,13 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
   return (
     <Dialog
       open={open}
-      onClose={isComplete || isError ? onClose : undefined}
+      onClose={allowBackgroundClose || isComplete || isError ? onClose : undefined}
       maxWidth="sm"
       fullWidth
-      disableEscapeKeyDown={!isComplete && !isError}
+      disableEscapeKeyDown={!allowBackgroundClose && !isComplete && !isError}
     >
       <DialogTitle>
-        {isError ? 'Upload Failed' : isComplete ? 'Upload Complete' : 'Processing Document'}
+        {isCancelled ? 'Upload Cancelled' : isError ? 'Upload Failed' : isComplete ? 'Upload Complete' : 'Processing Document'}
       </DialogTitle>
       <DialogContent>
         <Box sx={{ mb: 2 }}>
@@ -160,6 +163,11 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
         )}
       </DialogContent>
       <DialogActions>
+        {!isComplete && !isError && allowBackgroundClose && (
+          <Button onClick={onClose} variant="outlined">
+            Run in Background
+          </Button>
+        )}
         {isComplete && documentId && onLoadForChat && (
           <Button
             onClick={() => onLoadForChat(documentId)}

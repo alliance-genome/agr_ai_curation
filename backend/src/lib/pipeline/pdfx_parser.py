@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
 
-from ..exceptions import ConfigurationError, PDFParsingError
+from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
     build_pipeline_elements,
@@ -23,6 +23,8 @@ from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture too
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+ProcessIdCallback = Callable[[str], Awaitable[None]]
+CancelRequestedCallback = Callable[[], Awaitable[bool]]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _TRANSIENT_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
@@ -108,6 +110,8 @@ class PDFXParser:
         extraction_strategy: Optional[str] = None,
         enable_table_extraction: Optional[bool] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        process_id_callback: Optional[ProcessIdCallback] = None,
+        cancel_requested_callback: Optional[CancelRequestedCallback] = None,
     ) -> Dict[str, Any]:
         """Parse PDF through PDF extraction service and return pipeline elements."""
         del extraction_strategy
@@ -136,11 +140,21 @@ class PDFXParser:
                 if not process_id:
                     raise PDFParsingError("Extraction service returned no process_id")
 
+                if process_id_callback:
+                    await process_id_callback(process_id)
+
+                if cancel_requested_callback and await cancel_requested_callback():
+                    await self._request_cancel(session, process_id, headers)
+                    raise PDFCancellationError(
+                        "PDF extraction cancelled by user request before polling started"
+                    )
+
                 status_payload = await self._poll_until_complete(
                     session=session,
                     process_id=process_id,
                     headers=headers,
                     progress_callback=progress_callback,
+                    cancel_requested_callback=cancel_requested_callback,
                 )
                 merged_markdown = await self._download_markdown(session, process_id, headers)
         except asyncio.TimeoutError as exc:
@@ -299,6 +313,7 @@ class PDFXParser:
         process_id: str,
         headers: Dict[str, str],
         progress_callback: Optional[ProgressCallback],
+        cancel_requested_callback: Optional[CancelRequestedCallback] = None,
     ) -> Dict[str, Any]:
         """Poll extraction job until completion or failure."""
         status_endpoint = f"{self.service_url}/api/v1/extract/{process_id}"
@@ -306,6 +321,12 @@ class PDFXParser:
         latest_status = "pending"
 
         while True:
+            if cancel_requested_callback and await cancel_requested_callback():
+                await self._request_cancel(session, process_id, headers)
+                raise PDFCancellationError(
+                    f"PDF extraction cancelled by user request for process_id={process_id}"
+                )
+
             if time.monotonic() >= deadline:
                 raise PDFParsingError(
                     f"PDF extraction timed out before completion for process_id={process_id}"
@@ -350,6 +371,8 @@ class PDFXParser:
                     message = _build_progress_message(payload)
                     try:
                         await progress_callback(message)
+                    except PDFCancellationError:
+                        raise
                     except Exception:
                         logger.debug("Progress callback failed", exc_info=True)
 
@@ -364,6 +387,39 @@ class PDFXParser:
         raise PDFParsingError(
             f"PDF extraction ended in unexpected status '{latest_status}' for process_id={process_id}"
         )
+
+    async def _request_cancel(
+        self,
+        session: aiohttp.ClientSession,
+        process_id: str,
+        headers: Dict[str, str],
+    ) -> None:
+        """Best-effort request to terminate remote extraction job."""
+        cancel_endpoint = f"{self.service_url}/api/v1/extract/{process_id}/cancel"
+        payload = {"reason": "Cancelled by user request"}
+
+        try:
+            async with session.post(cancel_endpoint, json=payload, headers=headers) as response:
+                body_text = await response.text()
+                if response.status in {200, 202}:
+                    logger.info("Requested remote extraction cancellation for process_id=%s", process_id)
+                    return
+                if response.status in {404, 409}:
+                    logger.info(
+                        "Remote extraction cancellation returned %s for process_id=%s: %s",
+                        response.status,
+                        process_id,
+                        body_text[:200],
+                    )
+                    return
+                logger.warning(
+                    "Remote extraction cancellation failed for process_id=%s: %s - %s",
+                    process_id,
+                    response.status,
+                    body_text[:200],
+                )
+        except Exception as exc:
+            logger.warning("Remote extraction cancellation request failed for process_id=%s: %s", process_id, exc)
 
     async def _download_markdown(
         self,
@@ -589,6 +645,8 @@ async def parse_pdf_document(
     extraction_strategy: Optional[str] = None,
     enable_table_extraction: Optional[bool] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    process_id_callback: Optional[ProcessIdCallback] = None,
+    cancel_requested_callback: Optional[CancelRequestedCallback] = None,
 ) -> Dict[str, Any]:
     """Parse PDF document using AGR PDF extraction service."""
     parser = PDFXParser()
@@ -599,6 +657,8 @@ async def parse_pdf_document(
         extraction_strategy=extraction_strategy,
         enable_table_extraction=enable_table_extraction,
         progress_callback=progress_callback,
+        process_id_callback=process_id_callback,
+        cancel_requested_callback=cancel_requested_callback,
     )
 
 

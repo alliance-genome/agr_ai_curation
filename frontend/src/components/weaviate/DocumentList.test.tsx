@@ -3,6 +3,112 @@ import { render, screen, fireEvent, waitFor, within } from '../../test/test-util
 import DocumentList from './DocumentList';
 import { createMockDocument } from '../../test/test-utils';
 
+const refetchHealthMock = vi.fn();
+
+vi.mock('../../services/weaviate', async () => {
+  const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
+  return {
+    ...actual,
+    usePdfExtractionHealth: () => ({
+      data: {
+        status: 'healthy',
+        last_checked: '2026-03-05T00:00:00Z',
+      },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: refetchHealthMock,
+    }),
+  };
+});
+
+vi.mock('@mui/x-data-grid', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+
+  const DataGrid = ({
+    rows = [],
+    columns = [],
+    checkboxSelection = false,
+    rowSelectionModel,
+    onRowSelectionModelChange,
+  }: {
+    rows?: any[];
+    columns?: any[];
+    checkboxSelection?: boolean;
+    rowSelectionModel?: string[];
+    onRowSelectionModelChange?: (ids: string[]) => void;
+  }) => {
+    const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
+    const selectedIds =
+      rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
+
+    const setSelection = (ids: string[]) => {
+      if (rowSelectionModel === undefined) {
+        setInternalSelection(ids);
+      }
+      onRowSelectionModelChange?.(ids);
+    };
+
+    return (
+      <div className="MuiDataGrid-root" role="grid">
+        <table>
+          <thead>
+            <tr>
+              {checkboxSelection && (
+                <th className="MuiDataGrid-columnHeaderCheckbox">
+                  <input type="checkbox" />
+                </th>
+              )}
+              {columns.map((column: any) => (
+                <th key={column.field}>{column.headerName}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row: any) => (
+              <tr key={row.id} className="MuiDataGrid-row" style={{ cursor: 'pointer' }}>
+                {checkboxSelection && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(String(row.id))}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        const id = String(row.id);
+                        if (checked) {
+                          setSelection([...selectedIds, id]);
+                        } else {
+                          setSelection(selectedIds.filter((selectedId) => selectedId !== id));
+                        }
+                      }}
+                    />
+                  </td>
+                )}
+                {columns.map((column: any) => {
+                  const rawValue = row[column.field];
+                  let content = rawValue;
+
+                  if (typeof column.renderCell === 'function') {
+                    content = column.renderCell({ row, value: rawValue, field: column.field });
+                  } else if (typeof column.valueFormatter === 'function') {
+                    content = column.valueFormatter({ row, value: rawValue, field: column.field });
+                  }
+
+                  return <td key={`${row.id}-${column.field}`}>{content}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return {
+    DataGrid,
+  };
+});
+
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -28,6 +134,7 @@ describe('DocumentList', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    refetchHealthMock.mockReset();
   });
 
   it('renders document list with all documents', () => {
@@ -47,9 +154,9 @@ describe('DocumentList', () => {
 
   it('formats file sizes correctly', () => {
     const docs = [
-      createMockDocument({ fileSize: 1024 }),         // 1 KB
-      createMockDocument({ fileSize: 1048576 }),      // 1 MB
-      createMockDocument({ fileSize: 1073741824 }),   // 1 GB
+      createMockDocument({ id: '11', fileSize: 1024 }),         // 1 KB
+      createMockDocument({ id: '12', fileSize: 1048576 }),      // 1 MB
+      createMockDocument({ id: '13', fileSize: 1073741824 }),   // 1 GB
     ];
 
     render(<DocumentList {...defaultProps} documents={docs} />);
@@ -71,20 +178,23 @@ describe('DocumentList', () => {
     expect(failedChip.closest('.MuiChip-root')).toHaveClass('MuiChip-colorError');
   });
 
-  it('navigates to document detail on view button click', async () => {
+  it('opens document detail dialog on view button click', async () => {
     render(<DocumentList {...defaultProps} />);
 
     // Find the first view button
     const viewButtons = screen.getAllByTestId('VisibilityIcon');
     fireEvent.click(viewButtons[0].parentElement!);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/document/1');
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('calls onReembed when refresh button is clicked', () => {
     render(<DocumentList {...defaultProps} />);
 
-    const refreshButtons = screen.getAllByTestId('RefreshIcon');
+    const refreshButtons = screen
+      .getAllByTestId('RefreshIcon')
+      .filter((icon) => icon.closest('td') !== null);
     fireEvent.click(refreshButtons[0].parentElement!);
 
     expect(defaultProps.onReembed).toHaveBeenCalledWith('1');
@@ -93,7 +203,9 @@ describe('DocumentList', () => {
   it('calls onDelete when delete button is clicked', () => {
     render(<DocumentList {...defaultProps} />);
 
-    const deleteButtons = screen.getAllByTestId('DeleteIcon');
+    const deleteButtons = screen
+      .getAllByTestId('DeleteIcon')
+      .filter((icon) => icon.closest('td') !== null);
     fireEvent.click(deleteButtons[0].parentElement!);
 
     expect(defaultProps.onDelete).toHaveBeenCalledWith('1');
@@ -102,7 +214,9 @@ describe('DocumentList', () => {
   it('disables re-embed button for processing documents', () => {
     render(<DocumentList {...defaultProps} />);
 
-    const refreshButtons = screen.getAllByTestId('RefreshIcon');
+    const refreshButtons = screen
+      .getAllByTestId('RefreshIcon')
+      .filter((icon) => icon.closest('td') !== null);
     // Second document is processing
     expect(refreshButtons[1].parentElement).toBeDisabled();
   });
@@ -130,30 +244,34 @@ describe('DocumentList', () => {
     render(<DocumentList {...defaultProps} />);
 
     expect(screen.getByText('Filename')).toBeInTheDocument();
-    expect(screen.getByText('File Size')).toBeInTheDocument();
-    expect(screen.getByText('Creation Date')).toBeInTheDocument();
-    expect(screen.getByText('Last Accessed')).toBeInTheDocument();
-    expect(screen.getByText('Embedding Status')).toBeInTheDocument();
-    expect(screen.getByText('Vector Count')).toBeInTheDocument();
+    expect(screen.getByText('Title')).toBeInTheDocument();
+    expect(screen.getByText('Size')).toBeInTheDocument();
+    expect(screen.getByText('Created')).toBeInTheDocument();
+    expect(screen.getByText('Accessed')).toBeInTheDocument();
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('Vectors')).toBeInTheDocument();
     expect(screen.getByText('Chunks')).toBeInTheDocument();
     expect(screen.getByText('Actions')).toBeInTheDocument();
   });
 
   it('formats dates correctly', () => {
+    const creationDate = new Date('2024-01-01T10:00:00');
+    const lastAccessedDate = new Date('2024-01-02T15:30:00');
     const doc = createMockDocument({
+      id: 'date-doc',
       creationDate: new Date('2024-01-01T10:00:00'),
       lastAccessedDate: new Date('2024-01-02T15:30:00'),
     });
 
     render(<DocumentList {...defaultProps} documents={[doc]} />);
 
-    // Check that dates are displayed (exact format may vary by locale)
-    const dateElements = screen.getAllByText(/2024/);
-    expect(dateElements.length).toBeGreaterThan(0);
+    expect(screen.getByText(creationDate.toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(lastAccessedDate.toLocaleDateString())).toBeInTheDocument();
   });
 
   it('displays vector and chunk counts', () => {
     const doc = createMockDocument({
+      id: 'counts-doc',
       vectorCount: 150,
       chunkCount: 25,
     });
@@ -167,9 +285,80 @@ describe('DocumentList', () => {
   it('handles empty document list', () => {
     render(<DocumentList {...defaultProps} documents={[]} totalCount={0} />);
 
-    // DataGrid should show no rows message
+    expect(screen.getByText('No documents yet. Upload a PDF to get started.')).toBeInTheDocument();
     const grid = document.querySelector('.MuiDataGrid-root');
-    expect(grid).toBeInTheDocument();
+    expect(grid).not.toBeInTheDocument();
+  });
+
+  it('allows selecting multiple files for upload', () => {
+    const { container } = render(<DocumentList {...defaultProps} />);
+    const fileInput = container.querySelector('input[type="file"]');
+
+    expect(fileInput).toHaveAttribute('multiple');
+  });
+
+  it('blocks selecting more than 10 files for upload', () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const { container } = render(<DocumentList {...defaultProps} />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = Array.from(
+      { length: 11 },
+      (_, index) => new File(['test'], `doc-${index + 1}.pdf`, { type: 'application/pdf' })
+    );
+
+    fireEvent.change(fileInput, { target: { files } });
+
+    expect(alertSpy).toHaveBeenCalledWith('Please select up to 10 PDF files at a time');
+    alertSpy.mockRestore();
+  });
+
+  it('uploads two selected PDF files', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes('/api/weaviate/documents/upload')) {
+        return new Response(JSON.stringify({ document_id: crypto.randomUUID() }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/weaviate/documents/pdf-extraction-health')) {
+        return new Response(JSON.stringify({ status: 'healthy', service_url: 'http://pdfx' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const onRefresh = vi.fn();
+    const { container } = render(<DocumentList {...defaultProps} onRefresh={onRefresh} />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = [
+      new File(['a'], 'doc-a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'doc-b.pdf', { type: 'application/pdf' }),
+    ];
+
+    fireEvent.change(fileInput, { target: { files } });
+
+    await waitFor(() => {
+      const uploadCalls = fetchSpy.mock.calls.filter(([url]) =>
+        String(url).includes('/api/weaviate/documents/upload')
+      );
+      expect(uploadCalls).toHaveLength(2);
+    });
+
+    await waitFor(() => {
+      expect(onRefresh).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fetchSpy.mockRestore();
   });
 
   it('applies hover effects on rows', () => {
@@ -178,7 +367,7 @@ describe('DocumentList', () => {
     const rows = container.querySelectorAll('.MuiDataGrid-row');
     expect(rows.length).toBeGreaterThan(0);
 
-    // DataGrid handles hover internally
+    // DataGrid row style should include pointer cursor
     rows.forEach(row => {
       expect(row).toHaveStyle({ cursor: 'pointer' });
     });

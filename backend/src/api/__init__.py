@@ -11,6 +11,7 @@ from . import pdf_viewer
 from . import feedback
 from . import maintenance
 from . import agent_studio_custom
+from . import pdf_jobs
 
 __all__ = [
     "documents",
@@ -24,4 +25,5 @@ __all__ = [
     "feedback",
     "maintenance",
     "agent_studio_custom",
+    "pdf_jobs",
 ]

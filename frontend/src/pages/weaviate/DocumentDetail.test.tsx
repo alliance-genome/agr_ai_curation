@@ -62,7 +62,7 @@ describe('DocumentDetail page', () => {
     expect(lastDialogProps).toBeTruthy();
     lastDialogProps.onClose();
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/documents');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
   });
 
   it('calls delete endpoint when delete handler is invoked', async () => {
@@ -90,9 +90,9 @@ describe('DocumentDetail page', () => {
 
     render(<DocumentDetail />);
 
-    expect(screen.getByText(/Document identifier was not provided/i)).toBeInTheDocument();
+    expect(screen.getByText(/Missing document identifier/i)).toBeInTheDocument();
     const backButton = screen.getByRole('button', { name: /back to documents/i });
     fireEvent.click(backButton);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate/documents');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
   });
 });

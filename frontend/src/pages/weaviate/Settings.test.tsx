@@ -1,7 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
-import userEvent from '@testing-library/user-event';
+import { render, screen, fireEvent, waitFor, within, act } from '../../test/test-utils';
 import Settings from './Settings';
+
+const getSelectControl = (labelText: string) => {
+  const label = screen.getByText(labelText, { selector: 'label' });
+  const formControl = label.closest('.MuiFormControl-root');
+  if (!formControl) {
+    throw new Error(`Form control not found for label: ${labelText}`);
+  }
+  return within(formControl).getByRole('combobox');
+};
+
+const getSelectValueInput = (labelText: string): HTMLInputElement => {
+  const label = screen.getByText(labelText, { selector: 'label' });
+  const formControl = label.closest('.MuiFormControl-root');
+  if (!formControl) {
+    throw new Error(`Form control not found for label: ${labelText}`);
+  }
+  const input = formControl.querySelector('input.MuiSelect-nativeInput');
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`Select value input not found for label: ${labelText}`);
+  }
+  return input;
+};
 
 describe('Settings', () => {
   beforeEach(() => {
@@ -71,22 +92,22 @@ describe('Settings', () => {
         />
       );
 
-      expect(screen.getByDisplayValue('cohere')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('embed-english-v3.0')).toBeInTheDocument();
+      expect(getSelectValueInput('Model Provider')).toHaveValue('cohere');
+      expect(getSelectValueInput('Model Name')).toHaveValue('embed-english-v3.0');
       expect(screen.getByDisplayValue('1024')).toBeInTheDocument();
     });
 
     it('changes model provider and updates model options', async () => {
       render(<Settings />);
 
-      const providerSelect = screen.getByLabelText('Model Provider');
+      const providerSelect = getSelectControl('Model Provider');
       fireEvent.mouseDown(providerSelect);
 
       const cohereOption = await screen.findByText('Cohere');
       fireEvent.click(cohereOption);
 
       // Open model name dropdown
-      const modelSelect = screen.getByLabelText('Model Name');
+      const modelSelect = getSelectControl('Model Name');
       fireEvent.mouseDown(modelSelect);
 
       // Should show Cohere models
@@ -97,7 +118,7 @@ describe('Settings', () => {
     it('updates dimensions when model changes', async () => {
       render(<Settings />);
 
-      const modelSelect = screen.getByLabelText('Model Name');
+      const modelSelect = getSelectControl('Model Name');
       fireEvent.mouseDown(modelSelect);
 
       const largeModel = await screen.findByText('Text Embedding 3 Large');
@@ -111,7 +132,7 @@ describe('Settings', () => {
     it('adjusts batch size with slider', async () => {
       render(<Settings />);
 
-      const slider = screen.getByRole('slider');
+      const slider = screen.getAllByRole('slider')[0];
 
       // Simulate sliding to value 75
       fireEvent.change(slider, { target: { value: 75 } });
@@ -151,7 +172,7 @@ describe('Settings', () => {
       );
 
       // Change a value
-      const slider = screen.getByRole('slider');
+      const slider = screen.getAllByRole('slider')[0];
       fireEvent.change(slider, { target: { value: 25 } });
 
       // Reset
@@ -185,8 +206,8 @@ describe('Settings', () => {
         expect(screen.getByDisplayValue('TestCollection')).toBeInTheDocument();
         expect(screen.getByDisplayValue('2.0.0')).toBeInTheDocument();
         expect(screen.getByDisplayValue('3')).toBeInTheDocument();
-        expect(screen.getByDisplayValue('quorum')).toBeInTheDocument();
-        expect(screen.getByDisplayValue('flat')).toBeInTheDocument();
+        expect(getSelectValueInput('Consistency Level')).toHaveValue('quorum');
+        expect(getSelectValueInput('Vector Index Type')).toHaveValue('flat');
       });
     });
 
@@ -210,13 +231,13 @@ describe('Settings', () => {
       const databaseTab = screen.getByRole('tab', { name: /database/i });
       fireEvent.click(databaseTab);
 
-      const consistencySelect = await screen.findByLabelText('Consistency Level');
+      const consistencySelect = getSelectControl('Consistency Level');
       fireEvent.mouseDown(consistencySelect);
 
       const quorumOption = await screen.findByText('Quorum');
       fireEvent.click(quorumOption);
 
-      expect(screen.getByDisplayValue('quorum')).toBeInTheDocument();
+      expect(getSelectValueInput('Consistency Level')).toHaveValue('quorum');
     });
 
     it('updates vector index type', async () => {
@@ -226,13 +247,13 @@ describe('Settings', () => {
       const databaseTab = screen.getByRole('tab', { name: /database/i });
       fireEvent.click(databaseTab);
 
-      const indexSelect = await screen.findByLabelText('Vector Index Type');
+      const indexSelect = getSelectControl('Vector Index Type');
       fireEvent.mouseDown(indexSelect);
 
       const flatOption = await screen.findByText('Flat');
       fireEvent.click(flatOption);
 
-      expect(screen.getByDisplayValue('flat')).toBeInTheDocument();
+      expect(getSelectValueInput('Vector Index Type')).toHaveValue('flat');
     });
 
     it('saves database configuration', async () => {
@@ -341,26 +362,27 @@ describe('Settings', () => {
     it('provides correct OpenAI models', () => {
       render(<Settings />);
 
-      const modelSelect = screen.getByLabelText('Model Name');
+      const modelSelect = getSelectControl('Model Name');
       fireEvent.mouseDown(modelSelect);
 
-      expect(screen.getByText('Text Embedding 3 Small')).toBeInTheDocument();
-      expect(screen.getByText('Text Embedding 3 Large')).toBeInTheDocument();
-      expect(screen.getByText('Ada v2')).toBeInTheDocument();
+      const listbox = screen.getByRole('listbox');
+      expect(within(listbox).getByText('Text Embedding 3 Small')).toBeInTheDocument();
+      expect(within(listbox).getByText('Text Embedding 3 Large')).toBeInTheDocument();
+      expect(within(listbox).getByText('Ada v2')).toBeInTheDocument();
     });
 
     it('provides correct Cohere models', async () => {
       render(<Settings />);
 
       // Switch to Cohere
-      const providerSelect = screen.getByLabelText('Model Provider');
+      const providerSelect = getSelectControl('Model Provider');
       fireEvent.mouseDown(providerSelect);
 
       const cohereOption = await screen.findByText('Cohere');
       fireEvent.click(cohereOption);
 
       // Check models
-      const modelSelect = screen.getByLabelText('Model Name');
+      const modelSelect = getSelectControl('Model Name');
       fireEvent.mouseDown(modelSelect);
 
       expect(await screen.findByText('Embed English v3.0')).toBeInTheDocument();
@@ -371,14 +393,14 @@ describe('Settings', () => {
       render(<Settings />);
 
       // Switch to HuggingFace
-      const providerSelect = screen.getByLabelText('Model Provider');
+      const providerSelect = getSelectControl('Model Provider');
       fireEvent.mouseDown(providerSelect);
 
       const huggingfaceOption = await screen.findByText('HuggingFace');
       fireEvent.click(huggingfaceOption);
 
       // Check models
-      const modelSelect = screen.getByLabelText('Model Name');
+      const modelSelect = getSelectControl('Model Name');
       fireEvent.mouseDown(modelSelect);
 
       expect(await screen.findByText('MiniLM L6 v2')).toBeInTheDocument();
@@ -401,27 +423,28 @@ describe('Settings', () => {
       });
     });
 
-    it('auto-hides snackbar after timeout', async () => {
+    it('schedules snackbar auto-hide timeout', async () => {
       vi.useFakeTimers();
-      const onSaveEmbedding = vi.fn();
+      try {
+        const onSaveEmbedding = vi.fn();
+        const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
 
-      render(<Settings onSaveEmbedding={onSaveEmbedding} />);
+        render(<Settings onSaveEmbedding={onSaveEmbedding} />);
 
-      const saveButton = screen.getAllByRole('button', { name: /save configuration/i })[0];
-      fireEvent.click(saveButton);
+        const saveButton = screen.getAllByRole('button', { name: /save configuration/i })[0];
+        fireEvent.click(saveButton);
 
-      expect(screen.getByText('Embedding configuration saved successfully'))
-        .toBeInTheDocument();
+        expect(screen.getByText('Embedding configuration saved successfully'))
+          .toBeInTheDocument();
 
-      // Fast-forward 3 seconds
-      vi.advanceTimersByTime(3000);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3500);
+        });
 
-      await waitFor(() => {
-        expect(screen.queryByText('Embedding configuration saved successfully'))
-          .not.toBeInTheDocument();
-      });
-
-      vi.useRealTimers();
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 3000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('closes snackbar on close button click', async () => {
@@ -432,7 +455,12 @@ describe('Settings', () => {
       const saveButton = screen.getAllByRole('button', { name: /save configuration/i })[0];
       fireEvent.click(saveButton);
 
-      const alert = await screen.findByRole('alert');
+      const successMessage = await screen.findByText('Embedding configuration saved successfully');
+      const alert = successMessage.closest('.MuiAlert-root');
+      expect(alert).toBeTruthy();
+      if (!alert) {
+        throw new Error('Snackbar alert not found');
+      }
       const closeButton = within(alert).getByRole('button');
       fireEvent.click(closeButton);
 
@@ -454,7 +482,7 @@ describe('Settings', () => {
     render(<Settings />);
 
     // Change embedding config
-    const slider = screen.getByRole('slider');
+    const slider = screen.getAllByRole('slider')[0];
     fireEvent.change(slider, { target: { value: 75 } });
 
     // Switch to database tab

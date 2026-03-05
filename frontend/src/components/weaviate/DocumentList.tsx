@@ -14,6 +14,13 @@ import {
   Box,
   Chip,
   IconButton,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Tooltip,
   LinearProgress,
   Button,
@@ -30,13 +37,11 @@ import {
   Download,
   Edit,
 } from '@mui/icons-material';
-import UploadProgressDialog from './UploadProgressDialog';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
 import {
   DocumentSummary,
-  fetchDocumentDetail,
   usePdfExtractionHealth,
 } from '../../services/weaviate';
 
@@ -62,6 +67,8 @@ interface DocumentListProps {
   /** Optional filter bar component to render above the table */
   filterBar?: React.ReactNode;
 }
+
+const MAX_UPLOAD_FILES_PER_SELECTION = 10;
 
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
@@ -91,40 +98,13 @@ const DocumentList: React.FC<DocumentListProps> = ({
   });
   const [sortModel, setSortModel] = useState<GridSortModel>([]);
   const [filterModel, setFilterModel] = useState<GridFilterModel>({ items: [] });
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [uploadingFile, setUploadingFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState({
-    stage: '' as string,
-    progress: 0,
-    message: '',
-  });
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentSummary | null>(null);
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
   const [downloadDocumentId, setDownloadDocumentId] = useState<string | null>(null);
-  const [uploadedDocumentId, setUploadedDocumentId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDocument, setEditDocument] = useState<DocumentSummary | null>(null);
-  const progressEventSourceRef = useRef<EventSource | null>(null);
-  const statusPollingRef = useRef<number | null>(null);
-
-  const stopProgressTracking = () => {
-    if (progressEventSourceRef.current) {
-      progressEventSourceRef.current.close();
-      progressEventSourceRef.current = null;
-    }
-    if (statusPollingRef.current !== null) {
-      window.clearInterval(statusPollingRef.current);
-      statusPollingRef.current = null;
-    }
-  };
-
-  React.useEffect(() => {
-    return () => {
-      stopProgressTracking();
-    };
-  }, []);
 
   React.useEffect(() => {
     if (!selectedDocumentId) {
@@ -145,6 +125,13 @@ const DocumentList: React.FC<DocumentListProps> = ({
       : extractionHealth && !extractionHealthy
         ? extractionHealth.error || 'PDF extraction service is not healthy.'
         : null;
+
+  const isDocumentBusy = (doc: DocumentSummary): boolean => {
+    const processingStatus = String(doc.processingStatus || '').toLowerCase();
+    const embeddingStatus = String(doc.embeddingStatus || '').toLowerCase();
+    const activeProcessingStatuses = new Set(['processing', 'parsing', 'chunking', 'embedding', 'storing']);
+    return activeProcessingStatuses.has(processingStatus) || embeddingStatus === 'processing';
+  };
 
   const formatFileSize = (bytes: number | null | undefined): string => {
     if (bytes === null || bytes === undefined) return '—';
@@ -188,38 +175,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
     []
   );
 
-  const handleLoadForChat = async (documentId: string) => {
-    let summary: DocumentSummary | undefined = undefined;
-
-    // Try to find the document in the current list first
-    const doc = documents.find((d) => d.id === documentId);
-    if (doc) {
-      summary = toDocumentSummary(doc);
-    } else {
-      try {
-        const detail = await fetchDocumentDetail(documentId);
-        summary = detail.document;
-        // Ensure the documents table eventually reflects the new upload
-        onRefresh();
-      } catch (error) {
-        console.error('Failed to fetch document before loading for chat:', error);
-        setUploadProgress((prev) => ({
-          ...prev,
-          message: 'Unable to load the document. Please refresh the document list and try again.',
-        }));
-        return;
-      }
-    }
-
-    if (summary && onLoad) {
-      sessionStorage.setItem('document-loading', 'true');
-      window.dispatchEvent(new CustomEvent('document-load-start'));
-      onLoad(summary);
-      setUploadDialogOpen(false);
-      navigate('/');
-    }
-  };
-
   const handleLoadFromTable = (summary: DocumentSummary) => {
     if (onLoad) {
       // Signal that document loading is starting (persists across navigation)
@@ -256,193 +211,108 @@ const DocumentList: React.FC<DocumentListProps> = ({
     fileInputRef.current?.click();
   };
 
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('Please select a PDF file');
-      return;
-    }
-
-    setUploadingFile(file);
-    setUploadDialogOpen(true);
-    setUploadProgress({
-      stage: 'uploading',
-      progress: 20,
-      message: 'Uploading file...',
-    });
-    onPipelineStateChange?.(true, `Uploading “${file.name}”…`);
-
-    // Upload the file
+  const uploadDocumentFile = React.useCallback(async (file: File): Promise<string> => {
     const formData = new FormData();
     formData.append('file', file);
 
-    try {
-      const response = await fetch('/api/weaviate/documents/upload', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include', // Include httpOnly cookies for authentication
-      });
+    const response = await fetch('/api/weaviate/documents/upload', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include', // Include httpOnly cookies for authentication
+    });
 
-      if (!response.ok) {
-        // Handle duplicate file error (409 Conflict)
-        if (response.status === 409) {
-          const errorData = await response.json();
-          const uploadDate = errorData.detail?.uploaded_at
-            ? new Date(errorData.detail.uploaded_at).toLocaleDateString()
-            : 'previously';
-          throw new Error(
-            `This file was already uploaded ${uploadDate}. ${errorData.detail?.suggestion || 'Delete the existing document and try again.'}`
-          );
+    if (!response.ok) {
+      // Handle duplicate file error (409 Conflict)
+      if (response.status === 409) {
+        const errorData = await response.json();
+        const uploadDate = errorData.detail?.uploaded_at
+          ? new Date(errorData.detail.uploaded_at).toLocaleDateString()
+          : 'previously';
+        throw new Error(
+          `This file was already uploaded ${uploadDate}. ${errorData.detail?.suggestion || 'Delete the existing document and try again.'}`
+        );
+      }
+      throw new Error('Upload failed');
+    }
+
+    const result = await response.json();
+    return result.document_id as string;
+  }, []);
+
+  const uploadMultipleFiles = React.useCallback(
+    async (files: File[]) => {
+      const total = files.length;
+      let succeeded = 0;
+      const failures: string[] = [];
+      onPipelineStateChange?.(true, `Uploading ${total} PDFs...`);
+
+      for (let index = 0; index < total; index += 1) {
+        const file = files[index];
+        onPipelineStateChange?.(true, `Uploading ${index + 1}/${total}: ${file.name}`);
+
+        try {
+          await uploadDocumentFile(file);
+          succeeded += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Upload failed';
+          failures.push(`${file.name}: ${message}`);
         }
-        throw new Error('Upload failed');
       }
 
-      const result = await response.json();
-      const documentId = result.document_id as string;
-      setUploadedDocumentId(documentId);
+      onRefresh();
+      onPipelineStateChange?.(false);
 
-      const handleProgressPayload = (
-        stageRaw?: string,
-        progressRaw?: number,
-        messageRaw?: string,
-        isFinal?: boolean
-      ) => {
-        const stage = (stageRaw || '').toLowerCase() || 'processing';
-        const stageProgressFallback: Record<string, number> = {
-          upload: 20,
-          pending: 20,
-          waiting: 20,
-          processing: 30,
-          parsing: 40,
-          chunking: 60,
-          storing: 90,
-          completed: 100,
-          failed: 0,
-        };
+      if (failures.length > 0) {
+        const preview = failures.slice(0, 2).join(' | ');
+        const overflow = failures.length > 2 ? ` (+${failures.length - 2} more)` : '';
+        window.alert(`Queued ${succeeded}/${total} PDFs. Failed ${failures.length}: ${preview}${overflow}`);
+      }
+    },
+    [onPipelineStateChange, onRefresh, uploadDocumentFile]
+  );
 
-        const progress = Math.min(
-          100,
-          Math.max(
-            0,
-            typeof progressRaw === 'number' && !Number.isNaN(progressRaw)
-              ? progressRaw
-              : stageProgressFallback[stage] ?? 0
-          )
-        );
+  const uploadSingleFile = React.useCallback(async (file: File) => {
+    onPipelineStateChange?.(true, `Uploading “${file.name}”…`);
 
-        const displayMessage =
-          messageRaw ||
-          (stage === 'upload' || stage === 'pending'
-            ? 'Uploading file...'
-            : stage === 'waiting'
-            ? 'Waiting for processing to start...'
-            : stage === 'processing'
-            ? 'Processing document...'
-            : stage === 'parsing'
-            ? 'Parsing PDF document...'
-            : stage === 'chunking'
-            ? 'Chunking document into sections...'
-            : stage === 'storing'
-            ? 'Storing in Weaviate database...'
-            : stage === 'completed'
-            ? 'Document uploaded successfully!'
-            : stage === 'failed'
-            ? 'Upload failed'
-            : 'Processing document...');
-
-        const normalizedStage =
-          stage === 'upload' || stage === 'pending' || stage === 'processing' || stage === 'waiting'
-            ? 'uploading'
-            : stage;
-
-        setUploadProgress({ stage: normalizedStage, progress, message: displayMessage });
-
-        if (stage === 'completed' || isFinal) {
-          onPipelineStateChange?.(false);
-          stopProgressTracking();
-          // Refresh document list but keep dialog open so user can click "Load for Chat"
-          onRefresh();
-        } else if (stage === 'failed' || stage === 'error') {
-          onPipelineStateChange?.(false);
-          stopProgressTracking();
-          setTimeout(() => {
-            setUploadDialogOpen(false);
-          }, 3000);
-        } else {
-          onPipelineStateChange?.(true, displayMessage);
-        }
-      };
-
-      const startStatusPolling = () => {
-        const intervalId = window.setInterval(async () => {
-          try {
-            const statusResponse = await fetch(`/api/weaviate/documents/${documentId}/status`);
-            if (statusResponse.ok) {
-              const status = await statusResponse.json();
-              handleProgressPayload(
-                status.pipeline_status?.current_stage || status.processing_status,
-                status.pipeline_status?.progress_percentage,
-                status.pipeline_status?.message,
-                false
-              );
-            }
-          } catch (error) {
-            console.error('Error checking status:', error);
-          }
-        }, 2000);
-        statusPollingRef.current = intervalId;
-      };
-
-      const startProgressStream = () => {
-        try {
-          const source = new EventSource(
-            `/api/weaviate/documents/${documentId}/progress/stream`
-          );
-          progressEventSourceRef.current = source;
-
-          source.onmessage = (event) => {
-            try {
-              const payload = JSON.parse(event.data);
-              handleProgressPayload(
-                payload.stage,
-                payload.progress,
-                payload.message,
-                payload.final
-              );
-            } catch (parseError) {
-              console.error('Failed to parse progress event:', parseError);
-            }
-          };
-
-          source.onerror = () => {
-            source.close();
-            progressEventSourceRef.current = null;
-            if (statusPollingRef.current === null) {
-              startStatusPolling();
-            }
-          };
-        } catch (streamError) {
-          console.error('Failed to open progress stream:', streamError);
-          startStatusPolling();
-        }
-      };
-
-      handleProgressPayload('upload', 20, `Uploading “${file.name}”…`, false);
-      startProgressStream();
-
+    try {
+      await uploadDocumentFile(file);
+      onRefresh();
     } catch (error) {
       console.error('Error uploading file:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to upload file';
-      setUploadProgress({
-        stage: 'error',
-        progress: 0,
-        message: errorMessage,
-      });
+      window.alert(errorMessage);
+    } finally {
       onPipelineStateChange?.(false);
-      stopProgressTracking();
-      // Dialog stays open until user manually closes it
+    }
+  }, [onPipelineStateChange, onRefresh, uploadDocumentFile]);
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const nonPdfFile = selectedFiles.find((file) => !file.name.toLowerCase().endsWith('.pdf'));
+    if (nonPdfFile) {
+      alert('Please select PDF files only');
+      if (event.target) {
+        event.target.value = '';
+      }
+      return;
+    }
+
+    if (selectedFiles.length > MAX_UPLOAD_FILES_PER_SELECTION) {
+      alert(`Please select up to ${MAX_UPLOAD_FILES_PER_SELECTION} PDF files at a time`);
+      if (event.target) {
+        event.target.value = '';
+      }
+      return;
+    }
+
+    if (selectedFiles.length === 1) {
+      await uploadSingleFile(selectedFiles[0]);
+    } else {
+      await uploadMultipleFiles(selectedFiles);
     }
 
     // Reset file input
@@ -536,10 +406,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       headerAlign: 'center',
       renderCell: (params: GridRenderCellParams) => {
         const summary = toDocumentSummary(params.row) ?? undefined;
-        const disableLoad =
-          params.row.embeddingStatus !== 'completed' ||
-          pipelineBusy ||
-          uploadDialogOpen;
+        const disableLoad = params.row.embeddingStatus !== 'completed';
 
         return (
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -576,7 +443,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
                 <IconButton
                   size="small"
                   onClick={() => onReembed(params.row.id)}
-                  disabled={params.row.embeddingStatus === 'processing' || pipelineBusy || uploadDialogOpen}
+                  disabled={isDocumentBusy(params.row)}
                 >
                   <Refresh fontSize="small" />
                 </IconButton>
@@ -601,7 +468,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
                 <IconButton
                   size="small"
                   onClick={() => onDelete(params.row.id)}
-                  disabled={params.row.processingStatus === 'processing' || pipelineBusy || uploadDialogOpen}
+                  disabled={isDocumentBusy(params.row)}
                 >
                   <Delete fontSize="small" />
                 </IconButton>
@@ -613,8 +480,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
     },
   ];
 
+  const hasDocuments = documents.length > 0;
+
   return (
-    <Box sx={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box sx={{ flexGrow: 1, minHeight: 0, width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1}
@@ -681,15 +550,15 @@ const DocumentList: React.FC<DocumentListProps> = ({
           variant="contained"
           startIcon={<CloudUpload />}
           onClick={handleUploadClick}
-          disabled={loading || pipelineBusy || uploadDialogOpen || uploadBlockedByExtraction}
+          disabled={loading || pipelineBusy || uploadBlockedByExtraction}
         >
-          Upload Document
+          UPLOAD DOCUMENT(S)
         </Button>
         <Button
           variant="outlined"
           startIcon={<Refresh />}
           onClick={onRefresh}
-          disabled={loading || pipelineBusy || uploadDialogOpen}
+          disabled={loading || pipelineBusy}
         >
           Refresh
         </Button>
@@ -698,7 +567,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
             <CircularProgress size={16} thickness={5} />
             <Typography variant="body2" color="text.secondary">
               {pipelineMessage ||
-                'Processing in progress. Upload and refresh will be available when complete.'}
+                'Processing in progress.'}
             </Typography>
           </Stack>
         )}
@@ -706,6 +575,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
           ref={fileInputRef}
           type="file"
           accept=".pdf"
+          multiple
           style={{ display: 'none' }}
           onChange={handleFileSelect}
         />
@@ -726,72 +596,91 @@ const DocumentList: React.FC<DocumentListProps> = ({
         />
       )}
 
-      <Box sx={{ flexGrow: 1, minHeight: 0 }}>
-        <DataGrid
-          rows={documents}
-          columns={columns}
-          rowCount={totalCount}
-          loading={loading}
-          pageSizeOptions={[10, 20, 50, 100]}
-          paginationModel={paginationModel}
-          onPaginationModelChange={setPaginationModel}
-          sortModel={sortModel}
-          onSortModelChange={setSortModel}
-          filterModel={filterModel}
-          onFilterModelChange={setFilterModel}
-          paginationMode="server"
-          sortingMode="server"
-          filterMode="server"
-          disableRowSelectionOnClick
-          checkboxSelection={checkboxSelection}
-          rowSelectionModel={selectedIds}
-          onRowSelectionModelChange={(newSelection: GridRowSelectionModel) => {
-            onSelectionChange?.(newSelection as string[]);
-          }}
-          autoHeight={false}
-          sx={{
-            height: '100%',
-            '& .MuiDataGrid-cell': {
-              color: 'text.primary',
-              borderBottom: '1px solid',
-              borderBottomColor: 'divider',
-              '&:focus': {
-                outline: 'none',
+      <Box sx={{ flexGrow: hasDocuments ? 1 : 0, minHeight: 0, overflowX: 'hidden' }}>
+        {!hasDocuments ? (
+          <TableContainer component={Paper} variant="outlined" sx={{ maxWidth: '100%', overflowX: 'hidden' }}>
+            <Table size="small" sx={{ tableLayout: 'fixed' }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ width: '35%' }}>Filename</TableCell>
+                  <TableCell sx={{ width: '35%' }}>Title</TableCell>
+                  <TableCell sx={{ width: '15%' }}>Status</TableCell>
+                  <TableCell sx={{ width: '15%' }} align="center">
+                    Actions
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                <TableRow>
+                  <TableCell colSpan={4} align="center" sx={{ py: 3 }}>
+                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
+                      {loading && <CircularProgress size={16} />}
+                      <Typography variant="body2" color="text.secondary">
+                        {loading ? 'Loading documents…' : 'No documents yet. Upload a PDF to get started.'}
+                      </Typography>
+                    </Stack>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ) : (
+          <DataGrid
+            rows={documents}
+            columns={columns}
+            rowCount={totalCount}
+            loading={loading}
+            pageSizeOptions={[10, 20, 50, 100]}
+            paginationModel={paginationModel}
+            onPaginationModelChange={setPaginationModel}
+            sortModel={sortModel}
+            onSortModelChange={setSortModel}
+            filterModel={filterModel}
+            onFilterModelChange={setFilterModel}
+            paginationMode="server"
+            sortingMode="server"
+            filterMode="server"
+            disableRowSelectionOnClick
+            checkboxSelection={checkboxSelection}
+            rowSelectionModel={selectedIds}
+            onRowSelectionModelChange={(newSelection: GridRowSelectionModel) => {
+              onSelectionChange?.(newSelection as string[]);
+            }}
+            autoHeight={false}
+            sx={{
+              height: '100%',
+              '& .MuiDataGrid-cell': {
+                color: 'text.primary',
+                borderBottom: '1px solid',
+                borderBottomColor: 'divider',
+                '&:focus': {
+                  outline: 'none',
+                },
               },
-            },
-            '& .MuiDataGrid-columnHeaders': {
-              backgroundColor: 'background.paper',
-              color: 'text.primary',
-              borderBottom: '1px solid',
-              borderBottomColor: 'divider',
-            },
-            '& .MuiDataGrid-row': {
-              '&:hover': {
-                backgroundColor: 'action.hover',
+              '& .MuiDataGrid-columnHeaders': {
+                backgroundColor: 'background.paper',
+                color: 'text.primary',
+                borderBottom: '1px solid',
+                borderBottomColor: 'divider',
               },
-            },
-            '& .MuiDataGrid-footerContainer': {
-              borderTop: '1px solid',
-              borderTopColor: 'divider',
-              backgroundColor: 'background.paper',
-            },
-            '& .MuiTablePagination-root': {
-              color: 'text.primary',
-            },
-          }}
-        />
+              '& .MuiDataGrid-row': {
+                '&:hover': {
+                  backgroundColor: 'action.hover',
+                },
+              },
+              '& .MuiDataGrid-footerContainer': {
+                borderTop: '1px solid',
+                borderTopColor: 'divider',
+                backgroundColor: 'background.paper',
+              },
+              '& .MuiTablePagination-root': {
+                color: 'text.primary',
+              },
+            }}
+          />
+        )}
       </Box>
 
-      <UploadProgressDialog
-        open={uploadDialogOpen}
-        fileName={uploadingFile?.name || ''}
-        stage={uploadProgress.stage}
-        progress={uploadProgress.progress}
-        message={uploadProgress.message}
-        onClose={() => setUploadDialogOpen(false)}
-        documentId={uploadedDocumentId || undefined}
-        onLoadForChat={handleLoadForChat}
-      />
       <DocumentDetailsDialog
         open={detailsDialogOpen}
         documentId={selectedDocumentId}
@@ -800,7 +689,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
         onDelete={onDelete ? (id) => Promise.resolve(onDelete(id)) : undefined}
         onReembed={onReembed ? (id) => Promise.resolve(onReembed(id)) : undefined}
         onRefreshRequested={() => Promise.resolve(onRefresh())}
-        disableActions={pipelineBusy || uploadDialogOpen}
+        disableActions={false}
       />
       <DocumentDownloadDialog
         open={downloadDialogOpen}
@@ -826,4 +715,4 @@ const DocumentList: React.FC<DocumentListProps> = ({
   );
 };
 
-export default DocumentList;
+export default React.memo(DocumentList);

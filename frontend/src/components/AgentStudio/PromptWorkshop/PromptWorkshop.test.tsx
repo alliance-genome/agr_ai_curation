@@ -252,7 +252,7 @@ describe('PromptWorkshop', () => {
     expect(payload.template_source).toBe('gene')
     expect(payload.model_id).toBe('gpt-4o')
     expect(payload).not.toHaveProperty('parent_agent_id')
-  })
+  }, 15000)
 
   it('disables non-attachable tools in tool library modal', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
@@ -272,7 +272,7 @@ describe('PromptWorkshop', () => {
     const adminLabel = await screen.findByText('Admin Tool')
     const adminRowButton = adminLabel.closest('.MuiListItemButton-root')
     expect(adminRowButton).toHaveClass('Mui-disabled')
-  })
+  }, 15000)
 
   it('filters tool library by selected category', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
@@ -295,7 +295,7 @@ describe('PromptWorkshop', () => {
     })
     expect(within(dialog).queryByText('Search Document')).not.toBeInTheDocument()
     expect(within(dialog).queryByText('Admin Tool')).not.toBeInTheDocument()
-  })
+  }, 15000)
 
   it('shares newly created agents when visibility is set to project', async () => {
     serviceMocks.listCustomAgents

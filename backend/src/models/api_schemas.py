@@ -231,6 +231,7 @@ class DocumentResponse(BaseModel):
     """
 
     document_id: str = Field(..., description="Unique document identifier")
+    job_id: Optional[str] = Field(None, description="Background processing job ID")
     user_id: int = Field(..., description="Owner user ID from PostgreSQL users table")
     filename: str = Field(..., description="Original filename")
     status: str = Field(..., description="Processing status (PENDING, PROCESSING, COMPLETED, FAILED)")
