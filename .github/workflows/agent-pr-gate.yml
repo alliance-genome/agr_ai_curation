@@ -4,6 +4,10 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+  checks: read
+
 jobs:
   agent-pr-gate:
     name: Agent PR Gate
@@ -53,6 +57,125 @@ jobs:
           AGENT_PR_GATE_REPORT: file_outputs/ci/agent_pr_gate_report.json
         run: |
           bash scripts/testing/agent_pr_gate.sh
+
+      - name: Wait for Unit Tests checks on this PR commit
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          REQUIRED_CHECKS: Backend Unit Tests,Backend Contract Core Tests,Backend Persistence Tests,Frontend Tests,Frontend Build
+          CHECK_DISCOVERY_TIMEOUT_SECONDS: "180"
+          CHECK_WAIT_TIMEOUT_SECONDS: "7200"
+          CHECK_POLL_INTERVAL_SECONDS: "20"
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = context.payload.pull_request.head.sha;
+            const requiredChecks = (process.env.REQUIRED_CHECKS || "")
+              .split(",")
+              .map((name) => name.trim())
+              .filter(Boolean);
+
+            const discoveryTimeoutMs = Number(process.env.CHECK_DISCOVERY_TIMEOUT_SECONDS || "180") * 1000;
+            const waitTimeoutMs = Number(process.env.CHECK_WAIT_TIMEOUT_SECONDS || "7200") * 1000;
+            const pollIntervalMs = Number(process.env.CHECK_POLL_INTERVAL_SECONDS || "20") * 1000;
+            const startedAt = Date.now();
+
+            if (requiredChecks.length === 0) {
+              core.info("No REQUIRED_CHECKS configured; skipping wait.");
+              return;
+            }
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const isPassingConclusion = (conclusion) =>
+              ["success", "neutral", "skipped"].includes((conclusion || "").toLowerCase());
+
+            const pickLatestByName = (runs) => {
+              const latest = new Map();
+              for (const run of runs) {
+                if (!requiredChecks.includes(run.name)) continue;
+                const prior = latest.get(run.name);
+                const runTime = Date.parse(run.started_at || run.created_at || 0) || 0;
+                const priorTime = prior ? (Date.parse(prior.started_at || prior.created_at || 0) || 0) : -1;
+                if (!prior || runTime >= priorTime) latest.set(run.name, run);
+              }
+              return latest;
+            };
+
+            while (true) {
+              const allRuns = await github.paginate(github.rest.checks.listForRef, {
+                owner,
+                repo,
+                ref,
+                per_page: 100,
+              });
+
+              const latestByName = pickLatestByName(allRuns);
+              const discovered = requiredChecks.filter((name) => latestByName.has(name));
+              const discoveredCount = discovered.length;
+              const elapsedMs = Date.now() - startedAt;
+
+              if (discoveredCount === 0) {
+                if (elapsedMs >= discoveryTimeoutMs) {
+                  core.info(
+                    `No required Unit Tests checks detected for ${ref} after ${Math.floor(
+                      discoveryTimeoutMs / 1000
+                    )}s (likely path-filtered); continuing.`
+                  );
+                  return;
+                }
+
+                core.info(
+                  `Waiting for Unit Tests checks to appear for ${ref}... (${Math.floor(
+                    elapsedMs / 1000
+                  )}s elapsed)`
+                );
+                await sleep(pollIntervalMs);
+                continue;
+              }
+
+              const missing = requiredChecks.filter((name) => !latestByName.has(name));
+              const pending = [];
+              const failed = [];
+
+              for (const name of requiredChecks) {
+                const run = latestByName.get(name);
+                if (!run) continue;
+
+                if (run.status !== "completed") {
+                  pending.push(name);
+                  continue;
+                }
+
+                if (!isPassingConclusion(run.conclusion)) {
+                  failed.push(`${name}=${run.conclusion || "unknown"}`);
+                }
+              }
+
+              core.info(
+                `Unit Tests status for ${ref}: discovered=${discoveredCount}/${requiredChecks.length}, pending=${pending.length}, failed=${failed.length}`
+              );
+
+              if (missing.length === 0 && pending.length === 0) {
+                if (failed.length > 0) {
+                  core.setFailed(`Required Unit Tests checks failed: ${failed.join(", ")}`);
+                } else {
+                  core.info("All required Unit Tests checks completed successfully.");
+                }
+                return;
+              }
+
+              if (elapsedMs >= waitTimeoutMs) {
+                core.setFailed(
+                  `Timed out waiting for Unit Tests checks to finish. Missing: ${
+                    missing.length ? missing.join(", ") : "none"
+                  }. Pending: ${pending.length ? pending.join(", ") : "none"}.`
+                );
+                return;
+              }
+
+              await sleep(pollIntervalMs);
+            }
 
       - name: Upload gate report
         if: always()

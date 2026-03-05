@@ -21,7 +21,8 @@ Architecture:
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
+from types import SimpleNamespace
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 from agents import Agent, function_tool
 
@@ -352,7 +353,9 @@ def get_all_agent_tools(
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             if hasattr(tool_callable, "on_invoke_tool"):
-                result = await tool_callable.on_invoke_tool(None, json.dumps({"query": query}))
+                # Newer openai-agents tool invokers may dereference ctx.tool_name.
+                tool_ctx = SimpleNamespace(tool_name=tool_name)
+                result = await tool_callable.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
             else:
                 result = await tool_callable(query=query)
             execution_state["next_tool_index"] = next_idx + 1

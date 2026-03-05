@@ -1,17 +1,21 @@
-"""Integration tests for agent SQL queries using ontology_reader role.
+"""Integration tests for agent SQL queries against curation_db.
 
 These tests verify that AI agents can query ontology data using
-read-only database access. Tests the query patterns from quickstart.md.
+read-only database access via externally configured database URLs.
+Tests the query patterns from quickstart.md.
 
 IMPORTANT: These tests are expected to FAIL until database and tables are set up.
 """
 
-import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError, ProgrammingError
+import os
 import sys
 from pathlib import Path
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.orm import sessionmaker
 
 # Add the backend/src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -20,14 +24,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 class TestAgentQueries:
     """Integration tests for agent SQL query patterns."""
 
+    @staticmethod
+    def _require_db_url(env_var: str, purpose: str) -> str:
+        """Return DB URL from env var or skip test with actionable message."""
+        db_url = os.getenv(env_var, "").strip()
+        if not db_url:
+            pytest.skip(f"{env_var} not set ({purpose})")
+        return db_url
+
     @pytest.fixture
     def agent_readonly_engine(self):
-        """Create SQLAlchemy engine with ontology_reader (read-only) credentials.
-
-        Uses .pgpass file for password (as agents will).
-        """
-        # Connection string without password (reads from .pgpass)
-        db_url = "postgresql://ontology_reader@localhost/curation_db"
+        """Create SQLAlchemy engine using read-only curation DB credentials."""
+        db_url = self._require_db_url(
+            "CURATION_DB_URL",
+            "required for integration tests against external curation_db",
+        )
         try:
             engine = create_engine(db_url, pool_size=5, max_overflow=10)
             # Test connection
@@ -36,7 +47,7 @@ class TestAgentQueries:
             yield engine
             engine.dispose()
         except OperationalError as e:
-            pytest.skip(f"Database not available or ontology_reader user not configured: {e}")
+            pytest.skip(f"Database not available or read-only user not configured: {e}")
 
     @pytest.fixture
     def agent_session(self, agent_readonly_engine):
@@ -48,8 +59,11 @@ class TestAgentQueries:
 
     @pytest.fixture
     def admin_session(self):
-        """Create an admin session for test data setup."""
-        db_url = "postgresql://ontology_admin@localhost/curation_db"
+        """Create an admin session for integration test data setup/cleanup."""
+        db_url = self._require_db_url(
+            "CURATION_DB_ADMIN_URL",
+            "required for fixtures that insert/delete ontology test rows",
+        )
         engine = create_engine(db_url)
         Session = sessionmaker(bind=engine)
         session = Session()
@@ -127,10 +141,7 @@ class TestAgentQueries:
             pytest.skip(f"Database schema not ready: {e}")
 
     def test_agent_can_connect_readonly(self, agent_session):
-        """Test that agents can connect with ontology_reader credentials.
-
-        Uses .pgpass file for authentication (as documented in quickstart.md).
-        """
+        """Test that agents can connect with read-only curation DB credentials."""
         # Simple query to verify connection works
         result = agent_session.execute(text("SELECT 1 as test")).scalar()
         assert result == 1, "Agent should be able to connect and query"
@@ -215,7 +226,7 @@ class TestAgentQueries:
         assert "TEST:0000003" in child_ids
 
     def test_agent_readonly_permissions(self, agent_session, test_ontology_data):
-        """Test that ontology_reader cannot INSERT (read-only verification)."""
+        """Test that read-only curation credentials cannot INSERT."""
         # Agents should NOT be able to modify data
         with pytest.raises(Exception) as exc_info:
             agent_session.execute(
@@ -298,20 +309,23 @@ class TestAgentQueries:
         assert result.term_count == 5
 
     def test_agent_uses_pgpass_authentication(self):
-        """Test that connection works without explicit password (uses .pgpass).
-
-        This documents the expected authentication pattern from quickstart.md.
-        """
-        # Connection string without password
-        db_url = "postgresql://ontology_reader@localhost/curation_db"
+        """Test that URL without explicit password can connect when auth allows it."""
+        db_url = self._require_db_url(
+            "CURATION_DB_URL",
+            "required to build password-less connection URL",
+        )
+        parsed = make_url(db_url)
+        if not parsed.username:
+            pytest.skip("CURATION_DB_URL must include a username")
+        db_url_without_password = str(parsed.set(password=None))
 
         try:
-            engine = create_engine(db_url)
+            engine = create_engine(db_url_without_password)
             with engine.connect() as conn:
                 result = conn.execute(text("SELECT 1")).scalar()
                 assert result == 1, "Connection should work via .pgpass"
         except OperationalError:
-            pytest.skip("PostgreSQL .pgpass not configured or user doesn't exist")
+            pytest.skip("Password-less auth is not configured for CURATION_DB_URL user")
         finally:
             if 'engine' in locals():
                 engine.dispose()

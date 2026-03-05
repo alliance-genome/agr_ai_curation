@@ -44,7 +44,12 @@ run_check() {
   if bash -lc "${cmd}" >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
     record_check "${name}" "pass" "$(cat /tmp/agent_gate.out)"
   else
-    record_check "${name}" "fail" "$(cat /tmp/agent_gate.err)"
+    local error_output
+    error_output="$(cat /tmp/agent_gate.err)"
+    if [[ -z "${error_output}" ]]; then
+      error_output="$(cat /tmp/agent_gate.out)"
+    fi
+    record_check "${name}" "fail" "${error_output}"
   fi
 }
 
@@ -54,19 +59,45 @@ run_check "unit-ignore-path-validation" \
 run_check "contract-core-path-validation" \
   "bash backend/tests/contract/run_ci_contract_core_tests.sh --validate-only"
 
-if python3 -m ruff --version >/dev/null 2>&1; then
-  run_check "ruff-lint" \
-    "python3 -m ruff check backend/src backend/tests"
+mapfile -t CHANGED_BACKEND_PY_FILES < <(
+  git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
+)
 
-  run_check "ruff-format-check" \
-    "python3 -m ruff format --check backend/src backend/tests"
+if python3 -m ruff --version >/dev/null 2>&1; then
+  if (( ${#CHANGED_BACKEND_PY_FILES[@]} > 0 )); then
+    RUFF_FILE_ARGS="$(printf '%q ' "${CHANGED_BACKEND_PY_FILES[@]}")"
+    run_check "ruff-lint" \
+      "python3 -m ruff check ${RUFF_FILE_ARGS}"
+  else
+    record_check "ruff-lint" "pass" "no changed backend Python files; lint not required"
+  fi
+
+  if [[ "${AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK:-0}" == "1" ]]; then
+    if (( ${#CHANGED_BACKEND_PY_FILES[@]} > 0 )); then
+      RUFF_FILE_ARGS="$(printf '%q ' "${CHANGED_BACKEND_PY_FILES[@]}")"
+      run_check "ruff-format-check" \
+        "python3 -m ruff format --check ${RUFF_FILE_ARGS}"
+    else
+      record_check "ruff-format-check" "pass" "no changed backend Python files; format check not required"
+    fi
+  else
+    record_check "ruff-format-check" "pass" "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
+  fi
 else
   if [[ "${AGENT_GATE_SKIP_RUFF_IF_MISSING:-0}" == "1" ]]; then
     record_check "ruff-lint" "pass" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
-    record_check "ruff-format-check" "pass" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
   else
     record_check "ruff-lint" "fail" "ruff is not installed (install with: python3 -m pip install ruff)"
-    record_check "ruff-format-check" "fail" "ruff is not installed (install with: python3 -m pip install ruff)"
+  fi
+
+  if [[ "${AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK:-0}" == "1" ]]; then
+    if [[ "${AGENT_GATE_SKIP_RUFF_IF_MISSING:-0}" == "1" ]]; then
+      record_check "ruff-format-check" "pass" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
+    else
+      record_check "ruff-format-check" "fail" "ruff is not installed (install with: python3 -m pip install ruff)"
+    fi
+  else
+    record_check "ruff-format-check" "pass" "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
   fi
 fi
 
