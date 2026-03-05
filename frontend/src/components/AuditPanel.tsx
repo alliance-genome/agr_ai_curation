@@ -213,11 +213,21 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     }
   }, [sessionId, prevSessionId])
 
-  // Save events to localStorage whenever they change
+  // Save events to localStorage whenever they change.
+  // Persist only events that match the active session to prevent cross-session bleed.
   useEffect(() => {
-    if (sessionId && events.length > 0) {
-      saveAuditEventsToStorage(sessionId, events)
+    if (!sessionId) {
+      return
     }
+
+    const sessionScopedEvents = events.filter((event) => event.sessionId === sessionId)
+    if (sessionScopedEvents.length > 0) {
+      saveAuditEventsToStorage(sessionId, sessionScopedEvents)
+      return
+    }
+
+    // If there are no events for this session, clear any stale persisted data.
+    clearAuditEventsFromStorage(sessionId)
   }, [events, sessionId])
 
   // Update events when initialEvents prop changes (for testing)
