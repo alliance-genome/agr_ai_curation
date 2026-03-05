@@ -232,6 +232,11 @@ export function PdfViewer() {
     setUploadDialog((prev) => ({ ...prev, open: false }))
   }, [])
 
+  const suppressDragEvent = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }, [])
+
   const handleDroppedFiles = useCallback(async (files: File[]) => {
     if (uploadInFlight) {
       setDropError('An upload is already in progress. Please wait for it to finish.')
@@ -336,47 +341,43 @@ export function PdfViewer() {
   }, [uploadInFlight])
 
   const handleDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    suppressDragEvent(event)
     if (activeDocument || uploadInFlight) {
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
     setDropError(null)
     setDragActive(true)
-  }, [activeDocument, uploadInFlight])
+  }, [activeDocument, suppressDragEvent, uploadInFlight])
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    suppressDragEvent(event)
     if (activeDocument || uploadInFlight) {
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
     event.dataTransfer.dropEffect = 'copy'
     setDragActive(true)
-  }, [activeDocument, uploadInFlight])
+  }, [activeDocument, suppressDragEvent, uploadInFlight])
 
   const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    suppressDragEvent(event)
     if (activeDocument || uploadInFlight) {
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
       return
     }
     setDragActive(false)
-  }, [activeDocument, uploadInFlight])
+  }, [activeDocument, suppressDragEvent, uploadInFlight])
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    suppressDragEvent(event)
     if (activeDocument || uploadInFlight) {
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
     setDragActive(false)
     const files = Array.from(event.dataTransfer.files ?? [])
     void handleDroppedFiles(files)
-  }, [activeDocument, handleDroppedFiles, uploadInFlight])
+  }, [activeDocument, handleDroppedFiles, suppressDragEvent, uploadInFlight])
 
   useEffect(() => {
     const handleOverlayUpdate = (event: Event) => {

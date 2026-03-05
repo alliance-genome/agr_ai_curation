@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '../../test/test-utils'
+import { createEvent, fireEvent, render, screen, waitFor } from '../../test/test-utils'
 import PdfViewer from './PdfViewer'
 
 class MockEventSource {
@@ -183,6 +183,39 @@ describe('PdfViewer drag-and-drop upload', () => {
     })
 
     window.removeEventListener('chat-document-changed', eventSpy as EventListener)
+    fetchSpy.mockRestore()
+  })
+
+  it('prevents default browser drop behavior while an upload is already in progress', async () => {
+    MockEventSource.autoPayload = null
+    const fetchSpy = createFetchMock()
+    render(<PdfViewer />)
+
+    const dropZone = screen.getByRole('region', { name: 'PDF drop zone' })
+    const firstFile = new File(['%PDF-1.4'], 'first.pdf', { type: 'application/pdf' })
+    const secondFile = new File(['%PDF-1.4'], 'second.pdf', { type: 'application/pdf' })
+
+    fireEvent.drop(dropZone, { dataTransfer: { files: [firstFile] } })
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([input]) => String(input).includes('/api/weaviate/documents/upload'))
+      ).toBe(true)
+    })
+
+    const secondDropEvent = createEvent.drop(dropZone, {
+      cancelable: true,
+      dataTransfer: { files: [secondFile] },
+    })
+    fireEvent(dropZone, secondDropEvent)
+
+    expect(secondDropEvent.defaultPrevented).toBe(true)
+    expect(screen.getByText('Upload in progress...')).toBeInTheDocument()
+
+    expect(
+      fetchSpy.mock.calls.filter(([input]) => String(input).includes('/api/weaviate/documents/upload'))
+    ).toHaveLength(1)
+
     fetchSpy.mockRestore()
   })
 })
