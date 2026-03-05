@@ -917,6 +917,14 @@ function Chat({
         const data = await response.json()
         debug.log('Conversation reset:', data)
 
+        // Clear persisted audit history for the old/new session IDs so refresh stays clean.
+        if (propSessionId) {
+          localStorage.removeItem(`audit_events_${propSessionId}`)
+        }
+        if (data.session_id) {
+          localStorage.removeItem(`audit_events_${data.session_id}`)
+        }
+
         // Propagate new session ID back to HomePage if reset created a new session
         if (data.session_id && onSessionChange) {
           debug.log('🔄 [Session Reset] Propagating new session ID to HomePage:', data.session_id)

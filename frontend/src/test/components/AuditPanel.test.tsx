@@ -187,6 +187,34 @@ describe('AuditPanel - Session Change (T018)', () => {
     // Event should still be there
     expect(screen.getByText('[SUPERVISOR] Processing')).toBeInTheDocument()
   })
+
+  it('does not leak old-session events into a new session after rerender/remount', async () => {
+    const oldSessionEvents = [
+      createTestEvent('SUPERVISOR_START', { message: 'Processing old session' })
+    ]
+
+    const { rerender, unmount } = render(
+      <AuditPanel sessionId="session123" sseEvents={[]} initialEvents={oldSessionEvents} />
+    )
+
+    await waitFor(() => {
+      expect(localStorage.getItem('audit_events_session123')).not.toBeNull()
+    })
+
+    // Switch to a new session (as happens after Reset Chat)
+    rerender(<AuditPanel sessionId="session456" sseEvents={[]} />)
+
+    await waitFor(() => {
+      expect(localStorage.getItem('audit_events_session456')).toBeNull()
+    })
+
+    // Simulate refresh/remount on the new session; old events should not reappear.
+    unmount()
+    render(<AuditPanel sessionId="session456" sseEvents={[]} />)
+
+    expect(screen.queryByText('Processing old session')).not.toBeInTheDocument()
+    expect(screen.getByText(/No audit events yet/i)).toBeInTheDocument()
+  })
 })
 
 // ===================================================================
