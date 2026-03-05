@@ -22,7 +22,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 from agents import Agent, function_tool
 

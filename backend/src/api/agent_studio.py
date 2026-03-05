@@ -31,7 +31,6 @@ from src.lib.agent_studio import (
     AgentPrompts,
     ChatMessage,
     ChatContext,
-    TraceContext,
     TraceContextError,
     TraceNotFoundError,
     LangfuseUnavailableError,
@@ -2053,9 +2052,6 @@ async def chat_with_opus(
                                 # Tool input is being built - we'll handle complete tool use later
                                 pass
 
-                        elif event.type == "content_block_stop":
-                            current_block_type = None
-
                     # Get the final message to access complete tool inputs and stop reason
                     final_message = await stream.get_final_message()
                     collected_content = final_message.content
@@ -2285,8 +2281,8 @@ def _send_error_notification_sns(user_email: str, error_message: str, context: O
 
         # Build error message with context
         message_parts = [
-            f"AI-Assisted Suggestion Submission Failed",
-            f"",
+            "AI-Assisted Suggestion Submission Failed",
+            "",
             f"User: {user_email}",
             f"Error: {error_message}",
         ]

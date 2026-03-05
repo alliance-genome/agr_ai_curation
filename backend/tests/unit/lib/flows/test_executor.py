@@ -548,8 +548,8 @@ class TestBuildSupervisorCustomInstructions:
         ])
         result = build_supervisor_instructions(flow)
         lines = result.split("\n")
-        gene_line = next(l for l in lines if "Gene" in l)
-        disease_line = next(l for l in lines if "Disease" in l)
+        gene_line = next(line for line in lines if "Gene" in line)
+        disease_line = next(line for line in lines if "Disease" in line)
         assert "[has custom instructions]" in gene_line
         assert "[has custom instructions]" not in disease_line
 
