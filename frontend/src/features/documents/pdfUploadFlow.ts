@@ -440,6 +440,7 @@ export const waitForDocumentProcessing = async (
 export const loadDocumentForChat = async (documentId: string): Promise<Record<string, unknown>> => {
   const response = await fetch('/api/chat/document/load', {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
