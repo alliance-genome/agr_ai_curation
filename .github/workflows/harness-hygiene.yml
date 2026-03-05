@@ -1,0 +1,31 @@
+name: Harness Hygiene
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  harness-hygiene:
+    name: Harness Hygiene
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run harness hygiene
+        run: |
+          bash scripts/maintenance/harness_hygiene.sh
+
+      - name: Upload hygiene report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-hygiene-report
+          path: |
+            file_outputs/harness_hygiene/latest.md
+            file_outputs/harness_hygiene/*/summary.md
+
