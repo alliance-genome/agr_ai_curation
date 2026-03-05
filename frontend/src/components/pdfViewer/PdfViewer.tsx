@@ -10,6 +10,14 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import UploadProgressDialog from '@/components/weaviate/UploadProgressDialog'
+import {
+  dispatchChatDocumentChanged,
+  loadDocumentForChat,
+  uploadPdfDocument,
+  validatePdfSelection,
+  waitForDocumentProcessing,
+} from '@/features/documents/pdfUploadFlow'
 
 import {
   ApplyHighlightsEvent,
@@ -76,6 +84,15 @@ interface OverlayPayload {
   chunkId: string
   documentId?: string | null
   docItems: OverlayDocItem[]
+}
+
+interface UploadDialogState {
+  open: boolean
+  fileName: string
+  stage: string
+  progress: number
+  message: string
+  documentId?: string
 }
 
 const DEFAULT_SETTINGS: HighlightSettings = {
@@ -171,6 +188,7 @@ export function PdfViewer() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
+  const uploadAbortRef = useRef<AbortController | null>(null)
   const highlightTermsRef = useRef<string[]>([])
   const settingsRef = useRef<HighlightSettings>(DEFAULT_SETTINGS)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
@@ -188,6 +206,16 @@ export function PdfViewer() {
     slowLoad: false,
     slowHighlight: false,
   })
+  const [uploadInFlight, setUploadInFlight] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const [dropError, setDropError] = useState<string | null>(null)
+  const [uploadDialog, setUploadDialog] = useState<UploadDialogState>({
+    open: false,
+    fileName: '',
+    stage: 'uploading',
+    progress: 0,
+    message: '',
+  })
   const [overlays, setOverlays] = useState<OverlayPayload[]>([])
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
 
@@ -199,6 +227,156 @@ export function PdfViewer() {
     sessionStorage.removeItem('document-loading')
     window.dispatchEvent(new CustomEvent('document-load-complete'))
   }, [])
+
+  const handleCloseUploadDialog = useCallback(() => {
+    setUploadDialog((prev) => ({ ...prev, open: false }))
+  }, [])
+
+  const handleDroppedFiles = useCallback(async (files: File[]) => {
+    if (uploadInFlight) {
+      setDropError('An upload is already in progress. Please wait for it to finish.')
+      return
+    }
+
+    const validation = validatePdfSelection(files, { allowMultiple: false, maxFiles: 1 })
+    if (!validation.ok) {
+      setDropError(validation.error ?? 'Please select PDF files only')
+      return
+    }
+
+    const file = validation.files[0]
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
+    setDropError(null)
+    setUploadInFlight(true)
+    setUploadDialog({
+      open: true,
+      fileName: file.name,
+      stage: 'uploading',
+      progress: 8,
+      message: `Uploading “${file.name}”…`,
+    })
+
+    try {
+      const documentId = await uploadPdfDocument(file)
+      if (controller.signal.aborted) {
+        return
+      }
+
+      setUploadDialog((prev) => ({
+        ...prev,
+        open: true,
+        documentId,
+        stage: 'pending',
+        progress: 12,
+        message: 'Upload complete. Waiting for processing updates…',
+      }))
+
+      const finalProgress = await waitForDocumentProcessing(documentId, {
+        signal: controller.signal,
+        onProgress: (update) => {
+          setUploadDialog((prev) => ({
+            ...prev,
+            open: true,
+            stage: update.stage,
+            progress: update.progress,
+            message: update.message,
+            documentId,
+          }))
+        },
+      })
+
+      if (controller.signal.aborted) {
+        return
+      }
+
+      if (finalProgress.stage !== 'completed') {
+        setUploadDialog((prev) => ({
+          ...prev,
+          open: true,
+          stage: finalProgress.stage,
+          progress: finalProgress.progress,
+          message: finalProgress.message,
+          documentId,
+        }))
+        return
+      }
+
+      sessionStorage.setItem('document-loading', 'true')
+      window.dispatchEvent(new CustomEvent('document-load-start'))
+      const payload = await loadDocumentForChat(documentId)
+      dispatchChatDocumentChanged(payload)
+
+      setUploadDialog((prev) => ({
+        ...prev,
+        open: true,
+        stage: 'completed',
+        progress: 100,
+        message: 'Upload complete. Document loaded for chat.',
+        documentId,
+      }))
+    } catch (uploadError) {
+      if (controller.signal.aborted) {
+        return
+      }
+
+      setUploadDialog((prev) => ({
+        ...prev,
+        open: true,
+        stage: 'error',
+        progress: 100,
+        message: uploadError instanceof Error ? uploadError.message : 'Failed to upload PDF.',
+      }))
+    } finally {
+      if (uploadAbortRef.current === controller) {
+        uploadAbortRef.current = null
+      }
+      setUploadInFlight(false)
+    }
+  }, [uploadInFlight])
+
+  const handleDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (activeDocument || uploadInFlight) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    setDropError(null)
+    setDragActive(true)
+  }, [activeDocument, uploadInFlight])
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (activeDocument || uploadInFlight) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    setDragActive(true)
+  }, [activeDocument, uploadInFlight])
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (activeDocument || uploadInFlight) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return
+    }
+    setDragActive(false)
+  }, [activeDocument, uploadInFlight])
+
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (activeDocument || uploadInFlight) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    setDragActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    void handleDroppedFiles(files)
+  }, [activeDocument, handleDroppedFiles, uploadInFlight])
 
   useEffect(() => {
     const handleOverlayUpdate = (event: Event) => {
@@ -704,6 +882,8 @@ export function PdfViewer() {
         }
       })
       cleanupRefs.current = []
+      uploadAbortRef.current?.abort()
+      uploadAbortRef.current = null
     }
   }, [])
 
@@ -746,6 +926,8 @@ export function PdfViewer() {
 
   useEffect(() => {
     if (activeDocument) {
+      setDragActive(false)
+      setDropError(null)
       debug.log('🔍 [PDF VIEWER DEBUG] Active document exists, persisting session:', activeDocument.documentId)
       persistSession(activeDocument, viewerStateRef.current)
     } else {
@@ -991,6 +1173,12 @@ export function PdfViewer() {
       <Box sx={{ flex: 1, position: 'relative' }}>
         {!activeDocument && (
           <Box
+            role="region"
+            aria-label="PDF drop zone"
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
             sx={{
               position: 'absolute',
               inset: 0,
@@ -1001,14 +1189,33 @@ export function PdfViewer() {
               color: 'text.secondary',
               textAlign: 'center',
               px: 3,
+              border: '2px dashed',
+              borderColor: dragActive ? 'primary.main' : 'divider',
+              backgroundColor: dragActive ? 'action.hover' : 'transparent',
+              transition: 'border-color 120ms ease, background-color 120ms ease',
             }}
           >
             <Typography variant="body1" sx={{ mb: 2 }}>
-              To load a document, click <strong>Documents</strong> in the top right.
+              {dragActive ? 'Drop PDF to upload and load for chat' : 'Drag and drop a PDF here to upload'}
             </Typography>
+            {uploadInFlight && (
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+                <CircularProgress size={16} />
+                <Typography variant="body2" color="text.secondary">
+                  Upload in progress...
+                </Typography>
+              </Stack>
+            )}
+            {dropError && (
+              <Alert severity="error" sx={{ mb: 2, maxWidth: 640 }}>
+                {dropError}
+              </Alert>
+            )}
             <Typography variant="body2" component="div">
               <ul style={{ textAlign: 'left', margin: 0, paddingLeft: '1.5rem' }}>
-                <li style={{ marginBottom: '0.75rem' }}>To upload a new PDF: Click <strong>Upload Document</strong>, then click <strong>Load for Chat</strong> when processing completes.</li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  Drop one PDF file to upload, track processing, and auto-load it for chat.
+                </li>
                 <li>To load an existing PDF: Click the green <strong>file icon</strong> in the Actions column.</li>
               </ul>
             </Typography>
@@ -1088,6 +1295,15 @@ export function PdfViewer() {
           }}
         />
       </Box>
+      <UploadProgressDialog
+        open={uploadDialog.open}
+        fileName={uploadDialog.fileName}
+        stage={uploadDialog.stage}
+        progress={uploadDialog.progress}
+        message={uploadDialog.message}
+        documentId={uploadDialog.documentId}
+        onClose={handleCloseUploadDialog}
+      />
     </Paper>
   )
 }
