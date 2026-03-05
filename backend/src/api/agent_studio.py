@@ -40,6 +40,7 @@ from src.lib.agent_studio import (
     submit_suggestion_sns,
     SUBMIT_SUGGESTION_TOOL,
     # Flow tools user context management
+    register_flow_tools,
     set_workflow_user_context,
     clear_workflow_user_context,
     # Flow context for get_current_flow tool
@@ -1262,6 +1263,16 @@ def _get_active_tab(context: Optional[ChatContext]) -> str:
     return "agents"
 
 
+def _ensure_flow_tools_registered(registry: Any) -> None:
+    """Ensure flow tools are present even if the diagnostic registry was reset."""
+    if all(registry.has_tool(name) for name in _FLOW_TOOLS):
+        return
+    try:
+        register_flow_tools()
+    except Exception:
+        logger.exception("Failed to ensure flow tool registration for Agent Studio tools")
+
+
 def _is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) -> bool:
     """Check whether a tool is allowed for the current tab/context."""
     active_tab = _get_active_tab(context)
@@ -1337,6 +1348,7 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
 
     # Add diagnostic tools from registry using the same context-aware gate.
     registry = get_diagnostic_tools_registry()
+    _ensure_flow_tools_registered(registry)
     diagnostic_tools = []
     for tool in registry.get_all_tools():
         if not _is_tool_allowed_for_context(tool.name, context):
@@ -1880,6 +1892,7 @@ async def _handle_tool_call(
 
     # Check if this is a diagnostic tool from the registry
     registry = get_diagnostic_tools_registry()
+    _ensure_flow_tools_registered(registry)
     tool_def = registry.get_tool(tool_name)
 
     if tool_def:

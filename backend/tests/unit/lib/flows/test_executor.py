@@ -2,6 +2,7 @@
 import asyncio
 import importlib
 import json
+from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -478,13 +479,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_all_agent_tools(flow)
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
 
         # Step 1 executes normally.
-        out1 = asyncio.run(tools[0].on_invoke_tool(None, json.dumps({"query": "q1"})))
+        out1 = asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "q1"})))
         # Repeating step 1 should now be blocked (step 2 is next).
-        out2 = asyncio.run(tools[0].on_invoke_tool(None, json.dumps({"query": "q2"})))
+        out2 = asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "q2"})))
         # Step 2 executes normally.
-        out3 = asyncio.run(tools[1].on_invoke_tool(None, json.dumps({"query": "q3"})))
+        out3 = asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "q3"})))
 
         assert out1.startswith("ok:ask_gene_specialist:q1")
         assert "Flow step order is strict" in out2

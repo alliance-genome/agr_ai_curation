@@ -98,35 +98,8 @@ def test_groq_wrapper_forwards_payload_json(monkeypatch):
 
 
 def _unwrap_function_tool(tool):
-    """Extract decorated function from FunctionTool wrapper for unit testing.
-
-    The OpenAI Agents SDK wrapper shape can vary by environment/version, so
-    we avoid hard-coded closure indexes and recursively search for the first
-    callable named ``agr_curation_query``.
-    """
-
-    visited_ids = set()
-
-    def _walk_callable(candidate):
-        if not callable(candidate):
-            return None
-        obj_id = id(candidate)
-        if obj_id in visited_ids:
-            return None
-        visited_ids.add(obj_id)
-
-        if getattr(candidate, "__name__", "") == "agr_curation_query":
-            return candidate
-
-        for cell in getattr(candidate, "__closure__", ()) or ():
-            found = _walk_callable(cell.cell_contents)
-            if found is not None:
-                return found
-        return None
-
-    found = _walk_callable(tool.on_invoke_tool)
-    assert found is not None, "Unable to locate underlying agr_curation_query callable"
-    return found
+    """Extract decorated function from FunctionTool wrapper for unit testing."""
+    return agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query")
 
 
 def test_module_load_fallback_on_missing_groups_file(monkeypatch):

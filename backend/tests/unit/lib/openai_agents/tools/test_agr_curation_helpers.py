@@ -9,26 +9,7 @@ from src.lib.openai_agents.tools import agr_curation
 
 def _unwrap_query_function(tool):
     """Extract wrapped agr_curation_query callable for direct unit testing."""
-    visited_ids = set()
-
-    def _walk(candidate):
-        if not callable(candidate):
-            return None
-        obj_id = id(candidate)
-        if obj_id in visited_ids:
-            return None
-        visited_ids.add(obj_id)
-        if getattr(candidate, "__name__", "") == "agr_curation_query":
-            return candidate
-        for cell in getattr(candidate, "__closure__", ()) or ():
-            found = _walk(cell.cell_contents)
-            if found is not None:
-                return found
-        return None
-
-    found = _walk(getattr(tool, "on_invoke_tool", None))
-    assert found is not None
-    return found
+    return agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query")
 
 
 def test_curie_validation_helpers(monkeypatch):

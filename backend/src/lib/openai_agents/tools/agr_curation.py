@@ -1167,25 +1167,52 @@ def agr_curation_query(
 def _unwrap_function_tool_callable(tool: Any, target_name: str) -> Any:
     """Extract original callable from a FunctionTool wrapper."""
     visited_ids = set()
+    found: Optional[Any] = None
 
-    def _walk(candidate: Any) -> Optional[Any]:
-        if not callable(candidate):
-            return None
+    def _walk(candidate: Any, depth: int = 0) -> None:
+        nonlocal found
+        if candidate is None or found is not None or depth > 6:
+            return
         obj_id = id(candidate)
         if obj_id in visited_ids:
-            return None
+            return
         visited_ids.add(obj_id)
 
-        if getattr(candidate, "__name__", "") == target_name:
-            return candidate
+        if callable(candidate) and getattr(candidate, "__name__", "") == target_name:
+            found = candidate
+            return
 
-        for cell in getattr(candidate, "__closure__", ()) or ():
-            found = _walk(cell.cell_contents)
-            if found is not None:
-                return found
-        return None
+        if callable(candidate):
+            for cell in getattr(candidate, "__closure__", ()) or ():
+                try:
+                    _walk(cell.cell_contents, depth + 1)
+                except Exception:
+                    continue
 
-    found = _walk(getattr(tool, "on_invoke_tool", None))
+        for attr in (
+            "on_invoke_tool",
+            "_invoke_tool_impl",
+            "_function_tool",
+            "func",
+            "function",
+            "_func",
+            "_function",
+            "handler",
+        ):
+            if not hasattr(candidate, attr):
+                continue
+            try:
+                _walk(getattr(candidate, attr), depth + 1)
+            except Exception:
+                continue
+
+        obj_dict = getattr(candidate, "__dict__", None)
+        if isinstance(obj_dict, dict):
+            for value in obj_dict.values():
+                if callable(value) or hasattr(value, "__dict__"):
+                    _walk(value, depth + 1)
+
+    _walk(tool)
     if found is None:
         raise RuntimeError(f"Unable to locate callable for tool '{target_name}'")
     return found
