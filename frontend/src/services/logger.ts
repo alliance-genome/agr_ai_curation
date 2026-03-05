@@ -32,6 +32,7 @@ class Logger {
   private buffer: LogEntry[] = [];
   private maxBufferSize = 100;
   private logEndpoint = '/api/logs';
+  private remoteLoggingEnabled = true;
   private flushInterval = 30000; // 30 seconds
   private flushTimer: NodeJS.Timeout | null = null;
 
@@ -176,8 +177,8 @@ class Logger {
 
     try {
       // In production, send logs to backend
-      if (process.env.NODE_ENV === 'production') {
-        await fetch(this.logEndpoint, {
+      if (process.env.NODE_ENV === 'production' && this.remoteLoggingEnabled) {
+        const response = await fetch(this.logEndpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -186,6 +187,15 @@ class Logger {
             logs: logsToSend,
           }),
         });
+
+        if (!response.ok) {
+          // Disable repeated noisy retries when endpoint is unavailable in this deploy.
+          if (response.status === 404 || response.status === 405) {
+            this.remoteLoggingEnabled = false;
+            return;
+          }
+          throw new Error(`Log upload failed with status ${response.status}`);
+        }
       }
     } catch (error) {
       // If logging fails, at least log to console

@@ -61,6 +61,12 @@ class PDFParsingError(BasePipelineError):
     ERROR_CODE = "PDF_PARSE_001"
 
 
+class PDFCancellationError(BasePipelineError):
+    """Raised when PDF processing is cancelled by user request."""
+
+    ERROR_CODE = "PDF_CANCEL_001"
+
+
 class EmbeddingError(BasePipelineError):
     """Raised when embedding generation fails."""
 

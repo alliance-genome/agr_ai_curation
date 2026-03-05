@@ -19,6 +19,10 @@ from ..models.pipeline import ProcessingStage
 from .auth import get_auth_dependency
 from ..lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from ..lib.weaviate_client.connection import get_connection
+from ..lib.pdf_jobs import service as pdf_job_service
+from ..models.sql.database import SessionLocal
+from ..models.sql.pdf_processing_job import PdfJobStatus
+from ..services.user_service import principal_from_claims, provision_user
 from ..config import get_pdf_storage_path
 
 # Create a global tracker instance for the API
@@ -27,10 +31,58 @@ pipeline_tracker = PipelineTracker()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 
+_ACTIVE_PROCESSING_STATUSES = {
+    ProcessingStatus.PROCESSING.value,
+    ProcessingStatus.PARSING.value,
+    ProcessingStatus.CHUNKING.value,
+    ProcessingStatus.EMBEDDING.value,
+    ProcessingStatus.STORING.value,
+}
+_ACTIVE_PDF_JOB_STATUSES = {
+    PdfJobStatus.PENDING.value,
+    PdfJobStatus.RUNNING.value,
+    PdfJobStatus.CANCEL_REQUESTED.value,
+}
+_TERMINAL_PDF_JOB_STATUSES = {
+    PdfJobStatus.COMPLETED.value,
+    PdfJobStatus.FAILED.value,
+    PdfJobStatus.CANCELLED.value,
+}
+
 
 def _stage_value(stage: object) -> str:
     """Return a stable stage label for enums/strings in status payloads."""
     return getattr(stage, "value", str(stage))
+
+
+def _normalize_processing_status(value: object) -> str:
+    status = str(value or "").strip().lower()
+    return status if status else ProcessingStatus.PENDING.value
+
+
+def _latest_job_for_user_document(document_id: str, auth_user: Dict[str, Any]):
+    session = SessionLocal()
+    try:
+        db_user = provision_user(session, principal_from_claims(auth_user))
+        try:
+            return pdf_job_service.get_latest_job_for_document(
+                document_id=document_id,
+                user_id=db_user.id,
+                reconcile_stale=True,
+            )
+        except (TypeError, ValueError):
+            # Some contract tests use synthetic non-UUID ids (e.g., "doc-1").
+            # Treat those as "no durable job row" instead of surfacing 500.
+            return None
+    finally:
+        session.close()
+
+
+def _is_pipeline_status_active(pipeline_status: object) -> bool:
+    if not pipeline_status:
+        return False
+    stage_status = _normalize_processing_status(_stage_value(getattr(pipeline_status, "current_stage", None)))
+    return stage_status in _ACTIVE_PROCESSING_STATUSES
 
 
 @router.post("/documents/{document_id}/reprocess", response_model=OperationResult)
@@ -58,17 +110,41 @@ async def reprocess_document_endpoint(
                 detail=f"Document with ID {document_id} not found"
             )
 
-        doc_status = document_data["document"].get("processing_status")
+        doc_status = _normalize_processing_status(
+            document_data["document"].get("processing_status")
+            or document_data["document"].get("processingStatus")
+        )
 
-        if doc_status == ProcessingStatus.PROCESSING:
-            pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
-            # Allow reprocessing if it's been stuck for a while or if we want to force it
-            # For now, strict check
-            stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else "unknown"
+        latest_job = _latest_job_for_user_document(document_id, user)
+        if latest_job and latest_job.status in _ACTIVE_PDF_JOB_STATUSES:
             raise HTTPException(
                 status_code=409,
-                detail=f"Document is currently being processed (stage: {stage_label})"
+                detail=(
+                    "Document is currently being processed "
+                    f"(job status: {latest_job.status}, stage: {latest_job.current_stage or 'pending'})"
+                ),
             )
+        if doc_status in _ACTIVE_PROCESSING_STATUSES:
+            pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+            if _is_pipeline_status_active(pipeline_status):
+                stage_label = _stage_value(pipeline_status.current_stage)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Document is currently being processed (stage: {stage_label})"
+                )
+
+            if latest_job and latest_job.status in _TERMINAL_PDF_JOB_STATUSES:
+                logger.warning(
+                    "Allowing reprocess for stale document processing status=%s with terminal job status=%s",
+                    doc_status,
+                    latest_job.status,
+                )
+            else:
+                stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else doc_status
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Document is currently being processed (stage: {stage_label})"
+                )
 
         # Get filename to construct path
         filename = document_data["document"].get("filename")
@@ -186,15 +262,41 @@ async def reembed_document_endpoint(
                 detail=f"Document with ID {document_id} not found"
             )
 
-        doc_status = document["document"].get("processing_status")
+        doc_status = _normalize_processing_status(
+            document["document"].get("processing_status")
+            or document["document"].get("processingStatus")
+        )
 
-        if doc_status == ProcessingStatus.PROCESSING:
-            pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
-            stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else "unknown"
+        latest_job = _latest_job_for_user_document(document_id, user)
+        if latest_job and latest_job.status in _ACTIVE_PDF_JOB_STATUSES:
             raise HTTPException(
                 status_code=409,
-                detail=f"Document is currently being processed (stage: {stage_label})"
+                detail=(
+                    "Document is currently being processed "
+                    f"(job status: {latest_job.status}, stage: {latest_job.current_stage or 'pending'})"
+                ),
             )
+        if doc_status in _ACTIVE_PROCESSING_STATUSES:
+            pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+            if _is_pipeline_status_active(pipeline_status):
+                stage_label = _stage_value(pipeline_status.current_stage)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Document is currently being processed (stage: {stage_label})"
+                )
+
+            if latest_job and latest_job.status in _TERMINAL_PDF_JOB_STATUSES:
+                logger.warning(
+                    "Allowing re-embed for stale document processing status=%s with terminal job status=%s",
+                    doc_status,
+                    latest_job.status,
+                )
+            else:
+                stage_label = _stage_value(pipeline_status.current_stage) if pipeline_status else doc_status
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Document is currently being processed (stage: {stage_label})"
+                )
 
         if document.get("total_chunks", 0) == 0:
             raise HTTPException(

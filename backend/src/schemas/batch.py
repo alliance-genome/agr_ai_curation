@@ -7,11 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.sql.batch import BatchStatus, BatchDocumentStatus
 
+MAX_BATCH_DOCUMENTS = 10
+
 
 class BatchCreateRequest(BaseModel):
     """Request to create and start a new batch."""
     flow_id: UUID
-    document_ids: List[UUID] = Field(..., min_length=1, max_length=100)
+    document_ids: List[UUID] = Field(..., min_length=1, max_length=MAX_BATCH_DOCUMENTS)
 
 
 class BatchDocumentResponse(BaseModel):

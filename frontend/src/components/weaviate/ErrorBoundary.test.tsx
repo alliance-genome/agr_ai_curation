@@ -73,16 +73,16 @@ describe('ErrorBoundary', () => {
 
     expect(screen.getByText('Test error message')).toBeInTheDocument();
 
-    // Click Try Again
-    const tryAgainButton = screen.getByRole('button', { name: /try again/i });
-    fireEvent.click(tryAgainButton);
-
-    // Rerender with non-throwing component
+    // Swap to non-throwing child before reset so retry can succeed
     rerender(
       <ErrorBoundary>
         <ThrowError shouldThrow={false} />
       </ErrorBoundary>
     );
+
+    // Click Try Again
+    const tryAgainButton = screen.getByRole('button', { name: /try again/i });
+    fireEvent.click(tryAgainButton);
 
     expect(screen.getByText('No error')).toBeInTheDocument();
   });
@@ -113,15 +113,15 @@ describe('ErrorBoundary', () => {
     expect(window.location.href).toBe('/');
   });
 
-  it('toggles technical details visibility', () => {
+  it('toggles technical details visibility', async () => {
     render(
       <ErrorBoundary>
         <ThrowError shouldThrow={true} />
       </ErrorBoundary>
     );
 
-    // Details should be hidden initially
-    expect(screen.queryByText(/Stack Trace:/)).not.toBeInTheDocument();
+    // Details are present in the DOM but hidden by Collapse initially
+    expect(screen.getByText(/Stack Trace:/)).not.toBeVisible();
 
     // Click to show details
     const showDetailsButton = screen.getByRole('button', { name: /show technical details/i });
@@ -135,7 +135,9 @@ describe('ErrorBoundary', () => {
     fireEvent.click(hideDetailsButton);
 
     // Details should be hidden again
-    expect(screen.queryByText(/Stack Trace:/)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/Stack Trace:/)).not.toBeVisible();
+    });
   });
 
   it('calls onError callback when error occurs', () => {

@@ -138,6 +138,23 @@ async def test_validate_user_file_path_handles_resolve_errors(tmp_path):
     assert exc.value.status_code == 500
 
 
+def test_normalize_pipeline_result_supports_legacy_dict_payload():
+    success, cancelled, error = documents._normalize_pipeline_result(
+        {"status": "completed", "chunks_created": 0}
+    )
+    assert success is True
+    assert cancelled is False
+    assert error is None
+
+
+def test_normalize_pipeline_result_supports_object_payload():
+    payload = SimpleNamespace(success=False, cancelled=True, error="Cancelled by user")
+    success, cancelled, error = documents._normalize_pipeline_result(payload)
+    assert success is False
+    assert cancelled is True
+    assert error == "Cancelled by user"
+
+
 @pytest.mark.asyncio
 async def test_get_document_endpoint_returns_document_response(monkeypatch):
     upload_time = datetime.now(timezone.utc)
@@ -147,6 +164,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: pg_doc)
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=5))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(
         documents,
         "get_document",
@@ -222,9 +240,11 @@ async def test_delete_document_endpoint_returns_success(monkeypatch):
     cleanup_session = _FakeSession(execute_doc=None)
     _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
 
-    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 3}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert result.success is True
@@ -240,16 +260,81 @@ async def test_delete_document_endpoint_blocks_processing_documents(monkeypatch)
     verify_session = _FakeSession()
     _patch_session_factory(monkeypatch, [verify_session])
 
-    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(
         documents,
         "get_document",
-        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": ProcessingStatus.PROCESSING}}),
+        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": ProcessingStatus.PROCESSING.value}}),
     )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_blocks_active_pdf_job(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    _patch_session_factory(monkeypatch, [verify_session])
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+    assert exc.value.status_code == 409
+    assert "job status" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    cleanup_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_allows_stale_processing_status_when_job_terminal(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    cleanup_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+    assert result.success is True
 
 
 @pytest.mark.asyncio
@@ -258,9 +343,11 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
     verify_session = _FakeSession()
     _patch_session_factory(monkeypatch, [verify_session])
 
-    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": False, "message": "nope"}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -271,6 +358,8 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
 async def test_status_endpoint_returns_404_when_document_missing(monkeypatch):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
@@ -282,6 +371,8 @@ async def test_status_endpoint_returns_404_when_document_missing(monkeypatch):
 async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
 
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("lookup failed")
@@ -318,6 +409,11 @@ async def test_upload_document_endpoint_happy_path(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: SimpleNamespace(id=99),
     )
     monkeypatch.setattr(documents, "create_document", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "create_job",
+        lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+    )
     monkeypatch.setattr(documents, "get_tenant_name", lambda _sub: "tenant-user-1")
     monkeypatch.setattr(
         documents.pipeline_tracker,
@@ -358,19 +454,26 @@ async def test_upload_document_endpoint_happy_path(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_stream_document_progress_returns_not_found_event(monkeypatch):
+    doc_id = str(uuid4())
     monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
     monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value(None))
 
-    response = await documents.stream_document_progress("doc-404", {"sub": "user-1"})
+    response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
     payload = await _collect_stream(response)
     assert "Document not found" in payload
-    assert "doc-404" in payload
+    assert doc_id in payload
 
 
 @pytest.mark.asyncio
 async def test_stream_document_progress_emits_final_completed_event(monkeypatch):
     now = datetime.now(timezone.utc)
+    doc_id = str(uuid4())
 
     async def _status(*_args, **_kwargs):
         return PipelineStatus(
@@ -387,11 +490,16 @@ async def test_stream_document_progress_emits_final_completed_event(monkeypatch)
 
     monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
     monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "5")
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
     monkeypatch.setattr(documents.asyncio, "sleep", _no_sleep)
 
-    response = await documents.stream_document_progress("doc-1", {"sub": "user-1"})
+    response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
     payload = await _collect_stream(response)
     assert '"stage": "completed"' in payload
     assert '"final": true' in payload

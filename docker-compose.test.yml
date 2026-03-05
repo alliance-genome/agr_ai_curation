@@ -111,7 +111,7 @@ services:
         condition: service_healthy
       redis-test:
         condition: service_healthy
-    command: python -m pytest tests/ -v --tb=short
+    command: /bin/bash -lc "alembic upgrade head && python -m pytest tests/ -v --tb=short"
     networks:
       - test-network
 
@@ -214,7 +214,7 @@ services:
         condition: service_healthy
       redis-test:
         condition: service_healthy
-    command: python -m pytest tests/integration/ -v --tb=short
+    command: /bin/bash -lc "alembic upgrade head && python -m pytest tests/integration/ -v --tb=short"
     networks:
       - test-network
 
@@ -288,7 +288,7 @@ services:
         condition: service_healthy
       redis-test:
         condition: service_healthy
-    command: python -m pytest tests/contract/ -v --tb=short
+    command: /bin/bash -lc "alembic upgrade head && python -m pytest tests/contract/ -v --tb=short"
     networks:
       - test-network
 

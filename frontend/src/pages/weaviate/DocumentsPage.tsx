@@ -1,30 +1,143 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Box, Button, Paper, Typography } from '@mui/material';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import DocumentList from '../../components/weaviate/DocumentList';
+import PdfJobsPanel from '../../components/weaviate/PdfJobsPanel';
 import InlineFilterBar from '../../components/weaviate/InlineFilterBar';
 import {
+  cancelPdfJob,
   DocumentSummary,
   DocumentListResponse,
   DocumentFilter,
+  fetchPdfJobs,
+  PdfProcessingJob,
 } from '../../services/weaviate';
+import { emitGlobalToast } from '../../lib/globalNotifications';
 
 type PipelineState = {
   busy: boolean;
   message?: string;
 };
 
+const MAX_BATCH_DOCUMENT_SELECTION = 10;
+
+const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
+  if (previous === next) {
+    return true;
+  }
+  if (previous.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.length; index += 1) {
+    const prevJob = previous[index];
+    const nextJob = next[index];
+
+    if (
+      prevJob.job_id !== nextJob.job_id ||
+      prevJob.status !== nextJob.status ||
+      prevJob.progress_percentage !== nextJob.progress_percentage ||
+      prevJob.current_stage !== nextJob.current_stage ||
+      prevJob.message !== nextJob.message ||
+      prevJob.error_message !== nextJob.error_message ||
+      prevJob.cancel_requested !== nextJob.cancel_requested ||
+      prevJob.updated_at !== nextJob.updated_at ||
+      prevJob.completed_at !== nextJob.completed_at
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const [_totalCount, setTotalCount] = useState(0);
+  const [, setTotalCount] = useState(0);
   const [pipelineState, setPipelineState] = useState<PipelineState>({ busy: false });
   const [filters, setFilters] = useState<DocumentFilter>({});
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [jobs, setJobs] = useState<PdfProcessingJob[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'info';
+  }>({ open: false, message: '', severity: 'info' });
+  const [pendingDocumentRefresh, setPendingDocumentRefresh] = useState(false);
 
-  const handleRefresh = async () => {
+  const jobsEventSourceRef = useRef<EventSource | null>(null);
+  const jobsPollingRef = useRef<number | null>(null);
+  const seenTerminalNotificationsRef = useRef<Set<string>>(new Set());
+  const seededTerminalNotificationsRef = useRef(false);
+
+  const notifyTerminalJobTransitions = React.useCallback((nextJobs: PdfProcessingJob[]) => {
+    const seedOnly = !seededTerminalNotificationsRef.current;
+
+    for (const job of nextJobs) {
+      if (!['completed', 'failed', 'cancelled'].includes(job.status)) {
+        continue;
+      }
+      if (job.status === 'failed' && job.cancel_requested) {
+        // Ignore transient failed snapshots for jobs that are in cancellation flow.
+        continue;
+      }
+
+      const key = `${job.job_id}:${job.status}`;
+      if (seenTerminalNotificationsRef.current.has(key)) {
+        continue;
+      }
+      seenTerminalNotificationsRef.current.add(key);
+      if (seedOnly) {
+        continue;
+      }
+
+      const filename = job.filename || job.document_id;
+      if (job.status === 'completed') {
+        emitGlobalToast({ message: `PDF processing completed: ${filename}`, severity: 'success' });
+      } else if (job.status === 'cancelled') {
+        emitGlobalToast({ message: `PDF processing cancelled: ${filename}`, severity: 'info' });
+      } else {
+        emitGlobalToast({ message: `PDF processing failed: ${filename}`, severity: 'error' });
+      }
+
+      setPendingDocumentRefresh(true);
+    }
+
+    if (!seededTerminalNotificationsRef.current) {
+      seededTerminalNotificationsRef.current = true;
+    }
+  }, []);
+
+  const applyJobsUpdate = React.useCallback(
+    (nextJobs: PdfProcessingJob[]) => {
+      setJobs((previousJobs) => (areJobsEquivalent(previousJobs, nextJobs) ? previousJobs : nextJobs));
+      notifyTerminalJobTransitions(nextJobs);
+    },
+    [notifyTerminalJobTransitions]
+  );
+
+  const refreshJobs = React.useCallback(async (silent = false) => {
+    if (!silent) {
+      setJobsLoading(true);
+    }
+
+    try {
+      const payload = await fetchPdfJobs({ windowDays: 7, limit: 50, offset: 0 });
+      applyJobsUpdate(payload.jobs);
+    } catch (error) {
+      console.error('Error fetching PDF jobs:', error);
+    } finally {
+      if (!silent) {
+        setJobsLoading(false);
+      }
+    }
+  }, [applyJobsUpdate]);
+
+  const handleRefresh = React.useCallback(async () => {
     setLoading(true);
     try {
       console.log('[DocumentsPage] Refresh start');
@@ -46,7 +159,7 @@ const DocumentsPage: React.FC = () => {
 
       const data = (await response.json()) as DocumentListResponse;
       const docs = data.documents || [];
-      const normalizedDocs = docs.map((doc: any) => ({
+      const normalizedDocs = docs.map((doc: Record<string, unknown>) => ({
           id: doc.document_id ?? doc.id,  // Backend returns document_id, fallback to id for compatibility
           filename: doc.filename ?? 'Untitled',
           title: doc.title ?? null,
@@ -75,6 +188,7 @@ const DocumentsPage: React.FC = () => {
         data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
       setTotalCount(totalItems);
       setPipelineState((prev) => (prev.busy ? prev : { busy: false }));
+      await refreshJobs(true);
       console.log('[DocumentsPage] Refresh success', { count: normalizedDocs.length });
     } catch (error) {
       console.error('Error fetching documents:', error);
@@ -85,42 +199,148 @@ const DocumentsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [refreshJobs]);
 
   useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
-    handleRefresh();
+    void handleRefresh();
+  }, [handleRefresh]);
+
+  useEffect(() => {
+    if (!pendingDocumentRefresh) {
+      return;
+    }
+
+    setPendingDocumentRefresh(false);
+    void handleRefresh();
+  }, [handleRefresh, pendingDocumentRefresh]);
+
+  useEffect(() => {
+    const startJobsPolling = () => {
+      if (jobsPollingRef.current !== null) {
+        return;
+      }
+      jobsPollingRef.current = window.setInterval(() => {
+        void refreshJobs(true);
+      }, 5000);
+    };
+
+    try {
+      const source = new EventSource('/api/weaviate/pdf-jobs/stream?window_days=7&limit=50');
+      jobsEventSourceRef.current = source;
+
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as { jobs?: PdfProcessingJob[]; final?: boolean };
+          if (payload.final) {
+            return;
+          }
+          if (Array.isArray(payload.jobs)) {
+            applyJobsUpdate(payload.jobs);
+          }
+        } catch (parseError) {
+          console.error('Failed to parse PDF jobs stream payload:', parseError);
+        }
+      };
+
+      source.onerror = () => {
+        source.close();
+        jobsEventSourceRef.current = null;
+        startJobsPolling();
+      };
+    } catch (error) {
+      console.error('Failed to open PDF jobs stream:', error);
+      startJobsPolling();
+    }
+
+    return () => {
+      if (jobsEventSourceRef.current) {
+        jobsEventSourceRef.current.close();
+        jobsEventSourceRef.current = null;
+      }
+      if (jobsPollingRef.current !== null) {
+        window.clearInterval(jobsPollingRef.current);
+        jobsPollingRef.current = null;
+      }
+    };
+  }, [applyJobsUpdate, refreshJobs]);
+
+  const handleCancelJob = React.useCallback(async (jobId: string) => {
+    try {
+      const response = await cancelPdfJob(jobId);
+      setSnackbar({ open: true, message: response.message, severity: 'info' });
+      await refreshJobs(true);
+    } catch (error) {
+      console.error('Failed to cancel PDF job:', error);
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? error.message : 'Failed to cancel job',
+        severity: 'error',
+      });
+    }
+  }, [refreshJobs]);
+
+  const buildActionErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
+    try {
+      const payload = await response.json();
+      const detail = payload?.detail;
+      if (typeof detail === 'string' && detail.trim()) {
+        return detail;
+      }
+      if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
+        return detail.message;
+      }
+    } catch (_error) {
+      // Fall through to status-based fallback message.
+    }
+    return `${fallback} (${response.status})`;
   }, []);
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = React.useCallback(async (id: string) => {
     try {
       const response = await fetch(`/api/weaviate/documents/${id}`, {
         method: 'DELETE',
         credentials: 'include', // Include httpOnly cookies for authentication
       });
-      if (response.ok) {
-        handleRefresh();
+      if (!response.ok) {
+        const message = await buildActionErrorMessage(response, 'Failed to delete document');
+        setSnackbar({ open: true, message, severity: 'error' });
+        return;
       }
+      void handleRefresh();
     } catch (error) {
       console.error('Error deleting document:', error);
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? error.message : 'Failed to delete document',
+        severity: 'error',
+      });
     }
-  };
+  }, [buildActionErrorMessage, handleRefresh]);
 
-  const handleReembed = async (id: string) => {
+  const handleReembed = React.useCallback(async (id: string) => {
     try {
       const response = await fetch(`/api/weaviate/documents/${id}/reembed`, {
         method: 'POST',
         credentials: 'include', // Include httpOnly cookies for authentication
       });
-      if (response.ok) {
-        handleRefresh();
+      if (!response.ok) {
+        const message = await buildActionErrorMessage(response, 'Failed to re-embed document');
+        setSnackbar({ open: true, message, severity: 'error' });
+        return;
       }
+      void handleRefresh();
     } catch (error) {
       console.error('Error re-embedding document:', error);
+      setSnackbar({
+        open: true,
+        message: error instanceof Error ? error.message : 'Failed to re-embed document',
+        severity: 'error',
+      });
     }
-  };
+  }, [buildActionErrorMessage, handleRefresh]);
 
-  const handleLoad = async (summary: DocumentSummary) => {
+  const handleLoad = React.useCallback(async (summary: DocumentSummary) => {
     try {
       console.log('[DocumentsPage] Loading document for chat:', summary.id, summary.filename);
 
@@ -157,9 +377,9 @@ const DocumentsPage: React.FC = () => {
       console.error('[DocumentsPage] Error loading document:', error);
       window.alert('Failed to load document for chat');
     }
-  };
+  }, []);
 
-  const handleTitleUpdate = async (documentId: string, title: string) => {
+  const handleTitleUpdate = React.useCallback(async (documentId: string, title: string) => {
     const response = await fetch(`/api/weaviate/documents/${documentId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -170,7 +390,7 @@ const DocumentsPage: React.FC = () => {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || 'Failed to update title');
     }
-  };
+  }, []);
 
   // Client-side filtering
   const filteredDocuments = useMemo(() => {
@@ -220,16 +440,16 @@ const DocumentsPage: React.FC = () => {
     return result;
   }, [documents, filters]);
 
-  const handleFilterChange = (newFilters: DocumentFilter) => {
+  const handleFilterChange = React.useCallback((newFilters: DocumentFilter) => {
     setFilters((prev) => ({ ...prev, ...newFilters }));
-  };
+  }, []);
 
-  const handleClearFilters = () => {
+  const handleClearFilters = React.useCallback(() => {
     setFilters({});
-  };
+  }, []);
 
   // Navigate to batch page with selected documents
-  const handleStartBatch = () => {
+  const handleStartBatch = React.useCallback(() => {
     // Get full document info for selected IDs
     const selectedDocs = documents.filter(doc => selectedDocumentIds.includes(doc.id));
     navigate('/batch', {
@@ -241,7 +461,38 @@ const DocumentsPage: React.FC = () => {
         })),
       },
     });
-  };
+  }, [documents, navigate, selectedDocumentIds]);
+
+  const handlePipelineStateChange = React.useCallback((busy: boolean, message?: string) => {
+    setPipelineState({ busy, message });
+  }, []);
+
+  const handleSelectionChange = React.useCallback((ids: string[]) => {
+    if (ids.length <= MAX_BATCH_DOCUMENT_SELECTION) {
+      setSelectedDocumentIds(ids);
+      return;
+    }
+
+    setSelectedDocumentIds(ids.slice(0, MAX_BATCH_DOCUMENT_SELECTION));
+    setSnackbar({
+      open: true,
+      message: `You can select up to ${MAX_BATCH_DOCUMENT_SELECTION} documents per batch.`,
+      severity: 'info',
+    });
+  }, []);
+
+  const filterBar = React.useMemo(
+    () => (
+      <Box sx={{ py: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <InlineFilterBar
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          onClear={handleClearFilters}
+        />
+      </Box>
+    ),
+    [filters, handleClearFilters, handleFilterChange]
+  );
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -262,6 +513,7 @@ const DocumentsPage: React.FC = () => {
         >
           <Typography variant="body2">
             {selectedDocumentIds.length} document{selectedDocumentIds.length > 1 ? 's' : ''} selected
+            {' '}({MAX_BATCH_DOCUMENT_SELECTION} max)
           </Typography>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
@@ -286,7 +538,8 @@ const DocumentsPage: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+      <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
         <DocumentList
           documents={filteredDocuments}
           loading={loading}
@@ -298,21 +551,28 @@ const DocumentsPage: React.FC = () => {
           onTitleUpdate={handleTitleUpdate}
           pipelineBusy={pipelineState.busy}
           pipelineMessage={pipelineState.message}
-          onPipelineStateChange={(busy, message) => setPipelineState({ busy, message })}
+          onPipelineStateChange={handlePipelineStateChange}
           checkboxSelection={true}
           selectedIds={selectedDocumentIds}
-          onSelectionChange={setSelectedDocumentIds}
-          filterBar={
-            <Box sx={{ py: 1, borderBottom: 1, borderColor: 'divider' }}>
-              <InlineFilterBar
-                filters={filters}
-                onFilterChange={handleFilterChange}
-                onClear={handleClearFilters}
-              />
-            </Box>
-          }
+          onSelectionChange={handleSelectionChange}
+          filterBar={filterBar}
         />
       </Box>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

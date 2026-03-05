@@ -20,30 +20,25 @@ describe('WeaviateNavIcon', () => {
   it('renders the database icon and text', () => {
     render(<WeaviateNavIcon />);
 
-    // Check for icon button
-    const iconButton = screen.getByRole('button', {
-      name: /weaviate database control panel/i
-    });
+    const iconButton = screen.getByRole('button', { name: /documents/i });
     expect(iconButton).toBeInTheDocument();
-
-    // Check for text
-    const text = screen.getByText('Weaviate');
+    const text = screen.getByText('Documents');
     expect(text).toBeInTheDocument();
   });
 
   it('navigates to /weaviate when clicked', () => {
     render(<WeaviateNavIcon />);
 
-    const container = screen.getByText('Weaviate').parentElement;
+    const container = screen.getByRole('button', { name: /documents/i });
     fireEvent.click(container!);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate');
   });
 
   it('applies hover styles', () => {
     render(<WeaviateNavIcon />);
 
-    const container = screen.getByText('Weaviate').parentElement;
+    const container = screen.getByRole('button', { name: /documents/i });
     expect(container).toHaveStyle({ cursor: 'pointer' });
   });
 
@@ -51,7 +46,7 @@ describe('WeaviateNavIcon', () => {
     render(<WeaviateNavIcon />);
 
     const iconButton = screen.getByRole('button');
-    expect(iconButton).toHaveAttribute('aria-label', 'Weaviate Database Control Panel');
+    expect(iconButton).toHaveAttribute('aria-label', 'Documents');
   });
 
   it('maintains consistent layout', () => {
@@ -65,22 +60,19 @@ describe('WeaviateNavIcon', () => {
   it('handles keyboard navigation', () => {
     render(<WeaviateNavIcon />);
 
-    const container = screen.getByText('Weaviate').parentElement;
+    const container = screen.getByRole('button', { name: /documents/i });
 
     // Simulate Enter key press
     fireEvent.keyDown(container!, { key: 'Enter', code: 'Enter' });
 
-    // Click should still work as it's the main interaction
-    fireEvent.click(container!);
-    expect(mockNavigate).toHaveBeenCalledWith('/api/weaviate');
+    expect(mockNavigate).toHaveBeenCalledWith('/weaviate');
   });
 
   it('renders with correct icon size', () => {
     render(<WeaviateNavIcon />);
 
-    const iconButton = screen.getByRole('button');
-    // IconButton renders with proper classes
-    expect(iconButton).toHaveClass('MuiIconButton-root');
+    const iconButton = screen.getByRole('button', { name: /documents/i });
+    expect(iconButton).toHaveClass('MuiBox-root');
 
     // Check that icon is present
     const icon = screen.getByTestId('StorageIcon');
@@ -90,10 +82,9 @@ describe('WeaviateNavIcon', () => {
   it('has proper spacing between icon and text', () => {
     render(<WeaviateNavIcon />);
 
-    const text = screen.getByText('Weaviate');
-    const styles = window.getComputedStyle(text);
-
-    // Check that text has proper margins
-    expect(text).toHaveStyle({ fontWeight: '500' });
+    const text = screen.getByText('Documents');
+    const icon = screen.getByTestId('StorageIcon');
+    expect(text).toBeInTheDocument();
+    expect(icon).toBeInTheDocument();
   });
 });

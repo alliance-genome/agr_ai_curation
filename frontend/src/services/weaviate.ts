@@ -168,6 +168,46 @@ export interface PdfExtractionWakeResponse {
   wake_required?: boolean;
 }
 
+export type PdfJobStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancel_requested'
+  | 'cancelled';
+
+export interface PdfProcessingJob {
+  job_id: string;
+  document_id: string;
+  user_id: number;
+  filename?: string | null;
+  status: PdfJobStatus;
+  current_stage?: string | null;
+  progress_percentage: number;
+  message?: string | null;
+  process_id?: string | null;
+  cancel_requested: boolean;
+  error_message?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+  started_at?: string | null;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+export interface PdfJobListResponse {
+  jobs: PdfProcessingJob[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CancelPdfJobResponse {
+  success: boolean;
+  message: string;
+  job: PdfProcessingJob;
+}
+
 const toStringOrNull = (value: unknown): string | null => {
   if (typeof value === 'string') {
     return value;
@@ -527,6 +567,62 @@ export const usePdfExtractionHealth = (
     retry: false,
     ...options,
   });
+
+export const fetchPdfJobs = async (
+  params: {
+    status?: PdfJobStatus[];
+    windowDays?: number;
+    limit?: number;
+    offset?: number;
+  } = {}
+): Promise<PdfJobListResponse> => {
+  const query = new URLSearchParams();
+  (params.status ?? []).forEach((statusValue) => query.append('status', statusValue));
+  if (params.windowDays) query.set('window_days', String(params.windowDays));
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`);
+};
+
+export const fetchPdfJob = async (jobId: string): Promise<PdfProcessingJob> => {
+  return fetchApi<PdfProcessingJob>(`/pdf-jobs/${jobId}`);
+};
+
+export const cancelPdfJob = async (jobId: string): Promise<CancelPdfJobResponse> => {
+  return fetchApi<CancelPdfJobResponse>(`/pdf-jobs/${jobId}/cancel`, { method: 'POST' });
+};
+
+export const usePdfJobs = (
+  params: {
+    status?: PdfJobStatus[];
+    windowDays?: number;
+    limit?: number;
+    offset?: number;
+  } = {},
+  options?: UseQueryOptions<PdfJobListResponse>
+) =>
+  useQuery<PdfJobListResponse>({
+    queryKey: ['pdf-jobs', params],
+    queryFn: () => fetchPdfJobs(params),
+    refetchInterval: 15_000,
+    ...options,
+  });
+
+export const useCancelPdfJob = (
+  options?: UseMutationOptions<CancelPdfJobResponse, Error, string>
+) => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (jobId: string) => cancelPdfJob(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pdf-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    },
+    ...options,
+  });
+};
 
 // Query hooks
 export const useDocuments = (

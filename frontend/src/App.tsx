@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
-import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip } from '@mui/material'
-import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, Home as HomeIcon, Settings as SettingsIcon, HelpOutline as HelpIcon } from '@mui/icons-material'
+import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert } from '@mui/material'
+import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, Home as HomeIcon, Settings as SettingsIcon, HelpOutline as HelpIcon, History as ChangelogIcon } from '@mui/icons-material'
 import { getVersionDisplay, getFullVersionInfo } from './config/version'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -23,9 +23,13 @@ import HomePage from './pages/HomePage'
 import ViewerSettings from './pages/ViewerSettings'
 import AgentStudioPage from './pages/AgentStudioPage'
 import BatchPage from './pages/BatchPage'
+import ChangelogPage from './pages/ChangelogPage'
 import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
+import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
+import { LATEST_CHANGELOG_ENTRY } from './content/changelog'
+import ChangelogDialog from './components/ChangelogDialog'
 import theme from './theme'
 import './App.css'
 
@@ -82,9 +86,22 @@ function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   return null;
 }
 
-function AppContent() {
-  const { user, logout } = useAuth();
+export function AppContent() {
+  const { user, logout, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+  const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
+  const [globalSnackbar, setGlobalSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'warning' | 'info';
+  }>({ open: false, message: '', severity: 'info' });
+  const seededPdfJobsRef = React.useRef(false);
+  const seededBatchesRef = React.useRef(false);
+  const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
+  const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
+  const changelogStorageKey = user?.uid ? `changelog:last-seen:${user.uid}` : null;
 
   /**
    * Handle logout confirmation
@@ -94,6 +111,180 @@ function AppContent() {
     setLogoutDialogOpen(false);
     await logout();
   };
+
+  const markLatestChangelogSeen = React.useCallback(() => {
+    if (!changelogStorageKey || !LATEST_CHANGELOG_ENTRY) {
+      return;
+    }
+    localStorage.setItem(changelogStorageKey, LATEST_CHANGELOG_ENTRY.id);
+  }, [changelogStorageKey]);
+
+  const handleChangelogDialogClose = React.useCallback(() => {
+    markLatestChangelogSeen();
+    setChangelogDialogOpen(false);
+  }, [markLatestChangelogSeen]);
+
+  const handleChangelogViewAll = React.useCallback(() => {
+    markLatestChangelogSeen();
+    setChangelogDialogOpen(false);
+    navigate('/changelog');
+  }, [markLatestChangelogSeen, navigate]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.uid || !LATEST_CHANGELOG_ENTRY) {
+      setChangelogDialogOpen(false);
+      return;
+    }
+
+    const key = `changelog:last-seen:${user.uid}`;
+    const lastSeenId = localStorage.getItem(key);
+    if (lastSeenId !== LATEST_CHANGELOG_ENTRY.id) {
+      setChangelogDialogOpen(true);
+    }
+  }, [isAuthenticated, user?.uid]);
+
+  useEffect(() => {
+    const onGlobalToast = (event: Event) => {
+      const customEvent = event as CustomEvent<GlobalToastEventDetail>;
+      const detail = customEvent.detail;
+      if (!detail?.message) {
+        return;
+      }
+      setGlobalSnackbar({
+        open: true,
+        message: detail.message,
+        severity: detail.severity ?? 'info',
+      });
+    };
+
+    window.addEventListener(GLOBAL_TOAST_EVENT, onGlobalToast as EventListener);
+    return () => {
+      window.removeEventListener(GLOBAL_TOAST_EVENT, onGlobalToast as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      seededPdfJobsRef.current = false;
+      seededBatchesRef.current = false;
+      seenPdfTerminalRef.current.clear();
+      seenBatchTerminalRef.current.clear();
+      return;
+    }
+
+    const pollNotifications = async () => {
+      const onDocumentsPage = location.pathname.startsWith('/weaviate/documents');
+      const onBatchPage = location.pathname.startsWith('/batch');
+
+      if (!onDocumentsPage) {
+        try {
+          const response = await fetch('/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0', {
+            credentials: 'include',
+          });
+          if (response.ok) {
+            const payload = (await response.json()) as {
+              jobs?: Array<{ job_id: string; status: string; filename?: string; document_id: string }>;
+            };
+            const jobs = payload.jobs ?? [];
+
+            for (const job of jobs) {
+              const status = String(job.status).toLowerCase();
+              if (!['completed', 'failed', 'cancelled'].includes(status)) {
+                continue;
+              }
+              const terminalKey = `${job.job_id}:${status}`;
+              const alreadySeen = seenPdfTerminalRef.current.has(terminalKey);
+              if (!seededPdfJobsRef.current) {
+                seenPdfTerminalRef.current.add(terminalKey);
+                continue;
+              }
+              if (alreadySeen) {
+                continue;
+              }
+
+              seenPdfTerminalRef.current.add(terminalKey);
+              const filename = job.filename || job.document_id;
+              if (status === 'completed') {
+                setGlobalSnackbar({ open: true, message: `PDF processing completed: ${filename}`, severity: 'success' });
+              } else if (status === 'cancelled') {
+                setGlobalSnackbar({ open: true, message: `PDF processing cancelled: ${filename}`, severity: 'info' });
+              } else {
+                setGlobalSnackbar({ open: true, message: `PDF processing failed: ${filename}`, severity: 'error' });
+              }
+            }
+
+            seededPdfJobsRef.current = true;
+          }
+        } catch (error) {
+          console.error('Global PDF job notification poll failed:', error);
+        }
+      }
+
+      if (!onBatchPage) {
+        try {
+          const response = await fetch('/api/batches', { credentials: 'include' });
+          if (response.ok) {
+            const payload = (await response.json()) as {
+              batches?: Array<{
+                id: string;
+                status: string;
+                flow_name?: string | null;
+                completed_documents?: number;
+                total_documents?: number;
+                failed_documents?: number;
+              }>;
+            };
+            const batches = payload.batches ?? [];
+
+            for (const batch of batches) {
+              const status = String(batch.status).toLowerCase();
+              if (!['completed', 'cancelled'].includes(status)) {
+                continue;
+              }
+              const terminalKey = `${batch.id}:${status}`;
+              const alreadySeen = seenBatchTerminalRef.current.has(terminalKey);
+              if (!seededBatchesRef.current) {
+                seenBatchTerminalRef.current.add(terminalKey);
+                continue;
+              }
+              if (alreadySeen) {
+                continue;
+              }
+
+              seenBatchTerminalRef.current.add(terminalKey);
+              const flowLabel = batch.flow_name ? ` (${batch.flow_name})` : '';
+              if (status === 'cancelled') {
+                setGlobalSnackbar({
+                  open: true,
+                  message: `Batch processing cancelled${flowLabel}`,
+                  severity: 'info',
+                });
+              } else {
+                setGlobalSnackbar({
+                  open: true,
+                  message: `Batch completed${flowLabel}: ${batch.completed_documents ?? 0}/${batch.total_documents ?? 0} succeeded, ${batch.failed_documents ?? 0} failed`,
+                  severity: 'success',
+                });
+              }
+            }
+
+            seededBatchesRef.current = true;
+          }
+        } catch (error) {
+          console.error('Global batch notification poll failed:', error);
+        }
+      }
+    };
+
+    void pollNotifications();
+    const intervalId = window.setInterval(() => {
+      void pollNotifications();
+    }, 10000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isAuthenticated, location.pathname]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -176,6 +367,24 @@ function AppContent() {
           <WeaviateNavIcon />
           <BatchNavIcon />
           <Box
+            component={Link}
+            to="/changelog"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              textDecoration: 'none',
+              color: 'inherit',
+              marginRight: 2,
+              '&:hover': {
+                opacity: 0.8
+              }
+            }}
+          >
+            <ChangelogIcon fontSize="small" />
+            <Typography variant="body2">Changelog</Typography>
+          </Box>
+          <Box
             component="a"
             href="https://github.com/alliance-genome/agr_ai_curation/blob/main/docs/curator/README.md"
             target="_blank"
@@ -231,10 +440,17 @@ function AppContent() {
         onClose={() => setLogoutDialogOpen(false)}
         onConfirm={handleLogoutConfirm}
       />
+      <ChangelogDialog
+        open={changelogDialogOpen}
+        entry={LATEST_CHANGELOG_ENTRY}
+        onClose={handleChangelogDialogClose}
+        onViewAll={handleChangelogViewAll}
+      />
 
       <Box component="main" sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/changelog" element={<ChangelogPage />} />
           <Route path="/viewer-settings" element={<ViewerSettings />} />
           <Route path="/agent-studio" element={<AgentStudioPage />} />
           <Route path="/batch" element={<BatchPage />} />
@@ -265,6 +481,21 @@ function AppContent() {
           </Route>
         </Routes>
       </Box>
+
+      <Snackbar
+        open={globalSnackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          severity={globalSnackbar.severity}
+          onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
+          sx={{ width: '100%' }}
+        >
+          {globalSnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

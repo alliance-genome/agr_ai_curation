@@ -51,9 +51,12 @@ from ..lib.weaviate_client.documents import (
 from ..lib.pipeline.upload import PDFUploadHandler
 from ..lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from ..lib.pipeline.tracker import PipelineTracker
+from ..lib.pdf_jobs import service as pdf_job_service
+from ..lib.exceptions import PDFCancellationError
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+from ..models.sql.pdf_processing_job import PdfJobStatus
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -79,6 +82,31 @@ _PIPELINE_STAGE_TO_PROCESSING_STATUS = {
     ProcessingStage.COMPLETED.value: ProcessingStatus.COMPLETED.value,
     ProcessingStage.FAILED.value: ProcessingStatus.FAILED.value,
 }
+_PDF_JOB_STATUS_TO_PROCESSING_STATUS = {
+    PdfJobStatus.PENDING.value: ProcessingStatus.PENDING.value,
+    PdfJobStatus.RUNNING.value: ProcessingStatus.PROCESSING.value,
+    PdfJobStatus.CANCEL_REQUESTED.value: ProcessingStatus.PROCESSING.value,
+    PdfJobStatus.COMPLETED.value: ProcessingStatus.COMPLETED.value,
+    PdfJobStatus.CANCELLED.value: ProcessingStatus.FAILED.value,
+    PdfJobStatus.FAILED.value: ProcessingStatus.FAILED.value,
+}
+_ACTIVE_PROCESSING_STATUSES = {
+    ProcessingStatus.PROCESSING.value,
+    ProcessingStatus.PARSING.value,
+    ProcessingStatus.CHUNKING.value,
+    ProcessingStatus.EMBEDDING.value,
+    ProcessingStatus.STORING.value,
+}
+_ACTIVE_PDF_JOB_STATUSES = {
+    PdfJobStatus.PENDING.value,
+    PdfJobStatus.RUNNING.value,
+    PdfJobStatus.CANCEL_REQUESTED.value,
+}
+_TERMINAL_PDF_JOB_STATUSES = {
+    PdfJobStatus.COMPLETED.value,
+    PdfJobStatus.FAILED.value,
+    PdfJobStatus.CANCELLED.value,
+}
 
 
 def _normalize_processing_status(value: Any) -> str:
@@ -101,6 +129,121 @@ def _effective_processing_status(raw_document_status: Any, pipeline_status: Any)
     if mapped:
         return mapped
     return effective
+
+
+def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
+    """Extract and normalize processing status from mixed payload key styles."""
+    raw_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
+    return _normalize_processing_status(raw_status)
+
+
+def _normalize_pipeline_result(result: Any) -> tuple[bool, bool, Optional[str]]:
+    """Normalize pipeline result payloads across object and legacy dict shapes."""
+    if isinstance(result, dict):
+        status = str(result.get("status", "")).strip().lower()
+        cancelled = bool(result.get("cancelled")) or status in {"cancelled", "canceled", "cancel_requested"}
+        success_raw = result.get("success")
+        if success_raw is None:
+            success = status in {"completed", "complete", "success", "succeeded"} and not cancelled
+        else:
+            success = bool(success_raw)
+        error = result.get("error") or result.get("message")
+        return success, cancelled, error
+
+    status_attr = str(getattr(result, "status", "") or "").strip().lower()
+    cancelled = bool(getattr(result, "cancelled", False)) or status_attr in {"cancelled", "canceled", "cancel_requested"}
+    success_attr = getattr(result, "success", None)
+    if success_attr is None:
+        success = status_attr in {"completed", "complete", "success", "succeeded"} and not cancelled
+    else:
+        success = bool(success_attr)
+    error = getattr(result, "error", None) or getattr(result, "message", None)
+    return success, cancelled, error
+
+
+def _is_pipeline_status_active(pipeline_status: Any) -> bool:
+    """Check whether in-memory pipeline tracker indicates active processing."""
+    if not pipeline_status:
+        return False
+
+    stage = getattr(pipeline_status, "current_stage", None)
+    stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or "").strip().lower()
+    normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
+    return normalized in _ACTIVE_PROCESSING_STATUSES
+
+
+class JobAwarePipelineTracker:
+    """Tracker proxy that mirrors in-memory pipeline progress into durable job rows."""
+
+    def __init__(self, base_tracker: PipelineTracker, job_id: str):
+        self.base_tracker = base_tracker
+        self.job_id = job_id
+
+    async def track_pipeline_progress(
+        self,
+        document_id: str,
+        stage: ProcessingStage,
+        progress_percentage: Optional[int] = None,
+        message: Optional[str] = None,
+    ):
+        stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage)
+
+        if (
+            pdf_job_service.is_cancel_requested(job_id=self.job_id)
+            and stage_value not in {ProcessingStage.FAILED.value, ProcessingStage.COMPLETED.value}
+        ):
+            raise PDFCancellationError("Processing cancelled by user request")
+
+        status = await self.base_tracker.track_pipeline_progress(
+            document_id=document_id,
+            stage=stage,
+            progress_percentage=progress_percentage,
+            message=message,
+        )
+
+        if stage_value == ProcessingStage.COMPLETED.value:
+            pdf_job_service.mark_completed(
+                job_id=self.job_id,
+                message=message or "Processing completed",
+            )
+        elif stage_value == ProcessingStage.FAILED.value:
+            if pdf_job_service.is_cancel_requested(job_id=self.job_id):
+                pdf_job_service.update_progress(
+                    job_id=self.job_id,
+                    stage=PdfJobStatus.CANCEL_REQUESTED.value,
+                    progress_percentage=progress_percentage,
+                    message=message or "Cancellation requested",
+                    status=PdfJobStatus.CANCEL_REQUESTED.value,
+                )
+            else:
+                pdf_job_service.mark_failed(
+                    job_id=self.job_id,
+                    message=message or "Processing failed",
+                    stage=stage_value,
+                )
+        else:
+            pdf_job_service.update_progress(
+                job_id=self.job_id,
+                stage=stage_value,
+                progress_percentage=progress_percentage,
+                message=message,
+                status=PdfJobStatus.RUNNING.value,
+            )
+
+        return status
+
+    async def get_pipeline_status(self, document_id: str):
+        return await self.base_tracker.get_pipeline_status(document_id)
+
+    async def handle_pipeline_failure(self, document_id: str, error: Exception, stage: Optional[ProcessingStage] = None):
+        result = await self.base_tracker.handle_pipeline_failure(document_id, error, stage)
+        stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or ProcessingStage.FAILED.value)
+        pdf_job_service.mark_failed(
+            job_id=self.job_id,
+            message=str(error),
+            stage=stage_value,
+        )
+        return result
 
 
 async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
@@ -350,6 +493,35 @@ def validate_user_file_path(
             status_code=500,
             detail="File path validation error"
         )
+
+
+def _pipeline_payload_from_job(job: Any) -> Optional[Dict[str, Any]]:
+    """Build pipeline-like status payload from durable PDF job."""
+    if not job:
+        return None
+
+    if hasattr(job, "model_dump"):
+        payload = job.model_dump()
+    elif isinstance(job, dict):
+        payload = job
+    else:
+        payload = {}
+
+    updated_at = payload.get("updated_at")
+    started_at = payload.get("started_at")
+    completed_at = payload.get("completed_at")
+
+    return {
+        "document_id": payload.get("document_id"),
+        "current_stage": payload.get("current_stage") or "pending",
+        "started_at": started_at,
+        "updated_at": updated_at,
+        "completed_at": completed_at,
+        "progress_percentage": payload.get("progress_percentage", 0),
+        "message": payload.get("message"),
+        "error_count": 1 if payload.get("status") == PdfJobStatus.FAILED.value else 0,
+        "stage_results": [],
+    }
 
 
 @router.get("/documents", response_model=DocumentListResponse)
@@ -793,10 +965,16 @@ async def get_document_endpoint(
         # Extract document data from nested structure
         doc_data = weaviate_doc.get("document", {})
         tenant_name = get_tenant_name(user["sub"])
+        latest_job = pdf_job_service.get_latest_job_for_document(
+            document_id=document_id,
+            user_id=db_user.id,
+            reconcile_stale=True,
+        )
 
         # T031: Return contract Document schema (document_endpoints.yaml)
         return DocumentResponse(
             document_id=document_id,
+            job_id=latest_job.job_id if latest_job else None,
             user_id=db_user.id,
             filename=pg_doc.filename,
             status=doc_data.get("processing_status", "pending").upper(),  # Contract requires uppercase enum
@@ -894,11 +1072,47 @@ async def delete_document_endpoint(
             )
 
         doc_payload = document.get("document", {})
-        if doc_payload.get("processing_status") == ProcessingStatus.PROCESSING:
+        document_processing_status = _extract_document_processing_status(doc_payload)
+        latest_job = pdf_job_service.get_latest_job_for_document(
+            document_id=document_id,
+            user_id=pg_doc.user_id,
+            reconcile_stale=True,
+        )
+        active_job_status = latest_job.status if latest_job else None
+        pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+        pipeline_is_active = _is_pipeline_status_active(pipeline_status)
+
+        if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
+            job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
             raise HTTPException(
                 status_code=409,
-                detail="Cannot delete document while it is being processed"
+                detail=(
+                    "Cannot delete document while it is being processed "
+                    f"(status '{document_processing_status}'{job_hint})"
+                ),
             )
+        if pipeline_is_active:
+            stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
+            )
+        if document_processing_status in _ACTIVE_PROCESSING_STATUSES:
+            if latest_job and latest_job.status in _TERMINAL_PDF_JOB_STATUSES:
+                logger.warning(
+                    "Allowing delete for stale document processing status=%s with terminal job status=%s",
+                    document_processing_status,
+                    latest_job.status,
+                )
+            else:
+                job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Cannot delete document while it is being processed "
+                        f"(status '{document_processing_status}'{job_hint})"
+                    ),
+                )
 
         result = await delete_document(user["sub"], document_id)
 
@@ -1150,6 +1364,14 @@ async def upload_document_endpoint(
         finally:
             session.close()
 
+        # Create durable background job row for this upload.
+        job = pdf_job_service.create_job(
+            document_id=document.id,
+            user_id=db_user.id,
+            filename=document.filename,
+        )
+        job_id = job.job_id
+
         # Track initial status
         from ..models.pipeline import ProcessingStage
         await pipeline_tracker.track_pipeline_progress(document.id, ProcessingStage.UPLOAD)
@@ -1159,24 +1381,132 @@ async def upload_document_endpoint(
         user_id = user["sub"]
 
         async def process_document():
+            if pdf_job_service.is_cancel_requested(job_id=job_id):
+                cancellation_message = "Cancelled before processing started"
+                pdf_job_service.mark_cancelled(
+                    job_id=job_id,
+                    reason=cancellation_message,
+                )
+                try:
+                    from ..lib.weaviate_client.documents import update_document_status
+                    await update_document_status(document.id, user_id, ProcessingStatus.FAILED.value)
+                except Exception as status_err:
+                    logger.warning(
+                        "Failed to sync document status for pre-start cancellation document=%s: %s",
+                        document.id,
+                        status_err,
+                    )
+                try:
+                    await pipeline_tracker.track_pipeline_progress(
+                        document.id,
+                        ProcessingStage.FAILED,
+                        message=cancellation_message,
+                    )
+                except Exception as tracker_err:
+                    logger.warning(
+                        "Failed to update in-memory tracker for pre-start cancellation document=%s: %s",
+                        document.id,
+                        tracker_err,
+                    )
+                return
+
             try:
+                job_tracker = JobAwarePipelineTracker(
+                    base_tracker=pipeline_tracker,
+                    job_id=job_id,
+                )
+                pdf_job_service.update_progress(
+                    job_id=job_id,
+                    stage=ProcessingStage.UPLOAD.value,
+                    progress_percentage=10,
+                    message="Processing started",
+                    status=PdfJobStatus.RUNNING.value,
+                )
+
+                async def _cancel_requested() -> bool:
+                    return pdf_job_service.is_cancel_requested(job_id=job_id)
+
+                async def _on_process_id(process_id: str) -> None:
+                    pdf_job_service.set_process_id(job_id=job_id, process_id=process_id)
+
                 connection = get_connection()
                 orchestrator = DocumentPipelineOrchestrator(
                     weaviate_client=connection,
-                    tracker=pipeline_tracker,
+                    tracker=job_tracker,
                 )
                 result = await orchestrator.process_pdf_document(
                     file_path=saved_path,
                     document_id=document.id,
                     user_id=user_id,  # FR-011, FR-014: Pass user ID for tenant scoping
-                    validate_first=False  # Already validated
+                    validate_first=False,  # Already validated
+                    cancel_requested_callback=_cancel_requested,
+                    process_id_callback=_on_process_id,
                 )
                 logger.info('Document %s processing completed: %s', document.id, result)
+                success, cancelled, error_message = _normalize_pipeline_result(result)
+                if cancelled:
+                    try:
+                        await pipeline_tracker.track_pipeline_progress(
+                            document.id,
+                            ProcessingStage.FAILED,
+                            message=error_message or "Cancelled by user",
+                        )
+                    except Exception as tracker_err:
+                        logger.warning(
+                            "Failed to sync in-memory tracker for cancelled document=%s: %s",
+                            document.id,
+                            tracker_err,
+                        )
+                    pdf_job_service.mark_cancelled(
+                        job_id=job_id,
+                        reason=error_message or "Cancelled by user",
+                    )
+                elif success:
+                    try:
+                        await pipeline_tracker.track_pipeline_progress(
+                            document.id,
+                            ProcessingStage.COMPLETED,
+                            progress_percentage=100,
+                            message="Processing completed",
+                        )
+                    except Exception as tracker_err:
+                        logger.warning(
+                            "Failed to sync in-memory tracker for completed document=%s: %s",
+                            document.id,
+                            tracker_err,
+                        )
+                    pdf_job_service.mark_completed(job_id=job_id, message="Processing completed")
+                else:
+                    try:
+                        await pipeline_tracker.track_pipeline_progress(
+                            document.id,
+                            ProcessingStage.FAILED,
+                            message=error_message or "Processing failed",
+                        )
+                    except Exception as tracker_err:
+                        logger.warning(
+                            "Failed to sync in-memory tracker for failed document=%s: %s",
+                            document.id,
+                            tracker_err,
+                        )
+                    pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        message=error_message or "Processing failed",
+                        stage=ProcessingStage.FAILED.value,
+                    )
             except Exception as e:
                 logger.error('Error processing document %s: %s', document.id, e, exc_info=True)
                 # Update document status to failed
                 from ..lib.weaviate_client.documents import update_document_status
                 await update_document_status(document.id, user_id, "failed")
+                if isinstance(e, PDFCancellationError):
+                    pdf_job_service.mark_cancelled(job_id=job_id, reason=str(e))
+                else:
+                    pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        message=str(e),
+                        stage=ProcessingStage.FAILED.value,
+                    )
 
         # Add processing task to background
         background_tasks.add_task(process_document)
@@ -1187,6 +1517,7 @@ async def upload_document_endpoint(
 
         return DocumentResponse(
             document_id=document.id,
+            job_id=job_id,
             user_id=db_user.id,
             filename=document.filename,
             status="PENDING",  # Initial status
@@ -1227,6 +1558,7 @@ async def get_document_processing_status(
     session = SessionLocal()
     try:
         verify_document_ownership(session, document_id, user)
+        db_user = provision_user(session, principal_from_claims(user))
     finally:
         session.close()
 
@@ -1240,16 +1572,32 @@ async def get_document_processing_status(
                 detail=f"Document with ID {document_id} not found"
             )
 
-        # Get pipeline status
+        # Get pipeline status (in-memory) and durable job fallback.
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+        job = pdf_job_service.get_latest_job_for_document(
+            document_id=document_id,
+            user_id=db_user.id,
+            reconcile_stale=True,
+        )
         raw_processing_status = document["document"].get("processing_status", ProcessingStatus.PENDING.value)
-        processing_status = _effective_processing_status(raw_processing_status, pipeline_status)
+        if pipeline_status:
+            processing_status = _effective_processing_status(raw_processing_status, pipeline_status)
+            pipeline_payload = pipeline_status.model_dump()
+        elif job:
+            processing_status = _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, _normalize_processing_status(raw_processing_status))
+            pipeline_payload = _pipeline_payload_from_job(job)
+        else:
+            processing_status = _normalize_processing_status(raw_processing_status)
+            pipeline_payload = None
 
         return {
             "document_id": document_id,
             "processing_status": processing_status,
             "embedding_status": document["document"].get("embedding_status", "pending"),
-            "pipeline_status": pipeline_status.model_dump() if pipeline_status else None,
+            "pipeline_status": pipeline_payload,
+            "job_id": job.job_id if job else None,
+            "job_status": job.status if job else None,
+            "cancel_requested": bool(job.cancel_requested) if job else False,
             "chunk_count": document.get("total_chunks", 0),
             "vector_count": document["document"].get("vector_count", 0)
         }
@@ -1286,6 +1634,19 @@ async def stream_document_progress(
             "timestamp": "2025-01-24T10:30:00Z"
         }
     """
+    session = SessionLocal()
+    try:
+        try:
+            verify_document_ownership(session, document_id, user)
+        except HTTPException as exc:
+            # Keep SSE behavior backward-compatible for malformed/missing IDs:
+            # emit terminal stream events instead of failing the HTTP handshake.
+            if exc.status_code not in {400, 404}:
+                raise
+        db_user = provision_user(session, principal_from_claims(user))
+    finally:
+        session.close()
+
     async def generate():
         """Generate SSE events for document processing progress."""
         last_status_snapshot = None
@@ -1333,6 +1694,14 @@ async def stream_document_progress(
             while retry_count < max_retries:
                 # Get current pipeline status
                 status = await pipeline_tracker.get_pipeline_status(document_id)
+                try:
+                    job = pdf_job_service.get_latest_job_for_document(
+                        document_id=document_id,
+                        user_id=db_user.id,
+                        reconcile_stale=True,
+                    )
+                except (TypeError, ValueError):
+                    job = None
 
                 if status:
                     status_snapshot = status.model_dump()
@@ -1385,6 +1754,48 @@ async def stream_document_progress(
                                 'progress': 100 if current_stage_value == ProcessingStage.COMPLETED else progress_value,
                                 'message': final_message,
                                 'timestamp': timestamp_value,
+                                'final': True
+                            }
+                            yield f"data: {json.dumps(final_data)}\n\n"
+                            break
+                elif job:
+                    status_snapshot = {
+                        "stage": job.current_stage or "pending",
+                        "progress": job.progress_percentage,
+                        "message": job.message or "Processing document...",
+                        "status": job.status,
+                        "updated_at": job.updated_at.isoformat() if job.updated_at else datetime.now().isoformat(),
+                    }
+                    if status_snapshot != last_status_snapshot:
+                        event_data = {
+                            'stage': status_snapshot["stage"],
+                            'progress': status_snapshot["progress"],
+                            'message': status_snapshot["message"],
+                            'timestamp': status_snapshot["updated_at"],
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                        last_status_snapshot = status_snapshot
+
+                        if job.status in {
+                            PdfJobStatus.COMPLETED.value,
+                            PdfJobStatus.FAILED.value,
+                            PdfJobStatus.CANCELLED.value,
+                        }:
+                            if job.status == PdfJobStatus.COMPLETED.value:
+                                final_message = "Processing completed successfully"
+                                final_progress = 100
+                            elif job.status == PdfJobStatus.CANCELLED.value:
+                                final_message = job.message or "Processing cancelled"
+                                final_progress = status_snapshot["progress"]
+                            else:
+                                final_message = job.error_message or job.message or "Processing failed"
+                                final_progress = status_snapshot["progress"]
+
+                            final_data = {
+                                'stage': status_snapshot["stage"],
+                                'progress': final_progress,
+                                'message': final_message,
+                                'timestamp': status_snapshot["updated_at"],
                                 'final': True
                             }
                             yield f"data: {json.dumps(final_data)}\n\n"

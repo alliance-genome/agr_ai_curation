@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Awaitable, Callable, Optional, Dict, Any
 from dataclasses import dataclass
 import logging
 import time
@@ -10,6 +10,7 @@ import time
 from src.models.pipeline import ProcessingStage
 from .tracker import PipelineTracker
 from src.models.strategy import ChunkingStrategy, StrategyName
+from ..exceptions import PDFCancellationError
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class ProcessingResult:
     total_embeddings: int = 0
     error: Optional[str] = None
     duration_seconds: float = 0.0
+    cancelled: bool = False
 
 
 class DocumentPipelineOrchestrator:
@@ -62,7 +64,9 @@ class DocumentPipelineOrchestrator:
         user_id: str,
         strategy: Optional[ChunkingStrategy] = None,
         validate_first: bool = True,
-        extraction_strategy: str = "auto"
+        extraction_strategy: str = "auto",
+        cancel_requested_callback: Optional[Callable[[], Awaitable[bool]]] = None,
+        process_id_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> ProcessingResult:
         """Process a PDF document through all pipeline stages.
 
@@ -98,6 +102,7 @@ class DocumentPipelineOrchestrator:
 
             # Initialize pipeline status
             await self._initialize_pipeline(document_id)
+            await self._raise_if_cancel_requested(cancel_requested_callback)
 
             # Stage 1: Parse PDF
             logger.info("Starting PDF parsing for document %s", document_id)
@@ -106,6 +111,7 @@ class DocumentPipelineOrchestrator:
             from .pdfx_parser import parse_pdf_document
 
             async def _track_parser_progress(message: str) -> None:
+                await self._raise_if_cancel_requested(cancel_requested_callback)
                 await self.tracker.track_pipeline_progress(
                     document_id,
                     ProcessingStage.PARSING,
@@ -120,12 +126,15 @@ class DocumentPipelineOrchestrator:
                 user_id,
                 extraction_strategy,
                 progress_callback=_track_parser_progress,
+                process_id_callback=process_id_callback,
+                cancel_requested_callback=cancel_requested_callback,
             )
 
             # Extract elements and file paths from the result
             elements = parse_result["elements"]
             pdfx_json_path = parse_result.get("pdfx_json_path")
             processed_json_path = parse_result.get("processed_json_path")
+            await self._raise_if_cancel_requested(cancel_requested_callback)
 
             # Update database with file paths
             await self._update_file_paths(document_id, pdfx_json_path, processed_json_path)
@@ -144,6 +153,7 @@ class DocumentPipelineOrchestrator:
             try:
                 hierarchy_start = time.monotonic()
                 logger.info("Resolving section hierarchy for document %s", document_id)
+                await self._raise_if_cancel_requested(cancel_requested_callback)
                 # Send progress update to prevent UI freeze perception
                 await self.tracker.track_pipeline_progress(
                     document_id,
@@ -167,6 +177,7 @@ class DocumentPipelineOrchestrator:
 
             # Stage 2: Chunk document
             logger.info("Starting chunking for document %s", document_id)
+            await self._raise_if_cancel_requested(cancel_requested_callback)
             await self._update_status(document_id, ProcessingStage.CHUNKING)
 
             from .chunk import chunk_parsed_document
@@ -183,6 +194,7 @@ class DocumentPipelineOrchestrator:
 
             # Stage 3: Store to Weaviate (Weaviate handles embeddings)
             logger.info("Storing to Weaviate for document %s", document_id)
+            await self._raise_if_cancel_requested(cancel_requested_callback)
             await self._update_status(document_id, ProcessingStage.STORING)
 
             from .store import store_to_weaviate
@@ -215,6 +227,38 @@ class DocumentPipelineOrchestrator:
                 duration_seconds=duration
             )
 
+        except PDFCancellationError as e:
+            logger.info("Pipeline cancelled for document %s: %s", document_id, e)
+            await self._sync_sql_document_status(
+                document_id,
+                status="failed",
+                error_message=str(e),
+            )
+            try:
+                from src.lib.weaviate_client.documents import update_document_status_detailed
+                await update_document_status_detailed(document_id, self._current_user_id, embedding_status="failed")
+            except Exception as status_error:
+                logger.warning(
+                    "Failed to mark embedding status as failed for cancelled document %s: %s",
+                    document_id,
+                    status_error,
+                )
+            await self.tracker.track_pipeline_progress(
+                document_id,
+                ProcessingStage.FAILED,
+                message=str(e),
+            )
+
+            duration = (datetime.now() - start_time).total_seconds()
+            return ProcessingResult(
+                success=False,
+                document_id=document_id,
+                stages_completed=stages_completed,
+                error=str(e),
+                duration_seconds=duration,
+                cancelled=True,
+            )
+
         except Exception as e:
             logger.error("Pipeline failed for document %s: %s", document_id, e)
 
@@ -230,6 +274,16 @@ class DocumentPipelineOrchestrator:
                 error=str(e),
                 duration_seconds=duration
             )
+
+    async def _raise_if_cancel_requested(
+        self,
+        cancel_requested_callback: Optional[Callable[[], Awaitable[bool]]],
+    ) -> None:
+        """Raise cancellation exception when caller requested cancellation."""
+        if not cancel_requested_callback:
+            return
+        if await cancel_requested_callback():
+            raise PDFCancellationError("Processing cancelled by user request")
 
     def validate_pipeline_requirements(self) -> Dict[str, bool]:
         """Validate all pipeline requirements are met.

@@ -585,7 +585,16 @@ const BatchPage: React.FC = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to start batch');
+        let message = 'Failed to start batch';
+        try {
+          const payload = await response.json();
+          if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+            message = payload.detail;
+          }
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(message);
       }
 
       const batch = await response.json();

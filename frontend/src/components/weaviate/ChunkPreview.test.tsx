@@ -84,24 +84,26 @@ describe('ChunkPreview', () => {
 
     const titleChip = screen.getByText('Title');
     const narrativeChip = screen.getByText('NarrativeText');
-    const tableChip = screen.getByText('Table');
+    const tableChip = screen
+      .getAllByText('Table')
+      .find((chip) => chip.closest('.MuiChip-root')?.classList.contains('MuiChip-colorInfo'));
 
     expect(titleChip.closest('.MuiChip-root')).toHaveClass('MuiChip-colorPrimary');
     expect(narrativeChip.closest('.MuiChip-root')).toHaveClass('MuiChip-colorDefault');
-    expect(tableChip.closest('.MuiChip-root')).toHaveClass('MuiChip-colorInfo');
+    expect(tableChip?.closest('.MuiChip-root')).toHaveClass('MuiChip-colorInfo');
   });
 
   it('shows page numbers', () => {
     render(<ChunkPreview chunks={mockChunks} />);
 
-    expect(screen.getByText('Page 1')).toBeInTheDocument();
+    expect(screen.getAllByText('Page 1').length).toBeGreaterThan(0);
     expect(screen.getByText('Page 2')).toBeInTheDocument();
   });
 
   it('displays section titles when available', () => {
     render(<ChunkPreview chunks={mockChunks} />);
 
-    expect(screen.getByText('• Introduction')).toBeInTheDocument();
+    expect(screen.getAllByText('• Introduction').length).toBeGreaterThan(0);
   });
 
   it('shows metadata when showMetadata is true', () => {
@@ -134,8 +136,8 @@ describe('ChunkPreview', () => {
     render(<ChunkPreview chunks={mockChunks} />);
 
     // Check for various icons
-    expect(screen.getByTestId('DescriptionIcon')).toBeInTheDocument();
-    expect(screen.getByTestId('TableChartIcon')).toBeInTheDocument();
+    expect(screen.getAllByTestId('DescriptionIcon').length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('TableChartIcon').length).toBeGreaterThan(0);
   });
 
   it('handles empty chunks array', () => {

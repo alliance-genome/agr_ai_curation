@@ -96,6 +96,18 @@ const Settings: React.FC<SettingsProps> = ({
   const [showSuccessSnackbar, setShowSuccessSnackbar] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
 
+  React.useEffect(() => {
+    if (!showSuccessSnackbar) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowSuccessSnackbar(false);
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
+  }, [showSuccessSnackbar]);
+
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
   };
@@ -442,6 +454,7 @@ const Settings: React.FC<SettingsProps> = ({
       <Snackbar
         open={showSuccessSnackbar}
         autoHideDuration={3000}
+        disableWindowBlurListener
         onClose={() => setShowSuccessSnackbar(false)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
