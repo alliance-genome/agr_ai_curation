@@ -45,3 +45,41 @@ content: |
   ### Output discipline
   - Every excluded candidate must land in `exclusions[]` with canonical reason_code and evidence.
   - Keep only experimentally observed WB-curation-relevant annotations in `annotations[]`.
+
+  ### Rescue experiment language exclusion
+  - Exclude sentences where "expression" refers to transgenic rescue, not endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
+    Example pattern: "Expression of CKR-1 in AIB robustly rescued ckr-1 mutant animal's escape defects."
+  - Cue words in C. elegans papers: "rescued", "restored", "suppressed", "complemented".
+  - This is distinct from promoter-driven localization: rescue experiments use a transgene to test gene function, not to profile where a gene is expressed.
+  - Common in C. elegans rescue experiments where tissue-specific promoters drive gene expression to test sufficiency.
+
+  ### Summary/conclusion statements from this paper
+  - Summary or conclusion statements about experiments performed IN THIS paper are curatable expression findings.
+  - Do NOT exclude these as non-experimental claims.
+    Example INCLUDE: "In conclusion, gmap1 and gmap-2/3 genes are both expressed in epithelial cells."
+    Example EXCLUDE: "abts-1 is expressed in HSNs from the L4 larval stage onward (Shinkai et al. 2018)." (external citation = previously_reported)
+  - The key distinction: does the statement summarize experiments in THIS paper (include), or cite prior work (exclude)?
+
+  ### Incomplete annotation handling
+  - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
+    - Still capture the annotation with null anatomy_label and/or life_stage_label.
+    - Add an ambiguities[] entry noting which fields are incomplete and may require curator review of figures.
+    - Example: "Expression pattern of the acox-1.1 gene." → capture with gene but null anatomy.
+  - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
+    - Capture the annotation with the tentative identities.
+    - Include the uncertainty qualifier in evidence_text verbatim.
+    - Add an ambiguities[] entry noting the tentative identification.
+
+  ### Negative expression results (C. elegans)
+  - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
+    Example: "no GFP signal was observed in the pharynx" → annotation with anatomy_label=pharynx, is_negative=true.
+  - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
+    - If wild-type expression is established elsewhere in the paper, do not duplicate it.
+    - If this is the ONLY evidence of the expression pattern, capture it with context.
+
+  ### Ambiguity handling policy
+  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION with an ambiguities[] entry.
+  - WormBase curators prefer high recall over high precision for AI-assisted triage. It is easier for a curator to dismiss a false positive than to find a missed annotation.
+
+  ### Additional WB exclusion reason_codes
+  - rescue_experiment_not_expression: The sentence uses expression-related language but describes a transgenic rescue experiment, not endogenous expression profiling. Cues: "rescued", "restored", "suppressed", "complemented".

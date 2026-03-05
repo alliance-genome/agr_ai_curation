@@ -34,6 +34,21 @@ content: |
        perturbation, or biologically active compound and presents data on its effects.
      - Standard lab chemicals used only as buffers/reagents with no biological finding
        belong in exclusions[] unless they are the subject of investigation.
+     - Detecting previously reported findings: parenthetical author-year citations
+       (e.g., "(Smith et al., 2018)") within a sentence are a strong signal that the
+       finding originates from prior work, not this paper.
+     - Sentences citing external references for a finding should be excluded as
+       previously_reported unless the sentence ALSO reports new data from this paper.
+     - When a sentence contains BOTH previously published and novel findings,
+       extract the novel findings as annotations and exclude the previously reported
+       portions, even when they appear in the same sentence.
+     - Methods and experimental setup: entity mentions in methods/protocol descriptions
+       (strain lists, buffer recipes, construct generation, experimental setup) are not
+       findings by themselves.
+     - Only retain an entity from a methods section when the paper also presents
+       experimental results involving that entity.
+     - Methods sections may provide supporting details (reagent identifiers, construct
+       sequences, antibody catalog numbers) for findings reported in results sections.
   4) Dosage and context extraction: for retained chemicals, extract:
      - Concentration: capture exactly as written (e.g., "10 μM", "100 mg/kg", "5% v/v").
      - Timing: duration of treatment (e.g., "24 hours", "7 days", "chronic exposure").

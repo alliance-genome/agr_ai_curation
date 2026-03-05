@@ -24,7 +24,8 @@ content: |
 
   <core_policy>
   Inclusion gate:
-  - Keep an annotation only when evidence in this paper supports a direct expression finding.
+  - Keep an annotation only when evidence in this paper supports an expression finding
+    (including summary or conclusion statements about experiments performed in this paper).
 
   Exclude with canonical reason_code when applicable:
   - previously_reported
@@ -33,6 +34,7 @@ content: |
   - promoter_driven_marker_localization
   - mutant_background_only
   - structural_label_or_fusion_only
+  - rescue_experiment_not_expression
   - insufficient_experimental_evidence
   - out_of_scope
   - ambiguous_entity
@@ -47,6 +49,43 @@ content: |
   - Keep valid experimentally observed positives (directly supported experimental findings).
   - Capture reagent genotype strings exactly as written, without inference.
   - Prefer the most specific anatomy term supported by evidence and active MOD policy overlays.
+  - Summary and conclusion statements that describe experimental results from THIS paper
+    are valid findings. Do not exclude them as non-experimental claims. Distinguish these
+    from summaries of previously published results, which cite external references.
+  - Detecting previously reported findings: parenthetical author-year citations
+    (e.g., "(Smith et al., 2018)") within a sentence are a strong signal that the
+    finding originates from prior work, not this paper.
+  - Sentences citing external references for a finding should be excluded as
+    previously_reported unless the sentence ALSO reports new data from this paper.
+  - When a sentence contains BOTH previously published and novel findings,
+    extract the novel findings as annotations and exclude the previously reported
+    portions, even when they appear in the same sentence.
+  - Methods and experimental setup: entity mentions in methods/protocol descriptions
+    (strain lists, construct generation, experimental setup) are not findings by themselves.
+  - Only retain an entity from a methods section when the paper also presents
+    experimental results involving that entity.
+  - Sentences referencing specific figures, tables, or panels (e.g., "Fig. 3A", "Table 2")
+    are strong indicators of direct experimental results from this paper.
+
+  Rescue/overexpression false positives:
+  - Sentences where "expression" refers to transgenic rescue or ectopic overexpression
+    experiments are NOT gene expression profiling findings. Exclude these with
+    reason_code: rescue_experiment_not_expression.
+  - Cue phrases: "rescued", "restored", "suppressed the phenotype", "complemented",
+    "ectopic expression of X in Y caused/resulted in..."
+  - Example: "Expression of GeneX in TissueY rescued the mutant phenotype"
+    — this is a rescue experiment, NOT an expression pattern finding.
+  - Only retain when the sentence reports WHERE a gene is expressed as a novel observation,
+    not when expression is used as a tool to test gene function.
+
+  Negative expression results:
+  - When authors explicitly state no expression was detected in a specific tissue or
+    life stage (e.g., "no GFP signal was observed in the pharynx"), capture this as a
+    valid annotation with is_negative: true.
+  - "Expression unchanged in perturbation" (e.g., "GeneX expression in treated embryos
+    was not different from wild type") is generally NOT a new expression finding — it
+    confirms existing expression under altered conditions.
+  - Absence of discussion about expression is NOT a negative result.
   </core_policy>
 
   <output_contract>

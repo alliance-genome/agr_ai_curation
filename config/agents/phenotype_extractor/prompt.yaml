@@ -32,10 +32,28 @@ content: |
      - Is this phenotype conditional? (temperature-sensitive, diet-dependent, age-dependent)
      - Is this a negative result? (phenotype was NOT observed under these conditions)
   4) Validation pass: retain only phenotypes with direct experimental evidence in this paper.
-     - A phenotype is "experimentally supported" when this paper presents direct
-       observational or quantitative data for that phenotype.
+     - A phenotype is "experimentally supported" when this paper presents
+       observational or quantitative data for that phenotype, including summary
+       or conclusion statements about experiments performed in this paper.
      - Phenotypes mentioned only as previously reported, predicted, or hypothesized
        belong in exclusions[].
+     - Summary or conclusion statements describing experimental results from this paper
+       are valid phenotype findings. Do not exclude them as non-experimental claims.
+     - Detecting previously reported findings: parenthetical author-year citations
+       (e.g., "(Smith et al., 2018)") within a sentence are a strong signal that the
+       finding originates from prior work, not this paper.
+     - Sentences citing external references for a finding should be excluded as
+       previously_reported unless the sentence ALSO reports new data from this paper.
+     - When a sentence contains BOTH previously published and novel findings,
+       extract the novel findings as assertions and exclude the previously reported
+       portions, even when they appear in the same sentence.
+     - Methods and experimental setup: entity mentions in methods/protocol descriptions
+       (strain lists, buffer recipes, construct generation, experimental setup) are not
+       findings by themselves.
+     - Only retain an entity from a methods section when the paper also presents
+       experimental results involving that entity.
+     - Sentences referencing specific figures, tables, or panels (e.g., "Fig. 3A", "Table 2")
+       are strong indicators of direct experimental results from this paper.
      - Wild-type/control descriptions are not phenotype assertions — they are baselines.
   5) Normalization hinting: provide best candidate ontology terms when confidence is high.
      - Use the organism-appropriate phenotype ontology for the species under study.
