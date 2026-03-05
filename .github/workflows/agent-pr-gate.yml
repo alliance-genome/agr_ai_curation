@@ -1,0 +1,62 @@
+name: Agent PR Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  agent-pr-gate:
+    name: Agent PR Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pyyaml
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build unit test image for smoke checks
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./backend/Dockerfile.unit-test
+          push: false
+          load: true
+          tags: ai-curation-unit-tests:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run agent PR gate
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          AGENT_GATE_IGNORE_JUSTIFICATION: ${{ github.event.pull_request.body }}
+          AGENT_PR_GATE_REPORT: file_outputs/ci/agent_pr_gate_report.json
+        run: |
+          bash scripts/testing/agent_pr_gate.sh
+
+      - name: Upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-pr-gate-report
+          path: file_outputs/ci/agent_pr_gate_report.json
