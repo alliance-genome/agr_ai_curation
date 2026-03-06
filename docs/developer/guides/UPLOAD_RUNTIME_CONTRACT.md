@@ -1,6 +1,6 @@
 # Upload Runtime Contract
 
-Last updated: 2026-03-06  
+Last updated: 2026-03-06
 Related issues: ALL-24 (this contract), ALL-23 (implementation refactor)
 
 ## Goal
@@ -94,7 +94,7 @@ Required compensation behavior by failure point:
 | Save upload file fails | No-op | No-op | No-op | No-op |
 | Weaviate create fails after file save | Delete saved upload directory | No-op | No-op | No-op |
 | SQL document write fails after Weaviate create | Delete saved upload directory | Delete created Weaviate document/chunks | Roll back transaction | No job row should remain |
-| Durable job creation fails after SQL+Weaviate success | Keep or clean up deterministically (must choose one policy and implement consistently) | Must match filesystem policy | Must match filesystem/Weaviate policy | Return explicit error; no partial "active" job |
+| Durable job creation fails after SQL+Weaviate success | Delete saved upload directory | Delete created Weaviate document/chunks | Delete SQL document row before response is finalized | Return explicit error; no partial "active" job |
 | Pipeline fails during parsing/chunking/storing | Keep raw file and metadata for debugging/retry | Remove partial chunks when write is non-atomic, or mark partial write as failed and quarantined | Mark failed status + error message | Mark `failed` terminal |
 | Cancellation accepted before run | Keep upload artifacts unless explicit delete policy says otherwise | No processing writes should occur | Set projection to failed/cancelled | Mark `cancelled` terminal |
 
@@ -120,17 +120,17 @@ Required compensation behavior by failure point:
 
 These are known gaps between current code behavior and the contract above:
 
-1. `get_document_endpoint` returns status directly from Weaviate and does not apply durable-job precedence used by `/documents/{id}/status`.  
+1. `get_document_endpoint` returns status directly from Weaviate and does not apply durable-job precedence used by `/documents/{id}/status`.
    Owner area: `backend/src/api/documents.py`.
-2. `mark_completed`, `mark_failed`, and `mark_cancelled` can overwrite already-terminal job rows; first-terminal-write-wins is not enforced.  
+2. `mark_completed`, `mark_failed`, and `mark_cancelled` can overwrite already-terminal job rows; first-terminal-write-wins is not enforced.
    Owner area: `backend/src/lib/pdf_jobs/service.py`.
-3. Upload rollback is incomplete for non-`IntegrityError` failures after file save / Weaviate create (can leave orphaned files or Weaviate records).  
+3. Upload rollback is incomplete for non-`IntegrityError` failures after file save / Weaviate create (can leave orphaned files or Weaviate records).
    Owner area: `backend/src/api/documents.py` upload flow.
-4. Failure to create durable job row after successful SQL+Weaviate writes can return 500 with partially persisted upload state and no deterministic reconciliation policy.  
+4. Failure to create durable job row after successful SQL+Weaviate writes can return 500 with partially persisted upload state instead of executing the explicit cleanup policy in section 3.
    Owner area: `backend/src/api/documents.py` (`create_job` call path).
-5. Cancellation race behavior between late completion and cancel terminalization is not explicitly serialized; current flow can produce ambiguous winner semantics.  
+5. Cancellation race behavior between late completion and cancel terminalization is not explicitly serialized; current flow can produce ambiguous winner semantics.
    Owner areas: `backend/src/api/documents.py`, `backend/src/lib/pdf_jobs/service.py`.
-6. No dedicated automated tests currently lock in terminal immutability and terminal conflict resolution for `pdf_processing_jobs` transitions.  
+6. No dedicated automated tests currently lock in terminal immutability and terminal conflict resolution for `pdf_processing_jobs` transitions.
    Owner area: `backend/tests/unit` (new service-level tests needed).
 
 ## 6) Implementation checklist for ALL-23
@@ -140,4 +140,3 @@ These are known gaps between current code behavior and the contract above:
 - [ ] Apply one consistent status projection function across all document/status endpoints.
 - [ ] Implement explicit compensation behavior for every matrix failure point.
 - [ ] Add tests for cancellation races, terminal immutability, and replay/idempotency scenarios.
-
