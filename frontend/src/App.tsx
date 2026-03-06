@@ -34,6 +34,8 @@ import theme from './theme'
 import './App.css'
 
 const queryClient = new QueryClient()
+const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
+const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
 
 /**
  * ProtectedRoutes: Wrapper component that checks authentication before rendering routes
@@ -96,6 +98,11 @@ export function AppContent() {
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'warning' | 'info';
+    autoHideDurationMs?: number;
+    anchorOrigin?: {
+      vertical: 'top' | 'bottom';
+      horizontal: 'left' | 'center' | 'right';
+    };
   }>({ open: false, message: '', severity: 'info' });
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
@@ -154,6 +161,8 @@ export function AppContent() {
         open: true,
         message: detail.message,
         severity: detail.severity ?? 'info',
+        autoHideDurationMs: detail.autoHideDurationMs,
+        anchorOrigin: detail.anchorOrigin,
       });
     };
 
@@ -484,9 +493,9 @@ export function AppContent() {
 
       <Snackbar
         open={globalSnackbar.open}
-        autoHideDuration={4000}
+        autoHideDuration={globalSnackbar.autoHideDurationMs ?? DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS}
         onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        anchorOrigin={globalSnackbar.anchorOrigin ?? DEFAULT_GLOBAL_SNACKBAR_ANCHOR}
       >
         <Alert
           severity={globalSnackbar.severity}

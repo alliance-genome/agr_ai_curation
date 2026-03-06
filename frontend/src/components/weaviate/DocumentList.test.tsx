@@ -4,6 +4,11 @@ import DocumentList from './DocumentList';
 import { createMockDocument } from '../../test/test-utils';
 
 const refetchHealthMock = vi.fn();
+const emitGlobalToastMock = vi.fn();
+
+vi.mock('../../lib/globalNotifications', () => ({
+  emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
+}));
 
 vi.mock('../../services/weaviate', async () => {
   const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
@@ -135,6 +140,7 @@ describe('DocumentList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     refetchHealthMock.mockReset();
+    emitGlobalToastMock.mockReset();
   });
 
   it('renders document list with all documents', () => {
@@ -357,6 +363,95 @@ describe('DocumentList', () => {
       expect(onRefresh).toHaveBeenCalled();
     });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fetchSpy.mockRestore();
+  });
+
+  it('shows one background-processing toast after a successful single upload', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes('/api/weaviate/documents/upload')) {
+        return new Response(JSON.stringify({ document_id: crypto.randomUUID() }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/weaviate/documents/pdf-extraction-health')) {
+        return new Response(JSON.stringify({ status: 'healthy', service_url: 'http://pdfx' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const { container } = render(<DocumentList {...defaultProps} />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = [new File(['a'], 'doc-a.pdf', { type: 'application/pdf' })];
+
+    fireEvent.change(fileInput, { target: { files } });
+
+    await waitFor(() => {
+      expect(emitGlobalToastMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(emitGlobalToastMock).toHaveBeenCalledWith({
+      message: 'Your PDFs are processing in the background. You can safely navigate away.',
+      severity: 'info',
+      autoHideDurationMs: 8000,
+      anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  it('shows one background-processing toast for a multi-file upload initiation event', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes('/api/weaviate/documents/upload')) {
+        return new Response(JSON.stringify({ document_id: crypto.randomUUID() }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/weaviate/documents/pdf-extraction-health')) {
+        return new Response(JSON.stringify({ status: 'healthy', service_url: 'http://pdfx' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const { container } = render(<DocumentList {...defaultProps} />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = [
+      new File(['a'], 'doc-a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'doc-b.pdf', { type: 'application/pdf' }),
+    ];
+
+    fireEvent.change(fileInput, { target: { files } });
+
+    await waitFor(() => {
+      const uploadCalls = fetchSpy.mock.calls.filter(([url]) =>
+        String(url).includes('/api/weaviate/documents/upload')
+      );
+      expect(uploadCalls).toHaveLength(2);
+    });
+
+    expect(emitGlobalToastMock).toHaveBeenCalledTimes(1);
 
     fetchSpy.mockRestore();
   });
