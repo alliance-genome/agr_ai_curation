@@ -174,6 +174,47 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('PDF processing completed: new.pdf')).toBeInTheDocument();
   });
 
+  it('ignores failed PDF snapshots when cancellation has been requested', async () => {
+    vi.useFakeTimers();
+
+    let pdfPoll = 0;
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        pdfPoll += 1;
+        if (pdfPoll === 1) {
+          return jsonResponse({ jobs: [] });
+        }
+        return jsonResponse({
+          jobs: [
+            { job_id: 'cancel-job', status: 'failed', filename: 'cancel-me.pdf', document_id: 'cancel-doc', cancel_requested: true },
+            { job_id: 'cancel-job', status: 'cancelled', filename: 'cancel-me.pdf', document_id: 'cancel-doc', cancel_requested: true },
+          ],
+        });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(global.fetch).toHaveBeenCalled();
+    expect(screen.queryByText('PDF processing failed: cancel-me.pdf')).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('PDF processing failed: cancel-me.pdf')).not.toBeInTheDocument();
+    expect(screen.getByText('PDF processing cancelled: cancel-me.pdf')).toBeInTheDocument();
+  });
+
   it('skips PDF job polling on documents route and skips batch polling on batch route', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

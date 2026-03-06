@@ -30,6 +30,7 @@ import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
 import { LATEST_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
+import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
 import theme from './theme'
 import './App.css'
 
@@ -192,16 +193,16 @@ export function AppContent() {
           });
           if (response.ok) {
             const payload = (await response.json()) as {
-              jobs?: Array<{ job_id: string; status: string; filename?: string; document_id: string }>;
+              jobs?: Array<{ job_id: string; status: string; filename?: string; document_id: string; cancel_requested?: boolean }>;
             };
             const jobs = payload.jobs ?? [];
 
             for (const job of jobs) {
-              const status = String(job.status).toLowerCase();
-              if (!['completed', 'failed', 'cancelled'].includes(status)) {
+              const notification = buildPdfTerminalNotification(job);
+              if (!notification) {
                 continue;
               }
-              const terminalKey = `${job.job_id}:${status}`;
+              const terminalKey = notification.key;
               const alreadySeen = seenPdfTerminalRef.current.has(terminalKey);
               if (!seededPdfJobsRef.current) {
                 seenPdfTerminalRef.current.add(terminalKey);
@@ -212,14 +213,7 @@ export function AppContent() {
               }
 
               seenPdfTerminalRef.current.add(terminalKey);
-              const filename = job.filename || job.document_id;
-              if (status === 'completed') {
-                setGlobalSnackbar({ open: true, message: `PDF processing completed: ${filename}`, severity: 'success' });
-              } else if (status === 'cancelled') {
-                setGlobalSnackbar({ open: true, message: `PDF processing cancelled: ${filename}`, severity: 'info' });
-              } else {
-                setGlobalSnackbar({ open: true, message: `PDF processing failed: ${filename}`, severity: 'error' });
-              }
+              setGlobalSnackbar({ open: true, message: notification.message, severity: notification.severity });
             }
 
             seededPdfJobsRef.current = true;
