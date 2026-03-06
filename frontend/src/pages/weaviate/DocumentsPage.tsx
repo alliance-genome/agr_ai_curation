@@ -14,6 +14,10 @@ import {
   PdfProcessingJob,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
+import {
+  dispatchChatDocumentChanged,
+  loadDocumentForChat,
+} from '@/features/documents/pdfUploadFlow';
 
 type PipelineState = {
   busy: boolean;
@@ -343,39 +347,18 @@ const DocumentsPage: React.FC = () => {
   const handleLoad = React.useCallback(async (summary: DocumentSummary) => {
     try {
       console.log('[DocumentsPage] Loading document for chat:', summary.id, summary.filename);
-
-      // Save document to backend - this is the source of truth
-      const response = await fetch('/api/chat/document/load', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ document_id: summary.id }),
-      });
-
-      const payload = await response.json().catch((err) => {
-        console.error('[DocumentsPage] Failed to parse response:', err);
-        return {};
-      });
-
-      if (!response.ok) {
-        const detail = payload?.detail ?? 'Failed to load document for chat';
-        console.error('[DocumentsPage] Load failed:', detail);
-        window.alert(detail);
-        return;
-      }
-
+      const payload = await loadDocumentForChat(summary.id);
       console.log('[DocumentsPage] Document saved to backend:', payload);
 
       // Dispatch chat-document-changed event so Chat component updates immediately
       // This triggers Chat's event listener which will call fetchActiveDocument()
       // and load the PDF in the viewer
       console.log('[DocumentsPage] Dispatching chat-document-changed event with payload:', payload);
-      window.dispatchEvent(new CustomEvent('chat-document-changed', { detail: payload }));
+      dispatchChatDocumentChanged(payload);
 
     } catch (error) {
       console.error('[DocumentsPage] Error loading document:', error);
-      window.alert('Failed to load document for chat');
+      window.alert(error instanceof Error ? error.message : 'Failed to load document for chat');
     }
   }, []);
 
