@@ -2,7 +2,7 @@
 
 Provides endpoints for the Agent Studio feature:
 - GET /catalog - Get all agent prompts organized by category
-- POST /chat - Stream a conversation with Opus
+- POST /chat - Stream a conversation with the configured Anthropic chat model
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
@@ -78,8 +78,69 @@ from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus-4-6"
-ANTHROPIC_OPUS_MODEL = (os.getenv("ANTHROPIC_OPUS_MODEL") or DEFAULT_ANTHROPIC_OPUS_MODEL).strip()
+PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
+LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
+
+
+def _list_anthropic_catalog_models() -> List[Any]:
+    """Return Anthropic models from catalog, sorted with defaults first."""
+    try:
+        models = list_model_definitions()
+    except Exception as exc:
+        logger.warning("Failed to load model catalog while resolving prompt explorer model: %s", exc)
+        return []
+
+    anthropic_models = [
+        model
+        for model in models
+        if str(getattr(model, "provider", "") or "").strip().lower() == "anthropic"
+    ]
+    anthropic_models.sort(
+        key=lambda model: (
+            not bool(getattr(model, "default", False)),
+            str(getattr(model, "name", "") or "").lower(),
+        )
+    )
+    return anthropic_models
+
+
+def _resolve_prompt_explorer_model() -> tuple[str, str]:
+    """
+    Resolve the model id/name for Agent Studio chat and suggestion submission.
+
+    Resolution order:
+    1. PROMPT_EXPLORER_MODEL_ID env override
+    2. Legacy ANTHROPIC_OPUS_MODEL env override
+    3. Anthropic model from config/models.yaml (default first)
+    """
+    configured_model_id = (
+        os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR)
+        or os.getenv(LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR)
+        or ""
+    ).strip()
+
+    catalog_models = _list_anthropic_catalog_models()
+    catalog_name_by_id = {
+        str(getattr(model, "model_id", "")).strip(): str(getattr(model, "name", "")).strip()
+        for model in catalog_models
+        if str(getattr(model, "model_id", "")).strip()
+    }
+
+    if configured_model_id:
+        configured_name = catalog_name_by_id.get(configured_model_id) or configured_model_id
+        return configured_model_id, configured_name
+
+    if catalog_models:
+        selected = catalog_models[0]
+        selected_id = str(getattr(selected, "model_id", "")).strip()
+        selected_name = str(getattr(selected, "name", "")).strip() or selected_id
+        if selected_id:
+            return selected_id, selected_name
+
+    raise ValueError(
+        "No Agent Studio Anthropic model configured. Set PROMPT_EXPLORER_MODEL_ID "
+        "(or legacy ANTHROPIC_OPUS_MODEL), or add an anthropic model to config/models.yaml."
+    )
 
 # Create router with prefix
 router = APIRouter(prefix="/api/agent-studio")
@@ -951,7 +1012,7 @@ async def test_agent_endpoint(
 
 
 # ============================================================================
-# Chat Endpoints (Opus)
+# Chat Endpoints (Configured Anthropic Model)
 # ============================================================================
 
 # Convert tool definition to Anthropic format
@@ -1918,11 +1979,11 @@ async def _handle_tool_call(
 
 @router.post(
     "/chat",
-    summary="Chat with Opus",
+    summary="Chat with configured model",
     description="""
-    Stream a conversation with Claude Opus about prompts.
+    Stream a conversation with the configured Anthropic model about prompts.
 
-    Opus can discuss prompts, suggest improvements, and submit suggestions
+    The assistant can discuss prompts, suggest improvements, and submit suggestions
     to the development team using the submit_prompt_suggestion tool.
 
     Uses the effort parameter (beta) set to "medium" for optimal quality/cost balance.
@@ -1939,7 +2000,7 @@ async def chat_with_opus(
     request: ChatRequest,
     user: Dict[str, Any] = get_auth_dependency()
 ):
-    """Stream a conversation with Opus with tool support."""
+    """Stream a conversation with the configured Anthropic model with tool support."""
     import anthropic
 
     # Get API key
@@ -1950,6 +2011,11 @@ async def chat_with_opus(
             status_code=500,
             detail="Chat service not properly configured"
         )
+    try:
+        anthropic_model_id, anthropic_model_name = _resolve_prompt_explorer_model()
+    except ValueError as exc:
+        logger.error("%s", exc)
+        raise HTTPException(status_code=500, detail="Agent Studio chat model is not configured")
 
     # Get user info for attribution and prompt personalization
     user_email = user.get("email", user.get("sub", "unknown"))
@@ -2010,7 +2076,7 @@ async def chat_with_opus(
             # Build API call parameters for beta API with effort parameter
             # Using effort="medium" for optimal quality/cost balance (76% fewer tokens)
             api_params = {
-                "model": ANTHROPIC_OPUS_MODEL,
+                "model": anthropic_model_id,
                 "betas": ["effort-2025-11-24"],
                 "max_tokens": 16384,
                 "system": system_prompt,
@@ -2019,8 +2085,9 @@ async def chat_with_opus(
                 "output_config": {"effort": "medium"},
             }
             logger.info(
-                "Opus chat using model='%s' and effort='medium' for balanced quality/cost",
-                ANTHROPIC_OPUS_MODEL,
+                "Agent Studio chat using model='%s' (%s) and effort='medium' for balanced quality/cost",
+                anthropic_model_id,
+                anthropic_model_name,
             )
 
             while True:
@@ -2317,25 +2384,38 @@ async def _process_suggestion_background(
     api_key: str,
 ) -> None:
     """
-    Background task that processes the Opus suggestion submission.
+    Background task that processes suggestion submission with configured chat model.
 
     This runs after the HTTP response has been sent to the user.
     On success, sends the suggestion via SNS.
     On failure, sends an error notification via SNS.
     """
     try:
-        logger.info('[Background] Starting Opus suggestion processing for %s', user_email)
+        logger.info('[Background] Starting suggestion processing for %s', user_email)
 
-        # Call Opus synchronously to get the tool call
+        try:
+            anthropic_model_id, anthropic_model_name = _resolve_prompt_explorer_model()
+        except ValueError as exc:
+            error_msg = str(exc)
+            logger.error('[Background] %s', error_msg)
+            _send_error_notification_sns(user_email, error_msg, context)
+            return
+
+        # Call Anthropic synchronously to get the tool call
         client = anthropic.Anthropic(api_key=api_key)
 
         response = client.messages.create(
-            model=ANTHROPIC_OPUS_MODEL,
+            model=anthropic_model_id,
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
             tools=[ANTHROPIC_SUGGESTION_TOOL],
             tool_choice={"type": "tool", "name": "submit_prompt_suggestion"},
+        )
+        logger.info(
+            "[Background] Suggestion submission model='%s' (%s)",
+            anthropic_model_id,
+            anthropic_model_name,
         )
 
         # Extract tool use from response
@@ -2346,7 +2426,7 @@ async def _process_suggestion_background(
                 break
 
         if not tool_use_block:
-            error_msg = "Opus did not call submit_prompt_suggestion despite forced tool choice"
+            error_msg = "Configured model did not call submit_prompt_suggestion despite forced tool choice"
             logger.error('[Background] %s', error_msg)
             _send_error_notification_sns(user_email, error_msg, context)
             return

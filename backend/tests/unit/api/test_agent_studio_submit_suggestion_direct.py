@@ -111,6 +111,7 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
     import src.api.agent_studio as api_module
 
     notified = {}
+    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-test")
 
     class _FakeMessagesClient:
         @staticmethod
@@ -143,4 +144,4 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
     )
 
     assert notified["user_email"] == "curator@example.org"
-    assert "Opus did not call submit_prompt_suggestion" in notified["error_message"]
+    assert "did not call submit_prompt_suggestion" in notified["error_message"]
