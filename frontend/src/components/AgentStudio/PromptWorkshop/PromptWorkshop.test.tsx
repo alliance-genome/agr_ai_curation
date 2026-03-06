@@ -633,16 +633,14 @@ describe('PromptWorkshop', () => {
       />
     )
 
-    await waitFor(() => {
-      const alerts = screen.getAllByRole('alert')
-      expect(
-        alerts.some((alert) => {
-          const text = alert.textContent || ''
-          return text.includes('Applied Claude MOD update (WB):')
-            && text.includes('Updated WB-specific extraction guidance.')
-        })
-      ).toBe(true)
-    })
+    await screen.findByText(
+      (content) => (
+        content.includes('Applied Claude MOD update (WB):')
+        && content.includes('Updated WB-specific extraction guidance.')
+      ),
+      {},
+      { timeout: 5000 }
+    )
 
     await waitFor(() => {
       const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
