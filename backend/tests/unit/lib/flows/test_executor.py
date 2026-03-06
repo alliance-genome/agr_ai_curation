@@ -188,7 +188,7 @@ class TestDbUserIdPropagation:
 
         monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
 
-        flow = _make_flow([_agent_node("n1", "pdf")])
+        flow = _make_flow([_agent_node("n1", "pdf_extraction")])
         assert flow_requires_document(flow, db_user_id=42) is True
         assert observed == [42]
 
@@ -634,7 +634,7 @@ class TestGetAllAgentToolsCreatedNames:
                 agent_id,
                 {
                     **MOCK_REGISTRY,
-                    "pdf": {
+                    "pdf_extraction": {
                         "name": "PDF Specialist",
                         "description": "Read PDFs",
                         "requires_document": True,
@@ -647,7 +647,7 @@ class TestGetAllAgentToolsCreatedNames:
 
         flow = _make_flow([
             _agent_node("n1", "gene"),
-            _agent_node("n2", "pdf"),
+            _agent_node("n2", "pdf_extraction"),
         ])
 
         # No document_id provided
@@ -691,7 +691,7 @@ class TestGetAllAgentToolsCreatedNames:
                 agent_id,
                 {
                     **MOCK_REGISTRY,
-                    "pdf": {
+                    "pdf_extraction": {
                         "name": "PDF Specialist",
                         "description": "Read PDFs",
                         "requires_document": True,
@@ -703,9 +703,9 @@ class TestGetAllAgentToolsCreatedNames:
         mock_streaming.return_value = MagicMock()
 
         flow = _make_flow([
-            _agent_node("n1", "pdf"),
+            _agent_node("n1", "pdf_extraction"),
             _agent_node("n2", "gene"),
-            _agent_node("n3", "pdf"),
+            _agent_node("n3", "pdf_extraction"),
         ])
 
         # No document — both pdf steps skipped
@@ -777,7 +777,7 @@ class TestBuildSupervisorUnavailableSteps:
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
-            _agent_node("n2", "pdf", step_goal="Read paper", display_name="PDF Specialist"),
+            _agent_node("n2", "pdf_extraction", step_goal="Read paper", display_name="PDF Specialist"),
         ])
 
         # Only gene tool was created (pdf was skipped)
@@ -824,9 +824,9 @@ class TestBuildSupervisorUnavailableSteps:
         """Duplicate agent where one step's tool was not created."""
         flow = _make_flow([
             _task_input_node(),
-            _agent_node("n1", "pdf", step_goal="Read abstract", display_name="PDF Specialist"),
+            _agent_node("n1", "pdf_extraction", step_goal="Read abstract", display_name="PDF Specialist"),
             _agent_node("n2", "gene", step_goal="Extract genes"),
-            _agent_node("n3", "pdf", step_goal="Read methods", display_name="PDF Specialist"),
+            _agent_node("n3", "pdf_extraction", step_goal="Read methods", display_name="PDF Specialist"),
         ])
 
         # Only step 2 (gene) was created; both pdf steps skipped
@@ -845,7 +845,7 @@ class TestBuildSupervisorUnavailableSteps:
         """Unavailable steps should not show [has custom instructions]."""
         flow = _make_flow([
             _task_input_node(),
-            _agent_node("n1", "pdf", custom_instructions="Focus on methods",
+            _agent_node("n1", "pdf_extraction", custom_instructions="Focus on methods",
                         display_name="PDF Specialist"),
         ])
 
@@ -933,7 +933,7 @@ class TestCreateFlowSupervisorNoTools:
             lambda agent_id: _metadata_from_registry(
                 agent_id,
                 {
-                    "pdf": {
+                    "pdf_extraction": {
                         "name": "PDF Specialist",
                         "description": "Read PDFs",
                         "requires_document": True,
@@ -945,8 +945,8 @@ class TestCreateFlowSupervisorNoTools:
 
         flow = _make_flow([
             _task_input_node(),
-            _agent_node("n1", "pdf", step_goal="Read paper"),
-            _agent_node("n2", "pdf", step_goal="Extract data"),
+            _agent_node("n1", "pdf_extraction", step_goal="Read paper"),
+            _agent_node("n2", "pdf_extraction", step_goal="Extract data"),
         ])
 
         with pytest.raises(ValueError, match="no agent tools could be created"):

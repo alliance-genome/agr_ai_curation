@@ -8,7 +8,7 @@ Key structure for PromptTemplate: agent_name + prompt_type + group_id
 - Base prompts: gene:system:NULL
 - Group rules: gene:group_rules:FB
 
-Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf', 'gene').
+Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf_extraction', 'gene').
 """
 
 import uuid
@@ -25,7 +25,7 @@ class PromptTemplate(Base):
     - Base prompts: gene:system:NULL
     - Group rules: gene:group_rules:FB
 
-    Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf', 'gene').
+    Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf_extraction', 'gene').
     """
 
     __tablename__ = "prompt_templates"
@@ -33,7 +33,7 @@ class PromptTemplate(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Identity (uses catalog_service.py AGENT_REGISTRY IDs)
-    agent_name = Column(String(100), nullable=False)  # e.g., 'pdf', 'gene', 'supervisor'
+    agent_name = Column(String(100), nullable=False)  # e.g., 'pdf_extraction', 'gene', 'supervisor'
     prompt_type = Column(String(50), nullable=False)  # e.g., 'system', 'format_gene_expression', 'group_rules'
     group_id = Column(String(20), nullable=True)  # NULL for base prompts, e.g., 'FB', 'WB', 'MGI' for group rules
 

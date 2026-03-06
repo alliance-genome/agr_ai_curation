@@ -57,7 +57,7 @@ class TestCustomAgentTestEndpoint:
             lambda _aid, db=None: SimpleNamespace(
                 parent_exists=True,
                 requires_document=True,
-                parent_agent_key="pdf",
+                parent_agent_key="pdf_extraction",
             ),
         )
 

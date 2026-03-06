@@ -24,7 +24,7 @@ def make_task_input_node(node_id: str = "task_input_1", task_instructions: str =
     }
 
 
-def make_agent_node(node_id: str, agent_id: str = "pdf", output_key: str = None) -> dict:
+def make_agent_node(node_id: str, agent_id: str = "pdf_extraction", output_key: str = None) -> dict:
     """Helper to create a valid agent node dict."""
     return {
         "id": node_id,
@@ -47,7 +47,7 @@ class TestFlowDefinitionTaskInputRequirement:
         # Create flow with only agent nodes (no task_input)
         flow_data = {
             "version": "1.0",
-            "nodes": [make_agent_node("n1", "pdf")],
+            "nodes": [make_agent_node("n1", "pdf_extraction")],
             "edges": [],
             "entry_node_id": "n1",
         }
@@ -67,7 +67,7 @@ class TestFlowDefinitionTaskInputRequirement:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "Extract gene mentions"),
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -83,7 +83,7 @@ class TestFlowDefinitionTaskInputRequirement:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", ""),  # Empty instructions
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -104,7 +104,7 @@ class TestFlowDefinitionTaskInputRequirement:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "   "),  # Whitespace only
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -139,7 +139,7 @@ class TestFlowDefinitionTaskInputRequirement:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "Test task"),
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "n1",  # Wrong - should be task_1
@@ -159,7 +159,7 @@ class TestFlowDefinitionTaskInputRequirement:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "Test task"),
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "n1", "target": "task_1"}],  # Wrong direction
             "entry_node_id": "task_1",
@@ -188,7 +188,7 @@ class TestFlowDefinitionTaskInputRequirement:
                         "output_key": "task_input",
                     }
                 },
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -206,7 +206,7 @@ class TestFlowDefinitionTaskInputRequirement:
                 "type": "task_input",
                 "position": {"x": 0, "y": 0},
                 "data": {
-                    "agent_id": "pdf",  # Wrong agent_id for task_input type
+                    "agent_id": "pdf_extraction",  # Wrong agent_id for task_input type
                     "agent_display_name": "Wrong Agent",
                     "task_instructions": "Test task",
                     "input_source": "user_query",
@@ -238,7 +238,7 @@ class TestFlowDefinitionOtherValidations:
                     "type": "agent",
                     "position": {"x": 100, "y": 100},
                     "data": {
-                        "agent_id": "pdf",
+                        "agent_id": "pdf_extraction",
                         "agent_display_name": "PDF",
                         "input_source": "previous_output",
                         "output_key": "pdf_output",
@@ -263,7 +263,7 @@ class TestFlowDefinitionOtherValidations:
                     "type": "agent",
                     "position": {"x": 100, "y": 100},
                     "data": {
-                        "agent_id": "pdf",
+                        "agent_id": "pdf_extraction",
                         "agent_display_name": "PDF",
                         "input_source": "previous_output",
                         "output_key": "task_input",  # Duplicate of task_input's output_key!
@@ -295,7 +295,7 @@ class TestFlowDefinitionOtherValidations:
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "Test task"),
-                make_agent_node("n1", "pdf", "pdf_output"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "nonexistent"}],
             "entry_node_id": "task_1",

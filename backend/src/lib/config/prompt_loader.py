@@ -117,7 +117,7 @@ def _upsert_prompt(
 
     Args:
         db: Database session
-        agent_name: Short agent name (e.g., "gene", "pdf")
+        agent_name: Short agent name (e.g., "gene", "pdf_extraction")
         prompt_type: "system" for base prompts, "group_rules" for group rules
         content: The prompt content
         group_id: None for base prompts, group ID for group rules
@@ -204,9 +204,9 @@ def _load_base_prompt(
         Agent name if loaded successfully, None otherwise
 
     Note:
-        The agent_name is derived from the folder name, which is the canonical
-        identifier matching AGENT_REGISTRY keys (e.g., "gene", "go_annotations",
-        "csv_formatter"). This avoids brittle string heuristics.
+        The agent_name is derived from folder name for backwards compatibility,
+        except for explicit canonical-id migrations (currently `pdf` ->
+        `pdf_extraction`) where prompt.yaml `agent_id` is authoritative.
     """
     prompt_yaml = agent_folder / "prompt.yaml"
 
@@ -229,17 +229,20 @@ def _load_base_prompt(
             logger.warning('Missing content in %s', prompt_yaml)
             return None
 
-        # Use folder name as agent_name - this IS the canonical identifier
-        # that matches AGENT_REGISTRY keys (e.g., "gene", "go_annotations")
+        # Default to folder name for legacy compatibility.
         agent_name = agent_folder.name
 
-        # Validate agent_id if present (informational warning for debugging)
+        # Validate/consume agent_id if present.
         yaml_agent_id = data.get("agent_id")
         if yaml_agent_id and yaml_agent_id != agent_name:
+            # Pre-release canonicalization: load PDF prompts under `pdf_extraction`.
+            if agent_name == "pdf" and yaml_agent_id == "pdf_extraction":
+                agent_name = yaml_agent_id
+
             logger.warning(
                 f"agent_id mismatch in {agent_folder.name}/prompt.yaml: "
                 f"agent_id='{yaml_agent_id}' but folder name is '{agent_name}'. "
-                f"Using folder name as canonical agent_name."
+                f"Using '{agent_name}' as canonical prompt agent_name."
             )
 
         # Calculate relative path for source_file

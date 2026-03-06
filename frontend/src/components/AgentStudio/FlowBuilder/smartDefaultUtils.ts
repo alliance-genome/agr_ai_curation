@@ -12,7 +12,7 @@ import type { AgentNode } from './types'
 // =============================================================================
 
 /** Extraction agents produce raw data from documents */
-export const EXTRACTION_AGENTS = ['pdf', 'gene_expression']
+export const EXTRACTION_AGENTS = ['pdf_extraction', 'gene_expression']
 
 /** Validation agents validate/lookup entities - should typically use extractor output */
 export const VALIDATION_AGENTS = [

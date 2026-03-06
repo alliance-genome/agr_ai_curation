@@ -27,7 +27,7 @@ class FlowNodeData(BaseModel):
         ...,
         min_length=1,
         max_length=50,
-        description="Agent ID from catalog (e.g., 'pdf', 'gene') or 'task_input' for initial instructions"
+        description="Agent ID from catalog (e.g., 'pdf_extraction', 'gene') or 'task_input' for initial instructions"
     )
     agent_display_name: str = Field(
         ...,
@@ -243,7 +243,7 @@ class ExecuteFlowRequest(BaseModel):
     )
     document_id: Optional[UUID] = Field(
         None,
-        description="Document ID for PDF-aware agents (required if flow uses pdf/gene_expression)"
+        description="Document ID for PDF-aware agents (required if flow uses pdf_extraction/gene_expression)"
     )
     user_query: Optional[str] = Field(
         None,

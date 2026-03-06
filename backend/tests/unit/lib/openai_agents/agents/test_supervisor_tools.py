@@ -15,7 +15,7 @@ MOCK_SUPERVISOR_SPECS = [
         "group_rules_enabled": True,
     },
     {
-        "agent_key": "pdf",
+        "agent_key": "pdf_extraction",
         "name": "PDF Specialist",
         "description": "Document search and extraction",
         "tool_name": "ask_pdf_specialist",

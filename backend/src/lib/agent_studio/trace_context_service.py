@@ -301,9 +301,10 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
         'csv_formatter': 'csv_formatter',
         'tsv_formatter': 'tsv_formatter',
         'json_formatter': 'json_formatter',
-        # Normalize pdf_specialist -> pdf to match AGENT_REGISTRY
-        'pdf_specialist': 'pdf',
-        'pdf': 'pdf',
+        # Normalize pdf_specialist -> pdf_extraction to match AGENT_REGISTRY
+        'pdf_specialist': 'pdf_extraction',
+        'pdf': 'pdf_extraction',
+        'pdf_extraction': 'pdf_extraction',
     }
 
     for pattern, agent_id in agent_patterns.items():
@@ -314,7 +315,7 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
     if hasattr(obs, 'metadata') and obs.metadata:
         if 'agent' in obs.metadata:
             raw_id = obs.metadata['agent']
-            # Normalize any pdf_specialist references to pdf
+            # Normalize any pdf_specialist references to pdf_extraction
             return _normalize_agent_id(raw_id)
 
     return None
@@ -324,11 +325,12 @@ def _normalize_agent_id(agent_id: str) -> str:
     """
     Normalize agent ID to match AGENT_REGISTRY keys.
 
-    Handles inconsistencies like 'pdf_specialist' vs 'pdf'.
+    Handles inconsistencies like 'pdf_specialist' vs 'pdf_extraction'.
     """
     # Mapping from legacy/trace names to canonical AGENT_REGISTRY IDs
     normalization_map = {
-        'pdf_specialist': 'pdf',
+        'pdf_specialist': 'pdf_extraction',
+        'pdf': 'pdf_extraction',
         'gene_extraction': 'gene_extractor',
         'ask_gene_extractor_specialist': 'gene_extractor',
         'allele_variant_extraction': 'allele_extractor',
@@ -374,8 +376,8 @@ def _agent_id_to_name(agent_id: str) -> str:
         'csv_formatter': 'CSV File Formatter',
         'tsv_formatter': 'TSV File Formatter',
         'json_formatter': 'JSON File Formatter',
-        # Normalized: 'pdf' not 'pdf_specialist'
-        'pdf': 'General PDF Extraction Agent',
+        # Normalized: 'pdf_extraction' not 'pdf_specialist'
+        'pdf_extraction': 'General PDF Extraction Agent',
     }
     return names.get(agent_id, agent_id.replace('_', ' ').title())
 

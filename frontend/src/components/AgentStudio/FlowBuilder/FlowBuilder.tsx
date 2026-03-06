@@ -804,7 +804,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
         if (isTaskInput) {
           inputSource = 'user_query'
-        } else if (agentId === 'pdf') {
+        } else if (agentId === 'pdf_extraction') {
           inputSource = 'previous_output'
         } else if (isValidationAgentDynamic(agentId)) {
           // Smart default: Validators should use extractor output, not previous validator output

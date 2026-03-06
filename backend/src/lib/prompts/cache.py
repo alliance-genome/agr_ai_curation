@@ -5,7 +5,7 @@ Usage:
 
     # Anywhere in the codebase - no dependencies needed
     # Agent IDs match catalog_service.py AGENT_REGISTRY keys
-    prompt = get_prompt("pdf")  # Base prompt (mod_id=None)
+    prompt = get_prompt("pdf_extraction")  # Base prompt (mod_id=None)
     prompt = get_prompt("gene", mod_id="FB")  # MOD-specific rules for FlyBase
     prompt = get_prompt_by_version("gene", version=3, mod_id="WB")  # Pinned version
 """
@@ -97,7 +97,7 @@ def get_prompt(
     Get the active prompt for an agent. Zero DB queries.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
@@ -166,7 +166,7 @@ def get_prompt_by_version(
     Get a specific version of a prompt (for pinned flows). Zero DB queries.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         version: Specific version number to retrieve
         prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
@@ -206,7 +206,7 @@ def get_prompt_optional(
     Use this for optional prompts like MOD rules where missing is acceptable.
 
     Args:
-        agent_name: Catalog ID, e.g., 'pdf', 'gene', 'supervisor'
+        agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
         mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 

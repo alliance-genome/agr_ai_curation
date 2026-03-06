@@ -89,7 +89,15 @@ def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
         from src.lib.config.agent_loader import load_agent_definitions
 
         agent_defs = load_agent_definitions()
-        return {agent.folder_name for agent in agent_defs.values()}, None
+        expected_keys = set()
+        for agent in agent_defs.values():
+            # Canonicalize PDF agent to `pdf_extraction` while preserving
+            # legacy folder-key behavior for other agents.
+            if agent.folder_name == "pdf":
+                expected_keys.add(agent.agent_id)
+            else:
+                expected_keys.add(agent.folder_name)
+        return expected_keys, None
     except Exception as exc:
         return set(), f"Failed to load expected system agents from config: {exc}"
 

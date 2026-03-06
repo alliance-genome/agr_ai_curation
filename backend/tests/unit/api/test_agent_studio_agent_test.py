@@ -50,7 +50,7 @@ class TestAgentTestEndpoint:
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
                 api_module.test_agent_endpoint(
-                    agent_id="pdf",
+                    agent_id="pdf_extraction",
                     request=api_module.AgentTestRequest(input="test query"),
                     user={"sub": "auth-sub"},
                     db=SimpleNamespace(),

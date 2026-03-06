@@ -403,7 +403,7 @@ def _validate_flow_handler():
                 errors.append("Flow name exceeds 255 characters")
 
         # Generate suggestions based on agent patterns
-        if "pdf" not in seen_agents and any(
+        if "pdf_extraction" not in seen_agents and any(
             a in seen_agents
             for a in [
                 "gene",
@@ -419,7 +419,7 @@ def _validate_flow_handler():
             ]
         ):
             suggestions.append(
-                "Consider adding 'pdf' step first to extract entities from documents"
+                "Consider adding 'pdf_extraction' step first to extract entities from documents"
             )
 
         if "chat_output" not in seen_agents and len(seen_agents) >= 2:
@@ -460,7 +460,7 @@ def _get_flow_templates_handler():
                 "name": "Gene Curation",
                 "description": "Extract gene mentions from PDF and validate against database",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find gene symbols and identifiers"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find gene symbols and identifiers"},
                     {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
                     {"agent_id": "chat_output", "step_goal": "Display validated results"}
                 ]
@@ -469,7 +469,7 @@ def _get_flow_templates_handler():
                 "name": "Gene Extraction",
                 "description": "Extract experimentally supported gene assertions from papers",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find gene mentions and context"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find gene mentions and context"},
                     {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
                     {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
@@ -478,7 +478,7 @@ def _get_flow_templates_handler():
                 "name": "Disease Annotation",
                 "description": "Extract disease mentions and map to ontology terms",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find disease mentions"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions"},
                     {"agent_id": "disease", "step_goal": "Map to Disease Ontology terms"},
                     {"agent_id": "chat_output", "step_goal": "Display annotation results"}
                 ]
@@ -487,7 +487,7 @@ def _get_flow_templates_handler():
                 "name": "Disease Extraction",
                 "description": "Extract experimentally supported disease assertions from papers",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find disease mentions and evidence context"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions and evidence context"},
                     {"agent_id": "disease_extractor", "step_goal": "Extract evidence-backed disease assertions"},
                     {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
@@ -496,7 +496,7 @@ def _get_flow_templates_handler():
                 "name": "Chemical Entity Extraction",
                 "description": "Extract chemical compounds and link to ChEBI",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Extract chemical names"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Extract chemical names"},
                     {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"}
                 ]
             },
@@ -504,7 +504,7 @@ def _get_flow_templates_handler():
                 "name": "Chemical Extraction",
                 "description": "Extract experimentally supported chemical assertions from papers",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find chemical mentions and context"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find chemical mentions and context"},
                     {"agent_id": "chemical_extractor", "step_goal": "Extract evidence-backed chemical assertions"},
                     {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
@@ -513,7 +513,7 @@ def _get_flow_templates_handler():
                 "name": "Gene Expression Analysis",
                 "description": "Extract gene expression data from methods sections",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find experimental methods"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find experimental methods"},
                     {"agent_id": "gene_expression", "step_goal": "Extract expression patterns"},
                     {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
                     {"agent_id": "chat_output", "step_goal": "Display expression data"}
@@ -523,7 +523,7 @@ def _get_flow_templates_handler():
                 "name": "Phenotype Extraction",
                 "description": "Extract experimentally supported phenotype assertions from papers",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find phenotype-related result sections"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find phenotype-related result sections"},
                     {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
                     {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results"}
                 ]
@@ -532,7 +532,7 @@ def _get_flow_templates_handler():
                 "name": "Allele/Variant Extraction",
                 "description": "Extract experimentally supported allele and variant assertions from papers",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find allele/variant mentions and context"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions and context"},
                     {"agent_id": "allele_extractor", "step_goal": "Extract evidence-backed allele/variant assertions"},
                     {"agent_id": "chat_output", "step_goal": "Display extraction results"}
                 ]
@@ -541,7 +541,7 @@ def _get_flow_templates_handler():
                 "name": "Allele Annotation",
                 "description": "Extract allele/variant mentions and link to database",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find allele/variant mentions"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions"},
                     {"agent_id": "allele", "step_goal": "Validate alleles in Alliance database"},
                     {"agent_id": "chat_output", "step_goal": "Display allele results"}
                 ]
@@ -550,7 +550,7 @@ def _get_flow_templates_handler():
                 "name": "GO Annotation Pipeline",
                 "description": "Extract and validate Gene Ontology annotations",
                 "steps": [
-                    {"agent_id": "pdf", "step_goal": "Find GO term mentions and gene functions"},
+                    {"agent_id": "pdf_extraction", "step_goal": "Find GO term mentions and gene functions"},
                     {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
                     {"agent_id": "gene_ontology", "step_goal": "Validate GO terms"},
                     {"agent_id": "chat_output", "step_goal": "Display GO annotations"}
@@ -1067,7 +1067,7 @@ Returns agents grouped by category (Extraction, Validation, Output) and identifi
 which agents are designed for specific purposes:
 
 - output_agents: Agents meant to be the final step (chat_output, csv_formatter, tsv_formatter, json_formatter)
-- extraction_agents: Agents that extract data from documents (pdf, gene_extractor, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
+- extraction_agents: Agents that extract data from documents (pdf_extraction, gene_extractor, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
 - validation_agents: Agents that validate/lookup data (gene, allele, disease, etc.)
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,

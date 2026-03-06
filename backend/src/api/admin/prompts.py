@@ -136,7 +136,7 @@ class PromptListResponse(BaseModel):
 class CreatePromptRequest(BaseModel):
     """Request model for creating a new prompt version."""
 
-    agent_name: str = Field(..., min_length=1, max_length=100, description="Agent ID from catalog (e.g., 'pdf', 'gene')")
+    agent_name: str = Field(..., min_length=1, max_length=100, description="Agent ID from catalog (e.g., 'pdf_extraction', 'gene')")
     prompt_type: str = Field(..., min_length=1, max_length=50, description="Prompt type (e.g., 'system', 'group_rules')")
     group_id: Optional[str] = Field(None, max_length=20, description="Group ID for group-specific rules (e.g., 'FB', 'WB')")
     content: str = Field(..., min_length=1, description="The prompt content text")
@@ -207,7 +207,7 @@ async def list_prompts(
     """List all prompts with optional filtering.
 
     Args:
-        agent_name: Filter by agent name (e.g., 'pdf', 'gene')
+        agent_name: Filter by agent name (e.g., 'pdf_extraction', 'gene')
         prompt_type: Filter by type (e.g., 'system', 'group_rules')
         group_id: Filter by group ID ('base' for NULL group_id)
         active_only: Only return active versions
@@ -590,7 +590,7 @@ async def get_prompt_history(
     ordered by version descending (newest first).
 
     Args:
-        agent_name: Agent ID from catalog (e.g., 'pdf', 'gene')
+        agent_name: Agent ID from catalog (e.g., 'pdf_extraction', 'gene')
         prompt_type: Prompt type (e.g., 'system', 'group_rules')
         group_id: Group ID for group-specific rules ('base' or None for base prompts)
         db: Database session
@@ -646,7 +646,7 @@ async def get_prompt_by_version(
     """Get a specific version of an agent's prompt.
 
     Args:
-        agent_name: Agent ID from catalog (e.g., 'pdf', 'gene')
+        agent_name: Agent ID from catalog (e.g., 'pdf_extraction', 'gene')
         version: Version number to retrieve
         prompt_type: Prompt type (e.g., 'system', 'group_rules')
         group_id: Group ID for group-specific rules ('base' or None for base prompts)

@@ -85,7 +85,7 @@ def _flow_definition() -> dict:
                 "type": "agent",
                 "position": {"x": 280, "y": 0},
                 "data": {
-                    "agent_id": "pdf",
+                    "agent_id": "pdf_extraction",
                     "agent_display_name": "PDF Specialist",
                     "output_key": "pdf_findings",
                     "input_source": "previous_output",
