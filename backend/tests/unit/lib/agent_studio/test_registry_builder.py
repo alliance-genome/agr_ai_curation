@@ -6,8 +6,8 @@ Tests the helper functions that build registry entries from YAML configurations.
 
 import pytest
 
-from src.lib.config.agent_loader import ModelConfig
-from src.lib.agent_studio.registry_builder import _build_config_defaults
+from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
+from src.lib.agent_studio.registry_builder import _build_config_defaults, build_agent_registry
 
 
 class TestBuildConfigDefaults:
@@ -90,3 +90,24 @@ class TestBuildConfigDefaults:
 
         # Should be empty since all values match defaults
         assert result == {}
+
+
+class TestAgentDocumentationCoverage:
+    """Coverage checks for Agent Browser Overview summaries."""
+
+    def test_all_configured_agents_have_non_empty_overview_summary(self):
+        """Every configured agent should expose a non-empty documentation summary."""
+        configured_agents = load_agent_definitions(force_reload=True)
+        registry = build_agent_registry()
+        missing_summaries = []
+
+        for agent_id in sorted(configured_agents):
+            entry = registry.get(agent_id, {})
+            summary = ((entry.get("documentation") or {}).get("summary") or "").strip()
+            if not summary:
+                missing_summaries.append(agent_id)
+
+        assert not missing_summaries, (
+            "Missing Agent Browser Overview summary for configured agents: "
+            + ", ".join(missing_summaries)
+        )

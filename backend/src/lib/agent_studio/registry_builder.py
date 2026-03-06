@@ -116,7 +116,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Not available in Flow Builder - works automatically in chat",
         ],
     },
-    "pdf": {
+    "pdf_extraction": {
         "summary": "Extracts text, tables, and structured data from scientific papers using hybrid search.",
         "capabilities": [
             {
@@ -785,6 +785,18 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Ontology term mapping is suggestive only — a downstream ontology mapping agent handles formal ID resolution",
             "Does not use agr_curation_query — phenotype ontology validation is deferred to the ontology mapping step",
         ],
+    },
+    "chat_output_formatter": {
+        "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
+    },
+    "csv_output_formatter": {
+        "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
+    },
+    "json_output_formatter": {
+        "summary": "Formats structured extraction results as downloadable JSON while preserving nested data.",
+    },
+    "tsv_output_formatter": {
+        "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines.",
     },
 }
 
