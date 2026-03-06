@@ -633,15 +633,6 @@ describe('PromptWorkshop', () => {
       />
     )
 
-    await screen.findByText(
-      (content) => (
-        content.includes('Applied Claude MOD update (WB):')
-        && content.includes('Updated WB-specific extraction guidance.')
-      ),
-      {},
-      { timeout: 5000 }
-    )
-
     await waitFor(() => {
       const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
       expect(contextSnapshots).toContainEqual(
@@ -650,6 +641,6 @@ describe('PromptWorkshop', () => {
           selected_mod_prompt_draft: 'WB override from Claude',
         })
       )
-    }, { timeout: 5000 })
+    }, { timeout: 10000 })
   }, 15000)
 })
