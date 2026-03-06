@@ -787,15 +787,59 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
     },
     "chat_output_formatter": {
         "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
+        "capabilities": [
+            {
+                "name": "Inline result rendering",
+                "description": "Presents structured extraction output in readable chat-first format",
+                "example_query": "Show me the extracted entities in chat",
+                "example_result": "Returns a readable, sectioned summary directly in chat",
+            },
+        ],
+        "limitations": [
+            "Output is optimized for interactive reading, not file export",
+        ],
     },
     "csv_output_formatter": {
         "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
+        "capabilities": [
+            {
+                "name": "CSV export",
+                "description": "Converts normalized extraction output into comma-separated tabular rows",
+                "example_query": "Export extracted genes and evidence as CSV",
+                "example_result": "Returns a downloadable CSV with one record per row",
+            },
+        ],
+        "limitations": [
+            "Nested structures may be flattened for tabular compatibility",
+        ],
     },
     "json_output_formatter": {
         "summary": "Formats structured extraction results as downloadable JSON while preserving nested data.",
+        "capabilities": [
+            {
+                "name": "Structured JSON export",
+                "description": "Preserves nested objects and arrays for downstream programmatic use",
+                "example_query": "Export extraction results as JSON",
+                "example_result": "Returns hierarchical JSON matching extracted structure",
+            },
+        ],
+        "limitations": [
+            "File is optimized for machine consumption over spreadsheet readability",
+        ],
     },
     "tsv_output_formatter": {
         "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines.",
+        "capabilities": [
+            {
+                "name": "TSV export",
+                "description": "Generates tab-delimited output for pipelines that expect TSV input",
+                "example_query": "Export curated rows as TSV",
+                "example_result": "Returns a downloadable TSV with stable tab-delimited columns",
+            },
+        ],
+        "limitations": [
+            "Like CSV, complex nested fields may be flattened",
+        ],
     },
 }
 

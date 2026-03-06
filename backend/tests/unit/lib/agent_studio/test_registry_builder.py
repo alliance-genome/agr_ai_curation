@@ -109,3 +109,17 @@ class TestAgentDocumentationCoverage:
             "Missing Agent Browser Overview summary for configured agents: "
             + ", ".join(missing_summaries)
         )
+
+    def test_pdf_folder_alias_maps_to_pdf_extraction_documentation(self):
+        """Legacy `pdf` alias should keep the same docs as `pdf_extraction`."""
+        registry = build_agent_registry()
+
+        pdf_entry = registry.get("pdf")
+        pdf_extraction_entry = registry.get("pdf_extraction")
+
+        assert pdf_entry is not None
+        assert pdf_extraction_entry is not None
+        assert (
+            (pdf_entry.get("documentation") or {}).get("summary")
+            == (pdf_extraction_entry.get("documentation") or {}).get("summary")
+        )
