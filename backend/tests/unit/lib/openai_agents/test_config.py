@@ -63,6 +63,34 @@ class TestGetAgentConfig:
             assert config.tool_choice == "required"
 
 
+def test_get_agent_config_prefers_registry_model_over_global_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.AGENT_REGISTRY",
+        {"gene_extractor": {"config_defaults": {"model": "gpt-4o"}}},
+        raising=False,
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.4")
+
+    with patch.dict(os.environ, {}, clear=True):
+        config = get_agent_config("gene_extractor")
+
+    assert config.model == "gpt-4o"
+
+
+def test_get_agent_config_env_override_beats_registry_model(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.AGENT_REGISTRY",
+        {"gene_extractor": {"config_defaults": {"model": "gpt-4o"}}},
+        raising=False,
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.4")
+
+    with patch.dict(os.environ, {"AGENT_GENE_EXTRACTOR_MODEL": "gpt-5-mini"}, clear=True):
+        config = get_agent_config("gene_extractor")
+
+    assert config.model == "gpt-5-mini"
+
+
 def test_resolve_model_provider_uses_model_catalog_and_provider_registry(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",

@@ -11,14 +11,14 @@ from src.lib.agent_studio.registry_builder import _build_config_defaults, build_
 class TestBuildConfigDefaults:
     """Tests for _build_config_defaults function."""
 
-    def test_returns_empty_dict_when_all_values_match_defaults(self):
-        """When all values match ModelConfig defaults, return empty dict."""
+    def test_returns_model_when_all_values_match_defaults(self):
+        """When all values match defaults, model is still preserved."""
         # Use default ModelConfig values
         config = ModelConfig()
 
         result = _build_config_defaults(config)
 
-        assert result == {}
+        assert result == {"model": "gpt-4o"}
 
     def test_returns_model_when_differs_from_default(self):
         """When model differs from default, include it in result."""
@@ -34,7 +34,7 @@ class TestBuildConfigDefaults:
 
         result = _build_config_defaults(config)
 
-        assert result == {"temperature": 0.7}
+        assert result == {"model": "gpt-4o", "temperature": 0.7}
 
     def test_returns_reasoning_when_differs_from_default(self):
         """When reasoning differs from default, include it in result."""
@@ -42,7 +42,7 @@ class TestBuildConfigDefaults:
 
         result = _build_config_defaults(config)
 
-        assert result == {"reasoning": "high"}
+        assert result == {"model": "gpt-4o", "reasoning": "high"}
 
     def test_returns_multiple_non_default_values(self):
         """When multiple values differ, include all of them."""
@@ -86,8 +86,8 @@ class TestBuildConfigDefaults:
 
         result = _build_config_defaults(config)
 
-        # Should be empty since all values match defaults
-        assert result == {}
+        # Model is always preserved; other values remain omitted at default.
+        assert result == {"model": default_config.model}
 
 
 class TestAgentDocumentationCoverage:

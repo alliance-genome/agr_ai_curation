@@ -24,8 +24,9 @@ def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
     """
     Build config_defaults dict from YAML model_config.
 
-    Only includes non-default values to avoid overriding env var behavior.
-    These values become the fallback when no env var is set.
+    Always preserves the per-agent model from YAML so each agent can
+    declare its own authoritative runtime model default. Other settings
+    only include non-default values to avoid unnecessary overrides.
 
     Priority in get_agent_config():
     1. Environment variable (highest)
@@ -36,16 +37,16 @@ def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
         model_config: ModelConfig from agent.yaml
 
     Returns:
-        Dictionary with model, temperature, reasoning (only non-default values)
+        Dictionary with model, temperature, reasoning defaults
     """
-    # Compare against ModelConfig defaults to avoid hardcoding values here.
-    # This ensures changes to ModelConfig defaults automatically propagate.
-    default_config = ModelConfig()
-    defaults = {}
+    # Preserve per-agent model defaults from YAML as authoritative runtime
+    # defaults (unless env vars explicitly override at runtime).
+    defaults = {"model": model_config.model}
 
-    # Include model if not the default
-    if model_config.model != default_config.model:
-        defaults["model"] = model_config.model
+    # Compare remaining fields against ModelConfig defaults to avoid
+    # hardcoding values here. This ensures changes to ModelConfig defaults
+    # automatically propagate.
+    default_config = ModelConfig()
 
     # Include temperature if not the default
     if model_config.temperature != default_config.temperature:
