@@ -205,7 +205,7 @@ def _create_get_prompt_handler():
         Get an agent's prompt from the catalog.
 
         Args:
-            agent_id: Agent identifier (e.g., "supervisor", "gene", "pdf")
+            agent_id: Agent identifier (e.g., "supervisor", "gene", "pdf_extraction")
             mod_id: Optional MOD identifier for MOD-specific rules (e.g., "WB", "FB")
 
         Returns:
@@ -524,7 +524,7 @@ Useful for understanding agent behavior and troubleshooting routing issues.
 
 **Available agents:**
 - supervisor: Routes queries to specialists
-- pdf: Answers questions about PDF documents
+- pdf_extraction: Answers questions about PDF documents
 - gene_expression: Extracts gene expression patterns from papers
 - chat_output: Displays results in chat; csv_formatter, tsv_formatter, json_formatter: File exports
 - gene, allele, disease, chemical: Database query agents
@@ -549,7 +549,7 @@ Some agents have organism-specific rules. Use these MOD aliases:
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent identifier (e.g., 'supervisor', 'gene', 'gene_expression', 'pdf')"
+                    "description": "Agent identifier (e.g., 'supervisor', 'gene', 'gene_expression', 'pdf_extraction')"
                 },
                 "mod_id": {
                     "type": "string",

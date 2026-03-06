@@ -10,7 +10,7 @@ Usage:
     from src.lib.prompts.service import PromptService
 
     # Get active prompt (nanosecond lookup)
-    prompt = get_prompt("pdf")  # Base prompt
+    prompt = get_prompt("pdf_extraction")  # Base prompt
     prompt = get_prompt("gene", mod_id="FB")  # MOD-specific rules
 
     # Get pinned version (for flows)

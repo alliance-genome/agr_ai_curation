@@ -44,19 +44,19 @@ def test_get_flow_agent_ids_excludes_supervisor_and_task_input(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
-        {"supervisor": {}, "task_input": {}, "pdf": {}, "gene": {}, "chat_output": {}},
+        {"supervisor": {}, "task_input": {}, "pdf_extraction": {}, "gene": {}, "chat_output": {}},
     )
-    assert flow_tools._get_flow_agent_ids() == ["chat_output", "gene", "pdf"]
+    assert flow_tools._get_flow_agent_ids() == ["chat_output", "gene", "pdf_extraction"]
 
 
 def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypatch):
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf", "gene_expression", "chat_output"])
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene_expression", "chat_output"])
     validate = flow_tools._validate_flow_handler()
 
     result = validate(
         steps=[
-            {"agent_id": "pdf"},
-            {"agent_id": "pdf"},  # duplicate -> warning
+            {"agent_id": "pdf_extraction"},
+            {"agent_id": "pdf_extraction"},  # duplicate -> warning
             {"agent_id": "gene_expression", "custom_instructions": "x" * 2001},
             {"agent_id": "unknown"},
             {"agent_id": "chat_output", "step_goal": "y" * 501},
@@ -82,17 +82,17 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
     )
 
     assert result["valid"] is True
-    assert any("Consider adding 'pdf'" in s for s in result["suggestions"])
+    assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
     assert any("Consider adding 'chat_output'" in s for s in result["suggestions"])
 
 
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf", "gene"])
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
         {
-            "pdf": {
+            "pdf_extraction": {
                 "name": "PDF Specialist",
                 "description": "Extract entities",
                 "category": "Extraction",
@@ -111,7 +111,7 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
 
     assert len(result["templates"]) >= 1
     assert len(result["available_agents"]) == 2
-    assert result["available_agents"][0]["agent_id"] in {"pdf", "gene"}
+    assert result["available_agents"][0]["agent_id"] in {"pdf_extraction", "gene"}
     assert "Found" in result["message"]
 
 
@@ -122,7 +122,7 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
         {
             "supervisor": {"category": "Routing"},
             "task_input": {"category": "Input"},
-            "pdf": {"name": "PDF", "description": "Extract", "category": "Extraction", "requires_document": True},
+            "pdf_extraction": {"name": "PDF", "description": "Extract", "category": "Extraction", "requires_document": True},
             "gene": {"name": "Gene", "description": "Validate", "category": "Validation", "requires_document": False},
             "chat_output": {
                 "name": "Chat Output",
@@ -140,7 +140,7 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
     assert "Validation" in result["categories"]
     assert "Output" in result["categories"]
     assert "chat_output" in result["output_agents"]
-    assert "pdf" in result["extraction_agents"]
+    assert "pdf_extraction" in result["extraction_agents"]
     assert "gene" in result["validation_agents"]
 
 
@@ -178,7 +178,7 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
                 {
                     "id": "step_1",
                     "type": "agent",
-                    "data": {"agent_id": "pdf", "agent_display_name": "PDF", "output_key": "step_1_output"},
+                    "data": {"agent_id": "pdf_extraction", "agent_display_name": "PDF", "output_key": "step_1_output"},
                 },
                 {
                     "id": "step_2",
@@ -213,14 +213,14 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
 def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: None)
-    unauth = create("Flow A", "desc", [{"agent_id": "pdf"}])
+    unauth = create("Flow A", "desc", [{"agent_id": "pdf_extraction"}])
     assert unauth["success"] is False
     assert "User not authenticated" in unauth["error"]
 
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf", "gene"])
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
 
-    missing_desc = create("Flow A", "   ", [{"agent_id": "pdf"}])
+    missing_desc = create("Flow A", "   ", [{"agent_id": "pdf_extraction"}])
     assert missing_desc["success"] is False
     assert "description is required" in missing_desc["error"]
 
@@ -266,11 +266,11 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
 
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 123)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf", "gene"])
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
-        {"pdf": {"name": "PDF Specialist"}, "gene": {"name": "Gene Specialist"}},
+        {"pdf_extraction": {"name": "PDF Specialist"}, "gene": {"name": "Gene Specialist"}},
     )
 
     import src.models.sql as sql_module
@@ -283,7 +283,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
         name="Good Flow",
         description="Extract then validate",
         steps=[
-            {"agent_id": "pdf", "step_goal": "extract"},
+            {"agent_id": "pdf_extraction", "step_goal": "extract"},
             {"agent_id": "gene", "step_goal": "validate"},
         ],
     )
@@ -296,7 +296,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     dup = create(
         name="Good Flow",
         description="Extract then validate",
-        steps=[{"agent_id": "pdf"}],
+        steps=[{"agent_id": "pdf_extraction"}],
     )
     assert dup["success"] is False
     assert "already exists" in dup["error"]
@@ -307,7 +307,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     generic = create(
         name="Good Flow",
         description="Extract then validate",
-        steps=[{"agent_id": "pdf"}],
+        steps=[{"agent_id": "pdf_extraction"}],
     )
     assert generic["success"] is False
     assert "database error" in generic["error"]
@@ -321,7 +321,7 @@ def test_register_flow_tools_registers_five_tools(monkeypatch):
             registrations.append(kwargs)
 
     monkeypatch.setattr(flow_tools, "get_diagnostic_tools_registry", lambda: _Registry())
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf", "gene", "chat_output"])
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene", "chat_output"])
 
     flow_tools.register_flow_tools()
 

@@ -50,7 +50,7 @@ function createMockNode(
 
 describe('isExtractionAgent', () => {
   it('returns true for PDF agent', () => {
-    expect(isExtractionAgent('pdf')).toBe(true)
+    expect(isExtractionAgent('pdf_extraction')).toBe(true)
   })
 
   it('returns true for gene_expression agent', () => {
@@ -74,7 +74,7 @@ describe('isExtractionAgent', () => {
   })
 
   it('includes all expected extraction agents', () => {
-    expect(EXTRACTION_AGENTS).toEqual(['pdf', 'gene_expression'])
+    expect(EXTRACTION_AGENTS).toEqual(['pdf_extraction', 'gene_expression'])
   })
 })
 
@@ -116,7 +116,7 @@ describe('isValidationAgent', () => {
   })
 
   it('returns false for extraction agents', () => {
-    expect(isValidationAgent('pdf')).toBe(false)
+    expect(isValidationAgent('pdf_extraction')).toBe(false)
     expect(isValidationAgent('gene_expression')).toBe(false)
   })
 
@@ -146,7 +146,7 @@ describe('findNearestExtractor', () => {
   describe('with direct connection', () => {
     it('finds extractor directly connected to target', () => {
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene'),
       ]
       const edges = [{ source: 'node_0', target: 'node_1' }]
@@ -155,7 +155,7 @@ describe('findNearestExtractor', () => {
 
       expect(result).not.toBeNull()
       expect(result?.id).toBe('node_0')
-      expect(result?.data.agent_id).toBe('pdf')
+      expect(result?.data.agent_id).toBe('pdf_extraction')
     })
   })
 
@@ -164,7 +164,7 @@ describe('findNearestExtractor', () => {
       // task_input -> pdf -> gene -> allele
       const nodes = [
         createMockNode('node_0', 'task_input', 'task_input'),
-        createMockNode('node_1', 'pdf', 'pdf_output'),
+        createMockNode('node_1', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_2', 'gene', 'gene_output'),
         createMockNode('node_3', 'allele', 'allele_output'),
       ]
@@ -178,7 +178,7 @@ describe('findNearestExtractor', () => {
 
       expect(result).not.toBeNull()
       expect(result?.id).toBe('node_1')
-      expect(result?.data.agent_id).toBe('pdf')
+      expect(result?.data.agent_id).toBe('pdf_extraction')
     })
   })
 
@@ -187,7 +187,7 @@ describe('findNearestExtractor', () => {
       // Two extractors in sequence (unusual but possible)
       // pdf -> gene_expression -> gene
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene_expression', 'gex_output'),
         createMockNode('node_2', 'gene', 'gene_output'),
       ]
@@ -226,7 +226,7 @@ describe('findNearestExtractor', () => {
     it('falls back to most recent extractor in graph', () => {
       // pdf and gene exist but are not connected
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene'), // Not connected to pdf
       ]
       const edges: { source: string; target: string }[] = []
@@ -235,13 +235,13 @@ describe('findNearestExtractor', () => {
 
       expect(result).not.toBeNull()
       expect(result?.id).toBe('node_0')
-      expect(result?.data.agent_id).toBe('pdf')
+      expect(result?.data.agent_id).toBe('pdf_extraction')
     })
 
     it('returns most recently added extractor when multiple exist disconnected', () => {
       // Two extractors exist, neither connected to target
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_5', 'gene_expression', 'gex_output'),
         createMockNode('node_10', 'gene'),
       ]
@@ -259,7 +259,7 @@ describe('findNearestExtractor', () => {
     it('handles cycles without infinite loop', () => {
       // Create a cycle: node_1 -> node_2 -> node_3 -> node_1
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene'),
         createMockNode('node_2', 'allele'),
         createMockNode('node_3', 'disease'),
@@ -286,7 +286,7 @@ describe('findNearestExtractor', () => {
     })
 
     it('falls back to any extractor when target not in graph', () => {
-      const nodes = [createMockNode('node_0', 'pdf')]
+      const nodes = [createMockNode('node_0', 'pdf_extraction')]
       const result = findNearestExtractor('nonexistent', nodes, [])
       // Falls back to finding any extractor in the graph
       expect(result).not.toBeNull()
@@ -300,7 +300,7 @@ describe('findNearestExtractor', () => {
       // node_0 (pdf) -> node_2 (gene)
       // node_1 (task_input) -> node_2 (gene)
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'task_input'),
         createMockNode('node_2', 'gene'),
       ]
@@ -312,7 +312,7 @@ describe('findNearestExtractor', () => {
       const result = findNearestExtractor('node_2', nodes, edges)
 
       expect(result).not.toBeNull()
-      expect(result?.data.agent_id).toBe('pdf')
+      expect(result?.data.agent_id).toBe('pdf_extraction')
     })
   })
 })
@@ -336,7 +336,7 @@ describe('countExtractors', () => {
 
   it('returns 1 for single PDF extractor', () => {
     const nodes = [
-      createMockNode('node_0', 'pdf'),
+      createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'gene'),
     ]
     expect(countExtractors(nodes)).toBe(1)
@@ -352,7 +352,7 @@ describe('countExtractors', () => {
 
   it('returns 2 for PDF + gene_expression', () => {
     const nodes = [
-      createMockNode('node_0', 'pdf'),
+      createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'gene_expression'),
       createMockNode('node_2', 'gene'),
     ]
@@ -361,8 +361,8 @@ describe('countExtractors', () => {
 
   it('counts multiple of same extractor type', () => {
     const nodes = [
-      createMockNode('node_0', 'pdf'),
-      createMockNode('node_1', 'pdf'),
+      createMockNode('node_0', 'pdf_extraction'),
+      createMockNode('node_1', 'pdf_extraction'),
       createMockNode('node_2', 'gene'),
     ]
     expect(countExtractors(nodes)).toBe(2)
@@ -384,26 +384,26 @@ describe('getExtractors', () => {
 
   it('returns all extraction agents', () => {
     const nodes = [
-      createMockNode('node_0', 'pdf', 'pdf_output'),
+      createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
       createMockNode('node_1', 'gene_expression', 'gex_output'),
       createMockNode('node_2', 'gene'),
     ]
     const extractors = getExtractors(nodes)
     expect(extractors).toHaveLength(2)
-    expect(extractors[0].data.agent_id).toBe('pdf')
+    expect(extractors[0].data.agent_id).toBe('pdf_extraction')
     expect(extractors[1].data.agent_id).toBe('gene_expression')
   })
 
   it('excludes non-extraction agents', () => {
     const nodes = [
-      createMockNode('node_0', 'pdf'),
+      createMockNode('node_0', 'pdf_extraction'),
       createMockNode('node_1', 'gene'),
       createMockNode('node_2', 'allele'),
       createMockNode('node_3', 'disease'),
     ]
     const extractors = getExtractors(nodes)
     expect(extractors).toHaveLength(1)
-    expect(extractors[0].data.agent_id).toBe('pdf')
+    expect(extractors[0].data.agent_id).toBe('pdf_extraction')
   })
 })
 
@@ -415,7 +415,7 @@ describe('validatorHasExplicitExtractorInput', () => {
   it('returns false when input_source is not custom', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'previous_output'
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
   })
@@ -424,7 +424,7 @@ describe('validatorHasExplicitExtractorInput', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'custom'
     node.data.custom_input = ''
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
   })
@@ -433,7 +433,7 @@ describe('validatorHasExplicitExtractorInput', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'custom'
     node.data.custom_input = 'some static text'
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
   })
@@ -442,7 +442,7 @@ describe('validatorHasExplicitExtractorInput', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'custom'
     node.data.custom_input = '{{pdf_output}}'
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(true)
   })
@@ -460,7 +460,7 @@ describe('validatorHasExplicitExtractorInput', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'custom'
     node.data.custom_input = 'Process this: {{pdf_output}} and validate'
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(true)
   })
@@ -469,7 +469,7 @@ describe('validatorHasExplicitExtractorInput', () => {
     const node = createMockNode('node_0', 'gene')
     node.data.input_source = 'custom'
     node.data.custom_input = '{{deleted_output}}'
-    const extractors = [createMockNode('node_1', 'pdf', 'pdf_output')]
+    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
 
     expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
   })
@@ -483,8 +483,8 @@ describe('validatorNeedsConfiguration', () => {
   describe('when validator has explicit extractor input', () => {
     it('returns needsConfig: false', () => {
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
-        createMockNode('node_1', 'pdf', 'pdf2_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
+        createMockNode('node_1', 'pdf_extraction', 'pdf2_output'),
         (() => {
           const n = createMockNode('node_2', 'gene')
           n.data.input_source = 'custom'
@@ -501,7 +501,7 @@ describe('validatorNeedsConfiguration', () => {
   describe('when validator is connected to upstream extractor', () => {
     it('returns needsConfig: false regardless of global extractor count', () => {
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene_expression', 'gex_output'),
         createMockNode('node_2', 'gene'),
       ]
@@ -523,7 +523,7 @@ describe('validatorNeedsConfiguration', () => {
 
     it('returns needsConfig: false when only one extractor exists', () => {
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene'),
       ]
 
@@ -533,7 +533,7 @@ describe('validatorNeedsConfiguration', () => {
 
     it('returns needsConfig: true when multiple extractors exist', () => {
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene_expression', 'gex_output'),
         createMockNode('node_2', 'gene'),
       ]
@@ -546,7 +546,7 @@ describe('validatorNeedsConfiguration', () => {
 
   describe('edge cases', () => {
     it('returns needsConfig: false for non-validator nodes', () => {
-      const nodes = [createMockNode('node_0', 'pdf', 'pdf_output')]
+      const nodes = [createMockNode('node_0', 'pdf_extraction', 'pdf_output')]
 
       const result = validatorNeedsConfiguration('node_0', nodes, [])
       expect(result.needsConfig).toBe(false)
@@ -562,7 +562,7 @@ describe('validatorNeedsConfiguration', () => {
     it('handles multi-hop connections to extractors', () => {
       // pdf -> allele -> gene
       const nodes = [
-        createMockNode('node_0', 'pdf', 'pdf_output'),
+        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
         createMockNode('node_1', 'gene_expression', 'gex_output'), // Another extractor, disconnected
         createMockNode('node_2', 'allele'),
         createMockNode('node_3', 'gene'),

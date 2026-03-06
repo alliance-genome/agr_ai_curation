@@ -1,5 +1,5 @@
 # =============================================================================
-# AGENT DEFINITION: pdf
+# AGENT DEFINITION: pdf_extraction
 # =============================================================================
 # Extracts text, tables, and data from uploaded PDF documents.
 # Tool name generated at runtime: ask_pdf_specialist

@@ -172,7 +172,7 @@ def test_create_dynamic_specialist_tools_skips_document_required_tools_without_d
         lambda: [
             {
                 "tool_name": "ask_pdf_specialist",
-                "agent_key": "pdf",
+                "agent_key": "pdf_extraction",
                 "description": "PDF extraction",
                 "requires_document": True,
             }

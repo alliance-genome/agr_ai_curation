@@ -115,7 +115,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const [outputKey, setOutputKey] = useState('')
 
   // Check if this is a PDF agent (input source is hardcoded to PDF document)
-  const isPdfAgent = node?.data.agent_id === 'pdf'
+  const isPdfAgent = node?.data.agent_id === 'pdf_extraction'
 
   // Initialize form when node changes
   useEffect(() => {

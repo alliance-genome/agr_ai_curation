@@ -945,9 +945,13 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
         entry = _agent_definition_to_registry_entry(agent_def)
         registry[agent_id] = entry
 
-        # Also add folder_name as an alias for backwards compatibility
-        # This allows both AGENT_REGISTRY.get("pdf") and get("pdf_extraction")
-        if agent_def.folder_name != agent_id and agent_def.folder_name not in registry:
+        # Keep legacy folder-name aliases except for `pdf`.
+        # `pdf` is intentionally canonicalized to `pdf_extraction` only.
+        if (
+            agent_def.folder_name != agent_id
+            and agent_def.folder_name not in registry
+            and agent_def.folder_name != "pdf"
+        ):
             registry[agent_def.folder_name] = entry
 
         logger.debug(

@@ -14,7 +14,7 @@ class TestFlowValidation:
             "version": "1.0",
             "entry_node_id": "1",
             "nodes": [
-                {"id": "1", "type": "agent", "data": {"agent_id": "pdf", "output_key": "pdf_out"}, "position": {"x": 0, "y": 0}},
+                {"id": "1", "type": "agent", "data": {"agent_id": "pdf_extraction", "output_key": "pdf_out"}, "position": {"x": 0, "y": 0}},
                 {"id": "2", "type": "agent", "data": {"agent_id": "gene", "output_key": "gene_out"}, "position": {"x": 0, "y": 100}},
                 {"id": "3", "type": "agent", "data": {"agent_id": "csv_formatter", "output_key": "csv_out"}, "position": {"x": 0, "y": 200}},
             ],
@@ -36,7 +36,7 @@ class TestFlowValidation:
             "entry_node_id": "1",
             "nodes": [
                 {"id": "1", "type": "agent", "data": {"agent_id": "supervisor", "output_key": "init_out"}, "position": {"x": 0, "y": 0}},
-                {"id": "2", "type": "agent", "data": {"agent_id": "pdf", "output_key": "pdf_out"}, "position": {"x": 0, "y": 100}},
+                {"id": "2", "type": "agent", "data": {"agent_id": "pdf_extraction", "output_key": "pdf_out"}, "position": {"x": 0, "y": 100}},
                 {"id": "3", "type": "agent", "data": {"agent_id": "gene", "output_key": "gene_out"}, "position": {"x": 0, "y": 200}},
                 {"id": "4", "type": "agent", "data": {"agent_id": "csv_formatter", "output_key": "csv_out"}, "position": {"x": 0, "y": 300}},
             ],
@@ -75,7 +75,7 @@ class TestFlowValidation:
             "version": "1.0",
             "entry_node_id": "1",
             "nodes": [
-                {"id": "1", "type": "agent", "data": {"agent_id": "pdf", "output_key": "pdf_out"}, "position": {"x": 0, "y": 0}},
+                {"id": "1", "type": "agent", "data": {"agent_id": "pdf_extraction", "output_key": "pdf_out"}, "position": {"x": 0, "y": 0}},
                 {"id": "2", "type": "agent", "data": {"agent_id": "chat_output", "output_key": "chat_out"}, "position": {"x": 0, "y": 100}},
             ],
             "edges": [{"id": "e1", "source": "1", "target": "2"}],
