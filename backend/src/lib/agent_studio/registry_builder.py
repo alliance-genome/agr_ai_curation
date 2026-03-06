@@ -16,7 +16,6 @@ from src.lib.config.agent_loader import (
     ModelConfig,
     load_agent_definitions,
     get_agent_definition,
-    get_agent_by_folder,
 )
 logger = logging.getLogger(__name__)
 

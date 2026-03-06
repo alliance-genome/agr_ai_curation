@@ -4,8 +4,6 @@ Tests for registry_builder.py - YAML to AGENT_REGISTRY conversion.
 Tests the helper functions that build registry entries from YAML configurations.
 """
 
-import pytest
-
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.agent_studio.registry_builder import _build_config_defaults, build_agent_registry
 
