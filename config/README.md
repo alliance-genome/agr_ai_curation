@@ -127,8 +127,8 @@ Defines model catalog entries and maps each model to a provider key in `provider
 
 ```yaml
 models:
-  - model_id: gpt-5.2
-    name: GPT-5.2
+  - model_id: gpt-5.4
+    name: GPT-5.4
     provider: openai
     default: false
     curator_visible: true

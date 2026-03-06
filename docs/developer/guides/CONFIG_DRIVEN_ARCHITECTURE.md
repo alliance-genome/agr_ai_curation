@@ -279,8 +279,8 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5.2-mini
-    name: GPT-5.2 Mini
+  - model_id: gpt-5-mini
+    name: GPT-5.4 Mini
     provider: openai                    # Must match a key in providers.yaml
     description: Fast default model for day-to-day drafting and light extraction.
     guidance: Start here for most tasks.
@@ -293,8 +293,8 @@ models:
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
 
-  - model_id: gpt-5.2
-    name: GPT-5.2
+  - model_id: gpt-5.4
+    name: GPT-5.4
     provider: openai
     description: Highest-quality model for complex reasoning.
     supports_reasoning: true

@@ -365,9 +365,9 @@ Providers are defined in `config/providers.yaml` and loaded by `backend/src/lib/
 Set environment variables to override an agent's default model:
 
 ```bash
-AGENT_GENE_MODEL=gpt-5.2-mini
-AGENT_SUPERVISOR_MODEL=gpt-5.2
-AGENT_PDF_MODEL=gpt-5.2
+AGENT_GENE_MODEL=gpt-5-mini
+AGENT_SUPERVISOR_MODEL=gpt-5.4
+AGENT_PDF_MODEL=gpt-5.4
 ```
 
 ---
@@ -415,7 +415,7 @@ The Flow Builder palette, trace badges, and Tool Inspector all derive from regis
 ### Per-Agent Overrides
 
 ```bash
-AGENT_MY_AGENT_MODEL=gpt-5.2-mini
+AGENT_MY_AGENT_MODEL=gpt-5-mini
 AGENT_MY_AGENT_REASONING=low
 AGENT_MY_AGENT_TEMPERATURE=0.2
 ```
