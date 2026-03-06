@@ -12,7 +12,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 **Ready for advanced features?**
 
-4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus 4.5
+4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
 6. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
 
@@ -42,7 +42,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 ### Understand and Improve AI Behavior
 
-- **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus 4.5
+- **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
 - **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-MOD overrides, version history, and icon customization
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
@@ -145,7 +145,7 @@ File outputs appear in the chat as downloadable cards with metadata including fi
 
 **The best way to provide feedback:** Use the **triple-dot menu (...)** button on any AI response in the chat interface. This automatically captures your prompts, the AI's responses, and all database traces, giving developers the full context they need to help you.
 
-**Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus 4.5, and submit improvement suggestions based on your domain expertise.
+**Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus, and submit improvement suggestions based on your domain expertise.
 
 For general questions or suggestions, please reach out to the development team.
 

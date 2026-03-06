@@ -1,6 +1,6 @@
 # Agent Studio Guide
 
-Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and chat with Claude Opus 4.5 about any of it.
+Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and chat with Claude Opus about any of it.
 
 ## Accessing Agent Studio
 
@@ -8,11 +8,11 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. All tabs include a chat panel where you can talk with Claude Opus 4.5.
+Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. All tabs include a chat panel where you can talk with Claude Opus.
 
 ### Opus Chat (Left Panel)
 
-On both tabs, the left panel is your chat with Claude Opus 4.5. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
+On both tabs, the left panel is your chat with Claude Opus. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
 
 ### Agents Tab
 

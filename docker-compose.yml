@@ -152,7 +152,8 @@ services:
       - DOCKER_COMPOSE_DIR=/app  # For Docker logs API (docker-compose.yml location)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus 4.5 chat
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus chat
+      - ANTHROPIC_OPUS_MODEL=${ANTHROPIC_OPUS_MODEL:-claude-opus-4-6}
       # Langfuse Observability Configuration
       - LANGFUSE_HOST=http://langfuse:3000
       - LANGFUSE_PUBLIC_URL=${LANGFUSE_PUBLIC_URL:-}

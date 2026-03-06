@@ -76,7 +76,7 @@ The system will automatically determine which databases to query based on your q
 - Start asking questions and exploring!
 
 ### Explore Advanced Features
-- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Claude Opus 4.5 about prompts, browse agent configurations, and analyze traces
+- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Claude Opus about prompts, browse agent configurations, and analyze traces
 - **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain agents together and export results to CSV, TSV, or JSON files
 - **[Batch Processing](BATCH_PROCESSING.md)** - Run saved flows against multiple documents automatically with real-time progress tracking
 - **Agent Workshop** (in Agent Studio) - Create custom agents with template/scratch/clone starts, model/tool selection, and per-MOD overrides for your curation flows

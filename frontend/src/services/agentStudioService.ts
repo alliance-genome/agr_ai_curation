@@ -507,7 +507,7 @@ export async function fetchTraceContext(
 }
 
 /**
- * Stream chat with Opus 4.5
+ * Stream chat with Opus
  * Returns an async generator that yields SSE events
  *
  * Uses effort="medium" on the backend for optimal quality/cost balance.

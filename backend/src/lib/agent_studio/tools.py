@@ -1,7 +1,7 @@
 """
 Workflow Analysis Tools
 
-Provides tool functions for Opus 4.5 to dynamically query trace data and Docker logs.
+Provides tool functions for Opus to dynamically query trace data and Docker logs.
 Used in the Workflow Analysis feature (formerly Prompt Explorer).
 
 Token-Aware Tools (Claude-Specific Endpoints):
