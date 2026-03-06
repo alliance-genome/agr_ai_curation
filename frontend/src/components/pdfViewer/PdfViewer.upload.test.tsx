@@ -220,4 +220,40 @@ describe('PdfViewer drag-and-drop upload', () => {
 
     fetchSpy.mockRestore()
   })
+
+  it('keeps the progress dialog closed after selecting Run in Background', async () => {
+    MockEventSource.autoPayload = null
+    const fetchSpy = createFetchMock()
+    render(<PdfViewer />)
+
+    const dropZone = screen.getByRole('region', { name: 'PDF drop zone' })
+    const file = new File(['%PDF-1.4'], 'background.pdf', { type: 'application/pdf' })
+
+    fireEvent.drop(dropZone, { dataTransfer: { files: [file] } })
+
+    const backgroundButton = await screen.findByRole('button', { name: 'Run in Background' })
+    fireEvent.click(backgroundButton)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Run in Background' })).not.toBeInTheDocument()
+    })
+
+    const stream = MockEventSource.instances[0]
+    expect(stream).toBeDefined()
+    stream.onmessage?.({
+      data: JSON.stringify({
+        stage: 'parsing',
+        progress: 35,
+        message: 'Parsing PDF...',
+        final: false,
+      }),
+    } as MessageEvent)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Run in Background' })).not.toBeInTheDocument()
+      expect(screen.queryByText('Processing Document')).not.toBeInTheDocument()
+    })
+
+    fetchSpy.mockRestore()
+  })
 })

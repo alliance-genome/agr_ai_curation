@@ -88,6 +88,7 @@ interface OverlayPayload {
 
 interface UploadDialogState {
   open: boolean
+  dismissedToBackground: boolean
   fileName: string
   stage: string
   progress: number
@@ -211,6 +212,7 @@ export function PdfViewer() {
   const [dropError, setDropError] = useState<string | null>(null)
   const [uploadDialog, setUploadDialog] = useState<UploadDialogState>({
     open: false,
+    dismissedToBackground: false,
     fileName: '',
     stage: 'uploading',
     progress: 0,
@@ -229,7 +231,7 @@ export function PdfViewer() {
   }, [])
 
   const handleCloseUploadDialog = useCallback(() => {
-    setUploadDialog((prev) => ({ ...prev, open: false }))
+    setUploadDialog((prev) => ({ ...prev, open: false, dismissedToBackground: true }))
   }, [])
 
   const suppressDragEvent = useCallback((event: React.DragEvent<HTMLDivElement>) => {
@@ -256,6 +258,7 @@ export function PdfViewer() {
     setUploadInFlight(true)
     setUploadDialog({
       open: true,
+      dismissedToBackground: false,
       fileName: file.name,
       stage: 'uploading',
       progress: 8,
@@ -270,7 +273,7 @@ export function PdfViewer() {
 
       setUploadDialog((prev) => ({
         ...prev,
-        open: true,
+        open: prev.dismissedToBackground ? false : true,
         documentId,
         stage: 'pending',
         progress: 12,
@@ -282,7 +285,7 @@ export function PdfViewer() {
         onProgress: (update) => {
           setUploadDialog((prev) => ({
             ...prev,
-            open: true,
+            open: prev.dismissedToBackground ? false : true,
             stage: update.stage,
             progress: update.progress,
             message: update.message,
@@ -298,7 +301,7 @@ export function PdfViewer() {
       if (finalProgress.stage !== 'completed') {
         setUploadDialog((prev) => ({
           ...prev,
-          open: true,
+          open: prev.dismissedToBackground ? false : true,
           stage: finalProgress.stage,
           progress: finalProgress.progress,
           message: finalProgress.message,
@@ -314,7 +317,7 @@ export function PdfViewer() {
 
       setUploadDialog((prev) => ({
         ...prev,
-        open: true,
+        open: prev.dismissedToBackground ? false : true,
         stage: 'completed',
         progress: 100,
         message: 'Upload complete. Document loaded for chat.',
@@ -327,7 +330,7 @@ export function PdfViewer() {
 
       setUploadDialog((prev) => ({
         ...prev,
-        open: true,
+        open: prev.dismissedToBackground ? false : true,
         stage: 'error',
         progress: 100,
         message: uploadError instanceof Error ? uploadError.message : 'Failed to upload PDF.',
