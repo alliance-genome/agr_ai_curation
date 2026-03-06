@@ -44,6 +44,7 @@ import {
   DocumentSummary,
   usePdfExtractionHealth,
 } from '../../services/weaviate';
+import { emitGlobalToast } from '../../lib/globalNotifications';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -69,6 +70,8 @@ interface DocumentListProps {
 }
 
 const MAX_UPLOAD_FILES_PER_SELECTION = 10;
+const PDF_BACKGROUND_PROCESSING_TOAST =
+  'Your PDFs are processing in the background. You can safely navigate away.';
 
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
@@ -211,6 +214,15 @@ const DocumentList: React.FC<DocumentListProps> = ({
     fileInputRef.current?.click();
   };
 
+  const notifyBackgroundProcessingStarted = React.useCallback(() => {
+    emitGlobalToast({
+      message: PDF_BACKGROUND_PROCESSING_TOAST,
+      severity: 'info',
+      autoHideDurationMs: 8000,
+      anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
+    });
+  }, []);
+
   const uploadDocumentFile = React.useCallback(async (file: File): Promise<string> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -259,6 +271,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
         }
       }
 
+      if (succeeded > 0) {
+        notifyBackgroundProcessingStarted();
+      }
+
       onRefresh();
       onPipelineStateChange?.(false);
 
@@ -268,7 +284,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
         window.alert(`Queued ${succeeded}/${total} PDFs. Failed ${failures.length}: ${preview}${overflow}`);
       }
     },
-    [onPipelineStateChange, onRefresh, uploadDocumentFile]
+    [notifyBackgroundProcessingStarted, onPipelineStateChange, onRefresh, uploadDocumentFile]
   );
 
   const uploadSingleFile = React.useCallback(async (file: File) => {
@@ -276,6 +292,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
 
     try {
       await uploadDocumentFile(file);
+      notifyBackgroundProcessingStarted();
       onRefresh();
     } catch (error) {
       console.error('Error uploading file:', error);
@@ -284,7 +301,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     } finally {
       onPipelineStateChange?.(false);
     }
-  }, [onPipelineStateChange, onRefresh, uploadDocumentFile]);
+  }, [notifyBackgroundProcessingStarted, onPipelineStateChange, onRefresh, uploadDocumentFile]);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
