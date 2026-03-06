@@ -303,6 +303,7 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
         'json_formatter': 'json_formatter',
         # Normalize pdf_specialist -> pdf_extraction to match AGENT_REGISTRY
         'pdf_specialist': 'pdf_extraction',
+        'pdf': 'pdf_extraction',
         'pdf_extraction': 'pdf_extraction',
     }
 
@@ -329,6 +330,7 @@ def _normalize_agent_id(agent_id: str) -> str:
     # Mapping from legacy/trace names to canonical AGENT_REGISTRY IDs
     normalization_map = {
         'pdf_specialist': 'pdf_extraction',
+        'pdf': 'pdf_extraction',
         'gene_extraction': 'gene_extractor',
         'ask_gene_extractor_specialist': 'gene_extractor',
         'allele_variant_extraction': 'allele_extractor',

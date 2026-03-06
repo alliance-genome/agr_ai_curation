@@ -159,9 +159,19 @@ def _system_prompt_from_yaml(folder_name: str) -> tuple[str, str]:
     return str(content), str(prompt_yaml.relative_to(_repo_root()))
 
 
+def _canonical_system_agent_key(spec: Dict[str, Any]) -> str:
+    """Resolve canonical unified-agent key for system agent specs."""
+    folder_name = str(spec.get("folder_name") or "").strip()
+    agent_id = str(spec.get("agent_id") or folder_name).strip()
+    if folder_name == "pdf":
+        return agent_id
+    return folder_name
+
+
 def _seed_active_system_prompt_from_yaml(
     connection: sa.Connection,
     folder_name: str,
+    agent_name: str,
 ) -> str:
     content, source_file = _system_prompt_from_yaml(folder_name)
 
@@ -175,7 +185,7 @@ def _seed_active_system_prompt_from_yaml(
               AND group_id IS NULL
             """
         ),
-        {"agent_name": folder_name},
+        {"agent_name": agent_name},
     ).scalar_one()
 
     connection.execute(
@@ -208,7 +218,7 @@ def _seed_active_system_prompt_from_yaml(
             """
         ),
         {
-            "agent_name": folder_name,
+            "agent_name": agent_name,
             "content": content,
             "version": int(next_version),
             "source_file": source_file,
@@ -262,6 +272,7 @@ def upgrade() -> None:
 
     # Seed system agents from config/agents/*/agent.yaml and active DB prompts.
     for spec in yaml_specs:
+        canonical_agent_key = _canonical_system_agent_key(spec)
         instructions = _active_system_prompt(
             connection=connection,
             folder_name=spec["folder_name"],
@@ -271,13 +282,14 @@ def upgrade() -> None:
             instructions = _seed_active_system_prompt_from_yaml(
                 connection=connection,
                 folder_name=spec["folder_name"],
+                agent_name=canonical_agent_key,
             )
 
         connection.execute(
             insert(agents)
             .values(
                 id=uuid.uuid4(),
-                agent_key=spec["folder_name"],
+                agent_key=canonical_agent_key,
                 user_id=None,
                 name=spec["name"],
                 description=spec["description"],
@@ -288,7 +300,7 @@ def upgrade() -> None:
                 tool_ids=spec["tools"],
                 output_schema_key=spec["output_schema_key"],
                 group_rules_enabled=spec["group_rules_enabled"],
-                group_rules_component=spec["folder_name"] if spec["group_rules_enabled"] else None,
+                group_rules_component=canonical_agent_key if spec["group_rules_enabled"] else None,
                 mod_prompt_overrides={},
                 icon=spec["icon"],
                 category=spec["category"],
