@@ -30,4 +30,53 @@ describe('pdfTerminalNotifications', () => {
       severity: 'info',
     });
   });
+
+  it('builds a failed notification payload when failure is terminal', () => {
+    expect(
+      buildPdfTerminalNotification({
+        job_id: 'job-2',
+        status: 'failed',
+        filename: 'broken.pdf',
+        document_id: 'doc-2',
+        cancel_requested: false,
+      })
+    ).toEqual({
+      key: 'job-2:failed',
+      status: 'failed',
+      message: 'PDF processing failed: broken.pdf',
+      severity: 'error',
+    });
+  });
+
+  it('falls back to document_id and then job_id when filename is missing', () => {
+    expect(
+      buildPdfTerminalNotification({
+        job_id: 'job-3',
+        status: 'completed',
+        filename: undefined,
+        document_id: 'doc-3',
+        cancel_requested: false,
+      })
+    ).toEqual({
+      key: 'job-3:completed',
+      status: 'completed',
+      message: 'PDF processing completed: doc-3',
+      severity: 'success',
+    });
+
+    expect(
+      buildPdfTerminalNotification({
+        job_id: 'job-4',
+        status: 'completed',
+        filename: undefined,
+        document_id: undefined,
+        cancel_requested: false,
+      })
+    ).toEqual({
+      key: 'job-4:completed',
+      status: 'completed',
+      message: 'PDF processing completed: job-4',
+      severity: 'success',
+    });
+  });
 });
