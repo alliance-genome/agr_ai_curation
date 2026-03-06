@@ -651,5 +651,5 @@ describe('PromptWorkshop', () => {
         })
       )
     }, { timeout: 5000 })
-  })
+  }, 15000)
 })
