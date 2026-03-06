@@ -15,10 +15,11 @@ class TestBuildConfigDefaults:
         """When all values match defaults, model is still preserved."""
         # Use default ModelConfig values
         config = ModelConfig()
+        default_model = ModelConfig().model
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": "gpt-4o"}
+        assert result == {"model": default_model}
 
     def test_returns_model_when_differs_from_default(self):
         """When model differs from default, include it in result."""
@@ -31,18 +32,20 @@ class TestBuildConfigDefaults:
     def test_returns_temperature_when_differs_from_default(self):
         """When temperature differs from default, include it in result."""
         config = ModelConfig(temperature=0.7)
+        default_model = ModelConfig().model
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": "gpt-4o", "temperature": 0.7}
+        assert result == {"model": default_model, "temperature": 0.7}
 
     def test_returns_reasoning_when_differs_from_default(self):
         """When reasoning differs from default, include it in result."""
         config = ModelConfig(reasoning="high")
+        default_model = ModelConfig().model
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": "gpt-4o", "reasoning": "high"}
+        assert result == {"model": default_model, "reasoning": "high"}
 
     def test_returns_multiple_non_default_values(self):
         """When multiple values differ, include all of them."""

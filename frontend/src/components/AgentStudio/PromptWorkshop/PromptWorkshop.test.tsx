@@ -583,7 +583,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confused about models? Chat with Claude' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confused about models? Chat with Claude' }))
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me choose the best model settings')
@@ -598,7 +598,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Discuss prompt changes with Claude' }))
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
