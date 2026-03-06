@@ -45,6 +45,11 @@ import {
   usePdfExtractionHealth,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
+import {
+  MAX_UPLOAD_FILES_PER_SELECTION,
+  uploadPdfDocument,
+  validatePdfSelection,
+} from '@/features/documents/pdfUploadFlow';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -69,10 +74,8 @@ interface DocumentListProps {
   filterBar?: React.ReactNode;
 }
 
-const MAX_UPLOAD_FILES_PER_SELECTION = 10;
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
-
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
   loading,
@@ -224,31 +227,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   }, []);
 
   const uploadDocumentFile = React.useCallback(async (file: File): Promise<string> => {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const response = await fetch('/api/weaviate/documents/upload', {
-      method: 'POST',
-      body: formData,
-      credentials: 'include', // Include httpOnly cookies for authentication
-    });
-
-    if (!response.ok) {
-      // Handle duplicate file error (409 Conflict)
-      if (response.status === 409) {
-        const errorData = await response.json();
-        const uploadDate = errorData.detail?.uploaded_at
-          ? new Date(errorData.detail.uploaded_at).toLocaleDateString()
-          : 'previously';
-        throw new Error(
-          `This file was already uploaded ${uploadDate}. ${errorData.detail?.suggestion || 'Delete the existing document and try again.'}`
-        );
-      }
-      throw new Error('Upload failed');
-    }
-
-    const result = await response.json();
-    return result.document_id as string;
+    return uploadPdfDocument(file);
   }, []);
 
   const uploadMultipleFiles = React.useCallback(
@@ -309,27 +288,22 @@ const DocumentList: React.FC<DocumentListProps> = ({
       return;
     }
 
-    const nonPdfFile = selectedFiles.find((file) => !file.name.toLowerCase().endsWith('.pdf'));
-    if (nonPdfFile) {
-      alert('Please select PDF files only');
+    const validation = validatePdfSelection(selectedFiles, {
+      maxFiles: MAX_UPLOAD_FILES_PER_SELECTION,
+      allowMultiple: true,
+    });
+    if (!validation.ok) {
+      alert(validation.error ?? 'Please select PDF files only');
       if (event.target) {
         event.target.value = '';
       }
       return;
     }
 
-    if (selectedFiles.length > MAX_UPLOAD_FILES_PER_SELECTION) {
-      alert(`Please select up to ${MAX_UPLOAD_FILES_PER_SELECTION} PDF files at a time`);
-      if (event.target) {
-        event.target.value = '';
-      }
-      return;
-    }
-
-    if (selectedFiles.length === 1) {
-      await uploadSingleFile(selectedFiles[0]);
+    if (validation.files.length === 1) {
+      await uploadSingleFile(validation.files[0]);
     } else {
-      await uploadMultipleFiles(selectedFiles);
+      await uploadMultipleFiles(validation.files);
     }
 
     // Reset file input
