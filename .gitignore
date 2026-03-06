@@ -167,9 +167,11 @@ find_*.py
 *_DESIGN.md
 *_DESIGN_PLAN.md
 *_ARCHITECTURE_PLAN.md
+*_PLAN_REVIEW.md
 
 # Claude Code settings
 .claude/
+.symphony/
 
 # Git worktrees
 .worktrees/

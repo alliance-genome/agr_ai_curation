@@ -14,9 +14,15 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+BACKEND_URL="${REVIEW_BACKEND_URL:-http://localhost:${BACKEND_HOST_PORT:-8000}}"
+FRONTEND_URL="${REVIEW_FRONTEND_URL:-http://localhost:${FRONTEND_HOST_PORT:-3002}}"
+WEAVIATE_PORT="${WEAVIATE_HTTP_HOST_PORT:-8080}"
+POSTGRES_USER="${POSTGRES_USER:-postgres}"
+POSTGRES_DB="${POSTGRES_DB:-ai_curation}"
+
 # Check Docker services
 echo "📦 Docker Services:"
-docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Service}}" | while IFS=$'\t' read -r name status service; do
+docker compose ps --format "{{.Name}}\t{{.Status}}\t{{.Service}}" | while IFS=$'\t' read -r name status service; do
     if [[ "$status" == *"Up"* ]] && [[ "$status" == *"healthy"* ]]; then
         echo -e "  ${GREEN}✓${NC} $service (healthy)"
     elif [[ "$status" == *"Up"* ]]; then
@@ -31,37 +37,38 @@ echo "🌐 API Endpoints:"
 
 # Check backend health
 echo -n "  Backend API: "
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} http://localhost:8000"
+if curl -s "${BACKEND_URL%/}/health" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} ${BACKEND_URL}"
 else
     echo -e "${RED}✗${NC} Not responding"
 fi
 
 # Check frontend
 echo -n "  Frontend: "
-if curl -s http://localhost:3002 > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} http://localhost:3002"
+if curl -s "${FRONTEND_URL}" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} ${FRONTEND_URL}"
 else
     echo -e "${RED}✗${NC} Not responding"
 fi
 
 # Check Weaviate
 echo -n "  Weaviate: "
-if curl -s http://localhost:8080/v1/.well-known/ready > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} http://localhost:8080"
+if curl -s "http://localhost:${WEAVIATE_PORT}/v1/.well-known/ready" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} http://localhost:${WEAVIATE_PORT}"
 else
     echo -e "${RED}✗${NC} Not responding"
 fi
 
 # Check PDF extraction service (if configured)
 PDF_EXTRACTION_URL="${PDF_EXTRACTION_SERVICE_URL:-}"
+PDF_EXTRACTION_HEALTH_URL="${PDF_EXTRACTION_URL%/}/api/v1/health"
 echo -n "  PDF Extraction Service: "
 if [ -z "$PDF_EXTRACTION_URL" ]; then
     echo -e "${YELLOW}⚠${NC} Not configured (set PDF_EXTRACTION_SERVICE_URL)"
-elif curl -s --max-time 2 "${PDF_EXTRACTION_URL}/health" > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} ${PDF_EXTRACTION_URL}"
+elif curl -s --max-time 4 "${PDF_EXTRACTION_HEALTH_URL}" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} ${PDF_EXTRACTION_HEALTH_URL}"
 else
-    echo -e "${YELLOW}⚠${NC} Not reachable (${PDF_EXTRACTION_URL})"
+    echo -e "${YELLOW}⚠${NC} Not reachable (${PDF_EXTRACTION_HEALTH_URL})"
 fi
 
 echo ""
@@ -69,7 +76,7 @@ echo "💾 Database:"
 
 # Check PostgreSQL
 echo -n "  PostgreSQL: "
-if docker exec ai_curation_prototype-postgres-1 psql -U postgres -d ai_curation -c "SELECT 1;" > /dev/null 2>&1; then
+if docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "SELECT 1;" > /dev/null 2>&1; then
     echo -e "${GREEN}✓${NC} Database accessible"
 else
     echo -e "${RED}✗${NC} Cannot connect to database"

@@ -21,8 +21,8 @@ services:
       retries: 3
       start_period: 30s
     environment: &langfuse-worker-env
-      NEXTAUTH_URL: http://localhost:3000
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:${LANGFUSE_HOST_PORT:-3000}}
+      DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres}
       SALT: ${SALT:-CHANGE_ME_RANDOM_SALT}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-CHANGE_ME_64_CHAR_HEX_KEY_HERE_________________________________________________}
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
@@ -69,7 +69,7 @@ services:
     restart: always
     depends_on: *langfuse-depends-on
     ports:
-      - 3000:3000
+      - ${LANGFUSE_HOST_PORT:-3000}:3000
     environment:
       <<: *langfuse-worker-env
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-CHANGE_ME_RANDOM_SECRET}
@@ -100,7 +100,7 @@ services:
       log_tier: web
       log_component: nextjs
     ports:
-      - "3002:80"
+      - "${FRONTEND_HOST_PORT:-3002}:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
       interval: 30s
@@ -117,7 +117,7 @@ services:
     env_file:
       - path: .env
         required: false
-    command: bash -c "cd /app/backend && alembic upgrade head; /app/scripts/refresh_prefixes_on_start.sh; exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: bash -c "cd /app/backend && if [[ \"${RUN_DB_BOOTSTRAP_ON_START:-false}\" == \"true\" ]]; then /app/scripts/utilities/ensure_postgres_db_exists.sh; fi && if [[ \"${RUN_DB_MIGRATIONS_ON_START:-false}\" == \"true\" ]]; then alembic upgrade head; fi && /app/scripts/refresh_prefixes_on_start.sh && exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
     depends_on:
       langfuse:
@@ -133,7 +133,7 @@ services:
       log_tier: api
       log_component: openai-agents
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
@@ -151,6 +151,7 @@ services:
       - PDF_EXTRACTION_COGNITO_SCOPE=${PDF_EXTRACTION_COGNITO_SCOPE:-}
       - DOCKER_COMPOSE_DIR=/app  # For Docker logs API (docker-compose.yml location)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus 4.5 chat
       # Langfuse Observability Configuration
       - LANGFUSE_HOST=http://langfuse:3000
@@ -208,7 +209,7 @@ services:
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID:-}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET:-}
       - COGNITO_DOMAIN=${COGNITO_DOMAIN:-https://auth.alliancegenome.org}
-      - COGNITO_REDIRECT_URI=${COGNITO_REDIRECT_URI:-http://localhost:3002/auth/callback}
+      - COGNITO_REDIRECT_URI=${COGNITO_REDIRECT_URI:-http://localhost:${FRONTEND_HOST_PORT:-3002}/auth/callback}
       # Generic OIDC Provider Configuration
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
@@ -337,8 +338,8 @@ services:
       log_tier: database
       log_component: weaviate
     ports:
-      - "8080:8080"
-      - "50051:50051"  # gRPC port
+      - "${WEAVIATE_HTTP_HOST_PORT:-8080}:8080"
+      - "${WEAVIATE_GRPC_HOST_PORT:-50051}:50051"  # gRPC port
     environment:
       QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: ${WEAVIATE_ANONYMOUS_ACCESS:-true}
@@ -390,7 +391,7 @@ services:
       log_tier: cache
       log_component: redis
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}", "ping"]
       interval: 3s
@@ -411,8 +412,8 @@ services:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
     ports:
-      - "8123:8123"  # HTTP interface
-      - "9000:9000"  # Native protocol
+      - "${CLICKHOUSE_HTTP_HOST_PORT:-8123}:8123"  # HTTP interface
+      - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"  # Native protocol
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 10s
@@ -431,8 +432,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-CHANGE_ME_MINIO_SECRET}
     ports:
-      - 9090:9000
-      - 127.0.0.1:9091:9001
+      - ${MINIO_API_HOST_PORT:-9090}:9000
+      - 127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9091}:9001
     volumes:
       - langfuse_minio_data:/data
     healthcheck:
@@ -454,9 +455,9 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_curation}
     ports:
-      - 127.0.0.1:5434:5432
+      - 127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -464,7 +465,7 @@ services:
   loki:
     image: grafana/loki:latest
     ports:
-      - "3100:3100"
+      - "${LOKI_HOST_PORT:-3100}:3100"
     volumes:
       - ./loki-config.yml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
@@ -499,6 +500,5 @@ volumes:
   langfuse_minio_data:
     driver: local
 
-networks:
-  default:
-    name: ai-curation-network
+# Use Compose's per-project default network name for workspace isolation.
+# This keeps concurrent issue stacks independent and avoids cross-project cleanup conflicts.
