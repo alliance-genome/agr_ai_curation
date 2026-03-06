@@ -94,7 +94,7 @@ config/
 │   ├── chemical/agent.yaml      # Chemical entity agent
 │   ├── supervisor/agent.yaml    # Supervisor (routing) agent
 │   └── ...                      # 15 agent definitions total
-├── models.yaml                  # LLM model catalog (GPT-5.2, GPT-5.2 Mini, etc.)
+├── models.yaml                  # LLM model catalog (GPT-5.4, GPT-5 Mini, etc.)
 ├── providers.yaml               # LLM provider drivers (OpenAI, Gemini, Groq)
 └── tool_policy_defaults.yaml    # Tool visibility and permissions
 ```

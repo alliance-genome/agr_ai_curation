@@ -87,7 +87,7 @@ def test_resolve_model_provider_requires_known_model(monkeypatch):
 def test_resolve_model_provider_rejects_unknown_override(monkeypatch):
     monkeypatch.setattr("src.lib.config.providers_loader.get_provider", lambda _provider_id: None)
     with pytest.raises(ValueError, match="Unknown provider_id"):
-        resolve_model_provider("gpt-5.2-mini", provider_override="not-real")
+        resolve_model_provider("gpt-5-mini", provider_override="not-real")
 
 
 def test_support_flags_require_model_catalog(monkeypatch):

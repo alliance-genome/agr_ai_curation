@@ -22,8 +22,8 @@ def test_check_llm_providers_returns_report(monkeypatch):
                 "base_url_env": "OPENAI_BASE_URL",
                 "base_url_configured": False,
                 "default_for_runner": True,
-                "mapped_model_ids": ["gpt-5.2-mini"],
-                "mapped_curator_visible_model_ids": ["gpt-5.2-mini"],
+                "mapped_model_ids": ["gpt-5-mini"],
+                "mapped_curator_visible_model_ids": ["gpt-5-mini"],
                 "supports_parallel_tool_calls": True,
                 "readiness": "ready",
             },
@@ -44,7 +44,7 @@ def test_check_llm_providers_returns_report(monkeypatch):
         ],
         "models": [
             {
-                "model_id": "gpt-5.2-mini",
+                "model_id": "gpt-5-mini",
                 "provider_id": "openai",
                 "provider_exists": True,
                 "curator_visible": True,
