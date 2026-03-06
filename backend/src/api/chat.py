@@ -126,6 +126,102 @@ def _get_conversation_history_for_session(user_id: str, session_id: str) -> List
     return messages
 
 
+_FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS = 2500
+_FLOW_MEMORY_MAX_SPECIALIST_OUTPUTS = 8
+_FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS = 3500
+_FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES = 12
+_FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS = 18000
+
+
+def _truncate_text(value: Any, max_chars: int) -> str:
+    """Convert to string and truncate with deterministic suffix when needed."""
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    overflow = len(text) - max_chars
+    return f"{text[:max_chars]}... [truncated {overflow} chars]"
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    """Return unique strings while preserving insertion order."""
+    seen = set()
+    ordered: List[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _build_flow_memory_assistant_message(
+    *,
+    flow_name: str,
+    flow_id: str,
+    session_id: str,
+    status: str,
+    trace_id: Optional[str],
+    final_user_output: Optional[str],
+    agents_used: List[str],
+    specialist_outputs: List[Dict[str, Any]],
+    specialist_summaries: List[Dict[str, Any]],
+    domain_warnings: List[Dict[str, Any]],
+    file_outputs: List[Dict[str, Any]],
+    failure_reason: Optional[str],
+) -> str:
+    """Build a flow execution context message for follow-up chat grounding."""
+    agents = _dedupe_preserve_order([str(agent) for agent in agents_used if agent])
+    visible_output = _truncate_text(final_user_output or "", _FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS)
+
+    bounded_outputs: List[Dict[str, Any]] = []
+    for output in specialist_outputs[:_FLOW_MEMORY_MAX_SPECIALIST_OUTPUTS]:
+        bounded_outputs.append({
+            "tool": output.get("tool"),
+            "output_length": output.get("output_length"),
+            "output": _truncate_text(output.get("output"), _FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS),
+        })
+
+    hidden_payload = {
+        "flow": {
+            "flow_id": flow_id,
+            "flow_name": flow_name,
+            "session_id": session_id,
+            "status": status,
+            "trace_id": trace_id,
+            "failure_reason": failure_reason,
+        },
+        "specialist_outputs": bounded_outputs,
+        "intermediate_specialist_summaries": specialist_summaries[:_FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES],
+        "domain_warnings": domain_warnings,
+        "files": file_outputs,
+    }
+    hidden_json = json.dumps(hidden_payload, default=str, ensure_ascii=True)
+    hidden_json = _truncate_text(hidden_json, _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS)
+
+    agents_line = ", ".join(agents) if agents else "Unknown"
+    if visible_output:
+        final_output_block = visible_output
+    elif status == "failed":
+        final_output_block = f"Flow failed before producing a final output. Reason: {failure_reason or 'Unknown'}"
+    else:
+        final_output_block = "No final user-visible output was emitted."
+
+    return (
+        "Flow execution summary for follow-up questions:\n"
+        f"- Flow: {flow_name} ({flow_id})\n"
+        f"- Status: {status}\n"
+        f"- Session: {session_id}\n"
+        f"- Trace ID: {trace_id or 'n/a'}\n"
+        f"- Agents involved: {agents_line}\n"
+        "- Final user-visible output:\n"
+        f"{final_output_block}\n\n"
+        "Hidden flow context (internal grounding data; not user-visible output):\n"
+        "<FLOW_INTERNAL_CONTEXT_JSON>\n"
+        f"{hidden_json}\n"
+        "</FLOW_INTERNAL_CONTEXT_JSON>"
+    )
+
+
 class ChatResponse(BaseModel):
     """Response model for non-streaming chat."""
     response: str
@@ -736,6 +832,15 @@ async def execute_flow_endpoint(
         """Generate SSE events from flow execution with cancellation support."""
         current_session_id = request.session_id
         trace_id = None
+        flow_status: Optional[str] = None
+        flow_failure_reason: Optional[str] = None
+        run_finished_response = ""
+        chat_output_response = ""
+        agents_used: List[str] = []
+        specialist_outputs: List[Dict[str, Any]] = []
+        specialist_summaries: List[Dict[str, Any]] = []
+        domain_warnings: List[Dict[str, Any]] = []
+        file_outputs: List[Dict[str, Any]] = []
 
         try:
             async for event in execute_flow(
@@ -763,7 +868,50 @@ async def execute_flow_endpoint(
                 # Executor sends: {type, data: {...}, timestamp?, details?}
                 # Audit panel expects: {type, timestamp, sessionId, details}
                 event_type = event.get("type")
-                event_data = event.get("data", {})
+                event_data = event.get("data", {}) or {}
+                event_details = event.get("details", {}) or {}
+
+                if event_type == "RUN_STARTED" and "trace_id" in event_data:
+                    trace_id = event_data.get("trace_id")
+
+                if event_type == "RUN_FINISHED":
+                    run_finished_response = str(event_data.get("response") or "")
+                    agents_used.extend([
+                        str(agent_name) for agent_name in (event_data.get("agents_used") or [])
+                        if agent_name
+                    ])
+                elif event_type == "CHAT_OUTPUT_READY":
+                    chat_output_response = str(event_details.get("output") or event_data.get("output") or "")
+                elif event_type == "CREW_START":
+                    crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
+                    if crew_name:
+                        agents_used.append(str(crew_name))
+                elif event_type == "SPECIALIST_SUMMARY":
+                    specialist_summaries.append(dict(event_details))
+                elif event_type == "DOMAIN_WARNING":
+                    domain_warnings.append(dict(event_details))
+                elif event_type == "FILE_READY":
+                    file_outputs.append(dict(event_details))
+                elif event_type == "FLOW_FINISHED":
+                    flow_status = event_data.get("status")
+                    flow_failure_reason = event_data.get("failure_reason")
+                elif event_type == "TOOL_COMPLETE":
+                    tool_name = event_details.get("toolName")
+                    internal_payload = event.get("internal")
+                    if (
+                        isinstance(internal_payload, dict)
+                        and isinstance(tool_name, str)
+                        and tool_name.startswith("ask_")
+                        and tool_name.endswith("_specialist")
+                        and "tool_output" in internal_payload
+                    ):
+                        raw_output = internal_payload.get("tool_output")
+                        output_text = str(raw_output) if raw_output is not None else ""
+                        specialist_outputs.append({
+                            "tool": tool_name,
+                            "output": output_text,
+                            "output_length": internal_payload.get("output_length", len(output_text)),
+                        })
 
                 flat_event = {"type": event_type, "session_id": current_session_id, "sessionId": current_session_id}
                 flat_event.update(event_data)  # Merge all data fields to top level
@@ -774,11 +922,38 @@ async def execute_flow_endpoint(
                 if "details" in event:
                     flat_event["details"] = event["details"]
 
-                # Capture trace_id from RUN_STARTED event for error reporting
-                if event_type == "RUN_STARTED" and "trace_id" in event_data:
-                    trace_id = event_data.get("trace_id")
-
                 yield f"data: {json.dumps(flat_event, default=str)}\n\n"
+
+            if flow_status:
+                history_user_message = (request.user_query or "").strip() or f"Run flow '{flow.name}'"
+                history_assistant_message = _build_flow_memory_assistant_message(
+                    flow_name=flow.name,
+                    flow_id=str(flow.id),
+                    session_id=current_session_id,
+                    status=flow_status,
+                    trace_id=trace_id,
+                    final_user_output=chat_output_response or run_finished_response,
+                    agents_used=agents_used,
+                    specialist_outputs=specialist_outputs,
+                    specialist_summaries=specialist_summaries,
+                    domain_warnings=domain_warnings,
+                    file_outputs=file_outputs,
+                    failure_reason=flow_failure_reason,
+                )
+                try:
+                    conversation_manager.add_exchange(
+                        user_id,
+                        current_session_id,
+                        history_user_message,
+                        history_assistant_message,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Flow context injection failed for session %s",
+                        current_session_id,
+                        extra={"session_id": current_session_id, "user_id": user_id},
+                        exc_info=True,
+                    )
 
         except asyncio.CancelledError:
             logger.warning(

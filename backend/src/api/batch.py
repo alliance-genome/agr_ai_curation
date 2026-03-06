@@ -35,12 +35,22 @@ from ..services.user_service import principal_from_claims, provision_user
 
 
 logger = logging.getLogger(__name__)
+_BACKEND_ONLY_BATCH_EVENT_FIELDS = {"internal"}
 
 # Main batch router - handles /api/batches endpoints
 router = APIRouter(prefix="/api/batches")
 
 # Secondary router for flow validation - handles /api/flows/{id}/validate-batch
 flow_validation_router = APIRouter(prefix="/api/flows")
+
+
+def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove backend-only fields before streaming SSE payloads to clients."""
+    return {
+        key: value
+        for key, value in event.items()
+        if key not in _BACKEND_ONLY_BATCH_EVENT_FIELDS
+    }
 
 
 @router.post("", response_model=BatchResponse, status_code=201)
@@ -463,11 +473,12 @@ async def stream_batch_progress(
                 while True:
                     try:
                         event = event_queue.get_nowait()
+                        safe_event = _sanitize_batch_stream_event(event)
                         # Stream event directly to frontend (already enriched)
-                        yield f"data: {json.dumps(event, default=str)}\n\n"
+                        yield f"data: {json.dumps(safe_event, default=str)}\n\n"
 
                         # Check for stream completion marker
-                        if event.get("type") == "BATCH_STREAM_COMPLETE":
+                        if safe_event.get("type") == "BATCH_STREAM_COMPLETE":
                             batch_complete = True
                             break
                     except asyncio.QueueEmpty:

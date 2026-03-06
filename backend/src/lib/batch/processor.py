@@ -32,6 +32,7 @@ from src.models.sql.file_output import FileOutput
 from .events import get_batch_broadcaster
 
 logger = logging.getLogger(__name__)
+_BACKEND_ONLY_EVENT_FIELDS = {"internal"}
 
 
 def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
@@ -408,8 +409,13 @@ def _enrich_event_for_batch(
     Returns:
         Enriched event dict
     """
-    # Start with a copy of the original event
-    enriched = dict(event)
+    # Start with a sanitized copy of the original event.
+    # Keep backend-only payloads (e.g., internal tool output) out of SSE events.
+    enriched = {
+        key: value
+        for key, value in event.items()
+        if key not in _BACKEND_ONLY_EVENT_FIELDS
+    }
 
     # Add batch context
     enriched["batch_id"] = batch_id

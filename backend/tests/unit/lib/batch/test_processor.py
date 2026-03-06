@@ -269,6 +269,49 @@ def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypa
     assert published_events[0]["type"] == "SUPERVISOR_COMPLETE"
 
 
+def test_execute_flow_for_document_strips_internal_payload_before_publish(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "TOOL_COMPLETE",
+            "data": {"step_id": "s-1"},
+            "details": {"toolName": "ask_gene_specialist", "friendlyName": "Gene specialist complete"},
+            "internal": {"tool_output": "{\"selected_gene\":\"TP53\"}"},
+        }
+
+    published_events = []
+    batch_id = str(uuid4())
+    document_id = str(uuid4())
+
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_uuid, event: published_events.append(event)
+        ),
+    )
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    result = asyncio.run(
+        processor._execute_flow_for_document(
+            flow=SimpleNamespace(name="Batch Flow"),
+            document_id=document_id,
+            cognito_sub="auth-sub",
+            batch_id=batch_id,
+            db_user_id=7,
+        )
+    )
+
+    assert result is None
+    assert len(published_events) == 1
+    assert published_events[0]["type"] == "TOOL_COMPLETE"
+    assert published_events[0]["batch_id"] == batch_id
+    assert published_events[0]["document_id"] == document_id
+    assert published_events[0]["step_id"] == "s-1"
+    assert "internal" not in published_events[0]
+
+
 def test_validate_file_ownership_fails_closed_on_session_error(monkeypatch):
     def _raise_session_local():
         raise RuntimeError("db unavailable")

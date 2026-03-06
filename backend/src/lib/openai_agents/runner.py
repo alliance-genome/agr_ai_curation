@@ -709,7 +709,15 @@ async def _run_agent_with_tracing(
                                     custom_tool_display_names,
                                 ),
                                 "success": True
-                            }
+                            },
+                            # Internal payload used by backend-only consumers
+                            # (e.g., flow-context memory injection). SSE flatteners
+                            # intentionally drop this field, so it is not user-visible.
+                            "internal": {
+                                "tool_output": output,
+                                "output_length": len(str(output)),
+                                "output_preview": output_preview,
+                            },
                         }
 
                         # Check if chat_output agent completed (for flow termination)

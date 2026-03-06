@@ -1,5 +1,6 @@
 """Unit tests for batch API endpoints."""
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -400,6 +401,55 @@ async def test_stream_batch_progress_sanitizes_internal_errors(monkeypatch):
     body = await _read_streaming_response(response)
     assert b"Batch stream encountered an internal error" in body
     assert b"db credentials leaked" not in body
+
+
+@pytest.mark.asyncio
+async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
+    _mock_auth(monkeypatch, user_id=8)
+    batch_id = uuid4()
+    batch = SimpleNamespace(
+        id=batch_id,
+        status=BatchStatus.RUNNING,
+        total_documents=1,
+        completed_documents=0,
+        failed_documents=0,
+        documents=[],
+    )
+    service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
+    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+
+    class _StreamDB:
+        def expire_all(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(batch_api, "SessionLocal", lambda: _StreamDB())
+
+    class _Broadcaster:
+        async def subscribe(self, _batch_id):
+            queue = asyncio.Queue()
+            queue.put_nowait(
+                {
+                    "type": "TOOL_COMPLETE",
+                    "details": {"toolName": "ask_gene_specialist"},
+                    "internal": {"tool_output": "{\"selected_gene\":\"TP53\"}"},
+                }
+            )
+            queue.put_nowait({"type": "BATCH_STREAM_COMPLETE", "batch_id": str(batch_id)})
+            return queue
+
+        async def unsubscribe(self, _batch_id, _queue):
+            return None
+
+    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _Broadcaster())
+
+    response = await batch_api.stream_batch_progress(batch_id, {"sub": "u-1"}, db=object())
+    body = await _read_streaming_response(response)
+
+    assert b'"type": "TOOL_COMPLETE"' in body
+    assert b'"internal"' not in body
 
 
 async def _read_streaming_response(response):
