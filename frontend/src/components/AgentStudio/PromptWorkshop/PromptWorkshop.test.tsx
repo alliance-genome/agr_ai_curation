@@ -633,9 +633,16 @@ describe('PromptWorkshop', () => {
       />
     )
 
-    expect(
-      await screen.findByText('Applied Claude MOD update (WB): Updated WB-specific extraction guidance.')
-    ).toBeInTheDocument()
+    await waitFor(() => {
+      const alerts = screen.getAllByRole('alert')
+      expect(
+        alerts.some((alert) => {
+          const text = alert.textContent || ''
+          return text.includes('Applied Claude MOD update (WB):')
+            && text.includes('Updated WB-specific extraction guidance.')
+        })
+      ).toBe(true)
+    })
 
     await waitFor(() => {
       const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
