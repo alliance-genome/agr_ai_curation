@@ -71,6 +71,13 @@ jobs:
 
             START by reading their comment: gh pr view {1} --comments --json comments --jq ".comments[-1].body"
             Then check the PR diff: git diff origin/main...HEAD
+            Also check the commit history: git log --oneline origin/main...HEAD
+
+            If they are asking for a re-review or to check again, read through all PR comments to find your
+            earlier review(s). Check whether any new commits pushed after your previous review addressed
+            the feedback you raised. Frame your updated review accordingly — note which issues from your
+            earlier review have been addressed by new commit(s) and which (if any) remain. Do NOT retract
+            or call previous reviews inaccurate when subsequent commits fixed the issues that were flagged.
 
             If they are asking for a review or check, perform a full code review of the changes.
 
@@ -83,7 +90,7 @@ jobs:
           # CLI arguments (v1 format)
           claude_args: |
             --model ${{ vars.CLAUDE_PR_REVIEW_MODEL || 'claude-sonnet-4-6' }}
-            --max-turns 30
+            --max-turns 60
             --allowedTools "Bash,Edit,Read,Write,Glob,Grep,LS"
             --append-system-prompt "You are reviewing a pull request for the AI Curation application - a full-stack platform
             for AI-assisted scientific literature curation built with FastAPI (Python) backend and
