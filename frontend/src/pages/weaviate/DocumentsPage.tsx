@@ -18,6 +18,7 @@ import {
   dispatchChatDocumentChanged,
   loadDocumentForChat,
 } from '@/features/documents/pdfUploadFlow';
+import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
 
 type PipelineState = {
   busy: boolean;
@@ -82,15 +83,12 @@ const DocumentsPage: React.FC = () => {
     const seedOnly = !seededTerminalNotificationsRef.current;
 
     for (const job of nextJobs) {
-      if (!['completed', 'failed', 'cancelled'].includes(job.status)) {
-        continue;
-      }
-      if (job.status === 'failed' && job.cancel_requested) {
-        // Ignore transient failed snapshots for jobs that are in cancellation flow.
+      const notification = buildPdfTerminalNotification(job);
+      if (!notification) {
         continue;
       }
 
-      const key = `${job.job_id}:${job.status}`;
+      const key = notification.key;
       if (seenTerminalNotificationsRef.current.has(key)) {
         continue;
       }
@@ -99,14 +97,7 @@ const DocumentsPage: React.FC = () => {
         continue;
       }
 
-      const filename = job.filename || job.document_id;
-      if (job.status === 'completed') {
-        emitGlobalToast({ message: `PDF processing completed: ${filename}`, severity: 'success' });
-      } else if (job.status === 'cancelled') {
-        emitGlobalToast({ message: `PDF processing cancelled: ${filename}`, severity: 'info' });
-      } else {
-        emitGlobalToast({ message: `PDF processing failed: ${filename}`, severity: 'error' });
-      }
+      emitGlobalToast({ message: notification.message, severity: notification.severity });
 
       setPendingDocumentRefresh(true);
     }
