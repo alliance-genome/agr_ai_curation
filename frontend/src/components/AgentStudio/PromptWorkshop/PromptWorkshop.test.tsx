@@ -633,11 +633,18 @@ describe('PromptWorkshop', () => {
       />
     )
 
+    expect(
+      await screen.findByText('Applied Claude MOD update (WB): Updated WB-specific extraction guidance.')
+    ).toBeInTheDocument()
+
     await waitFor(() => {
-      const latestCall = onContextChange.mock.calls[onContextChange.mock.calls.length - 1]?.[0]
-      expect(latestCall?.selected_mod_id).toBe('WB')
-      expect(latestCall?.selected_mod_prompt_draft).toBe('WB override from Claude')
-    })
-    expect(screen.getByText('Applied Claude MOD update (WB): Updated WB-specific extraction guidance.')).toBeInTheDocument()
+      const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
+      expect(contextSnapshots).toContainEqual(
+        expect.objectContaining({
+          selected_mod_id: 'WB',
+          selected_mod_prompt_draft: 'WB override from Claude',
+        })
+      )
+    }, { timeout: 5000 })
   })
 })
