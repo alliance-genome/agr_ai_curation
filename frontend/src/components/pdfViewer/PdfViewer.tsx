@@ -1217,7 +1217,10 @@ export function PdfViewer() {
                 <li style={{ marginBottom: '0.75rem' }}>
                   Drop one PDF file to upload, track processing, and auto-load it for chat.
                 </li>
-                <li>To load an existing PDF: Click the green <strong>file icon</strong> in the Actions column.</li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  To upload one or many files, use the <strong>Documents</strong> tab upload controls.
+                </li>
+                <li>To load an existing PDF for chat, click the green <strong>file icon</strong> in the Actions column.</li>
               </ul>
             </Typography>
           </Box>

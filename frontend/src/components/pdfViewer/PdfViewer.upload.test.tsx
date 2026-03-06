@@ -107,6 +107,8 @@ describe('PdfViewer drag-and-drop upload', () => {
 
     const dropZone = screen.getByRole('region', { name: 'PDF drop zone' })
     expect(screen.getByText('Drag and drop a PDF here to upload')).toBeInTheDocument()
+    expect(screen.getByText(/To upload one or many files, use the/i)).toBeInTheDocument()
+    expect(screen.getByText(/tab upload controls\./i)).toBeInTheDocument()
 
     fireEvent.dragEnter(dropZone, { dataTransfer: { files: [] } })
     expect(screen.getByText('Drop PDF to upload and load for chat')).toBeInTheDocument()
