@@ -557,7 +557,7 @@ async def stream_batch_progress(
                     yield f"data: {json.dumps(complete_event)}\n\n"
                     batch_complete = True
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error streaming batch progress: batch_id=%s", batch_id)
             error_event = {
                 "type": "ERROR",

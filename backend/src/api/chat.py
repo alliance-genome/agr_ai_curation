@@ -131,6 +131,7 @@ _FLOW_MEMORY_MAX_SPECIALIST_OUTPUTS = 8
 _FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS = 3500
 _FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES = 12
 _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS = 18000
+_FLOW_MEMORY_COMPACT_SPECIALIST_OUTPUT_CHARS = 800
 
 
 def _truncate_text(value: Any, max_chars: int) -> str:
@@ -152,6 +153,57 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def _serialize_hidden_flow_payload(payload: Dict[str, Any], max_chars: int) -> str:
+    """Serialize hidden payload and compact it as needed while preserving valid JSON."""
+    serialized = json.dumps(payload, default=str, ensure_ascii=True)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    compact_payload = dict(payload)
+    compact_payload["truncated"] = True
+    compact_payload["truncation_notice"] = "Hidden flow context compacted to fit memory budget."
+
+    # Drop lower-priority collections first.
+    for key in ("intermediate_specialist_summaries", "domain_warnings", "files"):
+        if compact_payload.get(key):
+            compact_payload[key] = []
+            serialized = json.dumps(compact_payload, default=str, ensure_ascii=True)
+            if len(serialized) <= max_chars:
+                return serialized
+
+    # Keep at most one specialist output and tighten output text.
+    specialist_outputs = list(compact_payload.get("specialist_outputs") or [])
+    if specialist_outputs:
+        first_output = dict(specialist_outputs[0])
+        first_output["output"] = _truncate_text(
+            first_output.get("output"),
+            _FLOW_MEMORY_COMPACT_SPECIALIST_OUTPUT_CHARS,
+        )
+        compact_payload["specialist_outputs"] = [first_output]
+        serialized = json.dumps(compact_payload, default=str, ensure_ascii=True)
+        if len(serialized) <= max_chars:
+            return serialized
+
+    flow_payload = compact_payload.get("flow") or {}
+    minimal_payload = {
+        "flow": {
+            "flow_id": _truncate_text(flow_payload.get("flow_id"), 128),
+            "flow_name": _truncate_text(flow_payload.get("flow_name"), 128),
+            "session_id": _truncate_text(flow_payload.get("session_id"), 128),
+            "status": _truncate_text(flow_payload.get("status"), 64),
+            "trace_id": _truncate_text(flow_payload.get("trace_id"), 128),
+            "failure_reason": _truncate_text(flow_payload.get("failure_reason"), 512),
+        },
+        "truncated": True,
+        "truncation_notice": "Hidden flow context exceeded size limit and was reduced.",
+    }
+    serialized = json.dumps(minimal_payload, default=str, ensure_ascii=True)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    return json.dumps({"truncated": True}, ensure_ascii=True)
 
 
 def _build_flow_memory_assistant_message(
@@ -195,8 +247,7 @@ def _build_flow_memory_assistant_message(
         "domain_warnings": domain_warnings,
         "files": file_outputs,
     }
-    hidden_json = json.dumps(hidden_payload, default=str, ensure_ascii=True)
-    hidden_json = _truncate_text(hidden_json, _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS)
+    hidden_json = _serialize_hidden_flow_payload(hidden_payload, _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS)
 
     agents_line = ", ".join(agents) if agents else "Unknown"
     if visible_output:
@@ -648,9 +699,9 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 exc_info=True,
             )
             # Emit audit event so it's visible in the audit panel
-            yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': str(e), 'context': type(e).__name__, 'message': f'An error occurred. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': str(e), 'context': type(e).__name__, 'message': 'An error occurred. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
             # Emit RUN_ERROR with trace_id for feedback reporting
-            yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': f'An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
         finally:
             # Cleanup: remove from local dict, unregister from Redis, clear any cancel signal
             await _cleanup_stream_state(current_session_id)

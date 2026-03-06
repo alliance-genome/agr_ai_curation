@@ -325,6 +325,37 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     assert "TP53" in history_assistant_msg
 
 
+def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
+    assistant_message = chat._build_flow_memory_assistant_message(
+        flow_name="Large Flow",
+        flow_id="flow-123",
+        session_id="session-123",
+        status="completed",
+        trace_id="trace-123",
+        final_user_output="done",
+        agents_used=["Agent A"],
+        specialist_outputs=[
+            {
+                "tool": "ask_gene_specialist",
+                "output_length": 25000,
+                "output": "X" * 25000,
+            }
+        ],
+        specialist_summaries=[{"specialist": "Agent A", "summary": "S" * 6000}],
+        domain_warnings=[{"reason": "warning", "message": "W" * 6000}],
+        file_outputs=[{"file_id": "f1", "filename": "result.tsv", "metadata": "M" * 6000}],
+        failure_reason=None,
+    )
+
+    start_marker = "<FLOW_INTERNAL_CONTEXT_JSON>\n"
+    end_marker = "\n</FLOW_INTERNAL_CONTEXT_JSON>"
+    hidden_json = assistant_message.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+    assert len(hidden_json) <= chat._FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS
+    parsed_hidden = json.loads(hidden_json)
+    assert parsed_hidden["flow"]["flow_id"] == "flow-123"
+
+
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-owned-elsewhere")

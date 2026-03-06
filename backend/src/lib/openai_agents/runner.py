@@ -17,7 +17,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
 from agents import Agent, Runner, RunConfig, set_default_openai_client, set_default_openai_api
 from agents.models.openai_provider import OpenAIProvider
@@ -33,11 +33,11 @@ from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
 
 from .langfuse_client import (
     flush_langfuse,
-    is_langfuse_configured,
     get_langfuse,
     flush_agent_configs,
     clear_pending_configs
 )
+from .agents.supervisor_agent import create_supervisor_agent
 from .audit_labels import (
     BUILTIN_SPECIALIST_DISPLAY_NAMES,
     resolve_tool_display_name as _shared_resolve_tool_display_name,
@@ -48,9 +48,19 @@ from src.lib.config.providers_loader import get_default_runner_provider
 from .config import (
     get_api_key,
     get_base_url,
+    get_max_turns,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     is_retryable_groq_tool_call_error,
+)
+from .guardrails import enforce_uncited_negative_guardrail
+from .models import Answer
+from .streaming_tools import (
+    get_collected_events,
+    clear_collected_events,
+    set_live_event_list,
+    reset_consecutive_call_tracker,
+    SpecialistOutputError,
 )
 
 # Prompt context tracking for execution logging
@@ -61,6 +71,9 @@ from src.models.sql.database import SessionLocal
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+
+if TYPE_CHECKING:
+    from src.lib.document_context import DocumentContext
 
 # Logger must be defined early since _create_openai_client_kwargs uses it at module load
 logger = logging.getLogger(__name__)
@@ -381,22 +394,6 @@ def _log_used_prompts_to_db(
             exc_info=True,
         )
         return 0
-
-from .agents.supervisor_agent import create_supervisor_agent
-from .config import get_max_turns
-from .guardrails import enforce_uncited_negative_guardrail
-from .models import Answer
-from .streaming_tools import (
-    get_collected_events,
-    clear_collected_events,
-    set_live_event_list,
-    get_live_event_list,
-    reset_consecutive_call_tracker,
-    SpecialistOutputError,
-)
-
-# Note: logger is defined earlier in the file (line 39) for use during module initialization
-
 
 async def _run_agent_with_tracing(
     agent: Agent,
@@ -995,8 +992,6 @@ async def run_agent_streamed(
 
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization avoids redundant Weaviate queries when called from flow executor
-    from src.lib.document_context import DocumentContext
-
     hierarchy = None
     abstract = None
     if doc_context is not None:
