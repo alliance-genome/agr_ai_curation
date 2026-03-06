@@ -1,8 +1,8 @@
 /**
  * Agent Studio Page
  *
- * Two-panel layout for exploring agent prompts, building flows, and chatting with Opus 4.5:
- * - Left panel: Chat with Claude Opus 4.5 for guidance
+ * Two-panel layout for exploring agent prompts, building flows, and chatting with Opus:
+ * - Left panel: Chat with Claude Opus for guidance
  * - Right panel: Tabbed interface with [Prompts] and [Flows] tabs
  *
  * Entry points:

@@ -2,7 +2,7 @@
 
 Provides endpoints for the Agent Studio feature:
 - GET /catalog - Get all agent prompts organized by category
-- POST /chat - Stream a conversation with Opus 4.6
+- POST /chat - Stream a conversation with Opus
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
@@ -78,7 +78,7 @@ from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus-4-6"
+DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus"
 ANTHROPIC_OPUS_MODEL = (os.getenv("ANTHROPIC_OPUS_MODEL") or DEFAULT_ANTHROPIC_OPUS_MODEL).strip()
 
 # Create router with prefix
@@ -951,7 +951,7 @@ async def test_agent_endpoint(
 
 
 # ============================================================================
-# Chat Endpoints (Opus 4.6)
+# Chat Endpoints (Opus)
 # ============================================================================
 
 # Convert tool definition to Anthropic format
@@ -1918,9 +1918,9 @@ async def _handle_tool_call(
 
 @router.post(
     "/chat",
-    summary="Chat with Opus 4.6",
+    summary="Chat with Opus",
     description="""
-    Stream a conversation with Claude Opus 4.6 about prompts.
+    Stream a conversation with Claude Opus about prompts.
 
     Opus can discuss prompts, suggest improvements, and submit suggestions
     to the development team using the submit_prompt_suggestion tool.
@@ -1939,7 +1939,7 @@ async def chat_with_opus(
     request: ChatRequest,
     user: Dict[str, Any] = get_auth_dependency()
 ):
-    """Stream a conversation with Opus 4.6 with tool support."""
+    """Stream a conversation with Opus with tool support."""
     import anthropic
 
     # Get API key

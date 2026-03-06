@@ -35,7 +35,7 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 ## Flow Builder Interface
 
 **Opus Chat (Left Panel)**
-Chat with Claude Opus 4.5 about your flow - ask for help building it, troubleshooting issues, or understanding what each agent does.
+Chat with Claude Opus about your flow - ask for help building it, troubleshooting issues, or understanding what each agent does.
 
 **Agent Palette (Left Panel)**
 A searchable, collapsible list of available agents organized by category. Click or drag agents onto the canvas. Use the search box to filter agents by name, description, or tools.

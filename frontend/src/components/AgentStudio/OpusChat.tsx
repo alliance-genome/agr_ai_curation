@@ -1,7 +1,7 @@
 /**
  * OpusChat Component
  *
- * Chat interface for conversing with Claude Opus 4.5 about prompts.
+ * Chat interface for conversing with Claude Opus about prompts.
  * Includes tool support for suggestion submission.
  */
 

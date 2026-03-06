@@ -182,7 +182,7 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 | Users/Auth | GET/POST | `/api/users/me`, `/api/auth/login|logout|callback` | Identity & tokens. |
 | PDF viewer | GET | `/api/pdf-viewer/documents*` | Metadata + signed viewer URLs (no auth in current build). |
 | Trace Review (Claude) | GET | `/api/claude/traces/{id}/*` | Token-aware trace analysis for Opus/Claude (runs on port 8001). |
-| Workflow Analysis | POST | `/api/workflow-analysis/stream` | Opus 4.5 streaming trace analysis with SSE. |
+| Workflow Analysis | POST | `/api/workflow-analysis/stream` | Opus streaming trace analysis with SSE. |
 | CLI | python module | `backend/cli/ontology.py` | Only supported path for ontology loading/inspection today. |
 
 The sections below detail each group with payloads and SSE formats.
@@ -708,7 +708,7 @@ curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/conversation | jq '.da
 
 **Base URL**: `http://localhost:8000/api/workflow-analysis`
 
-The Workflow Analysis feature uses Claude Opus 4.5 to analyze Langfuse traces and identify issues in AI agent behavior. It streams responses via Server-Sent Events (SSE).
+The Workflow Analysis feature uses Claude Opus to analyze Langfuse traces and identify issues in AI agent behavior. It streams responses via Server-Sent Events (SSE).
 
 ### Stream Analysis
 

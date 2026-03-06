@@ -4,7 +4,7 @@ Prompt Explorer module.
 Provides services for exploring and analyzing agent prompts:
 - PromptCatalogService: Extract and serve prompt metadata
 - TraceContextService: Enrich traces with prompt context
-- OpusChatService: Stream Opus 4.5 conversations
+- OpusChatService: Stream Opus conversations
 - Flow Tools: Create and manage curation flows via Opus
 """
 import logging
