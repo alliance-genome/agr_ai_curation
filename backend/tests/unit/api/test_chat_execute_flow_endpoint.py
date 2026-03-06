@@ -61,7 +61,7 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
 
 
 def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
-    calls = {"register": [], "unregister": [], "clear": []}
+    calls = {"register": [], "unregister": [], "clear": [], "history": []}
 
     monkeypatch.setattr(
         chat,
@@ -94,6 +94,11 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        SimpleNamespace(add_exchange=lambda *args, **_kwargs: calls["history"].append(args)),
+    )
 
     async def _check_cancel_signal(_session_id: str) -> bool:
         return cancel_requested
@@ -246,6 +251,109 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
     assert calls["register"] == [("session-flow-domain-warning", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-domain-warning", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-domain-warning"]
+
+
+def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_payload(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-context",
+        user_query="Run gene selection flow",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Gene Selection Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-context"}}
+        yield {
+            "type": "CREW_START",
+            "timestamp": "2026-02-26T00:00:00+00:00",
+            "details": {"crewName": "Gene Agent", "crewDisplayName": "Gene Agent", "agents": ["Gene Agent"]},
+        }
+        yield {
+            "type": "TOOL_COMPLETE",
+            "timestamp": "2026-02-26T00:00:01+00:00",
+            "details": {"toolName": "ask_gene_specialist", "friendlyName": "Gene Agent complete", "success": True},
+            "internal": {"tool_output": "{\"selected_gene\":\"TP53\"}", "output_length": 24},
+        }
+        yield {
+            "type": "SPECIALIST_SUMMARY",
+            "timestamp": "2026-02-26T00:00:02+00:00",
+            "details": {"specialist": "Gene Agent", "toolCallCount": 2},
+        }
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:00:03+00:00",
+            "details": {"output": "Selected TP53 for highest evidence confidence."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "failure_reason": None},
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+
+    tool_complete_event = next(event for event in events if event.get("type") == "TOOL_COMPLETE")
+    assert "internal" not in tool_complete_event
+
+    assert len(calls["history"]) == 1
+    history_user_id, history_session_id, history_user_msg, history_assistant_msg = calls["history"][0]
+    assert history_user_id == "auth-sub"
+    assert history_session_id == "session-flow-context"
+    assert history_user_msg == "Run gene selection flow"
+    assert "Flow execution summary for follow-up questions" in history_assistant_msg
+    assert "<FLOW_INTERNAL_CONTEXT_JSON>" in history_assistant_msg
+    assert "ask_gene_specialist" in history_assistant_msg
+    assert "TP53" in history_assistant_msg
+
+
+def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
+    assistant_message = chat._build_flow_memory_assistant_message(
+        flow_name="Large Flow",
+        flow_id="flow-123",
+        session_id="session-123",
+        status="completed",
+        trace_id="trace-123",
+        final_user_output="done",
+        agents_used=["Agent A"],
+        specialist_outputs=[
+            {
+                "tool": "ask_gene_specialist",
+                "output_length": 25000,
+                "output": "X" * 25000,
+            }
+        ],
+        specialist_summaries=[{"specialist": "Agent A", "summary": "S" * 6000}],
+        domain_warnings=[{"reason": "warning", "message": "W" * 6000}],
+        file_outputs=[{"file_id": "f1", "filename": "result.tsv", "metadata": "M" * 6000}],
+        failure_reason=None,
+    )
+
+    start_marker = "<FLOW_INTERNAL_CONTEXT_JSON>\n"
+    end_marker = "\n</FLOW_INTERNAL_CONTEXT_JSON>"
+    hidden_json = assistant_message.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+    assert len(hidden_json) <= chat._FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS
+    parsed_hidden = json.loads(hidden_json)
+    assert parsed_hidden["flow"]["flow_id"] == "flow-123"
 
 
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
