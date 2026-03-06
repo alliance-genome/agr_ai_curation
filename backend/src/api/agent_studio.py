@@ -78,7 +78,7 @@ from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus"
+DEFAULT_ANTHROPIC_OPUS_MODEL = "claude-opus-4-6"
 ANTHROPIC_OPUS_MODEL = (os.getenv("ANTHROPIC_OPUS_MODEL") or DEFAULT_ANTHROPIC_OPUS_MODEL).strip()
 
 # Create router with prefix
