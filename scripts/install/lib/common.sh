@@ -119,3 +119,44 @@ require_hex_64() {
   fi
   return 0
 }
+
+backup_file_with_timestamp() {
+  local file_path="$1"
+
+  if [[ ! -f "$file_path" ]]; then
+    return 0
+  fi
+
+  local backup_path
+  backup_path="${file_path}.bak.$(date -u +%Y%m%d%H%M%S).$$"
+  cp "$file_path" "$backup_path"
+  log_info "Backed up $(basename "$file_path") -> $(basename "$backup_path")"
+}
+
+upsert_env_var() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+
+  require_file_exists "$env_file"
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found = 0 }
+    $0 ~ ("^" key "=") {
+      print key "=" value
+      found = 1
+      next
+    }
+    { print }
+    END {
+      if (!found) {
+        print key "=" value
+      }
+    }
+  ' "$env_file" >"$tmp_file"
+
+  mv "$tmp_file" "$env_file"
+}
