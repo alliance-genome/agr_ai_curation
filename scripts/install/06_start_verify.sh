@@ -87,8 +87,10 @@ service_port_label() {
 container_health_state() {
   local service="$1"
   local container_id=""
+  local container_ids=()
 
-  container_id="$(run_compose "$repo_root" ps -q "$service" | head -n 1)"
+  mapfile -t container_ids < <(run_compose "$repo_root" ps -q "$service" 2>/dev/null || true)
+  container_id="${container_ids[0]:-}"
   if [[ -z "$container_id" ]]; then
     printf '%s\n' "missing"
     return 0
@@ -170,7 +172,9 @@ pending_checks() {
     pending+=("pdf_extraction")
   fi
 
-  printf '%s\n' "${pending[*]}"
+  if (( ${#pending[@]} > 0 )); then
+    printf '%s\n' "${pending[*]}"
+  fi
 }
 
 wait_for_health_checks() {
@@ -250,7 +254,10 @@ start_pdfx_stack_if_configured() {
     return 0
   fi
 
-  require_file_exists "$pdfx_state_path"
+  if [[ ! -f "$pdfx_state_path" ]]; then
+    log_error "PDFX state file not found: ${pdfx_state_path}. Re-run Stage 5 without skipping PDF extraction setup to regenerate it."
+    exit 1
+  fi
   # shellcheck disable=SC1090
   source "$pdfx_state_path"
   require_non_empty "INSTALL_PDFX_CLONE_PATH" "${INSTALL_PDFX_CLONE_PATH:-}"

@@ -41,6 +41,7 @@ run_auth_setup() {
 make_stub_tools() {
   local stub_dir="$1"
 
+  # This stub includes Langfuse and PDFX endpoints because Stage 6 verifies them.
   cat >"${stub_dir}/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -68,7 +69,6 @@ if [[ "${1:-}" == "compose" && "${2:-}" == "ps" && "${3:-}" == "-q" ]]; then
 fi
 
 if [[ "${1:-}" == "inspect" && "${2:-}" == "-f" ]]; then
-  container_id="${3:-}"
   printf '%s\n' "healthy"
   exit 0
 fi
@@ -116,6 +116,32 @@ run_start_verify() {
 
   if [[ "$rc" -ne 0 ]]; then
     echo "Expected Stage 6 to succeed, got rc=$rc" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
+run_start_verify_expect_fail() {
+  local home_dir="$1"
+  local stub_dir="$2"
+  local state_dir="$3"
+  local output_path="$4"
+  local rc=0
+
+  set +e
+  HOME="$home_dir" \
+  PATH="${stub_dir}:${PATH}" \
+  INSTALL_DOCKER_CMD="docker" \
+  INSTALL_CURL_CMD="curl" \
+  INSTALL_START_VERIFY_TIMEOUT_SECONDS="1" \
+  INSTALL_START_VERIFY_POLL_INTERVAL_SECONDS="1" \
+  INSTALL_TEST_STATE_DIR="$state_dir" \
+  bash "$start_verify_script" >"$output_path" 2>&1
+  rc=$?
+  set -e
+
+  if [[ "$rc" -eq 0 ]]; then
+    echo "Expected Stage 6 to fail but it succeeded" >&2
     cat "$output_path" >&2
     exit 1
   fi
@@ -206,7 +232,35 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   assert_contains 'Auth mode: dev' "$output_path"
 }
 
+test_start_verify_fails_with_clear_pdfx_state_guidance() {
+  local temp_home
+  local stub_dir
+  local state_dir
+  local output_path
+  local env_file
+  temp_home="$(mktemp -d)"
+  stub_dir="$(mktemp -d)"
+  state_dir="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
+
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org/realms/alliance\nalliance-web\nsecret-value\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
+  make_stub_tools "$stub_dir"
+
+  env_file="${temp_home}/.agr_ai_curation/.env"
+  cat >>"$env_file" <<'EOF'
+PDF_EXTRACTION_SERVICE_URL=http://localhost:8501
+EOF
+
+  run_start_verify_expect_fail "$temp_home" "$stub_dir" "$state_dir" "$output_path"
+
+  assert_contains 'PDFX state file not found:' "$output_path"
+  assert_contains 'Re-run Stage 5 without skipping PDF extraction setup to regenerate it.' "$output_path"
+}
+
 test_start_verify_with_pdfx_enabled
 test_start_verify_marks_pdfx_skipped_when_not_configured
+test_start_verify_fails_with_clear_pdfx_state_guidance
 
 echo "start/verify installer stage checks passed"

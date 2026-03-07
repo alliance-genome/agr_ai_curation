@@ -91,6 +91,7 @@ run_group_setup_expect_fail() {
 make_stub_tools() {
   local stub_dir="$1"
 
+  # This stub intentionally stays minimal because these tests only exercise the main stack paths.
   cat >"${stub_dir}/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
