@@ -8,6 +8,7 @@ source "${repo_root}/scripts/install/lib/common.sh"
 
 install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
+pdfx_state_path="${INSTALL_PDFX_STATE_PATH:-${install_home_dir}/.install_pdfx.env}"
 git_cmd="${INSTALL_GIT_CMD:-git}"
 pdfx_repo_url="${INSTALL_PDFX_REPO_URL:-https://github.com/alliance-genome/agr_pdf_extraction_service.git}"
 default_clone_path="${INSTALL_PDFX_CLONE_PATH_DEFAULT:-${repo_root}/../agr_pdf_extraction_service}"
@@ -132,6 +133,17 @@ remove_pdf_env_vars_from_main_env() {
   remove_env_var "$env_file" "PDF_EXTRACTION_MERGE"
 }
 
+write_pdfx_state() {
+  local clone_path="$1"
+  local port="$2"
+
+  cat >"$pdfx_state_path" <<STATE
+INSTALL_PDFX_CLONE_PATH=${clone_path}
+INSTALL_PDFX_PORT=${port}
+STATE
+  chmod 600 "$pdfx_state_path"
+}
+
 main() {
   require_file_exists "$env_output_path"
   require_command "$git_cmd"
@@ -141,6 +153,7 @@ main() {
   if ! prompt_yes_no "Install PDF extraction service? (enables document upload)" "yes"; then
     backup_file_with_timestamp "$env_output_path"
     remove_pdf_env_vars_from_main_env "$env_output_path"
+    rm -f "$pdfx_state_path"
     chmod 600 "$env_output_path"
     log_success "Skipped PDF extraction setup. Main .env PDF extraction keys removed."
     exit 0
@@ -207,9 +220,11 @@ EOF
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_METHODS" "$methods"
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_MERGE" "$merge_enabled"
   chmod 600 "$env_output_path"
+  write_pdfx_state "$clone_path" "$pdfx_port"
 
   log_success "PDF extraction service cloned to ${clone_path}"
   log_success "Generated PDFX config at ${pdfx_env_path}"
+  log_success "Saved PDFX state to ${pdfx_state_path}"
   log_success "Main .env updated with PDF extraction service settings"
 }
 

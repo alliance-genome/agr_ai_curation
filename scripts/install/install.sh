@@ -11,6 +11,7 @@ skip_core_config=0
 skip_auth_setup=0
 skip_group_setup=0
 skip_pdfx_setup=0
+skip_start_verify=0
 
 print_usage() {
   cat <<USAGE
@@ -22,6 +23,7 @@ Options:
   --skip-auth-setup    Skip Stage 3 (03_auth_setup.sh)
   --skip-group-setup   Skip Stage 4 (04_group_setup.sh)
   --skip-pdfx-setup    Skip Stage 5 (05_pdfx_setup.sh)
+  --skip-start-verify  Skip Stage 6 (06_start_verify.sh)
   -h, --help           Show this help message
 USAGE
 }
@@ -54,6 +56,9 @@ parse_args() {
       --skip-pdfx-setup)
         skip_pdfx_setup=1
         ;;
+      --skip-start-verify)
+        skip_start_verify=1
+        ;;
       -h|--help)
         print_usage
         exit 0
@@ -76,6 +81,7 @@ main() {
   local stage3="${script_dir}/03_auth_setup.sh"
   local stage4="${script_dir}/04_group_setup.sh"
   local stage5="${script_dir}/05_pdfx_setup.sh"
+  local stage6="${script_dir}/06_start_verify.sh"
 
   if (( skip_preflight == 0 )); then
     run_stage "Stage 1 - Preflight" "$stage1"
@@ -105,6 +111,12 @@ main() {
     run_stage "Stage 5 - PDF extraction setup" "$stage5"
   else
     log_warn "Skipping Stage 5 - PDF extraction setup"
+  fi
+
+  if (( skip_start_verify == 0 )); then
+    run_stage "Stage 6 - Start and verify services" "$stage6"
+  else
+    log_warn "Skipping Stage 6 - Start and verify services"
   fi
 
   log_success "Installer completed"

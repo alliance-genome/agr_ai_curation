@@ -88,6 +88,58 @@ run_group_setup_expect_fail() {
   fi
 }
 
+make_stub_tools() {
+  local stub_dir="$1"
+
+  cat >"${stub_dir}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir="${INSTALL_TEST_STATE_DIR:?}"
+
+if [[ "${1:-}" == "compose" && "${2:-}" == "up" && "${3:-}" == "-d" ]]; then
+  touch "${state_dir}/main_up"
+  exit 0
+fi
+
+if [[ "${1:-}" == "compose" && "${2:-}" == "config" && "${3:-}" == "--services" ]]; then
+  printf '%s\n' backend frontend
+  exit 0
+fi
+
+if [[ "${1:-}" == "compose" && "${2:-}" == "ps" && "${3:-}" == "-q" ]]; then
+  service="${4:-}"
+  printf 'cid-%s\n' "$service"
+  exit 0
+fi
+
+if [[ "${1:-}" == "inspect" && "${2:-}" == "-f" ]]; then
+  printf '%s\n' "healthy"
+  exit 0
+fi
+
+echo "unexpected docker args: $*" >&2
+exit 2
+EOF
+
+  cat >"${stub_dir}/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${@: -1}"
+case "$url" in
+  http://localhost:3002|http://localhost:8000/health)
+    exit 0
+    ;;
+esac
+
+echo "unexpected curl url: $url" >&2
+exit 22
+EOF
+
+  chmod +x "${stub_dir}/docker" "${stub_dir}/curl"
+}
+
 test_core_config_generates_env_and_backups() {
   local temp_home
   temp_home="$(mktemp -d)"
@@ -248,15 +300,30 @@ test_group_setup_escapes_yaml_double_quotes() {
 
 test_orchestrator_skip_flags() {
   local temp_home
+  local stub_dir
+  local state_dir
+  local output_path
   temp_home="$(mktemp -d)"
-  trap 'rm -rf "$temp_home"' RETURN
+  stub_dir="$(mktemp -d)"
+  state_dir="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
   local groups_output_path="${temp_home}/orchestrator-groups.yaml"
+  make_stub_tools "$stub_dir"
 
-  HOME="$temp_home" INSTALL_GROUPS_OUTPUT_PATH="$groups_output_path" bash "$orchestrator_script" \
+  HOME="$temp_home" \
+  PATH="${stub_dir}:${PATH}" \
+  INSTALL_GROUPS_OUTPUT_PATH="$groups_output_path" \
+  INSTALL_DOCKER_CMD="docker" \
+  INSTALL_CURL_CMD="curl" \
+  INSTALL_START_VERIFY_TIMEOUT_SECONDS="1" \
+  INSTALL_START_VERIFY_POLL_INTERVAL_SECONDS="1" \
+  INSTALL_TEST_STATE_DIR="$state_dir" \
+  bash "$orchestrator_script" \
     --skip-preflight \
     --skip-group-setup \
-    --skip-pdfx-setup <<< $'sk-orchestrator\n\n\n\n1\n'
+    --skip-pdfx-setup >"$output_path" <<< $'sk-orchestrator\n\n\n\n1\n'
 
   [[ -f "${temp_home}/.agr_ai_curation/.env" ]] || {
     echo "Orchestrator did not create env file" >&2
@@ -267,6 +334,14 @@ test_orchestrator_skip_flags() {
     echo "Orchestrator should skip group setup when --skip-group-setup is provided" >&2
     exit 1
   fi
+
+  [[ -f "${state_dir}/main_up" ]] || {
+    echo "Expected Stage 6 to start the main stack" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
+
+  assert_contains 'Completed Stage 6 - Start and verify services' "$output_path"
 }
 
 test_core_config_generates_env_and_backups

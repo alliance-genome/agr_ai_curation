@@ -43,6 +43,10 @@ check-trace-review-env:
 setup: ## Initial setup - creates ~/.agr_ai_curation/ and copies .env templates
 	@./scripts/setup-env.sh
 
+.PHONY: install
+install: ## Run the standalone installer workflow
+	@./scripts/install/install.sh
+
 # =============================================================================
 # DEVELOPMENT - Full Stack
 # =============================================================================
