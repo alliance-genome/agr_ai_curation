@@ -7,8 +7,16 @@ groups_template="${repo_root}/scripts/install/lib/templates/groups.standalone.ya
 
 required_env_keys=(
   OPENAI_API_KEY
+  GROQ_API_KEY
+  ANTHROPIC_API_KEY
+  GEMINI_API_KEY
   AUTH_PROVIDER
   DEV_MODE
+  OIDC_ISSUER_URL
+  OIDC_CLIENT_ID
+  OIDC_CLIENT_SECRET
+  OIDC_REDIRECT_URI
+  OIDC_GROUP_CLAIM
   POSTGRES_PASSWORD
   REDIS_AUTH
   DATABASE_URL
