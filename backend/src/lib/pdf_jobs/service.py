@@ -171,7 +171,7 @@ def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -
 
 
 def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Optional[PdfJobResponse]:
-    """Return a single job by ID for internal orchestration checks."""
+    """Return a single job by ID for internal orchestration checks only."""
     session = SessionLocal()
     try:
         job = session.execute(

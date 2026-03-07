@@ -273,7 +273,7 @@ class UploadIntakeService:
             persisted = (
                 cleanup_session.execute(
                     select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.id == uuid.UUID(str(document_id)),
+                        ViewerPDFDocument.id == uuid.UUID(document_id),
                     )
                 )
                 .scalars()

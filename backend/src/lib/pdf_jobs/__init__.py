@@ -3,7 +3,6 @@
 from .service import (
     create_job,
     get_job,
-    get_job_by_id,
     get_latest_job_for_document,
     is_cancel_requested,
     list_jobs,
@@ -29,7 +28,6 @@ from .upload_intake_service import (
 __all__ = [
     "create_job",
     "get_job",
-    "get_job_by_id",
     "get_latest_job_for_document",
     "is_cancel_requested",
     "list_jobs",
