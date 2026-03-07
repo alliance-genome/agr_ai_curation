@@ -13,6 +13,11 @@ from .service import (
     set_process_id,
     update_progress,
 )
+from .upload_execution_service import (
+    UploadExecutionRequest,
+    UploadExecutionService,
+    normalize_pipeline_result,
+)
 
 __all__ = [
     "create_job",
@@ -26,4 +31,7 @@ __all__ = [
     "request_cancel",
     "set_process_id",
     "update_progress",
+    "UploadExecutionRequest",
+    "UploadExecutionService",
+    "normalize_pipeline_result",
 ]
