@@ -276,10 +276,39 @@ local_db_tunnel_hash_string() {
   cksum <<<"$1" | awk '{print $1}'
 }
 
+local_db_tunnel_state_root() {
+  local explicit_root="${SYMPHONY_LOCAL_DB_TUNNEL_STATE_ROOT:-}"
+  local candidates=()
+  local candidate
+
+  if [[ -n "${explicit_root}" ]]; then
+    candidates+=("${explicit_root}")
+  else
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      candidates+=("${XDG_RUNTIME_DIR}/agr_ai_curation_symphony_db_tunnels")
+    fi
+    if [[ -n "${HOME:-}" ]]; then
+      candidates+=("${HOME}/.local/state/agr_ai_curation_symphony_db_tunnels")
+    fi
+    candidates+=("/tmp/agr_ai_curation_symphony_db_tunnels")
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if mkdir -p "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+
+  local_db_tunnel_error "❌ Unable to create a writable state root for Symphony DB tunnel metadata"
+  return 1
+}
+
 local_db_tunnel_state_dir() {
   local workspace_dir="${1:-$PWD}"
-  local root="${SYMPHONY_LOCAL_DB_TUNNEL_STATE_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/agr_ai_curation_symphony_db_tunnels}"
+  local root
   local safe_name hash
+  root="$(local_db_tunnel_state_root)"
   safe_name="$(basename "${workspace_dir}" | tr -cs 'A-Za-z0-9._-' '-')"
   hash="$(local_db_tunnel_hash_string "${workspace_dir}")"
   echo "${root}/${safe_name}-${hash}"

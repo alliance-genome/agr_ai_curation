@@ -50,6 +50,29 @@ async def test_reprocess_document_rejects_when_processing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reprocess_document_rejects_stale_processing_status_without_terminal_job(monkeypatch):
+    async def _get_document(_user_id, _doc_id):
+        return {"document": {"processing_status": ProcessingStatus.PROCESSING.value, "filename": "paper.pdf"}}
+
+    async def _pipeline_status(_doc_id):
+        return None
+
+    monkeypatch.setattr(processing, "get_document", _get_document)
+    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
+
+    with pytest.raises(HTTPException) as exc:
+        await processing.reprocess_document_endpoint(
+            BackgroundTasks(),
+            document_id="doc-1",
+            request=ReprocessRequest(strategy_name="default", force_reparse=False),
+            user={"sub": "user-1"},
+        )
+    assert exc.value.status_code == 409
+    assert "stage: processing" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
 async def test_reprocess_document_treats_unknown_status_as_pending(monkeypatch, tmp_path):
     user_id = "user-1"
     document_id = "doc-1"
@@ -143,6 +166,28 @@ async def test_reembed_document_no_chunks(monkeypatch):
             user={"sub": "user-1"},
         )
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reembed_document_rejects_stale_processing_status_without_terminal_job(monkeypatch):
+    async def _get_document(_user_id, _doc_id):
+        return {"document": {"processing_status": ProcessingStatus.PROCESSING.value}, "total_chunks": 5}
+
+    async def _pipeline_status(_doc_id):
+        return None
+
+    monkeypatch.setattr(processing, "get_document", _get_document)
+    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
+
+    with pytest.raises(HTTPException) as exc:
+        await processing.reembed_document_endpoint(
+            document_id="doc-1",
+            request=None,
+            user={"sub": "user-1"},
+        )
+    assert exc.value.status_code == 409
+    assert "stage: processing" in str(exc.value.detail).lower()
 
 
 @pytest.mark.asyncio

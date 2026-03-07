@@ -44,7 +44,10 @@ services:
       retries: 20
       start_period: 10s
     ports:
-      - "${TEST_DB_PORT_HOST:-15434}:5432"
+      - target: 5432
+        published: "${TEST_DB_PORT_HOST:-0}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     networks:
       - test-network
 
@@ -74,8 +77,14 @@ services:
       retries: 5
       start_period: 10s
     ports:
-      - "${TEST_WEAVIATE_PORT_HOST:-18080}:8080"
-      - "${TEST_WEAVIATE_GRPC_PORT_HOST:-15051}:50051"
+      - target: 8080
+        published: "${TEST_WEAVIATE_PORT_HOST:-0}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 50051
+        published: "${TEST_WEAVIATE_GRPC_PORT_HOST:-0}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     networks:
       - test-network
 

@@ -213,6 +213,7 @@ test-prepare: ## Start isolated test infra (postgres/weaviate) and run migration
 test-stack-down: ## Stop isolated test infrastructure
 	@echo "$(YELLOW)Stopping isolated test infrastructure...$(NC)"
 	@docker compose -f docker-compose.test.yml down
+	@rm -f .test-stack.env
 
 .PHONY: smoke-llm-local
 smoke-llm-local: check-env ## Run local LLM provider smoke checks and capture evidence JSON
@@ -227,6 +228,9 @@ test-live: ## Run live backend tests (override with LIVE_TEST_PATH=... LIVE_TEST
 	@echo "$(GREEN)Running live tests: path=$(LIVE_TEST_PATH) marker='$(LIVE_TEST_EXPR)'...$(NC)"
 	@bash -lc 'set -euo pipefail; \
 		set -a; source scripts/testing/load-home-test-env.sh; set +a; \
+		if [[ -f .test-stack.env ]]; then \
+			set -a; source .test-stack.env; set +a; \
+		fi; \
 		if [[ "$${DATABASE_URL:-}" == *"@postgres:"* || "$${DATABASE_URL:-}" == *"@postgres-test:"* ]]; then \
 			export DATABASE_URL="postgresql://$${TEST_DB_USER:-postgres}:$${TEST_DB_PASSWORD:-postgres}@$${TEST_DB_HOST:-127.0.0.1}:$${TEST_DB_PORT:-15434}/$${TEST_DB_NAME:-ai_curation}"; \
 			echo "Using host DATABASE_URL override for local live tests."; \

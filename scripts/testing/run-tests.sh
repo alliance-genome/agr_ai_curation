@@ -86,5 +86,6 @@ esac
 # Cleanup
 echo -e "${GREEN}Cleaning up test containers...${NC}"
 docker compose -f docker-compose.test.yml down
+rm -f .test-stack.env
 
 echo -e "${GREEN}Tests completed!${NC}"
