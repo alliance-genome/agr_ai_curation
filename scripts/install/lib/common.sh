@@ -74,7 +74,7 @@ prompt_required_value() {
       printf '%s\n' "$response"
       return 0
     fi
-    log_warn "Value is required."
+    log_warn "Value is required." >&2
   done
 }
 

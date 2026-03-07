@@ -53,4 +53,20 @@ if [[ "$prompt_output" != "provided" ]]; then
   exit 1
 fi
 
+warning_output_file="$(mktemp)"
+prompt_output="$(
+  prompt_required_value "Enter value" <<< $'\nprovided' 2>"$warning_output_file"
+)"
+if [[ "$prompt_output" != "provided" ]]; then
+  echo "prompt_required_value should keep stdout clean when warning first" >&2
+  rm -f "$warning_output_file"
+  exit 1
+fi
+if ! grep -q "Value is required." "$warning_output_file"; then
+  echo "prompt_required_value should emit required-value warning to stderr" >&2
+  rm -f "$warning_output_file"
+  exit 1
+fi
+rm -f "$warning_output_file"
+
 echo "common.sh checks passed"
