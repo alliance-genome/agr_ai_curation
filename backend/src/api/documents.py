@@ -51,6 +51,18 @@ from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeService,
     UploadIntakeValidationError,
 )
+from ..services.processing_status_policy import (
+    ACTIVE_PDF_JOB_STATUSES as _ACTIVE_PDF_JOB_STATUSES,
+    ACTIVE_PROCESSING_STATUSES as _ACTIVE_PROCESSING_STATUSES,
+    PDF_JOB_STATUS_TO_PROCESSING_STATUS as _PDF_JOB_STATUS_TO_PROCESSING_STATUS,
+    PIPELINE_STAGE_TO_PROCESSING_STATUS as _PIPELINE_STAGE_TO_PROCESSING_STATUS,
+    TERMINAL_PDF_JOB_STATUSES as _TERMINAL_PDF_JOB_STATUSES,
+    is_pipeline_status_active as _is_pipeline_status_active,
+    is_pipeline_status_terminal as _is_pipeline_status_terminal,
+    normalize_processing_status as _normalize_processing_status,
+    pipeline_stage_value as _pipeline_stage_value,
+    processing_status_for_pipeline_stage,
+)
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
@@ -70,62 +82,6 @@ _pdf_extraction_service_token: Optional[str] = None
 _pdf_extraction_service_token_expires_at: float = 0.0
 
 
-_PROCESSING_STATUS_VALUES = {status.value for status in ProcessingStatus}
-_PIPELINE_STAGE_TO_PROCESSING_STATUS = {
-    ProcessingStage.PENDING.value: ProcessingStatus.PENDING.value,
-    ProcessingStage.UPLOAD.value: ProcessingStatus.PROCESSING.value,
-    ProcessingStage.PARSING.value: ProcessingStatus.PARSING.value,
-    ProcessingStage.CHUNKING.value: ProcessingStatus.CHUNKING.value,
-    ProcessingStage.EMBEDDING.value: ProcessingStatus.EMBEDDING.value,
-    ProcessingStage.STORING.value: ProcessingStatus.STORING.value,
-    ProcessingStage.COMPLETED.value: ProcessingStatus.COMPLETED.value,
-    ProcessingStage.FAILED.value: ProcessingStatus.FAILED.value,
-}
-_PDF_JOB_STATUS_TO_PROCESSING_STATUS = {
-    PdfJobStatus.PENDING.value: ProcessingStatus.PENDING.value,
-    PdfJobStatus.RUNNING.value: ProcessingStatus.PROCESSING.value,
-    PdfJobStatus.CANCEL_REQUESTED.value: ProcessingStatus.PROCESSING.value,
-    PdfJobStatus.COMPLETED.value: ProcessingStatus.COMPLETED.value,
-    PdfJobStatus.CANCELLED.value: ProcessingStatus.FAILED.value,
-    PdfJobStatus.FAILED.value: ProcessingStatus.FAILED.value,
-}
-_ACTIVE_PROCESSING_STATUSES = {
-    ProcessingStatus.PROCESSING.value,
-    ProcessingStatus.PARSING.value,
-    ProcessingStatus.CHUNKING.value,
-    ProcessingStatus.EMBEDDING.value,
-    ProcessingStatus.STORING.value,
-}
-_ACTIVE_PDF_JOB_STATUSES = {
-    PdfJobStatus.PENDING.value,
-    PdfJobStatus.RUNNING.value,
-    PdfJobStatus.CANCEL_REQUESTED.value,
-}
-_TERMINAL_PDF_JOB_STATUSES = {
-    PdfJobStatus.COMPLETED.value,
-    PdfJobStatus.FAILED.value,
-    PdfJobStatus.CANCELLED.value,
-}
-
-
-def _normalize_processing_status(value: Any) -> str:
-    """Normalize processing status to known API enum values."""
-    status_str = str(value or "").strip().lower()
-    if status_str in _PROCESSING_STATUS_VALUES:
-        return status_str
-    return ProcessingStatus.PENDING.value
-
-
-def _pipeline_stage_value(pipeline_status: Any) -> str:
-    """Return normalized pipeline stage value from enum/string payloads."""
-    if not pipeline_status:
-        return ProcessingStage.PENDING.value
-    stage = getattr(pipeline_status, "current_stage", None)
-    if isinstance(stage, ProcessingStage):
-        return stage.value
-    return str(stage or "").strip().lower()
-
-
 def _effective_processing_status(raw_document_status: Any, pipeline_status: Any) -> str:
     """Compute effective status with pipeline tracker precedence when present."""
     effective = _normalize_processing_status(raw_document_status)
@@ -133,39 +89,13 @@ def _effective_processing_status(raw_document_status: Any, pipeline_status: Any)
         return effective
 
     stage_value = _pipeline_stage_value(pipeline_status)
-    mapped = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value)
-    if mapped:
-        return mapped
-    return effective
+    return _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, effective)
 
 
 def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
     """Extract and normalize processing status from mixed payload key styles."""
     raw_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
     return _normalize_processing_status(raw_status)
-
-
-def _is_pipeline_status_active(pipeline_status: Any) -> bool:
-    """Check whether in-memory pipeline tracker indicates active processing."""
-    if not pipeline_status:
-        return False
-
-    stage_value = _pipeline_stage_value(pipeline_status)
-    normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
-    return normalized in _ACTIVE_PROCESSING_STATUSES
-
-
-def _is_pipeline_status_terminal(pipeline_status: Any) -> bool:
-    """Check whether pipeline tracker reports a terminal stage."""
-    if not pipeline_status:
-        return False
-
-    stage_value = _pipeline_stage_value(pipeline_status)
-    normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
-    return normalized in {
-        ProcessingStatus.COMPLETED.value,
-        ProcessingStatus.FAILED.value,
-    }
 
 
 def _pipeline_status_payload_with_job_precedence(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
@@ -203,7 +133,7 @@ def _status_snapshot_from_pipeline(pipeline_status: Any) -> Dict[str, Any]:
     payload = pipeline_status.model_dump()
     stage_str = _pipeline_stage_value(pipeline_status)
     progress_value = payload.get("progress_percentage", 0)
-    normalized_status = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_str, _normalize_processing_status(stage_str))
+    normalized_status = processing_status_for_pipeline_stage(stage_str)
     if normalized_status == ProcessingStatus.COMPLETED.value:
         message_value = payload.get("message") or "Processing completed successfully"
     elif normalized_status == ProcessingStatus.FAILED.value:

@@ -20,6 +20,14 @@ from .auth import get_auth_dependency
 from ..lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from ..lib.weaviate_client.connection import get_connection
 from ..lib.pdf_jobs import service as pdf_job_service
+from ..services.processing_status_policy import (
+    ACTIVE_PDF_JOB_STATUSES as _ACTIVE_PDF_JOB_STATUSES,
+    ACTIVE_PROCESSING_STATUSES as _ACTIVE_PROCESSING_STATUSES,
+    TERMINAL_PDF_JOB_STATUSES as _TERMINAL_PDF_JOB_STATUSES,
+    is_pipeline_status_active as _is_pipeline_status_active,
+    normalize_processing_status as _normalize_processing_status,
+    stage_value as _stage_value,
+)
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_processing_job import PdfJobStatus
 from ..services.user_service import principal_from_claims, provision_user
@@ -30,34 +38,6 @@ pipeline_tracker = PipelineTracker()
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
-
-_ACTIVE_PROCESSING_STATUSES = {
-    ProcessingStatus.PROCESSING.value,
-    ProcessingStatus.PARSING.value,
-    ProcessingStatus.CHUNKING.value,
-    ProcessingStatus.EMBEDDING.value,
-    ProcessingStatus.STORING.value,
-}
-_ACTIVE_PDF_JOB_STATUSES = {
-    PdfJobStatus.PENDING.value,
-    PdfJobStatus.RUNNING.value,
-    PdfJobStatus.CANCEL_REQUESTED.value,
-}
-_TERMINAL_PDF_JOB_STATUSES = {
-    PdfJobStatus.COMPLETED.value,
-    PdfJobStatus.FAILED.value,
-    PdfJobStatus.CANCELLED.value,
-}
-
-
-def _stage_value(stage: object) -> str:
-    """Return a stable stage label for enums/strings in status payloads."""
-    return getattr(stage, "value", str(stage))
-
-
-def _normalize_processing_status(value: object) -> str:
-    status = str(value or "").strip().lower()
-    return status if status else ProcessingStatus.PENDING.value
 
 
 def _latest_job_for_user_document(document_id: str, auth_user: Dict[str, Any]):
@@ -76,13 +56,6 @@ def _latest_job_for_user_document(document_id: str, auth_user: Dict[str, Any]):
             return None
     finally:
         session.close()
-
-
-def _is_pipeline_status_active(pipeline_status: object) -> bool:
-    if not pipeline_status:
-        return False
-    stage_status = _normalize_processing_status(_stage_value(getattr(pipeline_status, "current_stage", None)))
-    return stage_status in _ACTIVE_PROCESSING_STATUSES
 
 
 @router.post("/documents/{document_id}/reprocess", response_model=OperationResult)
