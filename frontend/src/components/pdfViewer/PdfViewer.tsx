@@ -66,7 +66,7 @@ interface ViewerTelemetry {
   slowHighlight: boolean
 }
 
-interface OverlayDocItem {
+export interface OverlayDocItem {
   page?: number
   page_no?: number
   bbox?: {
@@ -80,7 +80,7 @@ interface OverlayDocItem {
   element_id?: string
 }
 
-interface OverlayPayload {
+export interface OverlayPayload {
   chunkId: string
   documentId?: string | null
   docItems: OverlayDocItem[]
@@ -183,6 +183,57 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
     return [specificLayer]
   }
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
+}
+
+export const normalizeOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItem[] => {
+  if (!Array.isArray(docItems)) {
+    return []
+  }
+
+  return docItems
+    .map((item) => {
+      const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
+      const hasBbox = !!item.bbox
+
+      if (!hasBbox || typeof pageValue !== 'number') {
+        return null
+      }
+
+      return {
+        ...item,
+        page: pageValue,
+      } as OverlayDocItem
+    })
+    .filter((item): item is OverlayDocItem => item !== null)
+}
+
+export const reduceOverlayUpdate = (
+  currentOverlays: OverlayPayload[],
+  detail: OverlayPayload | null | undefined,
+  activeDocumentId?: string | null,
+): OverlayPayload[] | null => {
+  if (!detail) {
+    return null
+  }
+
+  if (typeof detail.chunkId !== 'string' || detail.chunkId.trim().length === 0) {
+    return null
+  }
+
+  const normalizedDocItems = normalizeOverlayDocItems(detail.docItems)
+  if (normalizedDocItems.length === 0) {
+    return []
+  }
+
+  void currentOverlays
+
+  return [
+    {
+      chunkId: detail.chunkId,
+      documentId: detail.documentId ?? activeDocumentId ?? null,
+      docItems: normalizedDocItems,
+    },
+  ]
 }
 
 export function PdfViewer() {
@@ -416,44 +467,20 @@ export function PdfViewer() {
         activeId: activeDocument?.documentId
       })
 
-      if (typeof detail.chunkId !== 'string' || detail.chunkId.trim().length === 0) {
-        debug.log('🔍 [PDF VIEWER DEBUG] Invalid chunk ID, skipping:', detail.chunkId)
-        return
-      }
-
       debug.log('🔍 [PDF VIEWER DEBUG] Processing doc items for normalization:', {
         rawCount: detail.docItems?.length || 0,
         firstThreeItems: detail.docItems?.slice(0, 3)
       })
 
-      const normalizedDocItems: OverlayDocItem[] = Array.isArray(detail.docItems)
-        ? (detail.docItems
-            .map((item, idx) => {
-              const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
-              const hasBbox = !!item.bbox
+      const normalizedDocItems = normalizeOverlayDocItems(detail.docItems)
 
-              if (!hasBbox || typeof pageValue !== 'number') {
-                debug.log(`🔍 [PDF VIEWER DEBUG] Skipping item ${idx}:`, {
-                  hasBbox,
-                  pageValue,
-                  item
-                })
-                return null
-              }
-
-              debug.log(`🔍 [PDF VIEWER DEBUG] Normalized item ${idx}:`, {
-                page: pageValue,
-                bbox: item.bbox,
-                label: item.doc_item_label
-              })
-
-              return {
-                ...item,
-                page: pageValue,
-              } as OverlayDocItem
-            })
-            .filter((item): item is OverlayDocItem => item !== null))
-        : []
+      normalizedDocItems.forEach((item, idx) => {
+        debug.log(`🔍 [PDF VIEWER DEBUG] Normalized item ${idx}:`, {
+          page: item.page,
+          bbox: item.bbox,
+          label: item.doc_item_label
+        })
+      })
 
       debug.log('🔍 [PDF VIEWER DEBUG] Normalization complete:', {
         inputCount: detail.docItems?.length || 0,
@@ -461,31 +488,21 @@ export function PdfViewer() {
         normalizedItems: normalizedDocItems.slice(0, 3) // First 3 for brevity
       })
 
-      if (normalizedDocItems.length === 0) {
-        debug.log('🔍 [PDF VIEWER DEBUG] No valid doc items after normalization, skipping')
-        return
-      }
-
       setOverlays((prev) => {
-        const filtered = prev.filter((entry) => entry.chunkId !== detail.chunkId)
-        const next = [
-          ...filtered,
-          {
-            chunkId: detail.chunkId,
-            documentId: detail.documentId ?? activeDocument?.documentId ?? null,
-            docItems: normalizedDocItems,
-          },
-        ]
-        const finalOverlays = next.slice(-5)
+        const nextOverlays = reduceOverlayUpdate(prev, detail, activeDocument?.documentId)
+        if (nextOverlays === null) {
+          debug.log('🔍 [PDF VIEWER DEBUG] Invalid overlay payload, skipping:', detail)
+          return prev
+        }
 
         debug.log('🔍 [PDF VIEWER DEBUG] Updated overlays state:', {
           previousCount: prev.length,
-          newCount: finalOverlays.length,
-          chunkIds: finalOverlays.map(o => o.chunkId),
-          totalDocItems: finalOverlays.reduce((sum, o) => sum + o.docItems.length, 0)
+          newCount: nextOverlays.length,
+          chunkIds: nextOverlays.map(o => o.chunkId),
+          totalDocItems: nextOverlays.reduce((sum, o) => sum + o.docItems.length, 0)
         })
 
-        return finalOverlays
+        return nextOverlays
       })
       setOverlayRenderKey((prev) => prev + 1)
     }

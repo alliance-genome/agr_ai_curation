@@ -91,6 +91,19 @@ This is the intro paragraph.
     assert elements[5]["metadata"]["content_type"] == "table"
 
 
+def test_markdown_to_pipeline_elements_does_not_synthesize_bbox_provenance():
+    markdown = """<!-- page: 2 -->
+# Results
+This paragraph came from a markdown-only extraction fallback.
+"""
+
+    elements = markdown_to_pipeline_elements(markdown)
+
+    assert [element["metadata"]["page_number"] for element in elements] == [2, 2]
+    assert all("bbox" not in element["metadata"] for element in elements)
+    assert all("provenance" not in element["metadata"] for element in elements)
+
+
 def test_build_progress_message_prefers_stage_display():
     message = _build_progress_message(
         {
