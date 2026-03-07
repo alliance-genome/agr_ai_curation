@@ -50,7 +50,7 @@ services:
 
   # Test-specific Weaviate instance
   weaviate-test:
-    image: semitechnologies/weaviate:latest
+    image: cr.weaviate.io/semitechnologies/weaviate:1.33.18
     depends_on:
       reranker-transformers-test:
         condition: service_healthy
@@ -63,6 +63,7 @@ services:
       OPENAI_APIKEY: ${OPENAI_API_KEY:-}
       RERANKER_INFERENCE_API: http://reranker-transformers-test:8080
       CLUSTER_HOSTNAME: weaviate-test
+      AUTOSCHEMA_ENABLED: "false"
       LOG_LEVEL: debug
       GRPC_HOST: weaviate-test
       GRPC_PORT: 50051

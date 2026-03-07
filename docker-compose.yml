@@ -328,7 +328,7 @@ services:
 
   # Weaviate Vector Database
   weaviate:
-    image: semitechnologies/weaviate:latest
+    image: cr.weaviate.io/semitechnologies/weaviate:1.33.18
     restart: always
     depends_on:
       reranker-transformers:
@@ -345,10 +345,12 @@ services:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: ${WEAVIATE_ANONYMOUS_ACCESS:-true}
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       DEFAULT_VECTORIZER_MODULE: text2vec-openai
-      ENABLE_MODULES: 'text2vec-openai,reranker-transformers'
+      ENABLE_MODULES: 'text2vec-openai,reranker-transformers,backup-filesystem'
+      BACKUP_FILESYSTEM_PATH: /var/lib/weaviate/backups
       OPENAI_APIKEY: ${OPENAI_API_KEY}
       RERANKER_INFERENCE_API: http://reranker-transformers:8080
       CLUSTER_HOSTNAME: weaviate
+      AUTOSCHEMA_ENABLED: "false"  # Prevent ghost collections from auto-creation
       LOG_LEVEL: debug
       # gRPC Configuration
       GRPC_HOST: weaviate  # Use service name directly
@@ -356,6 +358,7 @@ services:
       GRPC_SECURE: "false"  # Disable SSL for internal Docker communication
     volumes:
       - ./weaviate_data:/var/lib/weaviate
+      - ./weaviate_backups:/var/lib/weaviate/backups
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
       interval: 30s
