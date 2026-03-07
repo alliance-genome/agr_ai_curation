@@ -123,6 +123,7 @@ async def test_intake_upload_happy_path_creates_job_and_dispatches(tmp_path):
     assert result.status == "PENDING"
     assert result.user_id == 42
     assert result.weaviate_tenant == "tenant-user-1"
+    assert result.upload_timestamp.tzinfo == timezone.utc
     assert create_document_calls and create_document_calls[0][0] == "user-1"
     assert len(dispatch.calls) == 1
     assert dispatch.calls[0]["request"].job_id == "job-1"

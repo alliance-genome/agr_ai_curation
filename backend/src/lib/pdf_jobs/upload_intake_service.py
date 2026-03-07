@@ -14,7 +14,7 @@ import logging
 import shutil
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -197,7 +197,7 @@ class UploadIntakeService:
                 user_sub=user_sub,
                 document_id=str(document.id),
                 saved_path=saved_path,
-                weaviate_document_created=True,
+                weaviate_document_created=weaviate_document_created,
             )
             raise UploadIntakeDuplicateError(
                 {
@@ -242,7 +242,7 @@ class UploadIntakeService:
             user_id=db_user.id,
             filename=document.filename,
             status="PENDING",
-            upload_timestamp=datetime.utcnow(),
+            upload_timestamp=datetime.now(timezone.utc),
             processing_started_at=None,
             processing_completed_at=None,
             file_size_bytes=saved_path.stat().st_size,
