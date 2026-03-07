@@ -280,7 +280,7 @@ Located at: `config/models.yaml`
 ```yaml
 models:
   - model_id: gpt-5-mini
-    name: GPT-5.4 Mini
+    name: GPT-5 Mini
     provider: openai                    # Must match a key in providers.yaml
     description: Fast default model for day-to-day drafting and light extraction.
     guidance: Start here for most tasks.
