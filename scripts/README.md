@@ -204,6 +204,28 @@ This runs on backend container startup and can also be invoked manually.
 make prefix-refresh
 ```
 
+### utilities/symphony_local_db_tunnel_start.sh
+
+Fire-and-forget DB tunnel lifecycle for Symphony Human Review Prep.
+Starts the SSM tunnel and `socat` forwarder in the background, writes
+`scripts/local_db_tunnel_env.sh`, and records state so it can be checked or stopped later.
+
+```bash
+# Start background tunnel for the current workspace
+./scripts/utilities/symphony_local_db_tunnel_start.sh
+
+# Check status
+./scripts/utilities/symphony_local_db_tunnel_status.sh
+
+# Stop and clean up
+./scripts/utilities/symphony_local_db_tunnel_stop.sh
+```
+
+### local_db_tunnel.sh
+
+Interactive/manual version of the curation DB tunnel. This keeps the tunnel alive in the
+foreground until you stop it, which is useful for ad hoc debugging outside Symphony.
+
 ### maintenance_mode.sh
 
 Toggles maintenance mode which displays a banner in the UI warning users that the system is under maintenance.
