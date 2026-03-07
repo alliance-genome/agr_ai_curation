@@ -116,14 +116,23 @@ def _normalize_processing_status(value: Any) -> str:
     return ProcessingStatus.PENDING.value
 
 
+def _pipeline_stage_value(pipeline_status: Any) -> str:
+    """Return normalized pipeline stage value from enum/string payloads."""
+    if not pipeline_status:
+        return ProcessingStage.PENDING.value
+    stage = getattr(pipeline_status, "current_stage", None)
+    if isinstance(stage, ProcessingStage):
+        return stage.value
+    return str(stage or "").strip().lower()
+
+
 def _effective_processing_status(raw_document_status: Any, pipeline_status: Any) -> str:
     """Compute effective status with pipeline tracker precedence when present."""
     effective = _normalize_processing_status(raw_document_status)
     if not pipeline_status:
         return effective
 
-    stage = getattr(pipeline_status, "current_stage", None)
-    stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or "").strip().lower()
+    stage_value = _pipeline_stage_value(pipeline_status)
     mapped = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value)
     if mapped:
         return mapped
@@ -141,10 +150,116 @@ def _is_pipeline_status_active(pipeline_status: Any) -> bool:
     if not pipeline_status:
         return False
 
-    stage = getattr(pipeline_status, "current_stage", None)
-    stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or "").strip().lower()
+    stage_value = _pipeline_stage_value(pipeline_status)
     normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
     return normalized in _ACTIVE_PROCESSING_STATUSES
+
+
+def _is_pipeline_status_terminal(pipeline_status: Any) -> bool:
+    """Check whether pipeline tracker reports a terminal stage."""
+    stage_value = _pipeline_stage_value(pipeline_status)
+    normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
+    return normalized in {
+        ProcessingStatus.COMPLETED.value,
+        ProcessingStatus.FAILED.value,
+    }
+
+
+def _pipeline_status_payload_with_job_precedence(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
+    """Build status payload with durable-job precedence over stale tracker terminals."""
+    if job:
+        if job.status in _ACTIVE_PDF_JOB_STATUSES and pipeline_status and _is_pipeline_status_active(pipeline_status):
+            return pipeline_status.model_dump()
+        return _pipeline_payload_from_job(job)
+    if pipeline_status:
+        return pipeline_status.model_dump()
+    return None
+
+
+def _canonical_processing_status(
+    *,
+    sql_processing_status: Any,
+    weaviate_processing_status: Any,
+    pipeline_status: Any,
+    job: Any,
+) -> str:
+    """Resolve effective processing status using durable job precedence."""
+    raw_sql_status = str(sql_processing_status or "").strip()
+    fallback_status = _normalize_processing_status(
+        raw_sql_status if raw_sql_status else weaviate_processing_status
+    )
+
+    if job:
+        return _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, fallback_status)
+    if pipeline_status:
+        return _effective_processing_status(fallback_status, pipeline_status)
+    return fallback_status
+
+
+def _status_snapshot_from_pipeline(pipeline_status: Any) -> Dict[str, Any]:
+    payload = pipeline_status.model_dump()
+    stage_str = _pipeline_stage_value(pipeline_status)
+    progress_value = payload.get("progress_percentage", 0)
+    message_value = payload.get("message") or "Processing document..."
+    updated_at = payload.get("updated_at")
+    if isinstance(updated_at, datetime):
+        timestamp_value = updated_at.isoformat()
+    else:
+        timestamp_value = updated_at or datetime.now().isoformat()
+
+    return {
+        "source": "pipeline",
+        "stage": stage_str,
+        "progress": progress_value,
+        "message": message_value,
+        "status": _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_str, _normalize_processing_status(stage_str)),
+        "updated_at": timestamp_value,
+        "is_terminal": _is_pipeline_status_terminal(pipeline_status),
+    }
+
+
+def _status_snapshot_from_job(job: Any) -> Dict[str, Any]:
+    mapped_status = _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, ProcessingStatus.PENDING.value)
+    stage_value = job.current_stage or mapped_status
+    if job.status in _TERMINAL_PDF_JOB_STATUSES:
+        stage_value = mapped_status
+
+    if job.status == PdfJobStatus.COMPLETED.value:
+        message_value = "Processing completed successfully"
+    elif job.status == PdfJobStatus.CANCELLED.value:
+        message_value = job.message or "Processing cancelled"
+    elif job.status == PdfJobStatus.FAILED.value:
+        message_value = job.error_message or job.message or "Processing failed"
+    else:
+        message_value = job.message or "Processing document..."
+
+    progress_value = int(getattr(job, "progress_percentage", 0) or 0)
+    if job.status == PdfJobStatus.COMPLETED.value:
+        progress_value = 100
+
+    return {
+        "source": "job",
+        "stage": stage_value,
+        "progress": progress_value,
+        "message": message_value,
+        "status": mapped_status,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else datetime.now().isoformat(),
+        "is_terminal": job.status in _TERMINAL_PDF_JOB_STATUSES,
+    }
+
+
+def _select_progress_snapshot(*, pipeline_status: Any, job: Any) -> Optional[Dict[str, Any]]:
+    """Choose stream snapshot with durable-job lifecycle precedence."""
+    if job:
+        if job.status in _TERMINAL_PDF_JOB_STATUSES:
+            return _status_snapshot_from_job(job)
+        if job.status in _ACTIVE_PDF_JOB_STATUSES and pipeline_status and _is_pipeline_status_active(pipeline_status):
+            return _status_snapshot_from_pipeline(pipeline_status)
+        return _status_snapshot_from_job(job)
+
+    if pipeline_status:
+        return _status_snapshot_from_pipeline(pipeline_status)
+    return None
 
 
 async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
@@ -406,7 +521,16 @@ def _pipeline_payload_from_job(job: Any) -> Optional[Dict[str, Any]]:
     elif isinstance(job, dict):
         payload = job
     else:
-        payload = {}
+        payload = {
+            "document_id": getattr(job, "document_id", None),
+            "current_stage": getattr(job, "current_stage", None),
+            "started_at": getattr(job, "started_at", None),
+            "updated_at": getattr(job, "updated_at", None),
+            "completed_at": getattr(job, "completed_at", None),
+            "progress_percentage": getattr(job, "progress_percentage", 0),
+            "message": getattr(job, "message", None),
+            "status": getattr(job, "status", None),
+        }
 
     updated_at = payload.get("updated_at")
     started_at = payload.get("started_at")
@@ -1162,7 +1286,7 @@ async def get_document_processing_status(
     # Returns 404 if not found, 403 if not owned by user
     session = SessionLocal()
     try:
-        verify_document_ownership(session, document_id, user)
+        pg_doc = verify_document_ownership(session, document_id, user)
         db_user = provision_user(session, principal_from_claims(user))
     finally:
         session.close()
@@ -1184,16 +1308,18 @@ async def get_document_processing_status(
             user_id=db_user.id,
             reconcile_stale=True,
         )
-        raw_processing_status = document["document"].get("processing_status", ProcessingStatus.PENDING.value)
-        if pipeline_status:
-            processing_status = _effective_processing_status(raw_processing_status, pipeline_status)
-            pipeline_payload = pipeline_status.model_dump()
-        elif job:
-            processing_status = _PDF_JOB_STATUS_TO_PROCESSING_STATUS.get(job.status, _normalize_processing_status(raw_processing_status))
-            pipeline_payload = _pipeline_payload_from_job(job)
-        else:
-            processing_status = _normalize_processing_status(raw_processing_status)
-            pipeline_payload = None
+        doc_payload = document.get("document", {})
+        raw_processing_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
+        processing_status = _canonical_processing_status(
+            sql_processing_status=getattr(pg_doc, "status", None),
+            weaviate_processing_status=raw_processing_status,
+            pipeline_status=pipeline_status,
+            job=job,
+        )
+        pipeline_payload = _pipeline_status_payload_with_job_precedence(
+            pipeline_status=pipeline_status,
+            job=job,
+        )
 
         return {
             "document_id": document_id,
@@ -1298,7 +1424,7 @@ async def stream_document_progress(
 
             while retry_count < max_retries:
                 # Get current pipeline status
-                status = await pipeline_tracker.get_pipeline_status(document_id)
+                pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
                 try:
                     job = pdf_job_service.get_latest_job_for_document(
                         document_id=document_id,
@@ -1308,69 +1434,11 @@ async def stream_document_progress(
                 except (TypeError, ValueError):
                     job = None
 
-                if status:
-                    status_snapshot = status.model_dump()
-
-                    # Check if status has changed
-                    if status_snapshot != last_status_snapshot:
-                        stage_value = status_snapshot.get('current_stage', ProcessingStage.PENDING)
-                        if isinstance(stage_value, ProcessingStage):
-                            stage_str = stage_value.value
-                        else:
-                            stage_str = str(stage_value)
-                        progress_value = status_snapshot.get('progress_percentage', 0)
-                        message_value = status_snapshot.get('message') or 'Processing document...'
-                        # Convert datetime to ISO format string for JSON serialization
-                        updated_at = status_snapshot.get('updated_at')
-                        if isinstance(updated_at, datetime):
-                            timestamp_value = updated_at.isoformat()
-                        else:
-                            timestamp_value = updated_at or datetime.now().isoformat()
-
-                        event_data = {
-                            'stage': stage_str,
-                            'progress': progress_value,
-                            'message': message_value,
-                            'timestamp': timestamp_value
-                        }
-
-                        yield f"data: {json.dumps(event_data)}\n\n"
-
-                        last_status_snapshot = status_snapshot
-
-                        current_stage = stage_value
-                        if isinstance(current_stage, ProcessingStage):
-                            current_stage_value = current_stage
-                        else:
-                            try:
-                                current_stage_value = ProcessingStage(stage_str)
-                            except Exception:
-                                current_stage_value = ProcessingStage.PENDING
-
-                        # Exit if completed or failed
-                        if current_stage_value in [ProcessingStage.COMPLETED, ProcessingStage.FAILED]:
-                            final_message = (
-                                'Processing completed successfully'
-                                if current_stage_value == ProcessingStage.COMPLETED
-                                else f"Processing failed: {message_value}"
-                            )
-                            final_data = {
-                                'stage': current_stage_value.value,
-                                'progress': 100 if current_stage_value == ProcessingStage.COMPLETED else progress_value,
-                                'message': final_message,
-                                'timestamp': timestamp_value,
-                                'final': True
-                            }
-                            yield f"data: {json.dumps(final_data)}\n\n"
-                            break
-                elif job:
-                    status_snapshot = {
-                        "stage": job.current_stage or "pending",
-                        "progress": job.progress_percentage,
-                        "message": job.message or "Processing document...",
-                        "status": job.status,
-                        "updated_at": job.updated_at.isoformat() if job.updated_at else datetime.now().isoformat(),
-                    }
+                status_snapshot = _select_progress_snapshot(
+                    pipeline_status=pipeline_status,
+                    job=job,
+                )
+                if status_snapshot:
                     if status_snapshot != last_status_snapshot:
                         event_data = {
                             'stage': status_snapshot["stage"],
@@ -1378,30 +1446,17 @@ async def stream_document_progress(
                             'message': status_snapshot["message"],
                             'timestamp': status_snapshot["updated_at"],
                         }
+
                         yield f"data: {json.dumps(event_data)}\n\n"
                         last_status_snapshot = status_snapshot
 
-                        if job.status in {
-                            PdfJobStatus.COMPLETED.value,
-                            PdfJobStatus.FAILED.value,
-                            PdfJobStatus.CANCELLED.value,
-                        }:
-                            if job.status == PdfJobStatus.COMPLETED.value:
-                                final_message = "Processing completed successfully"
-                                final_progress = 100
-                            elif job.status == PdfJobStatus.CANCELLED.value:
-                                final_message = job.message or "Processing cancelled"
-                                final_progress = status_snapshot["progress"]
-                            else:
-                                final_message = job.error_message or job.message or "Processing failed"
-                                final_progress = status_snapshot["progress"]
-
+                        if status_snapshot["is_terminal"]:
                             final_data = {
                                 'stage': status_snapshot["stage"],
-                                'progress': final_progress,
-                                'message': final_message,
+                                'progress': status_snapshot["progress"],
+                                'message': status_snapshot["message"],
                                 'timestamp': status_snapshot["updated_at"],
-                                'final': True
+                                'final': True,
                             }
                             yield f"data: {json.dumps(final_data)}\n\n"
                             break
