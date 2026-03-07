@@ -69,4 +69,56 @@ if ! grep -q "Value is required." "$warning_output_file"; then
 fi
 rm -f "$warning_output_file"
 
+env_file="$(mktemp)"
+cat >"$env_file" <<'EOF'
+ONE=1
+TWO=2
+EOF
+remove_env_var "$env_file" "TWO"
+if grep -q '^TWO=' "$env_file"; then
+  echo "remove_env_var should remove matching key" >&2
+  rm -f "$env_file"
+  exit 1
+fi
+remove_env_var "$env_file" "MISSING"
+if ! grep -q '^ONE=1$' "$env_file"; then
+  echo "remove_env_var should leave file unchanged for missing key" >&2
+  rm -f "$env_file"
+  exit 1
+fi
+rm -f "$env_file"
+
+port_stub_dir="$(mktemp -d)"
+cat >"${port_stub_dir}/lsof" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"-iTCP:8501"* ]]; then
+  echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
+  echo "python 1234 codex 11u IPv4 0t0 TCP *:8501 (LISTEN)"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "${port_stub_dir}/lsof"
+
+owner="$(INSTALL_LSOF_CMD="lsof" PATH="${port_stub_dir}:${PATH}" find_listening_port_owner "8501" || true)"
+if [[ "$owner" != "python/1234" ]]; then
+  echo "find_listening_port_owner should return detected process owner" >&2
+  rm -rf "$port_stub_dir"
+  exit 1
+fi
+
+missing_owner="$(INSTALL_LSOF_CMD="lsof" PATH="${port_stub_dir}:${PATH}" find_listening_port_owner "8511" || true)"
+if [[ -n "$missing_owner" ]]; then
+  echo "find_listening_port_owner should return empty output for free port" >&2
+  rm -rf "$port_stub_dir"
+  exit 1
+fi
+
+INSTALL_LSOF_CMD="lsof" PATH="${port_stub_dir}:${PATH}" has_port_probe_command || {
+  echo "has_port_probe_command should detect available probe command" >&2
+  rm -rf "$port_stub_dir"
+  exit 1
+}
+rm -rf "$port_stub_dir"
+
 echo "common.sh checks passed"

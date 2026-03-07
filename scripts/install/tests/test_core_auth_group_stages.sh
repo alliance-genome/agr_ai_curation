@@ -255,7 +255,8 @@ test_orchestrator_skip_flags() {
 
   HOME="$temp_home" INSTALL_GROUPS_OUTPUT_PATH="$groups_output_path" bash "$orchestrator_script" \
     --skip-preflight \
-    --skip-group-setup <<< $'sk-orchestrator\n\n\n\n1\n'
+    --skip-group-setup \
+    --skip-pdfx-setup <<< $'sk-orchestrator\n\n\n\n1\n'
 
   [[ -f "${temp_home}/.agr_ai_curation/.env" ]] || {
     echo "Orchestrator did not create env file" >&2
