@@ -4,7 +4,7 @@ Task: T026 - Add Security() dependency injection to document endpoints
 All endpoints now require valid AWS Cognito JWT token via Security(auth.get_user).
 """
 
-from fastapi import APIRouter, HTTPException, Query, Path, Depends, UploadFile, File, BackgroundTasks, Security
+from fastapi import APIRouter, HTTPException, Query, Path, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse
 from typing import Dict, Any
 from typing import Optional, List
@@ -28,11 +28,8 @@ from ..services.user_service import principal_from_claims, provision_user
 from ..lib.weaviate_helpers import get_tenant_name
 
 from ..models.api_schemas import (
-    DocumentListRequest,
     DocumentListResponse,
-    DocumentDetailResponse,
     DocumentFilter,
-    PaginationInfo,
     SortBy,
     SortOrder,
     OperationResult,
@@ -40,12 +37,10 @@ from ..models.api_schemas import (
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
 from ..models.pipeline import ProcessingStage
-from ..lib.weaviate_helpers import get_connection
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
     get_document,
     delete_document,
-    search_similar,
     create_document
 )
 from ..lib.pipeline.upload import PDFUploadHandler
@@ -169,7 +164,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
     Returns:
         Number of phantom documents cleaned up
     """
-    from ..lib.weaviate_helpers import get_connection, get_user_collections, get_tenant_name
+    from ..lib.weaviate_helpers import get_connection, get_user_collections
     from ..models.sql.user import User
 
     user_id = user["sub"]
@@ -1133,7 +1128,6 @@ async def upload_document_endpoint(
 
         # T029: Use user-specific storage path (FR-012)
         # Create: pdf_storage/{user_id}/
-        from pathlib import Path
         base_storage = get_pdf_storage_path()
         user_storage_path = base_storage / user["sub"]  # User-specific directory
         user_storage_path.mkdir(parents=True, exist_ok=True)
