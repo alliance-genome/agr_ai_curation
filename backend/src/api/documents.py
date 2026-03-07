@@ -49,7 +49,6 @@ from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionRequest,
     UploadExecutionService,
-    normalize_pipeline_result,
 )
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
@@ -134,11 +133,6 @@ def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
     """Extract and normalize processing status from mixed payload key styles."""
     raw_status = doc_payload.get("processing_status", doc_payload.get("processingStatus"))
     return _normalize_processing_status(raw_status)
-
-
-def _normalize_pipeline_result(result: Any) -> tuple[bool, bool, Optional[str]]:
-    """Compatibility wrapper for existing call sites and tests."""
-    return normalize_pipeline_result(result)
 
 
 def _is_pipeline_status_active(pipeline_status: Any) -> bool:

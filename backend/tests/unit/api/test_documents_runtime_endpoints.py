@@ -10,6 +10,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 
 from src.api import documents
+from src.lib.pdf_jobs.upload_execution_service import normalize_pipeline_result
 from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
@@ -139,7 +140,7 @@ async def test_validate_user_file_path_handles_resolve_errors(tmp_path):
 
 
 def test_normalize_pipeline_result_supports_legacy_dict_payload():
-    success, cancelled, error = documents._normalize_pipeline_result(
+    success, cancelled, error = normalize_pipeline_result(
         {"status": "completed", "chunks_created": 0}
     )
     assert success is True
@@ -149,7 +150,7 @@ def test_normalize_pipeline_result_supports_legacy_dict_payload():
 
 def test_normalize_pipeline_result_supports_object_payload():
     payload = SimpleNamespace(success=False, cancelled=True, error="Cancelled by user")
-    success, cancelled, error = documents._normalize_pipeline_result(payload)
+    success, cancelled, error = normalize_pipeline_result(payload)
     assert success is False
     assert cancelled is True
     assert error == "Cancelled by user"
