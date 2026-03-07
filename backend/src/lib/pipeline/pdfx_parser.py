@@ -533,13 +533,6 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             "ListItem": "list_item",
             "Table": "table",
         }.get(element_type, "paragraph")
-        synthetic_bbox = {
-            "left": 0.0,
-            "top": 1000.0,
-            "right": 1000.0,
-            "bottom": 0.0,
-            "coord_origin": "BOTTOMLEFT",
-        }
         metadata = {
             "element_id": f"md_element_{index}",
             "doc_item_label": doc_item_label,
@@ -549,13 +542,6 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             "page_number": current_page,
             "content_type": content_type,
             "original_type": original_type,
-            "bbox": synthetic_bbox,
-            "provenance": [
-                {
-                    "page_no": current_page,
-                    "bbox": synthetic_bbox,
-                }
-            ],
         }
         elements.append(
             {
