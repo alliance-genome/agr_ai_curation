@@ -18,6 +18,12 @@ from .upload_execution_service import (
     UploadExecutionService,
     normalize_pipeline_result,
 )
+from .upload_intake_service import (
+    UploadIntakeDuplicateError,
+    UploadIntakeResult,
+    UploadIntakeService,
+    UploadIntakeValidationError,
+)
 
 __all__ = [
     "create_job",
@@ -34,4 +40,8 @@ __all__ = [
     "UploadExecutionRequest",
     "UploadExecutionService",
     "normalize_pipeline_result",
+    "UploadIntakeDuplicateError",
+    "UploadIntakeResult",
+    "UploadIntakeService",
+    "UploadIntakeValidationError",
 ]
