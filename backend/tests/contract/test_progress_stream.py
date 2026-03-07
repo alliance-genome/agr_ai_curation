@@ -8,8 +8,14 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 import pytest
 
+from src.api import documents
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
+
+
+class _DummySession:
+    def close(self):
+        return None
 
 
 @pytest.fixture
@@ -29,6 +35,28 @@ def client():
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(auth.get_user, None)
+
+
+@pytest.fixture(autouse=True)
+def patch_stream_dependencies(monkeypatch: pytest.MonkeyPatch):
+    import main
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(main.documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(
+        main.documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(main.documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(main.documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
 
 
 def _sse_events(response) -> list[dict]:
@@ -158,6 +186,43 @@ def test_progress_stream_prefers_terminal_durable_job_over_pipeline(client: Test
     assert final_events
     assert final_events[-1]["stage"] == "failed"
     assert "durable failure" in final_events[-1]["message"]
+    assert final_events[-1]["source"] == "job"
+
+
+def test_progress_stream_prefers_cancelled_durable_job_over_pipeline(client: TestClient):
+    document_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    now = datetime.now(timezone.utc)
+    running_status = PipelineStatus(
+        document_id=document_id,
+        current_stage=ProcessingStage.EMBEDDING,
+        started_at=now,
+        updated_at=now,
+        progress_percentage=70,
+        message="tracker still running",
+    )
+    terminal_job = SimpleNamespace(
+        status=PdfJobStatus.CANCELLED.value,
+        current_stage="cancelled",
+        progress_percentage=70,
+        message="job cancelled",
+        error_message=None,
+        updated_at=now,
+    )
+
+    with patch("src.api.documents.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.documents.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_status, \
+         patch("src.api.documents.pdf_job_service.get_latest_job_for_document") as mock_job:
+        mock_get_document.return_value = {"document": {"id": document_id}}
+        mock_status.return_value = running_status
+        mock_job.return_value = terminal_job
+        with client.stream("GET", f"/weaviate/documents/{document_id}/progress/stream") as response:
+            events = _sse_events(response)
+
+    assert response.status_code == 200
+    final_events = [event for event in events if event.get("final") is True]
+    assert final_events
+    assert final_events[-1]["stage"] == "failed"
+    assert "cancel" in final_events[-1]["message"].lower()
     assert final_events[-1]["source"] == "job"
 
 

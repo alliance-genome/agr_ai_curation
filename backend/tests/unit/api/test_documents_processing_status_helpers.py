@@ -80,6 +80,46 @@ def test_select_progress_snapshot_prefers_terminal_job_over_active_pipeline():
     assert snapshot["is_terminal"] is True
 
 
+def test_select_progress_snapshot_prefers_active_cancel_requested_job_over_terminal_pipeline():
+    pipeline_status = SimpleNamespace(current_stage=ProcessingStage.FAILED)
+    job = SimpleNamespace(
+        status=PdfJobStatus.CANCEL_REQUESTED.value,
+        current_stage="parsing",
+        progress_percentage=48,
+        message="Cancellation requested",
+        error_message=None,
+        updated_at=None,
+    )
+
+    snapshot = documents._select_progress_snapshot(pipeline_status=pipeline_status, job=job)
+
+    assert snapshot is not None
+    assert snapshot["source"] == "job"
+    assert snapshot["stage"] == "parsing"
+    assert snapshot["status"] == "processing"
+    assert snapshot["is_terminal"] is False
+
+
+def test_pipeline_status_payload_with_job_precedence_uses_cancelled_job_payload():
+    pipeline_status = SimpleNamespace(model_dump=lambda: {"current_stage": "completed", "message": "stale"})
+    job = SimpleNamespace(
+        status=PdfJobStatus.CANCELLED.value,
+        current_stage="cancelled",
+        progress_percentage=50,
+        message="Processing cancelled",
+        updated_at=None,
+        started_at=None,
+        completed_at=None,
+        document_id="doc-1",
+    )
+
+    payload = documents._pipeline_status_payload_with_job_precedence(pipeline_status=pipeline_status, job=job)
+
+    assert payload is not None
+    assert payload["current_stage"] == "cancelled"
+    assert payload["message"] == "Processing cancelled"
+
+
 def test_status_snapshot_from_pipeline_uses_terminal_default_message_and_utc_timestamp():
     payload = {
         "current_stage": ProcessingStage.COMPLETED.value,

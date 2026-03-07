@@ -30,6 +30,7 @@ import pytest
 import io
 from unittest.mock import MagicMock, patch
 from datetime import datetime
+from types import SimpleNamespace
 
 
 @pytest.fixture
@@ -348,6 +349,52 @@ class TestDocumentsUploadEndpoint:
 
             # Verify underscores present (not just stripped)
             assert "_" in data["weaviate_tenant"]
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_upload_duplicate_replay_returns_conflict_with_existing_document(self, client, monkeypatch):
+        from main import app
+        from src.api.auth import auth, get_db
+        from src.api import documents
+
+        mock_user = MagicMock()
+        mock_user.uid = "00u1abc2-def3-ghi4-jkl5"
+        mock_user.email = "curator@alliancegenome.org"
+        mock_user.name = "Test Curator"
+        mock_user.cid = None
+
+        mock_db_session = MagicMock()
+        mock_db_session.query.return_value.filter_by.return_value.one_or_none.return_value = SimpleNamespace(
+            user_id=123,
+            email="curator@alliancegenome.org",
+            is_active=True,
+        )
+
+        app.dependency_overrides[auth.get_user] = lambda: mock_user
+        app.dependency_overrides[get_db] = lambda: mock_db_session
+
+        async def _raise_duplicate(**_kwargs):
+            raise documents.UploadIntakeDuplicateError(
+                {
+                    "error": "duplicate_file",
+                    "message": "already uploaded",
+                    "existing_document_id": "doc-existing",
+                }
+            )
+
+        monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_duplicate)
+
+        try:
+            response = client.post(
+                "/weaviate/documents/upload",
+                headers=get_valid_auth_header(),
+                files={"file": ("research_paper.pdf", create_test_pdf_bytes(), "application/pdf")},
+            )
+
+            assert response.status_code == 409
+            data = response.json()
+            assert data["detail"]["error"] == "duplicate_file"
+            assert data["detail"]["existing_document_id"] == "doc-existing"
         finally:
             app.dependency_overrides.clear()
 

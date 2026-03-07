@@ -22,6 +22,14 @@ from . import service as pdf_job_service
 
 logger = logging.getLogger(__name__)
 
+_NON_PENDING_JOB_STATUSES = {
+    PdfJobStatus.RUNNING.value,
+    PdfJobStatus.CANCEL_REQUESTED.value,
+    PdfJobStatus.COMPLETED.value,
+    PdfJobStatus.FAILED.value,
+    PdfJobStatus.CANCELLED.value,
+}
+
 
 def normalize_pipeline_result(result: Any) -> tuple[bool, bool, Optional[str]]:
     """Normalize pipeline result payloads across object and legacy dict shapes."""
@@ -157,6 +165,15 @@ class UploadExecutionService:
         """Run upload orchestration and persist durable job transitions."""
         if pdf_job_service.is_cancel_requested(job_id=request.job_id):
             await self._handle_pre_start_cancellation(request)
+            return
+
+        existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+        if existing_job and existing_job.status in _NON_PENDING_JOB_STATUSES:
+            logger.info(
+                "Skipping replayed upload execution for job %s with durable status %s",
+                request.job_id,
+                existing_job.status,
+            )
             return
 
         try:

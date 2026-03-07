@@ -201,3 +201,358 @@ async def test_status_endpoint_prefers_active_job_when_pipeline_is_stale_termina
     assert result["processing_status"] == "processing"
     assert result["pipeline_status"]["current_stage"] == "parsing"
     assert result["job_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_keeps_cancel_requested_job_active_with_live_pipeline_stage(monkeypatch):
+    document_id = "55555555-5555-5555-5555-555555555555"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.CHUNKING,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=58,
+            message="Chunking in progress",
+        )
+
+    now = datetime.now(timezone.utc)
+    cancel_requested_job = SimpleNamespace(
+        status=PdfJobStatus.CANCEL_REQUESTED.value,
+        current_stage="parsing",
+        progress_percentage=40,
+        message="Cancellation requested",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=None,
+        document_id=document_id,
+        job_id="job-555",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancel_requested_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "processing"
+    assert result["pipeline_status"]["current_stage"] == ProcessingStage.CHUNKING.value
+    assert result["pipeline_status"]["progress_percentage"] == 58
+    assert result["job_status"] == PdfJobStatus.CANCEL_REQUESTED.value
+    assert result["cancel_requested"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_prefers_terminal_cancelled_job_over_stale_pipeline(monkeypatch):
+    document_id = "66666666-6666-6666-6666-666666666666"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.COMPLETED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=100,
+            message="stale tracker completion",
+        )
+
+    now = datetime.now(timezone.utc)
+    cancelled_job = SimpleNamespace(
+        status=PdfJobStatus.CANCELLED.value,
+        current_stage="cancelled",
+        progress_percentage=64,
+        message="Cancelled by user",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=now,
+        document_id=document_id,
+        job_id="job-666",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "failed"
+    assert result["pipeline_status"]["current_stage"] == "cancelled"
+    assert result["job_status"] == PdfJobStatus.CANCELLED.value
+    assert result["cancel_requested"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_prefers_cancelled_job_over_stale_pipeline(monkeypatch):
+    document_id = "55555555-5555-5555-5555-555555555555"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.COMPLETED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=100,
+            message="stale pipeline success",
+        )
+
+    now = datetime.now(timezone.utc)
+    cancelled_job = SimpleNamespace(
+        status=PdfJobStatus.CANCELLED.value,
+        current_stage="cancelled",
+        progress_percentage=61,
+        message="User cancelled upload",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=now,
+        document_id=document_id,
+        job_id="job-555",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "failed"
+    assert result["pipeline_status"]["current_stage"] == "cancelled"
+    assert result["job_status"] == "cancelled"
+    assert result["cancel_requested"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_prefers_cancel_requested_job_when_pipeline_is_stale_terminal(monkeypatch):
+    document_id = "66666666-6666-6666-6666-666666666666"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.FAILED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=88,
+            message="stale terminal tracker",
+        )
+
+    now = datetime.now(timezone.utc)
+    active_job = SimpleNamespace(
+        status=PdfJobStatus.CANCEL_REQUESTED.value,
+        current_stage="parsing",
+        progress_percentage=44,
+        message="Cancellation requested",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=None,
+        document_id=document_id,
+        job_id="job-666",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: active_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "processing"
+    assert result["pipeline_status"]["current_stage"] == "parsing"
+    assert result["job_status"] == "cancel_requested"
+    assert result["cancel_requested"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_prefers_cancel_requested_job_over_stale_terminal_pipeline(monkeypatch):
+    document_id = "55555555-5555-5555-5555-555555555555"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.FAILED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=91,
+            message="stale failed tracker",
+        )
+
+    now = datetime.now(timezone.utc)
+    cancel_requested_job = SimpleNamespace(
+        status=PdfJobStatus.CANCEL_REQUESTED.value,
+        current_stage="cancel_requested",
+        progress_percentage=72,
+        message="Cancellation requested",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=None,
+        document_id=document_id,
+        job_id="job-555",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancel_requested_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "processing"
+    assert result["pipeline_status"]["current_stage"] == "cancel_requested"
+    assert result["job_status"] == "cancel_requested"
+    assert result["cancel_requested"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_prefers_cancelled_terminal_job_over_active_pipeline(monkeypatch):
+    document_id = "66666666-6666-6666-6666-666666666666"
+
+    async def fake_get_document(_user_sub, _document_id):
+        return {
+            "document": {
+                "processing_status": "processing",
+                "embedding_status": "pending",
+                "vector_count": 0,
+            },
+            "total_chunks": 0,
+        }
+
+    async def fake_pipeline_status(_document_id):
+        now = datetime.now(timezone.utc)
+        return PipelineStatus(
+            document_id=document_id,
+            current_stage=ProcessingStage.EMBEDDING,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=80,
+            message="tracker still active",
+        )
+
+    now = datetime.now(timezone.utc)
+    cancelled_job = SimpleNamespace(
+        status=PdfJobStatus.CANCELLED.value,
+        current_stage="cancelled",
+        progress_percentage=80,
+        message="Cancelled by user",
+        error_message=None,
+        cancel_requested=True,
+        updated_at=now,
+        started_at=now,
+        completed_at=now,
+        document_id=document_id,
+        job_id="job-666",
+    )
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
+    )
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
+    monkeypatch.setattr(documents, "get_document", fake_get_document)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+
+    result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
+
+    assert result["processing_status"] == "failed"
+    assert result["pipeline_status"]["current_stage"] == "cancelled"
+    assert result["job_status"] == "cancelled"
+    assert result["cancel_requested"] is True

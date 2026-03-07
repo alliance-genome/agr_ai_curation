@@ -170,6 +170,23 @@ def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -
         session.close()
 
 
+def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Optional[PdfJobResponse]:
+    """Return a single job by ID for internal orchestration checks only."""
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+        ).scalar_one_or_none()
+        if job and reconcile_stale:
+            now = datetime.now(timezone.utc)
+            if _reconcile_stale_job(job, stale_after_seconds=_stale_timeout_seconds(), now=now):
+                session.commit()
+                session.refresh(job)
+        return _to_response(job) if job else None
+    finally:
+        session.close()
+
+
 def get_latest_job_for_document(
     *,
     document_id: UUID | str,
@@ -370,6 +387,8 @@ def mark_completed(*, job_id: UUID | str, message: Optional[str] = None) -> Opti
         ).scalar_one_or_none()
         if not job:
             return None
+        if job.status in _TERMINAL_STATUSES:
+            return _to_response(job)
 
         now = datetime.now(timezone.utc)
         if job.started_at is None:
@@ -397,6 +416,8 @@ def mark_failed(*, job_id: UUID | str, message: str, stage: Optional[str] = None
         ).scalar_one_or_none()
         if not job:
             return None
+        if job.status in _TERMINAL_STATUSES:
+            return _to_response(job)
 
         now = datetime.now(timezone.utc)
         if job.started_at is None:
@@ -423,6 +444,8 @@ def mark_cancelled(*, job_id: UUID | str, reason: Optional[str] = None) -> Optio
         ).scalar_one_or_none()
         if not job:
             return None
+        if job.status in _TERMINAL_STATUSES:
+            return _to_response(job)
 
         now = datetime.now(timezone.utc)
         if job.started_at is None:
