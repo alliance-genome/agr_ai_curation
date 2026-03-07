@@ -208,7 +208,6 @@ export const normalizeOverlayDocItems = (docItems: OverlayDocItem[] | undefined)
 }
 
 export const reduceOverlayUpdate = (
-  currentOverlays: OverlayPayload[],
   detail: OverlayPayload | null | undefined,
   activeDocumentId?: string | null,
 ): OverlayPayload[] | null => {
@@ -225,8 +224,8 @@ export const reduceOverlayUpdate = (
     return []
   }
 
-  void currentOverlays
-
+  // The viewer should track the most recently selected chunk only.
+  // Retaining prior overlays is what made highlights appear stuck on older pages.
   return [
     {
       chunkId: detail.chunkId,
@@ -489,7 +488,7 @@ export function PdfViewer() {
       })
 
       setOverlays((prev) => {
-        const nextOverlays = reduceOverlayUpdate(prev, detail, activeDocument?.documentId)
+        const nextOverlays = reduceOverlayUpdate(detail, activeDocument?.documentId)
         if (nextOverlays === null) {
           debug.log('🔍 [PDF VIEWER DEBUG] Invalid overlay payload, skipping:', detail)
           return prev

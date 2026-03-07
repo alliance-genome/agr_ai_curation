@@ -1,24 +1,39 @@
 import { describe, expect, it } from 'vitest'
 
-import { reduceOverlayUpdate } from './PdfViewer'
+import { normalizeOverlayDocItems, reduceOverlayUpdate } from './PdfViewer'
+
+describe('normalizeOverlayDocItems', () => {
+  it('returns an empty list for missing or unusable items', () => {
+    expect(normalizeOverlayDocItems(undefined)).toEqual([])
+    expect(
+      normalizeOverlayDocItems([
+        { page: 2 },
+        { page_no: 4, bbox: undefined },
+      ]),
+    ).toEqual([])
+  })
+
+  it('normalizes page_no to page when bbox data is present', () => {
+    expect(
+      normalizeOverlayDocItems([
+        {
+          page_no: 5,
+          bbox: { left: 1, top: 2, right: 3, bottom: 0, coord_origin: 'BOTTOMLEFT' },
+        },
+      ]),
+    ).toEqual([
+      {
+        page_no: 5,
+        page: 5,
+        bbox: { left: 1, top: 2, right: 3, bottom: 0, coord_origin: 'BOTTOMLEFT' },
+      },
+    ])
+  })
+})
 
 describe('reduceOverlayUpdate', () => {
   it('replaces prior overlays with the newest chunk highlight', () => {
-    const existing = [
-      {
-        chunkId: 'chunk-1',
-        documentId: 'doc-1',
-        docItems: [
-          {
-            page: 1,
-            bbox: { left: 10, top: 20, right: 30, bottom: 5, coord_origin: 'BOTTOMLEFT' },
-          },
-        ],
-      },
-    ]
-
     const next = reduceOverlayUpdate(
-      existing,
       {
         chunkId: 'chunk-2',
         documentId: 'doc-1',
@@ -48,21 +63,7 @@ describe('reduceOverlayUpdate', () => {
   })
 
   it('clears stale overlays when the next payload has no usable bbox data', () => {
-    const existing = [
-      {
-        chunkId: 'chunk-1',
-        documentId: 'doc-1',
-        docItems: [
-          {
-            page: 1,
-            bbox: { left: 10, top: 20, right: 30, bottom: 5, coord_origin: 'BOTTOMLEFT' },
-          },
-        ],
-      },
-    ]
-
     const next = reduceOverlayUpdate(
-      existing,
       {
         chunkId: 'chunk-2',
         documentId: 'doc-1',
