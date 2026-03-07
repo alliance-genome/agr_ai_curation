@@ -261,7 +261,7 @@ def validate_configuration(require_openai: bool = False) -> bool:
         errors.append("CHUNK_OVERLAP must be less than MAX_CHUNK_SIZE")
 
     if errors:
-        raise ConfigurationError(f"Configuration validation failed:\n" + "\n".join(errors))
+        raise ConfigurationError("Configuration validation failed:\n" + "\n".join(errors))
 
     return True
 
