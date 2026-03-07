@@ -160,3 +160,56 @@ upsert_env_var() {
 
   mv "$tmp_file" "$env_file"
 }
+
+remove_env_var() {
+  local env_file="$1"
+  local key="$2"
+
+  require_file_exists "$env_file"
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v key="$key" '
+    $0 !~ ("^" key "=") { print }
+  ' "$env_file" >"$tmp_file"
+
+  mv "$tmp_file" "$env_file"
+}
+
+has_port_probe_command() {
+  local lsof_cmd="${INSTALL_LSOF_CMD:-lsof}"
+  local ss_cmd="${INSTALL_SS_CMD:-ss}"
+
+  command -v "$lsof_cmd" >/dev/null 2>&1 || command -v "$ss_cmd" >/dev/null 2>&1
+}
+
+find_listening_port_owner() {
+  local port="$1"
+  local lsof_cmd="${INSTALL_LSOF_CMD:-lsof}"
+  local ss_cmd="${INSTALL_SS_CMD:-ss}"
+  local owner=""
+
+  if command -v "$lsof_cmd" >/dev/null 2>&1; then
+    owner="$("$lsof_cmd" -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 { print $1 "/" $2; exit }')"
+    if [[ -n "$owner" ]]; then
+      printf '%s\n' "$owner"
+      return 0
+    fi
+  fi
+
+  if command -v "$ss_cmd" >/dev/null 2>&1; then
+    local ss_line
+    ss_line="$("$ss_cmd" -ltnp "( sport = :${port} )" 2>/dev/null | awk 'NR>1 && $1=="LISTEN" { print; exit }')"
+    if [[ -n "$ss_line" ]]; then
+      owner="$(printf '%s\n' "$ss_line" | sed -n 's/.*users:(("\([^"]*\)".*pid=\([0-9]*\).*/\1\/\2/p')"
+      if [[ -z "$owner" ]]; then
+        owner="unknown process"
+      fi
+      printf '%s\n' "$owner"
+      return 0
+    fi
+  fi
+
+  return 1
+}

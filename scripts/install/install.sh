@@ -10,6 +10,7 @@ skip_preflight=0
 skip_core_config=0
 skip_auth_setup=0
 skip_group_setup=0
+skip_pdfx_setup=0
 
 print_usage() {
   cat <<USAGE
@@ -20,6 +21,7 @@ Options:
   --skip-core-config   Skip Stage 2 (02_core_config.sh)
   --skip-auth-setup    Skip Stage 3 (03_auth_setup.sh)
   --skip-group-setup   Skip Stage 4 (04_group_setup.sh)
+  --skip-pdfx-setup    Skip Stage 5 (05_pdfx_setup.sh)
   -h, --help           Show this help message
 USAGE
 }
@@ -49,6 +51,9 @@ parse_args() {
       --skip-group-setup)
         skip_group_setup=1
         ;;
+      --skip-pdfx-setup)
+        skip_pdfx_setup=1
+        ;;
       -h|--help)
         print_usage
         exit 0
@@ -70,6 +75,7 @@ main() {
   local stage2="${script_dir}/02_core_config.sh"
   local stage3="${script_dir}/03_auth_setup.sh"
   local stage4="${script_dir}/04_group_setup.sh"
+  local stage5="${script_dir}/05_pdfx_setup.sh"
 
   if (( skip_preflight == 0 )); then
     run_stage "Stage 1 - Preflight" "$stage1"
@@ -93,6 +99,12 @@ main() {
     run_stage "Stage 4 - Group setup" "$stage4"
   else
     log_warn "Skipping Stage 4 - Group setup"
+  fi
+
+  if (( skip_pdfx_setup == 0 )); then
+    run_stage "Stage 5 - PDF extraction setup" "$stage5"
+  else
+    log_warn "Skipping Stage 5 - PDF extraction setup"
   fi
 
   log_success "Installer completed"
