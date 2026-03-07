@@ -53,6 +53,14 @@ run_check() {
   fi
 }
 
+# Keep these as fast-fail preflight checks in the gate so path-config mistakes
+# surface before the heavier Docker-backed CI jobs start.
+run_check "unit-ignore-path-validation" \
+  "bash backend/tests/unit/run_ci_unit_tests.sh --validate-only"
+
+run_check "contract-core-path-validation" \
+  "bash backend/tests/contract/run_ci_contract_core_tests.sh --validate-only"
+
 mapfile -t CHANGED_BACKEND_PY_FILES < <(
   git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
 )
