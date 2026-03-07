@@ -1455,6 +1455,7 @@ class TestConnectionsLoader:
 
         # Check known optional services
         optional_ids = [c.service_id for c in optional]
+        assert "agr_curation_api" in optional_ids
         assert "redis" in optional_ids
         assert "langfuse" in optional_ids
 

@@ -42,7 +42,7 @@ services:
       endpoint: "/health"
       method: GET
       expected_status: 200
-    required: true
+    required: false
     timeout_seconds: 10
 
   # ---------------------------------------------------------------------------
