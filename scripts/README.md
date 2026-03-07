@@ -6,6 +6,12 @@ Utility scripts for development, validation, and operations.
 
 ```
 scripts/
+├── install/
+│   └── lib/
+│       ├── common.sh           # Shared installer helpers (colors/prompts/validation)
+│       └── templates/
+│           ├── env.standalone  # Authoritative standalone .env template
+│           └── groups.standalone.yaml # Standalone groups mapping template
 ├── create_agent.py              # Agent scaffolding CLI (see Agents Development Guide)
 ├── validate_registry.py         # Validate AGENT_REGISTRY consistency
 ├── validate_current_agents.py   # Validate all agents can be instantiated

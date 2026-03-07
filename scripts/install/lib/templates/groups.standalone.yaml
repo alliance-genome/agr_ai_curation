@@ -1,0 +1,70 @@
+# Standalone deployment group mapping template.
+# Installer replaces __AUTH_TYPE__ and __GROUP_CLAIM__.
+
+identity_provider:
+  type: "__AUTH_TYPE__"
+  group_claim: "__GROUP_CLAIM__"
+
+groups:
+  FB:
+    name: "FlyBase"
+    description: "Drosophila melanogaster curation team"
+    species: "Drosophila melanogaster"
+    taxon: "NCBITaxon:7227"
+    provider_groups:
+      - "flybase-curators"
+      - "flybase-admins"
+
+  WB:
+    name: "WormBase"
+    description: "C. elegans curation team"
+    species: "Caenorhabditis elegans"
+    taxon: "NCBITaxon:6239"
+    provider_groups:
+      - "wormbase-curators"
+      - "wormbase-admins"
+
+  MGI:
+    name: "Mouse Genome Informatics"
+    description: "Mus musculus curation team"
+    species: "Mus musculus"
+    taxon: "NCBITaxon:10090"
+    provider_groups:
+      - "mgi-curators"
+      - "mgi-admins"
+
+  ZFIN:
+    name: "Zebrafish Information Network"
+    description: "Danio rerio curation team"
+    species: "Danio rerio"
+    taxon: "NCBITaxon:7955"
+    provider_groups:
+      - "zfin-curators"
+      - "zfin-admins"
+
+  RGD:
+    name: "Rat Genome Database"
+    description: "Rattus norvegicus curation team"
+    species: "Rattus norvegicus"
+    taxon: "NCBITaxon:10116"
+    provider_groups:
+      - "rgd-curators"
+      - "rgd-admins"
+
+  SGD:
+    name: "Saccharomyces Genome Database"
+    description: "Saccharomyces cerevisiae curation team"
+    species: "Saccharomyces cerevisiae"
+    taxon: "NCBITaxon:559292"
+    provider_groups:
+      - "sgd-curators"
+      - "sgd-admins"
+
+  HGNC:
+    name: "HUGO Gene Nomenclature Committee"
+    description: "Homo sapiens gene nomenclature"
+    species: "Homo sapiens"
+    taxon: "NCBITaxon:9606"
+    provider_groups:
+      - "hgnc-curators"
+      - "hgnc-admins"
