@@ -4,7 +4,7 @@ Task: T026 - Add Security() dependency injection to document endpoints
 All endpoints now require valid AWS Cognito JWT token via Security(auth.get_user).
 """
 
-from fastapi import APIRouter, HTTPException, Query, Path, Depends, UploadFile, File, BackgroundTasks, Security
+from fastapi import APIRouter, HTTPException, Query, Path, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse
 from typing import Dict, Any
 from typing import Optional, List
@@ -28,11 +28,8 @@ from ..services.user_service import principal_from_claims, provision_user
 from ..lib.weaviate_helpers import get_tenant_name
 
 from ..models.api_schemas import (
-    DocumentListRequest,
     DocumentListResponse,
-    DocumentDetailResponse,
     DocumentFilter,
-    PaginationInfo,
     SortBy,
     SortOrder,
     OperationResult,
@@ -40,19 +37,19 @@ from ..models.api_schemas import (
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
 from ..models.pipeline import ProcessingStage
-from ..lib.weaviate_helpers import get_connection
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
     get_document,
     delete_document,
-    search_similar,
     create_document
 )
 from ..lib.pipeline.upload import PDFUploadHandler
-from ..lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from ..lib.pipeline.tracker import PipelineTracker
 from ..lib.pdf_jobs import service as pdf_job_service
-from ..lib.exceptions import PDFCancellationError
+from ..lib.pdf_jobs.upload_execution_service import (
+    UploadExecutionRequest,
+    UploadExecutionService,
+)
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
@@ -66,6 +63,7 @@ from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 pipeline_tracker = PipelineTracker()
+upload_execution_service = UploadExecutionService(pipeline_tracker=pipeline_tracker)
 
 _pdf_extraction_service_token: Optional[str] = None
 _pdf_extraction_service_token_expires_at: float = 0.0
@@ -137,30 +135,6 @@ def _extract_document_processing_status(doc_payload: Dict[str, Any]) -> str:
     return _normalize_processing_status(raw_status)
 
 
-def _normalize_pipeline_result(result: Any) -> tuple[bool, bool, Optional[str]]:
-    """Normalize pipeline result payloads across object and legacy dict shapes."""
-    if isinstance(result, dict):
-        status = str(result.get("status", "")).strip().lower()
-        cancelled = bool(result.get("cancelled")) or status in {"cancelled", "canceled", "cancel_requested"}
-        success_raw = result.get("success")
-        if success_raw is None:
-            success = status in {"completed", "complete", "success", "succeeded"} and not cancelled
-        else:
-            success = bool(success_raw)
-        error = result.get("error") or result.get("message")
-        return success, cancelled, error
-
-    status_attr = str(getattr(result, "status", "") or "").strip().lower()
-    cancelled = bool(getattr(result, "cancelled", False)) or status_attr in {"cancelled", "canceled", "cancel_requested"}
-    success_attr = getattr(result, "success", None)
-    if success_attr is None:
-        success = status_attr in {"completed", "complete", "success", "succeeded"} and not cancelled
-    else:
-        success = bool(success_attr)
-    error = getattr(result, "error", None) or getattr(result, "message", None)
-    return success, cancelled, error
-
-
 def _is_pipeline_status_active(pipeline_status: Any) -> bool:
     """Check whether in-memory pipeline tracker indicates active processing."""
     if not pipeline_status:
@@ -170,80 +144,6 @@ def _is_pipeline_status_active(pipeline_status: Any) -> bool:
     stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or "").strip().lower()
     normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
     return normalized in _ACTIVE_PROCESSING_STATUSES
-
-
-class JobAwarePipelineTracker:
-    """Tracker proxy that mirrors in-memory pipeline progress into durable job rows."""
-
-    def __init__(self, base_tracker: PipelineTracker, job_id: str):
-        self.base_tracker = base_tracker
-        self.job_id = job_id
-
-    async def track_pipeline_progress(
-        self,
-        document_id: str,
-        stage: ProcessingStage,
-        progress_percentage: Optional[int] = None,
-        message: Optional[str] = None,
-    ):
-        stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage)
-
-        if (
-            pdf_job_service.is_cancel_requested(job_id=self.job_id)
-            and stage_value not in {ProcessingStage.FAILED.value, ProcessingStage.COMPLETED.value}
-        ):
-            raise PDFCancellationError("Processing cancelled by user request")
-
-        status = await self.base_tracker.track_pipeline_progress(
-            document_id=document_id,
-            stage=stage,
-            progress_percentage=progress_percentage,
-            message=message,
-        )
-
-        if stage_value == ProcessingStage.COMPLETED.value:
-            pdf_job_service.mark_completed(
-                job_id=self.job_id,
-                message=message or "Processing completed",
-            )
-        elif stage_value == ProcessingStage.FAILED.value:
-            if pdf_job_service.is_cancel_requested(job_id=self.job_id):
-                pdf_job_service.update_progress(
-                    job_id=self.job_id,
-                    stage=PdfJobStatus.CANCEL_REQUESTED.value,
-                    progress_percentage=progress_percentage,
-                    message=message or "Cancellation requested",
-                    status=PdfJobStatus.CANCEL_REQUESTED.value,
-                )
-            else:
-                pdf_job_service.mark_failed(
-                    job_id=self.job_id,
-                    message=message or "Processing failed",
-                    stage=stage_value,
-                )
-        else:
-            pdf_job_service.update_progress(
-                job_id=self.job_id,
-                stage=stage_value,
-                progress_percentage=progress_percentage,
-                message=message,
-                status=PdfJobStatus.RUNNING.value,
-            )
-
-        return status
-
-    async def get_pipeline_status(self, document_id: str):
-        return await self.base_tracker.get_pipeline_status(document_id)
-
-    async def handle_pipeline_failure(self, document_id: str, error: Exception, stage: Optional[ProcessingStage] = None):
-        result = await self.base_tracker.handle_pipeline_failure(document_id, error, stage)
-        stage_value = stage.value if isinstance(stage, ProcessingStage) else str(stage or ProcessingStage.FAILED.value)
-        pdf_job_service.mark_failed(
-            job_id=self.job_id,
-            message=str(error),
-            stage=stage_value,
-        )
-        return result
 
 
 async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
@@ -258,7 +158,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
     Returns:
         Number of phantom documents cleaned up
     """
-    from ..lib.weaviate_helpers import get_connection, get_user_collections, get_tenant_name
+    from ..lib.weaviate_helpers import get_connection, get_user_collections
     from ..models.sql.user import User
 
     user_id = user["sub"]
@@ -1222,7 +1122,6 @@ async def upload_document_endpoint(
 
         # T029: Use user-specific storage path (FR-012)
         # Create: pdf_storage/{user_id}/
-        from pathlib import Path
         base_storage = get_pdf_storage_path()
         user_storage_path = base_storage / user["sub"]  # User-specific directory
         user_storage_path.mkdir(parents=True, exist_ok=True)
@@ -1372,144 +1271,17 @@ async def upload_document_endpoint(
         )
         job_id = job.job_id
 
-        # Track initial status
-        from ..models.pipeline import ProcessingStage
-        await pipeline_tracker.track_pipeline_progress(document.id, ProcessingStage.UPLOAD)
-
-        # Start processing pipeline in background
-        # Capture user["sub"] for background task (FR-011, FR-014: tenant scoping)
-        user_id = user["sub"]
-
-        async def process_document():
-            if pdf_job_service.is_cancel_requested(job_id=job_id):
-                cancellation_message = "Cancelled before processing started"
-                pdf_job_service.mark_cancelled(
-                    job_id=job_id,
-                    reason=cancellation_message,
-                )
-                try:
-                    from ..lib.weaviate_client.documents import update_document_status
-                    await update_document_status(document.id, user_id, ProcessingStatus.FAILED.value)
-                except Exception as status_err:
-                    logger.warning(
-                        "Failed to sync document status for pre-start cancellation document=%s: %s",
-                        document.id,
-                        status_err,
-                    )
-                try:
-                    await pipeline_tracker.track_pipeline_progress(
-                        document.id,
-                        ProcessingStage.FAILED,
-                        message=cancellation_message,
-                    )
-                except Exception as tracker_err:
-                    logger.warning(
-                        "Failed to update in-memory tracker for pre-start cancellation document=%s: %s",
-                        document.id,
-                        tracker_err,
-                    )
-                return
-
-            try:
-                job_tracker = JobAwarePipelineTracker(
-                    base_tracker=pipeline_tracker,
-                    job_id=job_id,
-                )
-                pdf_job_service.update_progress(
-                    job_id=job_id,
-                    stage=ProcessingStage.UPLOAD.value,
-                    progress_percentage=10,
-                    message="Processing started",
-                    status=PdfJobStatus.RUNNING.value,
-                )
-
-                async def _cancel_requested() -> bool:
-                    return pdf_job_service.is_cancel_requested(job_id=job_id)
-
-                async def _on_process_id(process_id: str) -> None:
-                    pdf_job_service.set_process_id(job_id=job_id, process_id=process_id)
-
-                connection = get_connection()
-                orchestrator = DocumentPipelineOrchestrator(
-                    weaviate_client=connection,
-                    tracker=job_tracker,
-                )
-                result = await orchestrator.process_pdf_document(
-                    file_path=saved_path,
-                    document_id=document.id,
-                    user_id=user_id,  # FR-011, FR-014: Pass user ID for tenant scoping
-                    validate_first=False,  # Already validated
-                    cancel_requested_callback=_cancel_requested,
-                    process_id_callback=_on_process_id,
-                )
-                logger.info('Document %s processing completed: %s', document.id, result)
-                success, cancelled, error_message = _normalize_pipeline_result(result)
-                if cancelled:
-                    try:
-                        await pipeline_tracker.track_pipeline_progress(
-                            document.id,
-                            ProcessingStage.FAILED,
-                            message=error_message or "Cancelled by user",
-                        )
-                    except Exception as tracker_err:
-                        logger.warning(
-                            "Failed to sync in-memory tracker for cancelled document=%s: %s",
-                            document.id,
-                            tracker_err,
-                        )
-                    pdf_job_service.mark_cancelled(
-                        job_id=job_id,
-                        reason=error_message or "Cancelled by user",
-                    )
-                elif success:
-                    try:
-                        await pipeline_tracker.track_pipeline_progress(
-                            document.id,
-                            ProcessingStage.COMPLETED,
-                            progress_percentage=100,
-                            message="Processing completed",
-                        )
-                    except Exception as tracker_err:
-                        logger.warning(
-                            "Failed to sync in-memory tracker for completed document=%s: %s",
-                            document.id,
-                            tracker_err,
-                        )
-                    pdf_job_service.mark_completed(job_id=job_id, message="Processing completed")
-                else:
-                    try:
-                        await pipeline_tracker.track_pipeline_progress(
-                            document.id,
-                            ProcessingStage.FAILED,
-                            message=error_message or "Processing failed",
-                        )
-                    except Exception as tracker_err:
-                        logger.warning(
-                            "Failed to sync in-memory tracker for failed document=%s: %s",
-                            document.id,
-                            tracker_err,
-                        )
-                    pdf_job_service.mark_failed(
-                        job_id=job_id,
-                        message=error_message or "Processing failed",
-                        stage=ProcessingStage.FAILED.value,
-                    )
-            except Exception as e:
-                logger.error('Error processing document %s: %s', document.id, e, exc_info=True)
-                # Update document status to failed
-                from ..lib.weaviate_client.documents import update_document_status
-                await update_document_status(document.id, user_id, "failed")
-                if isinstance(e, PDFCancellationError):
-                    pdf_job_service.mark_cancelled(job_id=job_id, reason=str(e))
-                else:
-                    pdf_job_service.mark_failed(
-                        job_id=job_id,
-                        message=str(e),
-                        stage=ProcessingStage.FAILED.value,
-                    )
-
-        # Add processing task to background
-        background_tasks.add_task(process_document)
+        # Start processing pipeline in background via runtime execution service.
+        execution_request = UploadExecutionRequest(
+            document_id=document.id,
+            job_id=job_id,
+            user_id=user["sub"],
+            file_path=saved_path,
+        )
+        await upload_execution_service.dispatch_upload_execution(
+            background_tasks=background_tasks,
+            request=execution_request,
+        )
 
         # T029: Return Document schema with ownership metadata (FR-014, FR-016)
         # Get tenant name for response
