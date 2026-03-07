@@ -22,9 +22,9 @@ services:
       start_period: 30s
     environment: &langfuse-worker-env
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:${LANGFUSE_HOST_PORT:-3000}}
-      DATABASE_URL: ${LANGFUSE_LOCAL_DATABASE_URL:-postgresql://postgres}${LANGFUSE_LOCAL_DATABASE_AUTH_SEP:-:}${LANGFUSE_LOCAL_DATABASE_AUTH:-postgres}${LANGFUSE_LOCAL_DATABASE_HOST_SEP:-@}${LANGFUSE_LOCAL_DATABASE_HOST:-postgres}:${LANGFUSE_LOCAL_DATABASE_PORT:-5432}/${LANGFUSE_LOCAL_DATABASE_NAME:-postgres}
-      SALT: ${LANGFUSE_LOCAL_SALT:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
-      ENCRYPTION_KEY: ${LANGFUSE_LOCAL_ENCRYPTION_KEY:-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+      DATABASE_URL: ${LANGFUSE_LOCAL_DATABASE_URL:-${LANGFUSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres}}
+      SALT: ${LANGFUSE_LOCAL_SALT:-${SALT:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}
+      ENCRYPTION_KEY: ${LANGFUSE_LOCAL_ENCRYPTION_KEY:-${ENCRYPTION_KEY:-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}}
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
       CLICKHOUSE_MIGRATION_URL: ${CLICKHOUSE_MIGRATION_URL:-clickhouse://clickhouse:9000}
@@ -72,7 +72,7 @@ services:
       - ${LANGFUSE_HOST_PORT:-3000}:3000
     environment:
       <<: *langfuse-worker-env
-      NEXTAUTH_SECRET: ${LANGFUSE_LOCAL_NEXTAUTH_SECRET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      NEXTAUTH_SECRET: ${LANGFUSE_LOCAL_NEXTAUTH_SECRET:-${NEXTAUTH_SECRET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-local-org}
       LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-Local AGR}
       LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-local-project}
@@ -156,8 +156,8 @@ services:
       # Langfuse Observability Configuration
       - LANGFUSE_HOST=http://langfuse:3000
       - LANGFUSE_PUBLIC_URL=${LANGFUSE_PUBLIC_URL:-}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-local-public-key-default}}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-local-secret-key-default}}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY:-pk-lf-local-public-key-default}}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_SECRET_KEY:-sk-lf-local-secret-key-default}}
       - WEAVIATE_HOST=${WEAVIATE_HOST:-weaviate}
       - WEAVIATE_PORT=${WEAVIATE_PORT:-8080}
       - WEAVIATE_SCHEME=${WEAVIATE_SCHEME:-http}

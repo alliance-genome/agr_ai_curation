@@ -100,6 +100,21 @@ stale_langfuse_database_url() {
   printf '%s://%s:%s@%s' "$scheme" "$user" "$password" "$host"
 }
 
+override_stale_database_url() {
+  local scheme="postgresql"
+  local user="old"
+  local password="old"
+  local host="old-db:5432/old"
+  password+="val"
+  printf '%s://%s:%s@%s' "$scheme" "$user" "$password" "$host"
+}
+
+stale_legacy_marker() {
+  local prefix="old_"
+  prefix+="legacy_"
+  printf '%s%s' "$prefix" "$1"
+}
+
 canonical_langfuse_url_regex() {
   local scheme="postgresql"
   local user="postgres"
@@ -271,45 +286,95 @@ EOF
   assert_contains "^LANGFUSE_LOCAL_DATABASE_URL=${canonical_langfuse_url_pattern}$" "$output_file"
 }
 
-test_direct_compose_ignores_stale_legacy_langfuse_vars() {
-  local temp_env output nextauth salt encryption stale_langfuse_url canonical_langfuse_url db_auth_value invalid_encryption_key placeholder_public_key placeholder_secret_key
+test_compose_uses_legacy_vars_when_local_not_set() {
+  # Production backward compat: when LANGFUSE_LOCAL_* vars are absent,
+  # compose falls through to legacy var names so EC2 deployments
+  # that run raw "docker compose up" still work.
+  local temp_env output db_auth_value legacy_salt legacy_encryption legacy_nextauth legacy_db_url legacy_public legacy_secret
   temp_env="$(mktemp)"
   trap 'rm -f "$temp_env"' RETURN
-  nextauth="$(repeat_char 'a' 64)"
-  salt="$(repeat_char 'b' 64)"
-  encryption="$(repeat_char 'c' 64)"
-  stale_langfuse_url="$(stale_langfuse_database_url)"
   db_auth_value="$(local_langfuse_database_auth)"
-  canonical_langfuse_url="$(canonical_langfuse_literal_url "$db_auth_value")"
-  invalid_encryption_key="$(invalid_langfuse_encryption_placeholder)"
-  placeholder_public_key="$(placeholder_langfuse_key public)"
-  placeholder_secret_key="$(placeholder_langfuse_key secret)"
+  legacy_salt="$(repeat_char 'd' 64)"
+  legacy_encryption="$(repeat_char 'e' 64)"
+  legacy_nextauth="$(repeat_char 'f' 64)"
+  legacy_db_url="$(canonical_langfuse_literal_url "$db_auth_value")"
+  legacy_public="pk-lf-$(repeat_char '4' 32)"
+  legacy_secret="sk-lf-$(repeat_char '5' 32)"
 
   cat >"$temp_env" <<EOF
 POSTGRES_PASSWORD=$db_auth_value
-ENCRYPTION_KEY=$invalid_encryption_key
-SALT=CHANGE_ME_RANDOM_SALT
-NEXTAUTH_SECRET=CHANGE_ME_RANDOM_SECRET
-LANGFUSE_DATABASE_URL=$stale_langfuse_url
-LANGFUSE_PUBLIC_KEY=$placeholder_public_key
-LANGFUSE_SECRET_KEY=$placeholder_secret_key
+SALT=$legacy_salt
+ENCRYPTION_KEY=$legacy_encryption
+NEXTAUTH_SECRET=$legacy_nextauth
+LANGFUSE_DATABASE_URL=$legacy_db_url
+LANGFUSE_PUBLIC_KEY=$legacy_public
+LANGFUSE_SECRET_KEY=$legacy_secret
 EOF
 
   output="$(docker compose --env-file "$temp_env" config)"
 
-  grep -q "DATABASE_URL: $canonical_langfuse_url" <<<"$output"
-  grep -q "ENCRYPTION_KEY: $encryption" <<<"$output"
-  grep -q "SALT: $salt" <<<"$output"
-  grep -q "NEXTAUTH_SECRET: $nextauth" <<<"$output"
-  grep -q 'LANGFUSE_PUBLIC_KEY: pk-lf-local-public-key-default' <<<"$output"
-  grep -q 'LANGFUSE_SECRET_KEY: sk-lf-local-secret-key-default' <<<"$output"
-  ! grep -q "$stale_langfuse_url" <<<"$output"
-  ! grep -q "$invalid_encryption_key" <<<"$output"
+  grep -q "SALT: $legacy_salt" <<<"$output"
+  grep -q "ENCRYPTION_KEY: $legacy_encryption" <<<"$output"
+  grep -q "NEXTAUTH_SECRET: $legacy_nextauth" <<<"$output"
+  grep -q "DATABASE_URL: $legacy_db_url" <<<"$output"
+  grep -q "LANGFUSE_PUBLIC_KEY: $legacy_public" <<<"$output"
+  grep -q "LANGFUSE_SECRET_KEY: $legacy_secret" <<<"$output"
+}
+
+test_compose_local_vars_override_legacy() {
+  # When LANGFUSE_LOCAL_* vars are set (repaired env), they take
+  # precedence over legacy vars.
+  local temp_env output db_auth_value local_salt local_encryption local_nextauth local_db_url local_public local_secret
+  local stale_salt stale_encryption stale_nextauth stale_db_url stale_public stale_secret stale_marker
+  temp_env="$(mktemp)"
+  trap 'rm -f "$temp_env"' RETURN
+  db_auth_value="$(local_langfuse_database_auth)"
+  local_salt="$(repeat_char 'd' 64)"
+  local_encryption="$(repeat_char 'e' 64)"
+  local_nextauth="$(repeat_char 'f' 64)"
+  local_db_url="$(canonical_langfuse_literal_url "$db_auth_value")"
+  local_public="pk-lf-$(repeat_char '4' 32)"
+  local_secret="sk-lf-$(repeat_char '5' 32)"
+  stale_salt="$(stale_legacy_marker salt)"
+  stale_encryption="$(stale_legacy_marker encryption)"
+  stale_nextauth="$(stale_legacy_marker nextauth)"
+  stale_db_url="$(override_stale_database_url)"
+  stale_public="$(stale_legacy_marker public)"
+  stale_secret="$(stale_legacy_marker secret)"
+  stale_marker="$(stale_legacy_marker "")"
+
+  cat >"$temp_env" <<EOF
+POSTGRES_PASSWORD=$db_auth_value
+SALT=$stale_salt
+ENCRYPTION_KEY=$stale_encryption
+NEXTAUTH_SECRET=$stale_nextauth
+LANGFUSE_DATABASE_URL=$stale_db_url
+LANGFUSE_PUBLIC_KEY=$stale_public
+LANGFUSE_SECRET_KEY=$stale_secret
+LANGFUSE_LOCAL_SALT=$local_salt
+LANGFUSE_LOCAL_ENCRYPTION_KEY=$local_encryption
+LANGFUSE_LOCAL_NEXTAUTH_SECRET=$local_nextauth
+LANGFUSE_LOCAL_DATABASE_URL=$local_db_url
+LANGFUSE_LOCAL_PUBLIC_KEY=$local_public
+LANGFUSE_LOCAL_SECRET_KEY=$local_secret
+EOF
+
+  output="$(docker compose --env-file "$temp_env" config)"
+
+  grep -q "SALT: $local_salt" <<<"$output"
+  grep -q "ENCRYPTION_KEY: $local_encryption" <<<"$output"
+  grep -q "NEXTAUTH_SECRET: $local_nextauth" <<<"$output"
+  grep -q "DATABASE_URL: $local_db_url" <<<"$output"
+  grep -q "LANGFUSE_PUBLIC_KEY: $local_public" <<<"$output"
+  grep -q "LANGFUSE_SECRET_KEY: $local_secret" <<<"$output"
+  ! grep -q "$stale_marker" <<<"$output"
+  ! grep -q "old-db" <<<"$output"
 }
 
 test_repairs_stale_langfuse_values
 test_preserves_valid_values
 test_load_home_test_env_repairs_before_export
-test_direct_compose_ignores_stale_legacy_langfuse_vars
+test_compose_uses_legacy_vars_when_local_not_set
+test_compose_local_vars_override_legacy
 
 echo "ensure_local_langfuse_env tests passed"
