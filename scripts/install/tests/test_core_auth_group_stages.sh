@@ -69,6 +69,25 @@ run_group_setup() {
   HOME="$home_dir" INSTALL_GROUPS_OUTPUT_PATH="$groups_output_path" bash "$group_setup_script" <<<"$input_text"
 }
 
+run_group_setup_expect_fail() {
+  local home_dir="$1"
+  local groups_output_path="$2"
+  local input_text="$3"
+  local output_path="$4"
+  local rc=0
+
+  set +e
+  HOME="$home_dir" INSTALL_GROUPS_OUTPUT_PATH="$groups_output_path" bash "$group_setup_script" <<<"$input_text" >"$output_path" 2>&1
+  rc=$?
+  set -e
+
+  if [[ "$rc" -eq 0 ]]; then
+    echo "Expected group setup to fail but it succeeded" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
 test_core_config_generates_env_and_backups() {
   local temp_home
   temp_home="$(mktemp -d)"
@@ -181,6 +200,52 @@ test_group_setup_modes_and_backup() {
   assert_contains '      - "myorg-admins"' "$groups_output_path"
 }
 
+test_group_setup_mode_one_handles_slash_group_claim() {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$temp_home"' RETURN
+
+  local groups_output_path="${temp_home}/groups-with-slash-claim.yaml"
+
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org\nclient-id\nclient-secret\nhttps://app.example.org/auth/callback\nrealm_access/roles\n'
+  run_group_setup "$temp_home" "$groups_output_path" $'1\n'
+
+  assert_contains '^  group_claim: "realm_access/roles"$' "$groups_output_path"
+}
+
+test_group_setup_rejects_invalid_custom_group_id() {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$temp_home"' RETURN
+
+  local groups_output_path="${temp_home}/groups-invalid-custom-id.yaml"
+  local output_path="${temp_home}/group-setup-invalid.log"
+
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_auth_setup "$temp_home" $'1\n'
+  run_group_setup_expect_fail "$temp_home" "$groups_output_path" $'3\nMY:ORG\nName\nDescription\nHomo sapiens\nNCBITaxon:9606\ngroup-one\n' "$output_path"
+
+  assert_contains 'Group ID must match \[A-Za-z0-9_]\+' "$output_path"
+}
+
+test_group_setup_escapes_yaml_double_quotes() {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$temp_home"' RETURN
+
+  local groups_output_path="${temp_home}/groups-escaped-values.yaml"
+
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org\nclient-id\nclient-secret\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
+  run_group_setup "$temp_home" "$groups_output_path" $'3\nMYORG\nMy "Org"\nDesc with "quotes"\nHomo "sapiens"\nNCBITaxon:9606\ngroup "one",group-two\n'
+
+  assert_contains '    name: "My \\"Org\\""' "$groups_output_path"
+  assert_contains '    description: "Desc with \\"quotes\\""' "$groups_output_path"
+  assert_contains '    species: "Homo \\"sapiens\\""' "$groups_output_path"
+  assert_contains '      - "group \\"one\\""' "$groups_output_path"
+}
+
 test_orchestrator_skip_flags() {
   local temp_home
   temp_home="$(mktemp -d)"
@@ -206,6 +271,9 @@ test_orchestrator_skip_flags() {
 test_core_config_generates_env_and_backups
 test_auth_setup_dev_and_oidc
 test_group_setup_modes_and_backup
+test_group_setup_mode_one_handles_slash_group_claim
+test_group_setup_rejects_invalid_custom_group_id
+test_group_setup_escapes_yaml_double_quotes
 test_orchestrator_skip_flags
 
 echo "core/auth/group installer stage checks passed"

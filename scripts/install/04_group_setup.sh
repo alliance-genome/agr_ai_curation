@@ -18,6 +18,29 @@ trim() {
   printf '%s\n' "$value"
 }
 
+escape_sed_replacement() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//&/\\&}"
+  value="${value//|/\\|}"
+  printf '%s\n' "$value"
+}
+
+yaml_escape_double_quoted() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s\n' "$value"
+}
+
+validate_group_id() {
+  local group_id="$1"
+  if [[ ! "$group_id" =~ ^[A-Za-z0-9_]+$ ]]; then
+    log_error "Group ID must match [A-Za-z0-9_]+"
+    return 1
+  fi
+}
+
 prompt_group_mode() {
   local response=""
 
@@ -92,23 +115,34 @@ append_custom_group_block() {
   local species="$5"
   local taxon="$6"
   local provider_groups_csv="$7"
+  local escaped_display_name
+  local escaped_description
+  local escaped_species
+  local escaped_taxon
+
+  escaped_display_name="$(yaml_escape_double_quoted "$display_name")"
+  escaped_description="$(yaml_escape_double_quoted "$description")"
+  escaped_species="$(yaml_escape_double_quoted "$species")"
+  escaped_taxon="$(yaml_escape_double_quoted "$taxon")"
 
   printf 'groups:\n' >>"$file_path"
   printf '  %s:\n' "$group_id" >>"$file_path"
-  printf '    name: "%s"\n' "$display_name" >>"$file_path"
-  printf '    description: "%s"\n' "$description" >>"$file_path"
-  printf '    species: "%s"\n' "$species" >>"$file_path"
-  printf '    taxon: "%s"\n' "$taxon" >>"$file_path"
+  printf '    name: "%s"\n' "$escaped_display_name" >>"$file_path"
+  printf '    description: "%s"\n' "$escaped_description" >>"$file_path"
+  printf '    species: "%s"\n' "$escaped_species" >>"$file_path"
+  printf '    taxon: "%s"\n' "$escaped_taxon" >>"$file_path"
   printf '    provider_groups:\n' >>"$file_path"
 
   local token
   local rendered_any=0
+  local escaped_token
   IFS=',' read -r -a tokens <<<"$provider_groups_csv"
   for token in "${tokens[@]}"; do
     token="$(trim "$token")"
     if [[ -n "$token" ]]; then
       rendered_any=1
-      printf '      - "%s"\n' "$token" >>"$file_path"
+      escaped_token="$(yaml_escape_double_quoted "$token")"
+      printf '      - "%s"\n' "$escaped_token" >>"$file_path"
     fi
   done
 
@@ -155,8 +189,12 @@ main() {
 
   case "$mode" in
     1)
-      sed -e "s/__AUTH_TYPE__/${auth_type}/g" \
-          -e "s/__GROUP_CLAIM__/${group_claim}/g" \
+      local escaped_auth_type
+      local escaped_group_claim
+      escaped_auth_type="$(escape_sed_replacement "$auth_type")"
+      escaped_group_claim="$(escape_sed_replacement "$group_claim")"
+      sed -e "s|__AUTH_TYPE__|${escaped_auth_type}|g" \
+          -e "s|__GROUP_CLAIM__|${escaped_group_claim}|g" \
           "$groups_template_path" >"$tmp_output"
       ;;
     2)
@@ -188,6 +226,7 @@ main() {
       local custom_provider_groups
 
       custom_group_id="$(prompt_required_value "Custom group ID (example: MYORG)")"
+      validate_group_id "$custom_group_id"
       custom_name="$(prompt_required_value "Display name")"
       custom_description="$(prompt_required_value "Description")"
       custom_species="$(prompt_required_value "Species")"
