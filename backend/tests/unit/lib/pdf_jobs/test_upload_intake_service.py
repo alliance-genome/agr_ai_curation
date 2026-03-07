@@ -161,6 +161,7 @@ async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(t
     )
     session = _FakeSession(execute_row=existing)
     dispatch = _DispatchRecorder()
+    create_job_calls = []
 
     async def _get_document(_user_sub, _document_id):
         return {"document": {"id": _document_id}}
@@ -175,7 +176,7 @@ async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(t
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=_get_document,
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
-        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        create_job_fn=lambda **kwargs: create_job_calls.append(kwargs) or SimpleNamespace(job_id="job-1"),
         tenant_name_resolver=lambda _sub: "tenant-user-1",
     )
 
@@ -188,6 +189,8 @@ async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(t
 
     assert exc.value.detail["error"] == "duplicate_file"
     assert session.deleted == []
+    assert create_job_calls == []
+    assert dispatch.calls == []
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()
     assert not any(user_dir.iterdir())
@@ -282,6 +285,220 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
     assert user_dir.exists()
     assert not any(user_dir.iterdir())
     assert not dispatch.calls
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_generic_commit_failure_rolls_back_and_cleans_up(tmp_path):
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    dispatch = _DispatchRecorder()
+    delete_document_calls = []
+
+    async def _delete_document(user_sub, document_id):
+        delete_document_calls.append((user_sub, document_id))
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.rollbacks == 1
+    assert len(delete_document_calls) == 1
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+    assert not dispatch.calls
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_runtime_error_rolls_back_and_compensates_without_dispatch(tmp_path):
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    dispatch = _DispatchRecorder()
+    delete_document_calls = []
+    create_job_calls = []
+
+    async def _delete_document(user_sub, document_id):
+        delete_document_calls.append((user_sub, document_id))
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **kwargs: create_job_calls.append(kwargs) or SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.rollbacks == 1
+    assert len(delete_document_calls) == 1
+    assert delete_document_calls[0][0] == "user-1"
+    assert create_job_calls == []
+    assert dispatch.calls == []
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_runtime_error_preserves_original_exception_when_cleanup_fails(tmp_path):
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    dispatch = _DispatchRecorder()
+
+    async def _delete_document(*_args, **_kwargs):
+        raise RuntimeError("cleanup failed")
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.rollbacks == 1
+    assert dispatch.calls == []
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_cleans_artifacts(tmp_path):
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    delete_document_calls = []
+
+    async def _delete_document(user_sub, document_id):
+        delete_document_calls.append((user_sub, document_id))
+
+    def _boom_on_add(_row):
+        raise RuntimeError("sql write failed")
+
+    session.add = _boom_on_add
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="sql write failed"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.rollbacks == 1
+    assert len(delete_document_calls) == 1
+    assert not dispatch.calls
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_files(tmp_path):
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, cleanup_session]
+    dispatch = _DispatchRecorder()
+    delete_document_calls = []
+
+    async def _delete_document(user_sub, document_id):
+        delete_document_calls.append((user_sub, document_id))
+
+    def _session_factory():
+        assert sessions, "session_factory called more times than expected"
+        return sessions.pop(0)
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=_session_factory,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="job row failed"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert initial_session.commit_calls == 1
+    assert cleanup_session.deleted == [persisted_record]
+    assert cleanup_session.commit_calls == 1
+    assert len(delete_document_calls) == 1
+    assert not dispatch.calls
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
 
 
 def _async_value(value):

@@ -218,11 +218,20 @@ class UploadIntakeService:
         finally:
             session.close()
 
-        job = self._create_job(
-            document_id=document.id,
-            user_id=db_user.id,
-            filename=document.filename,
-        )
+        try:
+            job = self._create_job(
+                document_id=document.id,
+                user_id=db_user.id,
+                filename=document.filename,
+            )
+        except Exception:
+            await self._compensate_job_creation_failure(
+                user_sub=user_sub,
+                document_id=str(document.id),
+                saved_path=saved_path,
+                weaviate_document_created=weaviate_document_created,
+            )
+            raise
         job_id = job.job_id
 
         execution_request = UploadExecutionRequest(
@@ -249,6 +258,45 @@ class UploadIntakeService:
             weaviate_tenant=self._tenant_name_resolver(user_sub),
             chunk_count=None,
             error_message=None,
+        )
+
+    async def _compensate_job_creation_failure(
+        self,
+        *,
+        user_sub: str,
+        document_id: str,
+        saved_path: Path,
+        weaviate_document_created: bool,
+    ) -> None:
+        cleanup_session = self._session_factory()
+        try:
+            persisted = (
+                cleanup_session.execute(
+                    select(ViewerPDFDocument).where(
+                        ViewerPDFDocument.id == uuid.UUID(str(document_id)),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if persisted:
+                cleanup_session.delete(persisted)
+                cleanup_session.commit()
+        except Exception as cleanup_err:
+            cleanup_session.rollback()
+            logger.warning(
+                "Best-effort SQL cleanup failed after durable job creation error for document %s: %s",
+                document_id,
+                cleanup_err,
+            )
+        finally:
+            cleanup_session.close()
+
+        await self._compensate_persistence_failure(
+            user_sub=user_sub,
+            document_id=document_id,
+            saved_path=saved_path,
+            weaviate_document_created=weaviate_document_created,
         )
 
     async def _resolve_phantom_duplicate(

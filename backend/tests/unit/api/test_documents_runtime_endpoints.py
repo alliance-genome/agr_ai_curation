@@ -514,6 +514,96 @@ async def test_stream_document_progress_emits_final_completed_event(monkeypatch)
     assert '"final": true' in payload
 
 
+@pytest.mark.asyncio
+async def test_stream_document_progress_prefers_terminal_cancelled_job_snapshot(monkeypatch):
+    now = datetime.now(timezone.utc)
+    doc_id = str(uuid4())
+
+    async def _status(*_args, **_kwargs):
+        return PipelineStatus(
+            document_id=doc_id,
+            current_stage=ProcessingStage.COMPLETED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=100,
+            message="stale completion",
+        )
+
+    monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
+    monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "5")
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="cancelled",
+            current_stage="cancelled",
+            progress_percentage=64,
+            message="Cancelled by user",
+            updated_at=now,
+        ),
+    )
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
+
+    response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
+    payload = await _collect_stream(response)
+    assert '"source": "job"' in payload
+    assert '"stage": "failed"' in payload
+    assert "Cancelled by user" in payload
+    assert '"final": true' in payload
+
+
+@pytest.mark.asyncio
+async def test_stream_document_progress_prefers_terminal_cancelled_job_over_stale_pipeline(monkeypatch):
+    now = datetime.now(timezone.utc)
+    doc_id = str(uuid4())
+
+    async def _status(*_args, **_kwargs):
+        return PipelineStatus(
+            document_id=doc_id,
+            current_stage=ProcessingStage.COMPLETED,
+            started_at=now,
+            updated_at=now,
+            progress_percentage=100,
+            message="stale pipeline success",
+        )
+
+    monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
+    monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "5")
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="cancelled",
+            current_stage="cancelled",
+            progress_percentage=61,
+            message="Processing cancelled",
+            error_message=None,
+            updated_at=now,
+            started_at=now,
+            completed_at=now,
+            document_id=doc_id,
+        ),
+    )
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
+
+    response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
+    payload = await _collect_stream(response)
+
+    assert '"stage": "failed"' in payload
+    assert '"source": "job"' in payload
+    assert '"final": true' in payload
+
+
 def _async_value(value):
     async def _coro(*_args, **_kwargs):
         return value

@@ -159,6 +159,21 @@ class UploadExecutionService:
             await self._handle_pre_start_cancellation(request)
             return
 
+        existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+        if existing_job and existing_job.status in {
+            PdfJobStatus.RUNNING.value,
+            PdfJobStatus.CANCEL_REQUESTED.value,
+            PdfJobStatus.COMPLETED.value,
+            PdfJobStatus.FAILED.value,
+            PdfJobStatus.CANCELLED.value,
+        }:
+            logger.info(
+                "Skipping replayed upload execution for job %s with durable status %s",
+                request.job_id,
+                existing_job.status,
+            )
+            return
+
         try:
             job_tracker = JobAwarePipelineTracker(
                 base_tracker=self.pipeline_tracker,
