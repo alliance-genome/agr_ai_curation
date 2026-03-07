@@ -35,18 +35,18 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 
 2. **Configure environment**
    ```bash
-   cp .env.example .env
-   # Edit .env with your API keys and settings
+   make setup
+   # Edit ~/.agr_ai_curation/.env with your API keys and settings
    ```
 
-   At minimum, set these values in `.env`:
+   At minimum, set these values in `~/.agr_ai_curation/.env`:
    ```
    OPENAI_API_KEY=your_openai_api_key_here
    ```
 
 3. **Start the services**
    ```bash
-   docker compose up -d
+   make dev-detached
    ```
 
 4. **Access the application**

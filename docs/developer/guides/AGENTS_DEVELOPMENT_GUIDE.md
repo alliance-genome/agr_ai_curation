@@ -32,7 +32,7 @@ Comprehensive reference for the AGR AI Curation multi-agent architecture. Covers
 
 ### Local stack & data access
 
-- **Environment file** -- Run `make setup` once. This copies `.env.example` to `~/.agr_ai_curation/.env` (600 permissions) so secrets stay outside git.
+- **Environment file** -- Run `make setup` once. This copies `.env.example` to `~/.agr_ai_curation/.env` (600 permissions), then repairs Langfuse-critical local values so secrets stay outside git and the local observability stack stays healthy.
 - **Start everything** -- `make dev` (foreground) or `make dev-detached`. Services come up on:
   - Backend FastAPI: `http://localhost:8000`
   - Agent Studio (React): `http://localhost:3002/agent-studio` (set `DEV_MODE=true` in your env to bypass Cognito locally)

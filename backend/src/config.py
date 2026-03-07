@@ -17,9 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # REQUIRED location: ~/.agr_ai_curation/.env
 #
 # Setup:
-#   mkdir -p ~/.agr_ai_curation
-#   cp .env.example ~/.agr_ai_curation/.env
-#   chmod 600 ~/.agr_ai_curation/.env
+#   make setup
+#   # or, for manual repair of an existing home env:
+#   ./scripts/utilities/ensure_local_langfuse_env.sh ~/.agr_ai_curation/.env
 
 _env_loaded_from: Optional[str] = None
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Warn if .env not found in required location
 if not _env_loaded_from:
     print("[config] WARNING: No .env file found at ~/.agr_ai_curation/.env")
-    print("[config] Copy .env.example to ~/.agr_ai_curation/.env and fill in values")
+    print("[config] Run 'make setup' to create and normalize ~/.agr_ai_curation/.env")
 
 
 class ConfigurationError(Exception):
@@ -261,7 +261,7 @@ def validate_configuration(require_openai: bool = False) -> bool:
         errors.append("CHUNK_OVERLAP must be less than MAX_CHUNK_SIZE")
 
     if errors:
-        raise ConfigurationError(f"Configuration validation failed:\n" + "\n".join(errors))
+        raise ConfigurationError("Configuration validation failed:\n" + "\n".join(errors))
 
     return True
 

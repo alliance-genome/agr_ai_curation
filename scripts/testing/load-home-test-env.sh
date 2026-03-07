@@ -21,6 +21,10 @@ candidate_files+=(
   "${HOME}/.agr_ai_curation/.env"
 )
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+langfuse_env_repair_script="${repo_root}/scripts/utilities/ensure_local_langfuse_env.sh"
+
 loaded_env_file=""
 for env_file in "${candidate_files[@]}"; do
   if [[ -f "${env_file}" ]]; then
@@ -35,6 +39,10 @@ if [[ -z "${loaded_env_file}" ]]; then
     return 0
   fi
   exit 0
+fi
+
+if [[ -x "${langfuse_env_repair_script}" ]]; then
+  bash "${langfuse_env_repair_script}" "${loaded_env_file}" >/dev/null
 fi
 
 # Parse only KEY=VALUE (or export KEY=VALUE) lines.

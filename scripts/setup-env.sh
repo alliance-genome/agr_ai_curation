@@ -27,6 +27,7 @@ CONFIG_DIR="$HOME/.agr_ai_curation"
 TRACE_REVIEW_CONFIG_DIR="$CONFIG_DIR/trace_review"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+LANGFUSE_ENV_REPAIR_SCRIPT="$REPO_ROOT/scripts/utilities/ensure_local_langfuse_env.sh"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}AI Curation Platform - Environment Setup${NC}"
@@ -82,6 +83,11 @@ echo ""
 echo -e "${BLUE}Verification:${NC}"
 echo ""
 if [ -f "$CONFIG_DIR/.env" ]; then
+    if [ -x "$LANGFUSE_ENV_REPAIR_SCRIPT" ]; then
+        echo -e "${GREEN}Normalizing local Langfuse env values...${NC}"
+        "$LANGFUSE_ENV_REPAIR_SCRIPT" "$CONFIG_DIR/.env"
+        echo ""
+    fi
     echo -e "  ${GREEN}✓${NC} $CONFIG_DIR/.env"
     ls -la "$CONFIG_DIR/.env" | awk '{print "    " $1 " " $9}'
 else
