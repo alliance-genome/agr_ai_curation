@@ -129,6 +129,11 @@ test_pdfx_setup_clones_and_generates_env() {
     cat "$output_path" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "$pdfx_env")" == "600" ]] || {
+    echo "Expected PDFX env permissions 600, got $(stat -c '%a' "$pdfx_env")" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
 
   assert_contains '^OPENAI_API_KEY=sk-openai-test$' "$pdfx_env"
   assert_contains '^DOCLING_DEVICE=cuda$' "$pdfx_env"
