@@ -118,6 +118,7 @@ test_pdfx_setup_clones_and_generates_env() {
 
   local pdfx_env="${clone_path}/.env"
   local main_env="${temp_home}/.agr_ai_curation/.env"
+  local pdfx_state="${temp_home}/.agr_ai_curation/.install_pdfx.env"
 
   [[ -f "${clone_path}/.git-cloned" ]] || {
     echo "Expected stub clone artifact at ${clone_path}/.git-cloned" >&2
@@ -146,6 +147,8 @@ test_pdfx_setup_clones_and_generates_env() {
   assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:8501$' "$main_env"
   assert_contains '^PDF_EXTRACTION_METHODS=grobid,marker$' "$main_env"
   assert_contains '^PDF_EXTRACTION_MERGE=true$' "$main_env"
+  assert_contains "^INSTALL_PDFX_CLONE_PATH=${clone_path}$" "$pdfx_state"
+  assert_contains '^INSTALL_PDFX_PORT=8501$' "$pdfx_state"
 }
 
 test_pdfx_setup_handles_port_conflict() {
@@ -187,9 +190,15 @@ test_pdfx_setup_skip_removes_main_env_vars() {
   run_pdfx_setup "$temp_home" "$stub_dir" $'n\n' "$output_path"
 
   local main_env="${temp_home}/.agr_ai_curation/.env"
+  local pdfx_state="${temp_home}/.agr_ai_curation/.install_pdfx.env"
   assert_not_contains '^PDF_EXTRACTION_SERVICE_URL=' "$main_env"
   assert_not_contains '^PDF_EXTRACTION_METHODS=' "$main_env"
   assert_not_contains '^PDF_EXTRACTION_MERGE=' "$main_env"
+  [[ ! -f "$pdfx_state" ]] || {
+    echo "Expected PDFX state file to be removed when setup is skipped" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
 }
 
 test_pdfx_setup_clones_and_generates_env
