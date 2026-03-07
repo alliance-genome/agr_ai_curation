@@ -2,7 +2,6 @@
 
 from datetime import datetime, timezone
 from io import BytesIO
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -10,6 +9,11 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 
 from src.api import documents
+from src.lib.pdf_jobs.upload_intake_service import (
+    UploadIntakeDuplicateError,
+    UploadIntakeResult,
+    UploadIntakeValidationError,
+)
 from src.lib.pdf_jobs.upload_execution_service import normalize_pipeline_result
 from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
@@ -386,9 +390,14 @@ async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_upload_document_endpoint_rejects_non_pdf():
+async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch):
     background_tasks = BackgroundTasks()
     upload = UploadFile(filename="notes.txt", file=BytesIO(b"text"))
+
+    async def _raise_validation(**_kwargs):
+        raise UploadIntakeValidationError("File must be a PDF. Got: notes.txt")
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_validation)
 
     with pytest.raises(HTTPException) as exc:
         await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
@@ -396,61 +405,60 @@ async def test_upload_document_endpoint_rejects_non_pdf():
 
 
 @pytest.mark.asyncio
-async def test_upload_document_endpoint_happy_path(monkeypatch, tmp_path):
-    session = _FakeSession(execute_doc=None)
-    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
-    monkeypatch.setattr(documents, "_require_pdf_extraction_worker_ready", lambda: _async_value(None))
-    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: Path(tmp_path))
-    monkeypatch.setattr(
-        "src.services.user_service.principal_from_claims",
-        lambda _claims: SimpleNamespace(subject="user-1"),
-    )
-    monkeypatch.setattr(
-        "src.services.user_service.provision_user",
-        lambda *_args, **_kwargs: SimpleNamespace(id=99),
-    )
-    monkeypatch.setattr(documents, "create_document", lambda *_args, **_kwargs: _async_value(None))
-    monkeypatch.setattr(
-        documents.pdf_job_service,
-        "create_job",
-        lambda **_kwargs: SimpleNamespace(job_id="job-1"),
-    )
-    monkeypatch.setattr(documents, "get_tenant_name", lambda _sub: "tenant-user-1")
-    monkeypatch.setattr(
-        documents.pipeline_tracker,
-        "track_pipeline_progress",
-        lambda *_args, **_kwargs: _async_value(None),
-    )
-
-    class _FakeUploadHandler:
-        def __init__(self, storage_path):
-            self.storage_path = storage_path
-
-        async def save_uploaded_pdf(self, file):
-            doc_id = str(uuid4())
-            doc_dir = self.storage_path / doc_id
-            doc_dir.mkdir(parents=True, exist_ok=True)
-            saved_path = doc_dir / file.filename
-            saved_path.write_bytes(b"%PDF-1.7")
-            doc = SimpleNamespace(
-                id=doc_id,
-                filename=file.filename,
-                metadata=SimpleNamespace(checksum="checksum-1", page_count=3),
-            )
-            return saved_path, doc
-
-    monkeypatch.setattr(documents, "PDFUploadHandler", _FakeUploadHandler)
-
+async def test_upload_document_endpoint_happy_path(monkeypatch):
     background_tasks = BackgroundTasks()
     upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
+    captured = {}
+
+    async def _intake_upload(**kwargs):
+        captured.update(kwargs)
+        return UploadIntakeResult(
+            document_id="doc-1",
+            job_id="job-1",
+            user_id=99,
+            filename="paper.pdf",
+            status="PENDING",
+            upload_timestamp=datetime.now(timezone.utc),
+            processing_started_at=None,
+            processing_completed_at=None,
+            file_size_bytes=7,
+            weaviate_tenant="tenant-user-1",
+            chunk_count=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _intake_upload)
     response = await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
 
     assert response.user_id == 99
     assert response.filename == "paper.pdf"
     assert response.status == "PENDING"
     assert response.weaviate_tenant == "tenant-user-1"
-    assert len(background_tasks.tasks) == 1
-    assert session.commits >= 1
+    assert captured["background_tasks"] is background_tasks
+    assert captured["file"] is upload
+    assert captured["user"] == {"sub": "user-1"}
+
+
+@pytest.mark.asyncio
+async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch):
+    background_tasks = BackgroundTasks()
+    upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
+
+    async def _raise_duplicate(**_kwargs):
+        raise UploadIntakeDuplicateError(
+            {
+                "error": "duplicate_file",
+                "message": "already uploaded",
+                "existing_document_id": "doc-1",
+            }
+        )
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_duplicate)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"] == "duplicate_file"
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,6 @@ from pathlib import Path as FilePath
 import logging
 import asyncio
 import json
-import hashlib
 import uuid
 import os
 import shutil
@@ -41,22 +40,23 @@ from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
     get_document,
     delete_document,
-    create_document
 )
-from ..lib.pipeline.upload import PDFUploadHandler
 from ..lib.pipeline.tracker import PipelineTracker
 from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
-    UploadExecutionRequest,
     UploadExecutionService,
+)
+from ..lib.pdf_jobs.upload_intake_service import (
+    UploadIntakeDuplicateError,
+    UploadIntakeService,
+    UploadIntakeValidationError,
 )
 from ..config import get_pdf_storage_path
 from ..models.sql.database import SessionLocal
 from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
 from ..models.sql.pdf_processing_job import PdfJobStatus
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 
@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
 pipeline_tracker = PipelineTracker()
 upload_execution_service = UploadExecutionService(pipeline_tracker=pipeline_tracker)
+upload_intake_service = UploadIntakeService(upload_execution_service=upload_execution_service)
 
 _pdf_extraction_service_token: Optional[str] = None
 _pdf_extraction_service_token_expires_at: float = 0.0
@@ -1113,197 +1114,29 @@ async def upload_document_endpoint(
         - T029: Return Document schema with ownership metadata (user_id, weaviate_tenant)
     """
     try:
-        # Validate file is PDF
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=400,
-                detail=f"File must be a PDF. Got: {file.filename}"
-            )
-
-        # T029: Use user-specific storage path (FR-012)
-        # Create: pdf_storage/{user_id}/
-        base_storage = get_pdf_storage_path()
-        user_storage_path = base_storage / user["sub"]  # User-specific directory
-        user_storage_path.mkdir(parents=True, exist_ok=True)
-
-        # Create upload handler with user-specific path
-        upload_handler = PDFUploadHandler(storage_path=user_storage_path)
-
-        # Save uploaded file and create document
-        saved_path, document = await upload_handler.save_uploaded_pdf(file)
-
-        # T029: CRITICAL - Provision user and tenant BEFORE Weaviate operations
-        # This ensures provision_weaviate_tenants() runs before create_document()
-        from src.services.user_service import principal_from_claims, provision_user
-
-        session = SessionLocal()
-        try:
-            # Ensure user exists in database and provision Weaviate tenants
-            db_user = provision_user(session, principal_from_claims(user))
-
-            # Use a user-scoped hash so different users can upload identical files
-            # without colliding on the legacy globally-unique file_hash constraint.
-            raw_checksum = document.metadata.checksum
-            scoped_file_hash = hashlib.sha256(
-                f"{db_user.id}:{raw_checksum}".encode("utf-8")
-            ).hexdigest()
-
-            # Check for duplicate file BEFORE creating Weaviate document.
-            # Include legacy raw-hash rows for backward compatibility.
-            existing = (
-                session.execute(
-                    select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.user_id == db_user.id,
-                        or_(
-                            ViewerPDFDocument.file_hash == scoped_file_hash,
-                            ViewerPDFDocument.file_hash == raw_checksum,
-                        )
-                    )
-                )
-                .scalars()
-                .first()
-            )
-
-            if existing:
-                # Phase 2 Fix: Check for "Phantom" document (exists in PG but not Weaviate)
-                try:
-                    # Check if the OLD document exists in Weaviate
-                    existing_weaviate_doc = await get_document(user["sub"], str(existing.id))
-                    if not existing_weaviate_doc:
-                        logger.warning('Phantom document detected (Hash match in PG, missing in Weaviate): %s. Cleaning up old record.', existing.id)
-
-                        # Delete the phantom PG record
-                        session.delete(existing)
-                        session.commit()
-
-                        # Clear 'existing' so we don't trigger the 409 error
-                        existing = None
-                except ValueError as not_found_err:
-                    # Document not found in Weaviate - this IS a phantom document
-                    # get_document raises ValueError when document doesn't exist
-                    logger.warning('Phantom document detected (ValueError - not in Weaviate): %s. Cleaning up: %s', existing.id, not_found_err)
-
-                    # Delete the phantom PG record
-                    session.delete(existing)
-                    session.commit()
-
-                    # Clear 'existing' so we don't trigger the 409 error
-                    existing = None
-                except Exception as check_err:
-                    logger.error('Error checking phantom status: %s', check_err)
-                    # If check fails for OTHER reasons, we conservatively assume it's a real duplicate
-
-                if existing:
-                    # Cleanup: Remove the newly uploaded file since it's a duplicate
-                    if saved_path.exists():
-                        # Remove the document directory (contains the PDF)
-                        shutil.rmtree(saved_path.parent)
-
-                    raise HTTPException(
-                        status_code=409,  # Conflict
-                        detail={
-                            "error": "duplicate_file",
-                            "message": f"This file has already been uploaded on {existing.upload_timestamp.strftime('%B %d, %Y at %I:%M %p')}",
-                            "existing_document_id": str(existing.id),
-                            "uploaded_at": existing.upload_timestamp.isoformat(),
-                            "suggestion": "If you want to re-process this file, delete the existing document first and then upload again."
-                        }
-                    )
-
-            # T029: Store document in tenant-scoped Weaviate collection (FR-011, FR-013)
-            # Now this will succeed because tenant exists
-            await create_document(user["sub"], document)
-
-            # Calculate relative path from user storage directory
-            relative_path = saved_path.relative_to(base_storage)  # Includes {user_id}/ prefix
-
-            record = ViewerPDFDocument(
-                id=uuid.UUID(document.id),
-                filename=document.filename,
-                file_path=str(relative_path).replace('\\', '/'),
-                file_hash=scoped_file_hash,
-                file_size=saved_path.stat().st_size,
-                page_count=max(document.metadata.page_count, 1),
-                user_id=db_user.id,  # T029: Track document ownership (FR-016)
-            )
-            session.add(record)
-            session.commit()
-        except IntegrityError as integrity_error:
-            session.rollback()
-            logger.warning(
-                "Integrity error persisting PDF metadata for document %s (user_id=%s): %s",
-                document.id,
-                db_user.id,
-                integrity_error,
-            )
-
-            # Keep Weaviate/PostgreSQL in sync: if SQL persistence fails after creating
-            # the Weaviate document, remove the Weaviate object to avoid orphan records.
-            try:
-                await delete_document(user["sub"], document.id)
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort Weaviate cleanup failed for document %s: %s",
-                    document.id,
-                    cleanup_err,
-                )
-
-            # Remove uploaded file artifacts for this failed upload attempt.
-            if saved_path.exists():
-                shutil.rmtree(saved_path.parent, ignore_errors=True)
-
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "duplicate_file",
-                    "message": "This file appears to have already been uploaded for your account.",
-                    "suggestion": "Refresh the document list. If needed, delete the existing document and upload again.",
-                },
-            ) from integrity_error
-        finally:
-            session.close()
-
-        # Create durable background job row for this upload.
-        job = pdf_job_service.create_job(
-            document_id=document.id,
-            user_id=db_user.id,
-            filename=document.filename,
-        )
-        job_id = job.job_id
-
-        # Start processing pipeline in background via runtime execution service.
-        execution_request = UploadExecutionRequest(
-            document_id=document.id,
-            job_id=job_id,
-            user_id=user["sub"],
-            file_path=saved_path,
-        )
-        await upload_execution_service.dispatch_upload_execution(
+        intake_result = await upload_intake_service.intake_upload(
             background_tasks=background_tasks,
-            request=execution_request,
+            file=file,
+            user=user,
         )
-
-        # T029: Return Document schema with ownership metadata (FR-014, FR-016)
-        # Get tenant name for response
-        tenant_name = get_tenant_name(user["sub"])
-
         return DocumentResponse(
-            document_id=document.id,
-            job_id=job_id,
-            user_id=db_user.id,
-            filename=document.filename,
-            status="PENDING",  # Initial status
-            upload_timestamp=datetime.utcnow(),
-            processing_started_at=None,  # Not started yet
-            processing_completed_at=None,
-            file_size_bytes=saved_path.stat().st_size,
-            weaviate_tenant=tenant_name,
-            chunk_count=None,  # Not processed yet
-            error_message=None
+            document_id=intake_result.document_id,
+            job_id=intake_result.job_id,
+            user_id=intake_result.user_id,
+            filename=intake_result.filename,
+            status=intake_result.status,
+            upload_timestamp=intake_result.upload_timestamp,
+            processing_started_at=intake_result.processing_started_at,
+            processing_completed_at=intake_result.processing_completed_at,
+            file_size_bytes=intake_result.file_size_bytes,
+            weaviate_tenant=intake_result.weaviate_tenant,
+            chunk_count=intake_result.chunk_count,
+            error_message=intake_result.error_message,
         )
-
-    except HTTPException:
-        raise
+    except UploadIntakeValidationError as validation_error:
+        raise HTTPException(status_code=400, detail=str(validation_error)) from validation_error
+    except UploadIntakeDuplicateError as duplicate_error:
+        raise HTTPException(status_code=409, detail=duplicate_error.detail) from duplicate_error
     except Exception as e:
         logger.error('Error uploading document: %s', e)
         raise HTTPException(
