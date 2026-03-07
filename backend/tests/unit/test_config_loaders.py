@@ -641,7 +641,7 @@ class TestCrossFileConsistency:
                     )
 
         assert not missing_schemas, (
-            f"Missing schema references:\n" + "\n".join(missing_schemas)
+            "Missing schema references:\n" + "\n".join(missing_schemas)
         )
 
     def test_batchable_agents_have_batching_instructions(self):
@@ -1455,6 +1455,7 @@ class TestConnectionsLoader:
 
         # Check known optional services
         optional_ids = [c.service_id for c in optional]
+        assert "agr_curation_api" in optional_ids
         assert "redis" in optional_ids
         assert "langfuse" in optional_ids
 
@@ -1855,7 +1856,7 @@ content: Test content for {folder_name}
 
             mock_db = MagicMock()
 
-            with patch("src.lib.config.prompt_loader._upsert_prompt") as mock_upsert:
+            with patch("src.lib.config.prompt_loader._upsert_prompt"):
                 agent_name = _load_base_prompt(agent_folder, mock_db)
                 assert agent_name == expected_agent_name, f"Failed for {folder_name}"
 
@@ -1964,7 +1965,7 @@ class TestPromptLoaderYAMLValidation:
             if "content" not in data:
                 missing_fields.append(f"{agent_folder.name}: missing content")
 
-        assert not missing_fields, f"Prompt YAML issues:\n" + "\n".join(missing_fields)
+        assert not missing_fields, "Prompt YAML issues:\n" + "\n".join(missing_fields)
 
     def test_prompt_yaml_content_not_empty(self):
         """Every prompt.yaml must have non-empty content."""
@@ -2019,4 +2020,4 @@ class TestPromptLoaderYAMLValidation:
                 if "content" not in data:
                     issues.append(f"{agent_folder.name}/{rule_file.name}: missing content")
 
-        assert not issues, f"Group rules issues:\n" + "\n".join(issues)
+        assert not issues, "Group rules issues:\n" + "\n".join(issues)

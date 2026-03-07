@@ -120,8 +120,6 @@ services:
     command: bash -c "cd /app/backend && if [[ \"${RUN_DB_BOOTSTRAP_ON_START:-false}\" == \"true\" ]]; then /app/scripts/utilities/ensure_postgres_db_exists.sh; fi && if [[ \"${RUN_DB_MIGRATIONS_ON_START:-false}\" == \"true\" ]]; then alembic upgrade head; fi && /app/scripts/refresh_prefixes_on_start.sh && exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
     depends_on:
-      langfuse:
-        condition: service_started
       postgres:
         condition: service_healthy
       weaviate:
@@ -152,6 +150,7 @@ services:
       - DOCKER_COMPOSE_DIR=/app  # For Docker logs API (docker-compose.yml location)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # For Prompt Explorer Opus chat
       - ANTHROPIC_OPUS_MODEL=${ANTHROPIC_OPUS_MODEL:-claude-opus-4-6}
       # Langfuse Observability Configuration
@@ -300,8 +299,8 @@ services:
       # Development Mode
       - DEV_MODE=${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}
       - SECURE_COOKIES=${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}
-      # Langfuse (trace_review uses Alliance internal instance by default)
-      - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-${LANGFUSE_HOST:-http://langfuse-internal.alliancegenome.org:3000}}
+      # Langfuse default must be localhost because trace_review_backend runs with network_mode: host
+      - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-${LANGFUSE_HOST:-http://localhost:3000}}
       - LANGFUSE_PUBLIC_KEY=${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY}}
       - LANGFUSE_SECRET_KEY=${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-${LANGFUSE_SECRET_KEY}}
       # Local Langfuse alternative
