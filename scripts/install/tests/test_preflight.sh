@@ -52,7 +52,12 @@ echo "unexpected git args: $*" >&2
 exit 2
 EOF
 
-  chmod +x "${stub_dir}/docker" "${stub_dir}/git"
+  cat >"${stub_dir}/ss" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+
+  chmod +x "${stub_dir}/docker" "${stub_dir}/git" "${stub_dir}/ss"
 }
 
 test_detects_missing_docker() {

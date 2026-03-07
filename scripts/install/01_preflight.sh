@@ -126,7 +126,10 @@ find_port_owner() {
 }
 
 check_required_tools() {
+  local docker_available=1
+
   if ! command_exists "$DOCKER_CMD"; then
+    docker_available=0
     record_prereq_failure "Docker CLI not found: ${DOCKER_CMD}"
   elif "$DOCKER_CMD" info >/dev/null 2>&1; then
     log_success "Docker daemon is reachable."
@@ -134,9 +137,7 @@ check_required_tools() {
     record_prereq_failure "Docker daemon check failed: '${DOCKER_CMD} info' did not succeed."
   fi
 
-  if ! command_exists "$DOCKER_CMD"; then
-    record_prereq_failure "Docker Compose v2 check failed because Docker CLI is unavailable."
-  else
+  if (( docker_available == 1 )); then
     local compose_output
     local compose_major
     compose_output="$("$DOCKER_CMD" compose version 2>&1 || true)"
