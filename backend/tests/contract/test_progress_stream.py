@@ -96,6 +96,32 @@ def test_progress_stream_emits_completed_final_event(client: TestClient):
     final_events = [event for event in events if event.get("final") is True]
     assert final_events
     assert final_events[-1]["stage"] == "completed"
+    assert final_events[-1]["source"] == "pipeline"
+
+
+def test_progress_stream_pipeline_terminal_fallback_message_and_source(client: TestClient):
+    now = datetime.now(timezone.utc)
+    completed_status = PipelineStatus(
+        document_id="doc-2b",
+        current_stage=ProcessingStage.COMPLETED,
+        started_at=now,
+        updated_at=now,
+        progress_percentage=100,
+        message="",
+    )
+
+    with patch("src.api.documents.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.documents.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_status:
+        mock_get_document.return_value = {"document": {"id": "doc-2b"}}
+        mock_status.return_value = completed_status
+        with client.stream("GET", "/weaviate/documents/doc-2b/progress/stream") as response:
+            events = _sse_events(response)
+
+    assert response.status_code == 200
+    final_events = [event for event in events if event.get("final") is True]
+    assert final_events
+    assert final_events[-1]["message"] == "Processing completed successfully"
+    assert final_events[-1]["source"] == "pipeline"
 
 
 def test_progress_stream_prefers_terminal_durable_job_over_pipeline(client: TestClient):
@@ -132,6 +158,7 @@ def test_progress_stream_prefers_terminal_durable_job_over_pipeline(client: Test
     assert final_events
     assert final_events[-1]["stage"] == "failed"
     assert "durable failure" in final_events[-1]["message"]
+    assert final_events[-1]["source"] == "job"
 
 
 def test_progress_stream_ignores_stale_terminal_pipeline_when_job_active(

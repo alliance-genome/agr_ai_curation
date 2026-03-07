@@ -78,3 +78,27 @@ def test_select_progress_snapshot_prefers_terminal_job_over_active_pipeline():
     assert snapshot["source"] == "job"
     assert snapshot["stage"] == "completed"
     assert snapshot["is_terminal"] is True
+
+
+def test_status_snapshot_from_pipeline_uses_terminal_default_message_and_utc_timestamp():
+    payload = {
+        "current_stage": ProcessingStage.COMPLETED.value,
+        "progress_percentage": 100,
+        "message": "",
+        "updated_at": None,
+    }
+    pipeline_status = SimpleNamespace(
+        current_stage=ProcessingStage.COMPLETED.value,
+        model_dump=lambda: payload,
+    )
+
+    snapshot = documents._status_snapshot_from_pipeline(pipeline_status)
+
+    assert snapshot["message"] == "Processing completed successfully"
+    assert snapshot["status"] == "completed"
+    assert snapshot["is_terminal"] is True
+    assert snapshot["updated_at"].endswith("+00:00")
+
+
+def test_is_pipeline_status_terminal_returns_false_for_none():
+    assert documents._is_pipeline_status_terminal(None) is False

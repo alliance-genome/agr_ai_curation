@@ -157,6 +157,9 @@ def _is_pipeline_status_active(pipeline_status: Any) -> bool:
 
 def _is_pipeline_status_terminal(pipeline_status: Any) -> bool:
     """Check whether pipeline tracker reports a terminal stage."""
+    if not pipeline_status:
+        return False
+
     stage_value = _pipeline_stage_value(pipeline_status)
     normalized = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_value, _normalize_processing_status(stage_value))
     return normalized in {
@@ -200,19 +203,25 @@ def _status_snapshot_from_pipeline(pipeline_status: Any) -> Dict[str, Any]:
     payload = pipeline_status.model_dump()
     stage_str = _pipeline_stage_value(pipeline_status)
     progress_value = payload.get("progress_percentage", 0)
-    message_value = payload.get("message") or "Processing document..."
+    normalized_status = _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_str, _normalize_processing_status(stage_str))
+    if normalized_status == ProcessingStatus.COMPLETED.value:
+        message_value = payload.get("message") or "Processing completed successfully"
+    elif normalized_status == ProcessingStatus.FAILED.value:
+        message_value = payload.get("message") or "Processing failed"
+    else:
+        message_value = payload.get("message") or "Processing document..."
     updated_at = payload.get("updated_at")
     if isinstance(updated_at, datetime):
         timestamp_value = updated_at.isoformat()
     else:
-        timestamp_value = updated_at or datetime.now().isoformat()
+        timestamp_value = updated_at or datetime.now(timezone.utc).isoformat()
 
     return {
         "source": "pipeline",
         "stage": stage_str,
         "progress": progress_value,
         "message": message_value,
-        "status": _PIPELINE_STAGE_TO_PROCESSING_STATUS.get(stage_str, _normalize_processing_status(stage_str)),
+        "status": normalized_status,
         "updated_at": timestamp_value,
         "is_terminal": _is_pipeline_status_terminal(pipeline_status),
     }
@@ -243,7 +252,7 @@ def _status_snapshot_from_job(job: Any) -> Dict[str, Any]:
         "progress": progress_value,
         "message": message_value,
         "status": mapped_status,
-        "updated_at": job.updated_at.isoformat() if job.updated_at else datetime.now().isoformat(),
+        "updated_at": job.updated_at.isoformat() if job.updated_at else datetime.now(timezone.utc).isoformat(),
         "is_terminal": job.status in _TERMINAL_PDF_JOB_STATUSES,
     }
 
@@ -1445,6 +1454,7 @@ async def stream_document_progress(
                             'progress': status_snapshot["progress"],
                             'message': status_snapshot["message"],
                             'timestamp': status_snapshot["updated_at"],
+                            'source': status_snapshot["source"],
                         }
 
                         yield f"data: {json.dumps(event_data)}\n\n"
@@ -1456,6 +1466,7 @@ async def stream_document_progress(
                                 'progress': status_snapshot["progress"],
                                 'message': status_snapshot["message"],
                                 'timestamp': status_snapshot["updated_at"],
+                                'source': status_snapshot["source"],
                                 'final': True,
                             }
                             yield f"data: {json.dumps(final_data)}\n\n"
