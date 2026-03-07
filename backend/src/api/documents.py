@@ -35,7 +35,6 @@ from ..models.api_schemas import (
     DocumentResponse
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
-from ..models.pipeline import ProcessingStage
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
     get_document,

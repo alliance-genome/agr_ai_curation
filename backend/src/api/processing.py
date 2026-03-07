@@ -4,16 +4,14 @@ from fastapi import APIRouter, HTTPException, Path, Body, BackgroundTasks
 from typing import Optional
 import logging
 from typing import Dict, Any
-from pathlib import Path as FilePath
 
 from ..models.api_schemas import (
     OperationResult,
     ReprocessRequest,
     ReembedRequest,
-    EmbeddingConfiguration
 )
 from ..models.document import ProcessingStatus
-from ..lib.weaviate_client.documents import get_document, update_document_status, re_embed_document, update_document_status_detailed
+from ..lib.weaviate_client.documents import get_document, update_document_status, re_embed_document
 from ..lib.pipeline.tracker import PipelineTracker
 from ..models.pipeline import ProcessingStage
 from .auth import get_auth_dependency
@@ -29,7 +27,6 @@ from ..services.processing_status_policy import (
     stage_value as _stage_value,
 )
 from ..models.sql.database import SessionLocal
-from ..models.sql.pdf_processing_job import PdfJobStatus
 from ..services.user_service import principal_from_claims, provision_user
 from ..config import get_pdf_storage_path
 
@@ -202,7 +199,7 @@ async def reprocess_document_endpoint(
 
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
-        except:
+        except Exception:
             pass
 
         raise HTTPException(
@@ -305,7 +302,7 @@ async def reembed_document_endpoint(
 
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
-        except:
+        except Exception:
             pass
 
         raise HTTPException(

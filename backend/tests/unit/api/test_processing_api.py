@@ -50,6 +50,41 @@ async def test_reprocess_document_rejects_when_processing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reprocess_document_treats_unknown_status_as_pending(monkeypatch, tmp_path):
+    user_id = "user-1"
+    document_id = "doc-1"
+    filename = "paper.pdf"
+    file_dir = tmp_path / user_id / document_id
+    file_dir.mkdir(parents=True)
+    (file_dir / filename).write_text("pdf", encoding="utf-8")
+
+    async def _get_document(_user_id, _doc_id):
+        return {"document": {"processing_status": "custom-status", "filename": filename}}
+
+    async def _update_status(_doc_id, _uid, _status):
+        return None
+
+    async def _track(_doc_id, _stage):
+        return None
+
+    monkeypatch.setattr(processing, "get_document", _get_document)
+    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "update_document_status", _update_status)
+    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
+
+    result = await processing.reprocess_document_endpoint(
+        BackgroundTasks(),
+        document_id=document_id,
+        request=ReprocessRequest(strategy_name="default", force_reparse=False),
+        user={"sub": user_id},
+    )
+
+    assert result.success is True
+
+
+@pytest.mark.asyncio
 async def test_reprocess_document_success_schedules_background_task(monkeypatch, tmp_path):
     user_id = "user-1"
     document_id = "doc-1"
