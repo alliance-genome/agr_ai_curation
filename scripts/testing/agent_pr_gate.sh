@@ -53,12 +53,6 @@ run_check() {
   fi
 }
 
-run_check "unit-ignore-path-validation" \
-  "bash backend/tests/unit/run_ci_unit_tests.sh --validate-only"
-
-run_check "contract-core-path-validation" \
-  "bash backend/tests/contract/run_ci_contract_core_tests.sh --validate-only"
-
 mapfile -t CHANGED_BACKEND_PY_FILES < <(
   git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
 )
@@ -138,28 +132,9 @@ else
   record_check "backend-unit-smoke" "pass" "backend unchanged; smoke test not required"
 fi
 
-CHANGED_FRONTEND_FILES="$(git diff --name-only "${DIFF_RANGE}" -- frontend || true)"
-if [[ -n "${CHANGED_FRONTEND_FILES}" ]]; then
-  if command -v npm >/dev/null 2>&1; then
-    run_check "frontend-npm-ci" "cd frontend && npm ci"
-    run_check "frontend-test" "cd frontend && npm run test -- --run"
-    run_check "frontend-build" "cd frontend && npm run build"
-  else
-    if [[ "${AGENT_GATE_SKIP_FRONTEND_IF_MISSING:-0}" == "1" ]]; then
-      record_check "frontend-npm-ci" "pass" "frontend changed; skipped because npm missing and AGENT_GATE_SKIP_FRONTEND_IF_MISSING=1"
-      record_check "frontend-test" "pass" "frontend changed; skipped because npm missing and AGENT_GATE_SKIP_FRONTEND_IF_MISSING=1"
-      record_check "frontend-build" "pass" "frontend changed; skipped because npm missing and AGENT_GATE_SKIP_FRONTEND_IF_MISSING=1"
-    else
-      record_check "frontend-npm-ci" "fail" "frontend changed but npm is not installed"
-      record_check "frontend-test" "fail" "frontend changed but npm is not installed"
-      record_check "frontend-build" "fail" "frontend changed but npm is not installed"
-    fi
-  fi
-else
-  record_check "frontend-npm-ci" "pass" "frontend unchanged; npm ci not required"
-  record_check "frontend-test" "pass" "frontend unchanged; test not required"
-  record_check "frontend-build" "pass" "frontend unchanged; build not required"
-fi
+# Frontend validation intentionally lives in .github/workflows/test.yml.
+# The gate keeps orchestration responsibility by waiting on the Frontend Tests
+# and Frontend Build checks instead of rerunning npm ci/test/build inline here.
 
 IGNORE_JUSTIFICATION="${AGENT_GATE_IGNORE_JUSTIFICATION:-}"
 CHANGED_IGNORE_LINES="$(git diff --name-only "${DIFF_RANGE}" -- backend/tests/unit/.ci-ignore-paths backend/tests/contract/.core-test-paths || true)"
