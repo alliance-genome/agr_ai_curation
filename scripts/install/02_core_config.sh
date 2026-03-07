@@ -87,6 +87,9 @@ main() {
   upsert_env_var "$env_output_path" "NEXTAUTH_SECRET" "$nextauth_secret"
   upsert_env_var "$env_output_path" "SALT" "$salt"
   upsert_env_var "$env_output_path" "ENCRYPTION_KEY" "$encryption_key"
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_NEXTAUTH_SECRET" "$nextauth_secret"
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_SALT" "$salt"
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_ENCRYPTION_KEY" "$encryption_key"
   upsert_env_var "$env_output_path" "CLICKHOUSE_PASSWORD" "$clickhouse_password"
   upsert_env_var "$env_output_path" "MINIO_ROOT_PASSWORD" "$minio_root_password"
 
@@ -96,6 +99,8 @@ main() {
 
   upsert_env_var "$env_output_path" "LANGFUSE_PUBLIC_KEY" "$langfuse_init_public_key"
   upsert_env_var "$env_output_path" "LANGFUSE_SECRET_KEY" "$langfuse_init_secret_key"
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_PUBLIC_KEY" "$langfuse_init_public_key"
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_SECRET_KEY" "$langfuse_init_secret_key"
 
   upsert_env_var "$env_output_path" "LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
   upsert_env_var "$env_output_path" "LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
@@ -105,6 +110,7 @@ main() {
   # Ensure compose interpolation keeps working if .env values are consumed directly.
   upsert_env_var "$env_output_path" "DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_curation'
   upsert_env_var "$env_output_path" "LANGFUSE_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
+  upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
 
   chmod 600 "$env_output_path"
   log_success "Generated core config at ${env_output_path}"

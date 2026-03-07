@@ -26,6 +26,7 @@ check-env:
 		echo "Run 'make setup' to create it from the template."; \
 		exit 1; \
 	fi
+	@./scripts/utilities/ensure_local_langfuse_env.sh "$(ENV_FILE)"
 
 .PHONY: check-trace-review-env
 check-trace-review-env:

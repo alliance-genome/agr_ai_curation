@@ -162,12 +162,18 @@ test_core_config_generates_env_and_backups() {
   assert_regex '^NEXTAUTH_SECRET=[0-9a-f]{64}$' "$env_file"
   assert_regex '^SALT=[0-9a-f]{64}$' "$env_file"
   assert_regex '^ENCRYPTION_KEY=[0-9a-f]{64}$' "$env_file"
+  assert_regex '^LANGFUSE_LOCAL_NEXTAUTH_SECRET=[0-9a-f]{64}$' "$env_file"
+  assert_regex '^LANGFUSE_LOCAL_SALT=[0-9a-f]{64}$' "$env_file"
+  assert_regex '^LANGFUSE_LOCAL_ENCRYPTION_KEY=[0-9a-f]{64}$' "$env_file"
   assert_regex '^LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-[0-9a-f]{32}$' "$env_file"
   assert_regex '^LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-[0-9a-f]{32}$' "$env_file"
+  assert_regex '^LANGFUSE_LOCAL_PUBLIC_KEY=pk-lf-[0-9a-f]{32}$' "$env_file"
+  assert_regex '^LANGFUSE_LOCAL_SECRET_KEY=sk-lf-[0-9a-f]{32}$' "$env_file"
   assert_contains '^LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LLM_PROVIDER_STRICT_MODE=false$' "$env_file"
+  assert_contains '^LANGFUSE_LOCAL_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres$' "$env_file"
 
   local init_public_key
   local public_key
