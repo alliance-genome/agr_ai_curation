@@ -86,6 +86,22 @@ export interface OverlayPayload {
   docItems: OverlayDocItem[]
 }
 
+export type OverlayDocItemDropReason = 'missing-page' | 'missing-bbox' | 'invalid-bbox'
+
+export interface OverlayDocItemDropDiagnostic {
+  index: number
+  reason: OverlayDocItemDropReason
+  page?: number
+  page_no?: number
+  bbox?: OverlayDocItem['bbox']
+  invalidFields?: string[]
+}
+
+export interface OverlayDocItemInspection {
+  normalizedDocItems: OverlayDocItem[]
+  droppedItems: OverlayDocItemDropDiagnostic[]
+}
+
 interface UploadDialogState {
   open: boolean
   dismissedToBackground: boolean
@@ -185,31 +201,98 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }
 
-export const normalizeOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItem[] => {
-  if (!Array.isArray(docItems)) {
-    return []
+const getInvalidBboxFields = (bbox: OverlayDocItem['bbox'] | undefined): string[] => {
+  if (!bbox) {
+    return ['bbox']
   }
 
-  return docItems
-    .map((item) => {
-      const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
-      const hasBbox = !!item.bbox
+  const invalidFields: string[] = []
+  const left = Number(bbox.left)
+  const top = Number(bbox.top)
+  const right = Number(bbox.right)
+  const bottom = Number(bbox.bottom)
 
-      if (!hasBbox || typeof pageValue !== 'number') {
-        return null
+  if (!Number.isFinite(left)) invalidFields.push('left')
+  if (!Number.isFinite(top)) invalidFields.push('top')
+  if (!Number.isFinite(right)) invalidFields.push('right')
+  if (!Number.isFinite(bottom)) invalidFields.push('bottom')
+
+  if (Number.isFinite(left) && Number.isFinite(right) && left === right) {
+    invalidFields.push('zero-width')
+  }
+  if (Number.isFinite(top) && Number.isFinite(bottom) && top === bottom) {
+    invalidFields.push('zero-height')
+  }
+
+  return invalidFields
+}
+
+export const inspectOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItemInspection => {
+  if (!Array.isArray(docItems)) {
+    return {
+      normalizedDocItems: [],
+      droppedItems: [],
+    }
+  }
+
+  return docItems.reduce<OverlayDocItemInspection>(
+    (acc, item, index) => {
+      const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
+      if (pageValue === undefined || !Number.isFinite(pageValue) || pageValue <= 0) {
+        acc.droppedItems.push({
+          index,
+          reason: 'missing-page',
+          page: item.page,
+          page_no: item.page_no,
+          bbox: item.bbox,
+        })
+        return acc
       }
 
-      return {
+      if (!item.bbox) {
+        acc.droppedItems.push({
+          index,
+          reason: 'missing-bbox',
+          page: item.page,
+          page_no: item.page_no,
+        })
+        return acc
+      }
+
+      const invalidFields = getInvalidBboxFields(item.bbox)
+      if (invalidFields.length > 0) {
+        acc.droppedItems.push({
+          index,
+          reason: 'invalid-bbox',
+          page: item.page,
+          page_no: item.page_no,
+          bbox: item.bbox,
+          invalidFields,
+        })
+        return acc
+      }
+
+      acc.normalizedDocItems.push({
         ...item,
         page: pageValue,
-      } as OverlayDocItem
-    })
-    .filter((item): item is OverlayDocItem => item !== null)
+      })
+      return acc
+    },
+    {
+      normalizedDocItems: [],
+      droppedItems: [],
+    },
+  )
+}
+
+export const normalizeOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItem[] => {
+  return inspectOverlayDocItems(docItems).normalizedDocItems
 }
 
 export const reduceOverlayUpdate = (
   detail: OverlayPayload | null | undefined,
   activeDocumentId?: string | null,
+  normalizedDocItemsInput?: OverlayDocItem[],
 ): OverlayPayload[] | null => {
   if (!detail) {
     return null
@@ -219,7 +302,7 @@ export const reduceOverlayUpdate = (
     return null
   }
 
-  const normalizedDocItems = normalizeOverlayDocItems(detail.docItems)
+  const normalizedDocItems = normalizedDocItemsInput ?? normalizeOverlayDocItems(detail.docItems)
   if (normalizedDocItems.length === 0) {
     return []
   }
@@ -270,6 +353,31 @@ export function PdfViewer() {
   })
   const [overlays, setOverlays] = useState<OverlayPayload[]>([])
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
+
+  const logOverlayNormalizationDiagnostics = useCallback(
+    (detail: OverlayPayload, inspection: OverlayDocItemInspection) => {
+      if (inspection.droppedItems.length === 0) {
+        return
+      }
+
+      const reasonCounts = inspection.droppedItems.reduce<Record<string, number>>((acc, item) => {
+        acc[item.reason] = (acc[item.reason] ?? 0) + 1
+        return acc
+      }, {})
+
+      console.warn('[PDF OVERLAY DIAGNOSTICS] Dropped highlight doc_items during normalization', {
+        chunkId: detail.chunkId,
+        documentId: detail.documentId ?? activeDocument?.documentId ?? null,
+        activeDocumentId: activeDocument?.documentId ?? null,
+        receivedDocItems: detail.docItems?.length ?? 0,
+        normalizedDocItems: inspection.normalizedDocItems.length,
+        droppedDocItems: inspection.droppedItems.length,
+        reasonCounts,
+        samples: inspection.droppedItems.slice(0, 3),
+      })
+    },
+    [activeDocument?.documentId],
+  )
 
   /**
    * Signal that document loading is complete (whether success or failure).
@@ -471,7 +579,10 @@ export function PdfViewer() {
         firstThreeItems: detail.docItems?.slice(0, 3)
       })
 
-      const normalizedDocItems = normalizeOverlayDocItems(detail.docItems)
+      const inspection = inspectOverlayDocItems(detail.docItems)
+      const normalizedDocItems = inspection.normalizedDocItems
+
+      logOverlayNormalizationDiagnostics(detail, inspection)
 
       normalizedDocItems.forEach((item, idx) => {
         debug.log(`🔍 [PDF VIEWER DEBUG] Normalized item ${idx}:`, {
@@ -488,7 +599,7 @@ export function PdfViewer() {
       })
 
       setOverlays((prev) => {
-        const nextOverlays = reduceOverlayUpdate(detail, activeDocument?.documentId)
+        const nextOverlays = reduceOverlayUpdate(detail, activeDocument?.documentId, normalizedDocItems)
         if (nextOverlays === null) {
           debug.log('🔍 [PDF VIEWER DEBUG] Invalid overlay payload, skipping:', detail)
           return prev
@@ -519,7 +630,7 @@ export function PdfViewer() {
       window.removeEventListener('pdf-overlay-update', handleOverlayUpdate)
       window.removeEventListener('pdf-overlay-clear', handleOverlayClear)
     }
-  }, [activeDocument?.documentId])
+  }, [activeDocument?.documentId, logOverlayNormalizationDiagnostics])
 
   const viewerSrc = useMemo(() => {
     if (!activeDocument) return 'about:blank'
@@ -1025,10 +1136,13 @@ export function PdfViewer() {
         const bbox = item.bbox
 
         if (!pageNumber || !bbox) {
-          debug.log(`🔍 [PDF OVERLAY RENDER] Skipping item ${itemIdx} - missing data:`, {
+          console.warn('[PDF OVERLAY DIAGNOSTICS] Skipping overlay render for incomplete doc_item', {
+            chunkId: overlay.chunkId,
+            documentId: overlay.documentId ?? activeDocument?.documentId ?? null,
+            itemIndex: itemIdx,
             hasPageNumber: !!pageNumber,
             hasBbox: !!bbox,
-            item
+            item,
           })
           skippedItemCount++
           return
@@ -1040,8 +1154,15 @@ export function PdfViewer() {
         const bottom = Number(bbox.bottom)
 
         if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
-          debug.log(`🔍 [PDF OVERLAY RENDER] Skipping item ${itemIdx} - invalid bbox coordinates:`, {
-            left, top, right, bottom
+          console.warn('[PDF OVERLAY DIAGNOSTICS] Skipping overlay render for invalid bbox coordinates', {
+            chunkId: overlay.chunkId,
+            documentId: overlay.documentId ?? activeDocument?.documentId ?? null,
+            itemIndex: itemIdx,
+            pageNumber,
+            left,
+            top,
+            right,
+            bottom,
           })
           skippedItemCount++
           return
@@ -1120,7 +1241,7 @@ export function PdfViewer() {
       debug.log('🔍 [PDF OVERLAY RENDER] Cleanup - removing overlay layers:', toRemove.length)
       toRemove.forEach((node) => node.remove())
     }
-  }, [overlays, status, overlayRenderKey])
+  }, [activeDocument?.documentId, overlays, status, overlayRenderKey])
 
   useEffect(() => {
     if (!activeDocument) return
