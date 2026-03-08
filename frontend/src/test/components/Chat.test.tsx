@@ -94,4 +94,57 @@ describe('Chat persistence', () => {
 
     expect(localStorage.getItem('chat-messages')).not.toBeNull()
   })
+
+  it('dispatches pdf overlay updates for chunk provenance events', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-overlay-update', listener as EventListener)
+
+    renderChat({
+      events: [
+        {
+          type: 'CHUNK_PROVENANCE',
+          chunk_id: 'chunk-42',
+          document_id: 'doc-7',
+          doc_items: [
+            {
+              page_no: 4,
+              bbox: { left: 11, top: 22, right: 33, bottom: 5, coord_origin: 'BOTTOMLEFT' },
+            },
+          ],
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    const event = listener.mock.calls[0][0] as CustomEvent<{
+      chunkId: string
+      documentId: string
+      docItems: Array<{
+        page_no: number
+        bbox: {
+          left: number
+          top: number
+          right: number
+          bottom: number
+          coord_origin: string
+        }
+      }>
+    }>
+
+    expect(event.detail).toEqual({
+      chunkId: 'chunk-42',
+      documentId: 'doc-7',
+      docItems: [
+        {
+          page_no: 4,
+          bbox: { left: 11, top: 22, right: 33, bottom: 5, coord_origin: 'BOTTOMLEFT' },
+        },
+      ],
+    })
+
+    window.removeEventListener('pdf-overlay-update', listener as EventListener)
+  })
 })

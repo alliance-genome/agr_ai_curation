@@ -30,6 +30,7 @@ Start here for new developers:
 | [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Create agents via YAML config or Agent Studio UI -- no Python agent files needed |
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add Python tools with `@function_tool` and register tool bindings |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
+| [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 
 ### API Reference
