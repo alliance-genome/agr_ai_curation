@@ -201,11 +201,7 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }
 
-const getInvalidBboxFields = (bbox: OverlayDocItem['bbox'] | undefined): string[] => {
-  if (!bbox) {
-    return ['bbox']
-  }
-
+const getInvalidBboxFields = (bbox: OverlayDocItem['bbox']): string[] => {
   const invalidFields: string[] = []
   const left = Number(bbox.left)
   const top = Number(bbox.top)
@@ -238,6 +234,7 @@ export const inspectOverlayDocItems = (docItems: OverlayDocItem[] | undefined): 
   return docItems.reduce<OverlayDocItemInspection>(
     (acc, item, index) => {
       const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
+      // PDF.js pages are 1-indexed, so page 0 is treated as invalid input.
       if (pageValue === undefined || !Number.isFinite(pageValue) || pageValue <= 0) {
         acc.droppedItems.push({
           index,
@@ -1241,6 +1238,8 @@ export function PdfViewer() {
       debug.log('🔍 [PDF OVERLAY RENDER] Cleanup - removing overlay layers:', toRemove.length)
       toRemove.forEach((node) => node.remove())
     }
+  // Re-render overlays when the active document changes so stale rectangles from
+  // the previous PDF are cleared even if the overlay payload did not change.
   }, [activeDocument?.documentId, overlays, status, overlayRenderKey])
 
   useEffect(() => {
