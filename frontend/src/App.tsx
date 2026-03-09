@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert } from '@mui/material'
-import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, Home as HomeIcon, Settings as SettingsIcon, HelpOutline as HelpIcon, History as ChangelogIcon } from '@mui/icons-material'
+import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, Home as HomeIcon, HelpOutline as HelpIcon, History as ChangelogIcon } from '@mui/icons-material'
 import { getVersionDisplay, getFullVersionInfo } from './config/version'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -10,20 +10,6 @@ import { AgentMetadataProvider } from './contexts/AgentMetadataContext'
 import LogoutDialog from './components/LogoutDialog'
 import WeaviateNavIcon from './components/weaviate/WeaviateNavIcon'
 import BatchNavIcon from './components/BatchNavIcon'
-import WeaviateLayout from './components/weaviate/WeaviateLayout'
-import Settings from './pages/weaviate/Settings'
-import DocumentDetail from './pages/weaviate/DocumentDetail'
-import DocumentsPage from './pages/weaviate/DocumentsPage'
-import Dashboard from './pages/weaviate/Dashboard'
-import EmbeddingsSettings from './pages/weaviate/settings/EmbeddingsSettings'
-import DatabaseSettings from './pages/weaviate/settings/DatabaseSettings'
-import SchemaSettings from './pages/weaviate/settings/SchemaSettings'
-import ChunkingSettings from './pages/weaviate/settings/ChunkingSettings'
-import HomePage from './pages/HomePage'
-import ViewerSettings from './pages/ViewerSettings'
-import AgentStudioPage from './pages/AgentStudioPage'
-import BatchPage from './pages/BatchPage'
-import ChangelogPage from './pages/ChangelogPage'
 import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
@@ -37,6 +23,45 @@ import './App.css'
 const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
+
+const HomePage = lazy(() => import('./pages/HomePage'))
+const ViewerSettings = lazy(() => import('./pages/ViewerSettings'))
+const AgentStudioPage = lazy(() => import('./pages/AgentStudioPage'))
+const BatchPage = lazy(() => import('./pages/BatchPage'))
+const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
+const WeaviateLayout = lazy(() => import('./components/weaviate/WeaviateLayout'))
+const Settings = lazy(() => import('./pages/weaviate/Settings'))
+const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
+const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
+const Dashboard = lazy(() => import('./pages/weaviate/Dashboard'))
+const EmbeddingsSettings = lazy(() => import('./pages/weaviate/settings/EmbeddingsSettings'))
+const DatabaseSettings = lazy(() => import('./pages/weaviate/settings/DatabaseSettings'))
+const SchemaSettings = lazy(() => import('./pages/weaviate/settings/SchemaSettings'))
+const ChunkingSettings = lazy(() => import('./pages/weaviate/settings/ChunkingSettings'))
+
+function RouteLoadingFallback() {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: 240,
+        width: '100%',
+      }}
+    >
+      <CircularProgress />
+    </Box>
+  );
+}
+
+function renderLazyRoute(element: React.ReactNode) {
+  return (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      {element}
+    </Suspense>
+  );
+}
 
 /**
  * ProtectedRoutes: Wrapper component that checks authentication before rendering routes
@@ -452,11 +477,11 @@ export function AppContent() {
 
       <Box component="main" sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/changelog" element={<ChangelogPage />} />
-          <Route path="/viewer-settings" element={<ViewerSettings />} />
-          <Route path="/agent-studio" element={<AgentStudioPage />} />
-          <Route path="/batch" element={<BatchPage />} />
+          <Route path="/" element={renderLazyRoute(<HomePage />)} />
+          <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
+          <Route path="/viewer-settings" element={renderLazyRoute(<ViewerSettings />)} />
+          <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
+          <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/pdf-viewer" element={
             <Box sx={{
               width: '100%',
@@ -471,16 +496,16 @@ export function AppContent() {
               </Typography>
             </Box>
           } />
-          <Route path="/weaviate/*" element={<WeaviateLayout />}>
+          <Route path="/weaviate/*" element={renderLazyRoute(<WeaviateLayout />)}>
             <Route index element={<Navigate to="/weaviate/documents" replace />} />
-            <Route path="documents" element={<DocumentsPage />} />
-            <Route path="documents/:id" element={<DocumentDetail />} />
-            <Route path="dashboard" element={<Dashboard />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="settings/embeddings" element={<EmbeddingsSettings />} />
-            <Route path="settings/database" element={<DatabaseSettings />} />
-            <Route path="settings/schema" element={<SchemaSettings />} />
-            <Route path="settings/chunking" element={<ChunkingSettings />} />
+            <Route path="documents" element={renderLazyRoute(<DocumentsPage />)} />
+            <Route path="documents/:id" element={renderLazyRoute(<DocumentDetail />)} />
+            <Route path="dashboard" element={renderLazyRoute(<Dashboard />)} />
+            <Route path="settings" element={renderLazyRoute(<Settings />)} />
+            <Route path="settings/embeddings" element={renderLazyRoute(<EmbeddingsSettings />)} />
+            <Route path="settings/database" element={renderLazyRoute(<DatabaseSettings />)} />
+            <Route path="settings/schema" element={renderLazyRoute(<SchemaSettings />)} />
+            <Route path="settings/chunking" element={renderLazyRoute(<ChunkingSettings />)} />
           </Route>
         </Routes>
       </Box>

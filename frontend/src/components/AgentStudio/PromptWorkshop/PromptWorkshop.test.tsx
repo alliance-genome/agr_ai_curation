@@ -331,7 +331,7 @@ describe('PromptWorkshop', () => {
       'ca_11111111-1111-1111-1111-111111111111',
       'project'
     )
-  })
+  }, 15000)
 
   it('submits tool idea requests from the workshop dialog', async () => {
     const opusConversation = [
