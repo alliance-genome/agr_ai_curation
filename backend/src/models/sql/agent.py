@@ -270,12 +270,3 @@ class Agent(Base):
     def parent_prompt_hash(self, value: str | None) -> None:
         # Not persisted in unified schema, but preserved in-memory for callers.
         self._legacy_parent_prompt_hash = value
-
-    @property
-    def group_prompt_overrides(self) -> dict:
-        """Generic alias for the legacy DB-backed override map."""
-        return dict(self.mod_prompt_overrides or {})
-
-    @group_prompt_overrides.setter
-    def group_prompt_overrides(self, value: dict) -> None:
-        self.mod_prompt_overrides = dict(value or {})

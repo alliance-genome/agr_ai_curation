@@ -69,12 +69,3 @@ class CustomAgentVersion(Base):
             f"<CustomAgentVersion custom_agent_id={self.custom_agent_id} "
             f"v={self.version}>"
         )
-
-    @property
-    def group_prompt_overrides(self) -> dict:
-        """Generic alias for the legacy DB-backed override map."""
-        return dict(self.mod_prompt_overrides or {})
-
-    @group_prompt_overrides.setter
-    def group_prompt_overrides(self, value: dict) -> None:
-        self.mod_prompt_overrides = dict(value or {})
