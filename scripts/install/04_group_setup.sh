@@ -128,7 +128,9 @@ append_custom_group_block() {
   printf 'groups:\n' >>"$file_path"
   printf '  %s:\n' "$group_id" >>"$file_path"
   printf '    name: "%s"\n' "$escaped_display_name" >>"$file_path"
-  printf '    description: "%s"\n' "$escaped_description" >>"$file_path"
+  if [[ -n "$description" ]]; then
+    printf '    description: "%s"\n' "$escaped_description" >>"$file_path"
+  fi
   if [[ -n "$species" ]]; then
     printf '    species: "%s"\n' "$escaped_species" >>"$file_path"
   fi
@@ -255,7 +257,7 @@ main() {
       custom_group_id="$(prompt_required_value "Custom group ID (example: MYORG)")"
       validate_group_id "$custom_group_id"
       custom_name="$(prompt_required_value "Display name")"
-      custom_description="$(prompt_required_value "Description")"
+      read -r -p "Description (press Enter to skip): " custom_description
       read -r -p "Species (press Enter to skip): " custom_species
       read -r -p "Taxon ID (press Enter to skip): " custom_taxon
       custom_provider_groups="$(prompt_required_value "Provider group names (comma-separated)")"
