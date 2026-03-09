@@ -346,9 +346,9 @@ function AgentBrowser({
                         onClick={() => onAgentSelect(agent.agent_id)}
                         sx={{ pl: 4 }}
                       >
-              <ListItemText
-                primary={agent.agent_name}
-                secondary={agent.has_group_rules ? 'Has group rules' : undefined}
+                        <ListItemText
+                          primary={agent.agent_name}
+                          secondary={agent.has_group_rules ? 'Has group rules' : undefined}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
@@ -370,14 +370,14 @@ function AgentBrowser({
 
         {/* Agent Details Panel */}
         <DetailsContainer>
-        <AgentDetailsPanel
-          agent={selectedAgent}
-          selectedGroupId={selectedGroupId}
-          viewMode={viewMode}
-          onGroupSelect={onGroupSelect}
-          onViewModeChange={onViewModeChange}
-          onDiscussWithClaude={onDiscussWithClaude}
-          onCloneToWorkshop={onCloneToWorkshop}
+          <AgentDetailsPanel
+            agent={selectedAgent}
+            selectedGroupId={selectedGroupId}
+            viewMode={viewMode}
+            onGroupSelect={onGroupSelect}
+            onViewModeChange={onViewModeChange}
+            onDiscussWithClaude={onDiscussWithClaude}
+            onCloneToWorkshop={onCloneToWorkshop}
           />
         </DetailsContainer>
       </ContentArea>
