@@ -92,16 +92,16 @@ export async function refreshPromptCatalog(): Promise<PromptCatalog> {
 }
 
 /**
- * Get combined prompt (base + MOD rules injected)
+ * Get combined prompt (base + group rules injected)
  */
 export async function fetchCombinedPrompt(
   agentId: string,
-  modId: string
+  groupId: string
 ): Promise<string> {
   const response = await fetch(`${BASE_URL}/catalog/combined`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_id: agentId, mod_id: modId }),
+    body: JSON.stringify({ agent_id: agentId, group_id: groupId }),
   })
   if (!response.ok) {
     throw new Error(`Failed to fetch combined prompt: ${response.status}`)
@@ -115,11 +115,11 @@ export async function fetchCombinedPrompt(
  */
 export async function fetchPromptPreview(
   agentId: string,
-  modId?: string
+  groupId?: string
 ): Promise<PromptPreviewResponse> {
   const params = new URLSearchParams()
-  if (modId) {
-    params.set('mod_id', modId)
+  if (groupId) {
+    params.set('group_id', groupId)
   }
   const query = params.toString() ? `?${params.toString()}` : ''
   const response = await fetch(`${BASE_URL}/prompt-preview/${encodeURIComponent(agentId)}${query}`)
@@ -137,10 +137,10 @@ export interface CreateCustomAgentRequest {
   template_source?: string
   name: string
   custom_prompt?: string
-  mod_prompt_overrides?: Record<string, string>
+  group_prompt_overrides?: Record<string, string>
   description?: string
   icon?: string
-  include_mod_rules?: boolean
+  include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
   model_reasoning?: string
@@ -152,10 +152,10 @@ export interface CreateCustomAgentRequest {
 export interface UpdateCustomAgentRequest {
   name?: string
   custom_prompt?: string
-  mod_prompt_overrides?: Record<string, string>
+  group_prompt_overrides?: Record<string, string>
   description?: string
   icon?: string
-  include_mod_rules?: boolean
+  include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
   model_reasoning?: string
@@ -181,7 +181,7 @@ export interface CreateToolIdeaRequest {
 
 export interface CustomAgentTestRequest {
   input: string
-  mod_id?: string
+  group_id?: string
   document_id?: string
   session_id?: string
 }
@@ -513,7 +513,7 @@ export async function fetchTraceContext(
  * Uses effort="medium" on the backend for optimal quality/cost balance.
  *
  * @param messages - Chat messages to send
- * @param context - Optional context (selected agent, MOD, trace, etc.)
+ * @param context - Optional context (selected agent, group, trace, etc.)
  */
 export async function* streamOpusChat(
   messages: ChatMessage[],

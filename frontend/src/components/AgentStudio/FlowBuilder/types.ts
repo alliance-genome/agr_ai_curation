@@ -15,7 +15,7 @@ export interface AgentInfo {
   description: string
   category: string
   subcategory?: string
-  has_mod_rules: boolean
+  has_group_rules: boolean
   tools: string[]
   show_in_palette?: boolean
 }

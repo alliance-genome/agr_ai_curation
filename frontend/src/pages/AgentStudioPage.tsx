@@ -144,8 +144,8 @@ function AgentStudioPage() {
     localStorage.setItem(AGENT_STUDIO_TAB_KEY, newValue)
   }, [])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const [selectedModId, setSelectedModId] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'base' | 'mod' | 'combined'>('base')
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'base' | 'group' | 'combined'>('base')
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
   const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
   const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
@@ -184,21 +184,21 @@ function AgentStudioPage() {
   }, [])
 
   const workshopSelectedAgentId = agentWorkshopContext?.custom_agent_id || agentWorkshopContext?.template_source
-  const workshopSelectedModId = agentWorkshopContext?.selected_mod_id
+  const workshopSelectedGroupId = agentWorkshopContext?.selected_group_id
 
   const effectiveSelectedAgentId =
     activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
-  const effectiveSelectedModId =
-    activeTab === 'agent_workshop' ? workshopSelectedModId : (selectedModId || undefined)
+  const effectiveSelectedGroupId =
+    activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
   const effectiveViewMode =
     activeTab === 'agent_workshop'
-      ? (effectiveSelectedModId ? 'combined' : 'base')
+      ? (effectiveSelectedGroupId ? 'combined' : 'base')
       : viewMode
 
   // Build chat context for Opus (includes active tab, flow state, and agent workshop state)
   const chatContext: ChatContext = {
     selected_agent_id: effectiveSelectedAgentId,
-    selected_mod_id: effectiveSelectedModId,
+    selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
     // Flow context (when on flows tab)
@@ -221,15 +221,15 @@ function AgentStudioPage() {
   // Handle agent selection from browser
   const handleAgentSelect = (agentId: string) => {
     setSelectedAgentId(agentId)
-    // Reset MOD selection when changing agents
-    setSelectedModId(null)
+    // Reset group selection when changing agents
+    setSelectedGroupId(null)
     setViewMode('base')
   }
 
-  // Handle MOD selection
-  const handleModSelect = (modId: string | null) => {
-    setSelectedModId(modId)
-    setViewMode(modId ? 'combined' : 'base')
+  // Handle group selection
+  const handleGroupSelect = (groupId: string | null) => {
+    setSelectedGroupId(groupId)
+    setViewMode(groupId ? 'combined' : 'base')
   }
 
   // Handle flow state changes from FlowBuilder
@@ -322,7 +322,7 @@ Agent ID: ${agentId}`
       summary: proposal.summary,
       apply_mode: proposal.apply_mode || 'replace',
       target_prompt: proposal.target_prompt || 'main',
-      target_mod_id: proposal.target_mod_id,
+      target_group_id: proposal.target_group_id,
     })
   }, [])
 
@@ -415,10 +415,10 @@ Agent ID: ${agentId}`
                   <AgentBrowser
                     catalog={catalog}
                     selectedAgentId={selectedAgentId}
-                    selectedModId={selectedModId}
+                    selectedGroupId={selectedGroupId}
                     viewMode={viewMode}
                     onAgentSelect={handleAgentSelect}
-                    onModSelect={handleModSelect}
+                    onGroupSelect={handleGroupSelect}
                     onViewModeChange={setViewMode}
                     onDiscussWithClaude={handleDiscussWithClaude}
                     onCloneToWorkshop={handleCloneToWorkshop}

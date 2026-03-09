@@ -171,7 +171,7 @@ describe('OpusChat', () => {
     })
   })
 
-  it('routes MOD-target workshop prompt proposals to MOD apply path', async () => {
+  it('routes group-target workshop prompt proposals to the group apply path', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -186,8 +186,8 @@ describe('OpusChat', () => {
           success: true,
           pending_user_approval: true,
           apply_mode: 'replace',
-          target_prompt: 'mod',
-          target_mod_id: 'WB',
+          target_prompt: 'group',
+          target_group_id: 'WB',
           proposed_prompt: 'WB-specific override prompt text.',
           change_summary: 'Tightened WB anatomy constraints.',
         },
@@ -199,8 +199,8 @@ describe('OpusChat', () => {
     const context: ChatContext = {
       active_tab: 'agent_workshop',
       agent_workshop: {
-        selected_mod_id: 'WB',
-        selected_mod_prompt_draft: 'Old WB prompt',
+        selected_group_id: 'WB',
+        selected_group_prompt_draft: 'Old WB prompt',
       },
     }
 
@@ -226,8 +226,8 @@ describe('OpusChat', () => {
         prompt: 'WB-specific override prompt text.',
         summary: 'Tightened WB anatomy constraints.',
         apply_mode: 'replace',
-        target_prompt: 'mod',
-        target_mod_id: 'WB',
+        target_prompt: 'group',
+        target_group_id: 'WB',
       })
     })
   })

@@ -35,9 +35,9 @@ export interface AgentDocumentation {
 // Prompt Catalog Types
 // ============================================================================
 
-// MOD-specific rule information
-export interface MODRuleInfo {
-  mod_id: string
+// Group-specific rule information
+export interface GroupRuleInfo {
+  group_id: string
   content: string
   source_file: string  // Legacy file path or 'database'
   description?: string
@@ -56,8 +56,8 @@ export interface PromptInfo {
   description: string
   base_prompt: string
   source_file: string  // Legacy file path or 'database'
-  has_mod_rules: boolean
-  mod_rules: Record<string, MODRuleInfo>
+  has_group_rules: boolean
+  group_rules: Record<string, GroupRuleInfo>
   tools: string[]
   model?: string
   subcategory?: string  // Subcategory for palette grouping
@@ -83,7 +83,7 @@ export interface AgentPrompts {
 export interface PromptCatalog {
   categories: AgentPrompts[]
   total_agents: number
-  available_mods: string[]
+  available_groups: string[]
   last_updated: string
 }
 
@@ -163,9 +163,9 @@ export interface CustomAgent {
   name: string
   description?: string
   custom_prompt: string
-  mod_prompt_overrides: Record<string, string>
+  group_prompt_overrides: Record<string, string>
   icon: string
-  include_mod_rules: boolean
+  include_group_rules: boolean
   model_id: string
   model_temperature: number
   model_reasoning?: string
@@ -187,7 +187,7 @@ export interface CustomAgentVersion {
   custom_agent_id: string
   version: number
   custom_prompt: string
-  mod_prompt_overrides: Record<string, string>
+  group_prompt_overrides: Record<string, string>
   notes?: string
   created_at: string
 }
@@ -195,10 +195,10 @@ export interface CustomAgentVersion {
 export interface PromptPreviewResponse {
   agent_id: string
   prompt: string
-  mod_id?: string
+  group_id?: string
   source: 'system_agent' | 'custom_agent'
   parent_agent_key?: string
-  include_mod_rules?: boolean
+  include_group_rules?: boolean
 }
 
 export interface CustomAgentTestEvent {
@@ -242,12 +242,12 @@ export interface AgentWorkshopContext {
   template_name?: string
   custom_agent_id?: string
   custom_agent_name?: string
-  include_mod_rules?: boolean
-  selected_mod_id?: string
+  include_group_rules?: boolean
+  selected_group_id?: string
   prompt_draft?: string
-  selected_mod_prompt_draft?: string
-  mod_prompt_override_count?: number
-  has_mod_prompt_overrides?: boolean
+  selected_group_prompt_draft?: string
+  group_prompt_override_count?: number
+  has_group_prompt_overrides?: boolean
   template_prompt_stale?: boolean
   template_exists?: boolean
   draft_tool_ids?: string[]
@@ -259,8 +259,8 @@ export interface WorkshopPromptUpdateProposal {
   prompt: string
   summary?: string
   apply_mode?: 'replace' | 'targeted_edit'
-  target_prompt?: 'main' | 'mod'
-  target_mod_id?: string
+  target_prompt?: 'main' | 'group'
+  target_group_id?: string
 }
 
 export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposal {
@@ -270,8 +270,8 @@ export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposa
 // Context passed to Opus chat
 export interface ChatContext {
   selected_agent_id?: string
-  selected_mod_id?: string
-  view_mode?: 'base' | 'mod' | 'combined'
+  selected_group_id?: string
+  view_mode?: 'base' | 'group' | 'combined'
   trace_id?: string
   // Flow context (when on Flows tab)
   active_tab?: 'agents' | 'flows' | 'agent_workshop'
@@ -302,7 +302,7 @@ export interface PromptExecution {
   agent_id: string
   agent_name: string
   prompt_preview: string
-  mod_applied?: string
+  group_applied?: string
   model?: string
   tokens_used?: number
 }
@@ -334,8 +334,8 @@ export interface ToolResult {
   pending_user_approval?: boolean
   apply_mode?: 'replace' | 'targeted_edit'
   proposed_prompt?: string
-  target_prompt?: 'main' | 'mod'
-  target_mod_id?: string
+  target_prompt?: 'main' | 'group'
+  target_group_id?: string
   change_summary?: string
   applied_edits?: string[]
   [key: string]: unknown
@@ -353,7 +353,7 @@ export interface OpusChatEvent {
 }
 
 // Suggestion types
-export type SuggestionType = 'improvement' | 'bug' | 'clarification' | 'mod_specific' | 'missing_case' | 'general'
+export type SuggestionType = 'improvement' | 'bug' | 'clarification' | 'group_specific' | 'missing_case' | 'general'
 
 // Manual suggestion submission
 export interface SuggestionSubmission {
@@ -362,7 +362,7 @@ export interface SuggestionSubmission {
   summary: string
   detailed_reasoning: string
   proposed_change?: string
-  mod_id?: string
+  group_id?: string
   trace_id?: string
 }
 

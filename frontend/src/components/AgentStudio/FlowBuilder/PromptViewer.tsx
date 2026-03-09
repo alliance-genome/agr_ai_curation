@@ -1,7 +1,7 @@
 /**
  * PromptViewer Component
  *
- * Slide-over panel that displays base prompts and MOD-specific prompts
+ * Slide-over panel that displays base prompts and group-specific prompts
  * for an agent. Covers the flow canvas when open.
  */
 
@@ -84,7 +84,7 @@ const ControlsRow = styled(Box)(({ theme }) => ({
   flexWrap: 'wrap',
 }))
 
-type ViewMode = 'base' | 'mod' | 'combined'
+type ViewMode = 'base' | 'group' | 'combined'
 
 interface PromptViewerProps {
   /** Agent ID to display prompts for */
@@ -105,7 +105,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
   // UI state
   const [viewMode, setViewMode] = useState<ViewMode>('base')
-  const [selectedModId, setSelectedModId] = useState<string | null>(null)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [combinedPrompt, setCombinedPrompt] = useState<string | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -118,7 +118,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
       setLoading(true)
       setError(null)
       setAgent(null)
-      setSelectedModId(null)
+      setSelectedGroupId(null)
       setViewMode('base')
       setCombinedPrompt(null)
 
@@ -136,10 +136,10 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
         if (foundAgent) {
           setAgent(foundAgent)
-          // Auto-select first MOD if available
-          if (foundAgent.has_mod_rules && Object.keys(foundAgent.mod_rules).length > 0) {
-            const firstMod = Object.keys(foundAgent.mod_rules)[0]
-            setSelectedModId(firstMod)
+          // Auto-select first group if available
+          if (foundAgent.has_group_rules && Object.keys(foundAgent.group_rules).length > 0) {
+            const firstGroup = Object.keys(foundAgent.group_rules)[0]
+            setSelectedGroupId(firstGroup)
           }
         } else {
           setError(`Agent "${agentId}" not found in catalog`)
@@ -157,9 +157,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
   // Load combined prompt when needed
   useEffect(() => {
-    if (viewMode === 'combined' && agentId && selectedModId && agent?.has_mod_rules) {
+    if (viewMode === 'combined' && agentId && selectedGroupId && agent?.has_group_rules) {
       setLoadingCombined(true)
-      fetchCombinedPrompt(agentId, selectedModId)
+      fetchCombinedPrompt(agentId, selectedGroupId)
         .then(setCombinedPrompt)
         .catch((err) => {
           logger.error('Failed to fetch combined prompt', err as Error, { component: 'PromptViewer' })
@@ -167,7 +167,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
         })
         .finally(() => setLoadingCombined(false))
     }
-  }, [viewMode, agentId, selectedModId, agent])
+  }, [viewMode, agentId, selectedGroupId, agent])
 
   // Get prompt content based on view mode
   const getDisplayContent = (): string => {
@@ -177,8 +177,8 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
       return agent.base_prompt
     }
 
-    if (viewMode === 'mod' && selectedModId && agent.mod_rules[selectedModId]) {
-      return agent.mod_rules[selectedModId].content
+    if (viewMode === 'group' && selectedGroupId && agent.group_rules[selectedGroupId]) {
+      return agent.group_rules[selectedGroupId].content
     }
 
     if (viewMode === 'combined' && combinedPrompt) {
@@ -204,11 +204,11 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
     }
   }
 
-  // Handle MOD selection change
-  const handleModChange = (modId: string | null) => {
-    setSelectedModId(modId)
-    setCombinedPrompt(null) // Reset combined prompt when MOD changes
-    if (!modId) {
+  // Handle group selection change
+  const handleGroupChange = (groupId: string | null) => {
+    setSelectedGroupId(groupId)
+    setCombinedPrompt(null) // Reset combined prompt when group changes
+    if (!groupId) {
       setViewMode('base')
     }
   }
@@ -229,7 +229,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
               {agentName} Prompts
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              View the base prompt and MOD-specific instructions
+              View the base prompt and group-specific instructions
             </Typography>
           </Box>
           <Tooltip title={copied ? 'Copied!' : 'Copy prompt'}>
@@ -283,34 +283,34 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                   size="small"
                 >
                   <ToggleButton value="base">Base Prompt</ToggleButton>
-                  <ToggleButton value="mod" disabled={!selectedModId || !agent.has_mod_rules}>
-                    MOD Rules
+                  <ToggleButton value="group" disabled={!selectedGroupId || !agent.has_group_rules}>
+                    Group Rules
                   </ToggleButton>
-                  <ToggleButton value="combined" disabled={!selectedModId || !agent.has_mod_rules}>
+                  <ToggleButton value="combined" disabled={!selectedGroupId || !agent.has_group_rules}>
                     Combined
                   </ToggleButton>
                 </ToggleButtonGroup>
 
-                {agent.has_mod_rules && Object.keys(agent.mod_rules).length > 0 && (
+                {agent.has_group_rules && Object.keys(agent.group_rules).length > 0 && (
                   <FormControl size="small" sx={{ minWidth: 120 }}>
-                    <InputLabel>MOD</InputLabel>
+                    <InputLabel>Group</InputLabel>
                     <Select
-                      value={selectedModId || ''}
-                      label="MOD"
-                      onChange={(e) => handleModChange(e.target.value || null)}
+                      value={selectedGroupId || ''}
+                      label="Group"
+                      onChange={(e) => handleGroupChange(e.target.value || null)}
                     >
-                      {Object.keys(agent.mod_rules).map((modId) => (
-                        <MenuItem key={modId} value={modId}>
-                          {modId.toUpperCase()}
+                      {Object.keys(agent.group_rules).map((groupId) => (
+                        <MenuItem key={groupId} value={groupId}>
+                          {groupId.toUpperCase()}
                         </MenuItem>
                       ))}
                     </Select>
                   </FormControl>
                 )}
 
-                {!agent.has_mod_rules && (
+                {!agent.has_group_rules && (
                   <Typography variant="caption" color="text.secondary">
-                    No MOD-specific rules for this agent
+                    No group-specific rules for this agent
                   </Typography>
                 )}
               </ControlsRow>

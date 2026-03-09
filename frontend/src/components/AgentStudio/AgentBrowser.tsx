@@ -112,11 +112,11 @@ const DetailsContainer = styled(Box)(() => ({
 interface AgentBrowserProps {
   catalog: PromptCatalog
   selectedAgentId: string | null
-  selectedModId: string | null
-  viewMode: 'base' | 'mod' | 'combined'
+  selectedGroupId: string | null
+  viewMode: 'base' | 'group' | 'combined'
   onAgentSelect: (agentId: string) => void
-  onModSelect: (modId: string | null) => void
-  onViewModeChange: (mode: 'base' | 'mod' | 'combined') => void
+  onGroupSelect: (groupId: string | null) => void
+  onViewModeChange: (mode: 'base' | 'group' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
   onCloneToWorkshop?: (agentId: string) => void
 }
@@ -126,10 +126,10 @@ type BrowserFilter = 'all' | 'shared' | 'templates'
 function AgentBrowser({
   catalog,
   selectedAgentId,
-  selectedModId,
+  selectedGroupId,
   viewMode,
   onAgentSelect,
-  onModSelect,
+  onGroupSelect,
   onViewModeChange,
   onDiscussWithClaude,
   onCloneToWorkshop,
@@ -348,7 +348,7 @@ function AgentBrowser({
                       >
                         <ListItemText
                           primary={agent.agent_name}
-                          secondary={agent.has_mod_rules ? 'Has MOD rules' : undefined}
+                          secondary={agent.has_group_rules ? 'Has group rules' : undefined}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
@@ -372,9 +372,9 @@ function AgentBrowser({
         <DetailsContainer>
           <AgentDetailsPanel
             agent={selectedAgent}
-            selectedModId={selectedModId}
+            selectedGroupId={selectedGroupId}
             viewMode={viewMode}
-            onModSelect={onModSelect}
+            onGroupSelect={onGroupSelect}
             onViewModeChange={onViewModeChange}
             onDiscussWithClaude={onDiscussWithClaude}
             onCloneToWorkshop={onCloneToWorkshop}
