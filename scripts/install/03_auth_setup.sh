@@ -54,8 +54,10 @@ main() {
   echo "  Choose how users will log in to AI Curation."
   echo
   echo "    Option 1: Dev mode (default)"
-  echo "      No login required. Anyone who can reach the URL has full access."
-  echo "      Great for local testing or evaluation. Not suitable for production."
+  echo "      No login required. Everyone shares a single \"Dev User\" identity."
+  echo "      Publications, work items, and agent sessions are NOT isolated --"
+  echo "      all activity is visible to all users. Good for quick testing, but"
+  echo "      you need OIDC for proper per-user isolation."
   echo
   echo "    Option 2: OIDC (OpenID Connect)"
   echo "      Production-grade single sign-on. Works with Keycloak, Auth0, Okta,"
