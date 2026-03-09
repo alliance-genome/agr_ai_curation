@@ -129,8 +129,12 @@ append_custom_group_block() {
   printf '  %s:\n' "$group_id" >>"$file_path"
   printf '    name: "%s"\n' "$escaped_display_name" >>"$file_path"
   printf '    description: "%s"\n' "$escaped_description" >>"$file_path"
-  printf '    species: "%s"\n' "$escaped_species" >>"$file_path"
-  printf '    taxon: "%s"\n' "$escaped_taxon" >>"$file_path"
+  if [[ -n "$species" ]]; then
+    printf '    species: "%s"\n' "$escaped_species" >>"$file_path"
+  fi
+  if [[ -n "$taxon" ]]; then
+    printf '    taxon: "%s"\n' "$escaped_taxon" >>"$file_path"
+  fi
   printf '    provider_groups:\n' >>"$file_path"
 
   local token
@@ -250,8 +254,8 @@ main() {
       validate_group_id "$custom_group_id"
       custom_name="$(prompt_required_value "Display name")"
       custom_description="$(prompt_required_value "Description")"
-      custom_species="$(prompt_required_value "Species")"
-      custom_taxon="$(prompt_required_value "Taxon ID")"
+      read -r -p "Species (press Enter to skip): " custom_species
+      read -r -p "Taxon ID (press Enter to skip): " custom_taxon
       custom_provider_groups="$(prompt_required_value "Provider group names (comma-separated)")"
 
       write_identity_provider_header "$tmp_output" "$auth_type" "$group_claim"
