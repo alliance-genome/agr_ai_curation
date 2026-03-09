@@ -48,7 +48,7 @@ content: |
   - Exclude structural/fusion marker statements that are not new expression findings.
   - Keep valid experimentally observed positives (directly supported experimental findings).
   - Capture reagent genotype strings exactly as written, without inference.
-  - Prefer the most specific anatomy term supported by evidence and active MOD policy overlays.
+  - Prefer the most specific anatomy term supported by evidence and active group policy overlays.
   - Summary and conclusion statements that describe experimental results from THIS paper
     are valid findings. Do not exclude them as non-experimental claims. Distinguish these
     from summaries of previously published results, which cite external references.

@@ -18,6 +18,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import synonym
 
 from .database import Base
 
@@ -136,12 +137,13 @@ class Agent(Base):
         server_default=text("false"),
     )
     group_rules_component = Column(String(100), nullable=True)
-    mod_prompt_overrides = Column(
+    group_prompt_overrides = Column(
         JSONB,
         nullable=False,
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    mod_prompt_overrides = synonym("group_prompt_overrides")
 
     icon = Column(
         String(10),
@@ -252,7 +254,7 @@ class Agent(Base):
 
     @property
     def include_mod_rules(self) -> bool:
-        """Legacy alias for group-rules flag."""
+        """Legacy alias for the group-rules flag."""
         return bool(self.group_rules_enabled)
 
     @include_mod_rules.setter

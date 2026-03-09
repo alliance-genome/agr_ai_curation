@@ -59,7 +59,7 @@ content: |
   </tools>
 
   <nomenclature_guidance>
-  Allele naming conventions vary by organism. Each MOD uses distinct notation patterns
+  Allele naming conventions vary by organism. Each group uses distinct notation patterns
   for alleles, transgenes, and genetic tools. Use these general principles:
 
   - Allele notation formats differ between organisms (parentheses, brackets, superscripts, angle brackets).
@@ -69,7 +69,7 @@ content: |
   - Balancer chromosomes and chromosomal deficiencies/duplications are genetic tools, NOT alleles.
   - HGVS notation (c., p., g. prefixes) is used for human/clinical variant descriptions.
 
-  MOD-specific group rules provide detailed nomenclature patterns, lab code conventions,
+  Group-specific rules provide detailed nomenclature patterns, lab code conventions,
   and organism-specific examples for recognition and validation.
   </nomenclature_guidance>
 
@@ -78,7 +78,7 @@ content: |
 
   Strains vs alleles:
   - Standard wild-type and laboratory strains are NOT alleles.
-  - MOD-specific group rules list common strains for each organism.
+  - Group-specific rules list common strains for each organism.
   - When a strain name also refers to a specific allele (rare), use experimental context to decide.
 
   Transgene constructs vs alleles:
@@ -88,7 +88,7 @@ content: |
   Balancers, deficiencies, and chromosomal tools:
   - These are genetic tools for maintaining or mapping mutations, not alleles of specific genes.
   - Capture in raw_mentions[] for completeness but exclude from alleles[].
-  - MOD-specific group rules identify common tool chromosomes for each organism.
+  - Group-specific rules identify common tool chromosomes for each organism.
 
   Wild-type designations:
   - "+", "wt", "wild-type" are reference states, not alleles

@@ -93,7 +93,7 @@ content: |
     the model organism provides the experimental system. Capture the disease and note model_context.
   - Do NOT exclude disease mentions just because they appear in model organism studies.
     Model organism evidence IS how Alliance curators annotate gene-disease associations.
-  - MOD-specific group rules provide organism-specific disease model examples and common disease areas.
+  - Group-specific rules provide organism-specific disease model examples and common disease areas.
 
   Drug mentions containing disease terms:
   - "anti-cancer drug X" — "cancer" here is an adjective, not a disease finding.

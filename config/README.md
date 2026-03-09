@@ -9,7 +9,7 @@ config/
 ├── README.md                    # This file
 ├── groups.yaml                  # Group/organization mappings (from .example)
 ├── connections.yaml             # External service connections (from .example)
-├── providers.yaml               # MOD provider-to-taxon mappings
+├── providers.yaml               # LLM runtime provider definitions
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
 └── agents/                      # Agent definitions

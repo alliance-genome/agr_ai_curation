@@ -32,8 +32,8 @@ The Agent Browser also includes filter tabs (All, Shared, Templates) at the top 
 
 For each agent, you can view:
 - **Base Prompt** - The core instructions given to the agent
-- **MOD-Specific Rules** - How the prompt is customized for each Model Organism Database (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
-- **Combined View** - See the base prompt with MOD rules injected
+- **Group-Specific Rules** - How the prompt is customized for each curator group (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
+- **Combined View** - See the base prompt with group rules injected
 - **Tools** - The tools available to each agent (listed in the agent card)
 
 **Clickable Tool Names**
@@ -84,13 +84,13 @@ Create and test custom versions of agent prompts without affecting the live syst
 
 **What is a Custom Agent?**
 
-A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-MOD overrides, and use it in flows — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-group overrides, and use it in flows — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
 
 **Getting Started**
 
 1. **Choose a Getting Started mode** - Select **Template**, **Scratch**, or **Clone**
 2. **Set your base configuration** - Pick template/clone source (if applicable), model, and tools
-3. **Edit the prompt** - Modify instructions and optional per-MOD overrides
+3. **Edit the prompt** - Modify instructions and optional per-group overrides
 4. **Choose an icon** - Pick an emoji icon from the icon picker to identify your agent
 5. **Save** - Use **File → Save Agent**. Each save creates a version you can revert to later.
 
@@ -110,16 +110,16 @@ The Workshop toolbar provides these operations:
 
 When creating or editing a custom agent, select an emoji icon to help identify your agent in the palette and flow canvas. Available icons include 🔧, 🧬, 📄, 🔍, 🧪, 📊, 🧠, ⚙️, ✨, 📝, 📚, 🧩, and more.
 
-**Per-MOD Prompt Overrides**
+**Per-Group Prompt Overrides**
 
-Customize how your agent behaves for different Model Organism Databases:
+Customize how your agent behaves for different curator groups:
 
-1. Check **"Include MOD rules at runtime"** to apply MOD-specific rules when your custom agent runs
-2. **Select a MOD** from the dropdown (e.g., WormBase, FlyBase, MGI)
-3. **Edit the override** - Write MOD-specific instructions in the text area
-4. **Reset to Template** - Revert a MOD override back to the template version
+1. Check **"Include group rules at runtime"** to apply group-specific rules when your custom agent runs
+2. **Select a group** from the dropdown (e.g., WormBase, FlyBase, MGI)
+3. **Edit the override** - Write group-specific instructions in the text area
+4. **Reset to Template** - Revert a group override back to the template version
 
-The Workshop shows which MODs have custom overrides and a total override count.
+The Workshop shows which groups have custom overrides and a total override count.
 
 **Version History**
 
@@ -169,7 +169,7 @@ Custom agents appear in the Flow Builder palette under "My Custom Agents". You c
 
 **Discuss with Claude**
 
-Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the left-panel chat is aware of your workshop context — your selected template source, draft prompt, and MOD settings. You can ask Claude to:
+Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the left-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
@@ -211,7 +211,7 @@ Click the **"Manual"** button to fill out a suggestion form yourself:
   - *Improvement* - General enhancement
   - *Bug* - Incorrect or unexpected behavior
   - *Clarification* - Ambiguous instructions
-  - *MOD-Specific* - Change needed for your MOD
+  - *Group-Specific* - Change needed for your group
   - *Missing Case* - Scenario the prompt doesn't handle
   - *General* - Feedback not tied to a specific prompt
 - **Summary** - Brief description (1-2 sentences)
@@ -228,11 +228,11 @@ Instead of "The AI is wrong," try "When I asked about gene X, the AI said Y, but
 ### Include Examples
 If you see a pattern of errors, describe 2-3 specific cases. This helps identify whether it's a prompt issue or something else.
 
-### Share Your MOD's Conventions
-If your MOD has specific naming conventions, annotation rules, or curation practices that the AI doesn't follow, explain them. **You're the expert on your organism!**
+### Share Your Group's Conventions
+If your group has specific naming conventions, annotation rules, or curation practices that the AI doesn't follow, explain them. **You're the expert on your organism!**
 
-### Check MOD-Specific Rules First
-Before suggesting a change to a base prompt, check if your MOD already has specific rules in the Agent Browser. The issue might be that your MOD's rules need updating rather than the base prompt.
+### Check Group-Specific Rules First
+Before suggesting a change to a base prompt, check if your group already has specific rules in the Agent Browser. The issue might be that your group's rules need updating rather than the base prompt.
 
 ### Use "Open in Agent Studio"
 When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives Opus (and the development team) the full context.
@@ -258,13 +258,13 @@ No. If you have feedback based on a conversation or general observation, you can
 
 Yes! That's the main purpose of the Agents tab. Browse all agent prompts and see exactly what instructions each agent receives.
 
-### Why are there MOD-specific rules?
+### Why are there group-specific rules?
 
-Each Model Organism Database has decades of curated data and organism-specific conventions. MOD rules customize the AI to respect these conventions - for example, using WormBase anatomy terms (WBbt) for C. elegans or FlyBase allele naming patterns.
+Each curator group has organism-specific conventions and curation practices. Group rules customize the AI to respect these conventions, for example using WormBase anatomy terms (WBbt) for C. elegans or FlyBase allele naming patterns.
 
 ### How do prompts layer together? Can they conflict?
 
-Each agent has a base prompt, optional MOD-specific rules, and optional flow custom instructions. These combine in a defined priority order: flow custom instructions (highest) > base prompt > MOD rules. Flow instructions override everything else for that step. See **[How Prompts Layer Together](CURATION_FLOWS.md#how-prompts-layer-together)** in the Curation Flows guide for full details.
+Each agent has a base prompt, optional group-specific rules, and optional flow custom instructions. These combine in a defined priority order: flow custom instructions (highest) > base prompt > group rules. Flow instructions override everything else for that step. See **[How Prompts Layer Together](CURATION_FLOWS.md#how-prompts-layer-together)** in the Curation Flows guide for full details.
 
 ### What's the difference between Agent Studio's Opus and the main chat?
 
