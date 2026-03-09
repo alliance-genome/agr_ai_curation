@@ -177,7 +177,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
                 description: agent.description,
                 category: cat.category,
                 subcategory: agent.subcategory,
-                has_mod_rules: agent.has_mod_rules,
+                has_group_rules: agent.has_group_rules,
                 tools: agent.tools,
                 show_in_palette: agent.show_in_palette,
               }))

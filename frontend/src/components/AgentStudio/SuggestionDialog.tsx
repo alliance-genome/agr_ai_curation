@@ -52,9 +52,9 @@ const SUGGESTION_TYPES: { value: SuggestionType; label: string; description: str
     description: 'The prompt is ambiguous or unclear',
   },
   {
-    value: 'mod_specific',
-    label: 'MOD-Specific',
-    description: 'Change needed for a specific Model Organism Database',
+    value: 'group_specific',
+    label: 'Group-Specific',
+    description: 'Change needed for a specific group',
   },
   {
     value: 'missing_case',
@@ -116,7 +116,7 @@ function SuggestionDialog({
         summary: summary.trim(),
         detailed_reasoning: reasoning.trim(),
         proposed_change: proposedChange.trim() || undefined,
-        mod_id: context.selected_mod_id,
+        group_id: context.selected_group_id,
         trace_id: context.trace_id,
       })
 
@@ -161,7 +161,7 @@ function SuggestionDialog({
                 {selectedAgentId ? (
                   <>
                     Submitting suggestion for: <strong>{selectedAgentName}</strong>
-                    {context.selected_mod_id && ` (${context.selected_mod_id})`}
+                    {context.selected_group_id && ` (${context.selected_group_id})`}
                   </>
                 ) : (
                   <>Submitting general feedback based on conversation</>

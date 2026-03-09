@@ -82,7 +82,7 @@ const AgentChip = styled(Chip, {
 
 interface TraceContextPanelProps {
   context: TraceContext
-  onAgentClick: (agentId: string, modId?: string) => void
+  onAgentClick: (agentId: string, groupId?: string) => void
   selectedAgentId: string | null
 }
 
@@ -169,9 +169,9 @@ function TraceContextPanel({
                       <Typography variant="caption" display="block">
                         {exec.agent_name}
                       </Typography>
-                      {exec.mod_applied && (
+                      {exec.group_applied && (
                         <Typography variant="caption" display="block">
-                          MOD: {exec.mod_applied}
+                          Group: {exec.group_applied}
                         </Typography>
                       )}
                       {exec.tokens_used && (
@@ -186,7 +186,7 @@ function TraceContextPanel({
                     label={exec.agent_name}
                     size="small"
                     isSelected={selectedAgentId === exec.agent_id}
-                    onClick={() => onAgentClick(exec.agent_id, exec.mod_applied)}
+                    onClick={() => onAgentClick(exec.agent_id, exec.group_applied)}
                   />
                 </Tooltip>
               ))}

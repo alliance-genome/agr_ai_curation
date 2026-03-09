@@ -112,11 +112,11 @@ const DetailsContainer = styled(Box)(() => ({
 interface AgentBrowserProps {
   catalog: PromptCatalog
   selectedAgentId: string | null
-  selectedModId: string | null
-  viewMode: 'base' | 'mod' | 'combined'
+  selectedGroupId: string | null
+  viewMode: 'base' | 'group' | 'combined'
   onAgentSelect: (agentId: string) => void
-  onModSelect: (modId: string | null) => void
-  onViewModeChange: (mode: 'base' | 'mod' | 'combined') => void
+  onGroupSelect: (groupId: string | null) => void
+  onViewModeChange: (mode: 'base' | 'group' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
   onCloneToWorkshop?: (agentId: string) => void
 }
@@ -126,10 +126,10 @@ type BrowserFilter = 'all' | 'shared' | 'templates'
 function AgentBrowser({
   catalog,
   selectedAgentId,
-  selectedModId,
+  selectedGroupId,
   viewMode,
   onAgentSelect,
-  onModSelect,
+  onGroupSelect,
   onViewModeChange,
   onDiscussWithClaude,
   onCloneToWorkshop,
@@ -346,9 +346,9 @@ function AgentBrowser({
                         onClick={() => onAgentSelect(agent.agent_id)}
                         sx={{ pl: 4 }}
                       >
-                        <ListItemText
-                          primary={agent.agent_name}
-                          secondary={agent.has_mod_rules ? 'Has MOD rules' : undefined}
+              <ListItemText
+                primary={agent.agent_name}
+                secondary={agent.has_group_rules ? 'Has group rules' : undefined}
                           primaryTypographyProps={{ variant: 'body2' }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
@@ -370,14 +370,14 @@ function AgentBrowser({
 
         {/* Agent Details Panel */}
         <DetailsContainer>
-          <AgentDetailsPanel
-            agent={selectedAgent}
-            selectedModId={selectedModId}
-            viewMode={viewMode}
-            onModSelect={onModSelect}
-            onViewModeChange={onViewModeChange}
-            onDiscussWithClaude={onDiscussWithClaude}
-            onCloneToWorkshop={onCloneToWorkshop}
+        <AgentDetailsPanel
+          agent={selectedAgent}
+          selectedGroupId={selectedGroupId}
+          viewMode={viewMode}
+          onGroupSelect={onGroupSelect}
+          onViewModeChange={onViewModeChange}
+          onDiscussWithClaude={onDiscussWithClaude}
+          onCloneToWorkshop={onCloneToWorkshop}
           />
         </DetailsContainer>
       </ContentArea>

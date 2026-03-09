@@ -45,20 +45,20 @@ function buildCatalog(): PromptCatalog {
             description: 'Gene validation',
             base_prompt: 'System base prompt',
             source_file: 'database',
-            has_mod_rules: false,
-            mod_rules: {},
+            has_group_rules: false,
+            group_rules: {},
             tools: ['agr_curation_query'],
           },
         ],
       },
     ],
     total_agents: 1,
-    available_mods: [],
+    available_groups: [],
     last_updated: '2026-02-23T00:00:00Z',
   }
 }
 
-function buildCatalogWithModRule(): PromptCatalog {
+function buildCatalogWithGroupRule(): PromptCatalog {
   return {
     categories: [
       {
@@ -70,10 +70,10 @@ function buildCatalogWithModRule(): PromptCatalog {
             description: 'Gene validation',
             base_prompt: 'System base prompt',
             source_file: 'database',
-            has_mod_rules: true,
-            mod_rules: {
+            has_group_rules: true,
+            group_rules: {
               WB: {
-                mod_id: 'WB',
+                group_id: 'WB',
                 content: 'WB template prompt',
                 source_file: 'database',
               },
@@ -84,7 +84,7 @@ function buildCatalogWithModRule(): PromptCatalog {
       },
     ],
     total_agents: 1,
-    available_mods: ['WB'],
+    available_groups: ['WB'],
     last_updated: '2026-02-23T00:00:00Z',
   }
 }
@@ -98,9 +98,9 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     name: 'My Agent',
     description: 'desc',
     custom_prompt: 'Prompt',
-    mod_prompt_overrides: {},
+    group_prompt_overrides: {},
     icon: '🔧',
-    include_mod_rules: true,
+    include_group_rules: true,
     model_id: 'gpt-4o',
     model_temperature: 0.1,
     model_reasoning: undefined,
@@ -604,11 +604,11 @@ describe('PromptWorkshop', () => {
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
   })
 
-  it('applies incoming MOD prompt updates from Opus approval into MOD overrides', async () => {
+  it('applies incoming group prompt updates from Opus approval into group overrides', async () => {
     const onContextChange = vi.fn()
     const { rerender } = render(
       <PromptWorkshop
-        catalog={buildCatalogWithModRule()}
+        catalog={buildCatalogWithGroupRule()}
         incomingPromptUpdate={null}
         onContextChange={onContextChange}
       />
@@ -620,15 +620,15 @@ describe('PromptWorkshop', () => {
 
     rerender(
       <PromptWorkshop
-        catalog={buildCatalogWithModRule()}
+        catalog={buildCatalogWithGroupRule()}
         onContextChange={onContextChange}
         incomingPromptUpdate={{
           request_id: 2,
           prompt: 'WB override from Claude',
           summary: 'Updated WB-specific extraction guidance.',
           apply_mode: 'replace',
-          target_prompt: 'mod',
-          target_mod_id: 'WB',
+          target_prompt: 'group',
+          target_group_id: 'WB',
         }}
       />
     )
@@ -637,8 +637,8 @@ describe('PromptWorkshop', () => {
       const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
       expect(contextSnapshots).toContainEqual(
         expect.objectContaining({
-          selected_mod_id: 'WB',
-          selected_mod_prompt_draft: 'WB override from Claude',
+          selected_group_id: 'WB',
+          selected_group_prompt_draft: 'WB override from Claude',
         })
       )
     }, { timeout: 10000 })

@@ -212,11 +212,11 @@ function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string 
   const summaryText = proposal.summary?.trim()
     ? proposal.summary.trim()
     : 'No summary provided.'
-  const targetPrompt = proposal.target_prompt === 'mod' ? 'MOD prompt draft' : 'main workshop prompt draft'
-  const modLabel = proposal.target_prompt === 'mod' && proposal.target_mod_id
-    ? ` (${proposal.target_mod_id})`
+  const targetPrompt = proposal.target_prompt === 'group' ? 'group prompt draft' : 'main workshop prompt draft'
+  const groupLabel = proposal.target_prompt === 'group' && proposal.target_group_id
+    ? ` (${proposal.target_group_id})`
     : ''
-  return `Please run a post-apply review of my Agent Workshop draft.\n\nTarget reviewed: ${targetPrompt}${modLabel}\n\nChecklist:\n1. Confirm the intended update is present in the current target prompt draft.\n2. Flag any regressions, contradictions, or ambiguities introduced by the edit.\n3. Suggest one follow-up tweak only if it clearly improves behavior.\n\nApplied update summary: ${summaryText}`
+  return `Please run a post-apply review of my Agent Workshop draft.\n\nTarget reviewed: ${targetPrompt}${groupLabel}\n\nChecklist:\n1. Confirm the intended update is present in the current target prompt draft.\n2. Flag any regressions, contradictions, or ambiguities introduced by the edit.\n3. Suggest one follow-up tweak only if it clearly improves behavior.\n\nApplied update summary: ${summaryText}`
 }
 
 function OpusChat({
@@ -274,9 +274,9 @@ function OpusChat({
   // Track which discuss message was already sent to prevent duplicates
   const discussMessageSentRef = useRef<string | null>(null)
   const currentMainWorkshopDraft = context?.agent_workshop?.prompt_draft || ''
-  const currentModWorkshopDraft = context?.agent_workshop?.selected_mod_prompt_draft || ''
+  const currentGroupWorkshopDraft = context?.agent_workshop?.selected_group_prompt_draft || ''
   const currentPromptForPendingUpdate =
-    pendingPromptUpdate?.target_prompt === 'mod' ? currentModWorkshopDraft : currentMainWorkshopDraft
+    pendingPromptUpdate?.target_prompt === 'group' ? currentGroupWorkshopDraft : currentMainWorkshopDraft
   const promptLineDiff = useMemo(
     () => buildPromptLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
     [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
@@ -389,12 +389,12 @@ function OpusChat({
             ? toolResult.apply_mode
             : undefined
         const targetPrompt =
-          toolResult.target_prompt === 'mod'
-            ? 'mod'
+          toolResult.target_prompt === 'group'
+            ? 'group'
             : 'main'
-        const targetModId =
-          typeof toolResult.target_mod_id === 'string' && toolResult.target_mod_id.trim()
-            ? toolResult.target_mod_id.trim().toUpperCase()
+        const targetGroupId =
+          typeof toolResult.target_group_id === 'string' && toolResult.target_group_id.trim()
+            ? toolResult.target_group_id.trim().toUpperCase()
             : undefined
 
         if (success && proposedPrompt) {
@@ -403,11 +403,11 @@ function OpusChat({
             summary: changeSummary,
             apply_mode: applyMode || 'replace',
             target_prompt: targetPrompt,
-            target_mod_id: targetPrompt === 'mod' ? targetModId : undefined,
+            target_group_id: targetPrompt === 'group' ? targetGroupId : undefined,
           })
           setPromptUpdateDialogOpen(true)
-          const targetLabel = targetPrompt === 'mod'
-            ? `MOD prompt${targetModId ? ` (${targetModId})` : ''}`
+          const targetLabel = targetPrompt === 'group'
+            ? `group prompt${targetGroupId ? ` (${targetGroupId})` : ''}`
             : 'main prompt'
           setMessages((prev) => [
             ...prev,
@@ -598,7 +598,7 @@ function OpusChat({
       // Add agents-specific context
       if (context?.active_tab !== 'flows') {
         feedbackContext.selected_agent_id = context?.selected_agent_id || selectedAgent?.agent_id || null
-        feedbackContext.selected_mod_id = context?.selected_mod_id || null
+        feedbackContext.selected_group_id = context?.selected_group_id || null
         if (context?.active_tab === 'agent_workshop' && context?.agent_workshop) {
           feedbackContext.agent_workshop = context.agent_workshop
         }
@@ -692,13 +692,13 @@ function OpusChat({
   useEffect(() => {
     if (!awaitingAppliedPromptUpdate) return
     if (context?.active_tab !== 'agent_workshop') return
-    const targetPrompt = awaitingAppliedPromptUpdate.target_prompt === 'mod' ? 'mod' : 'main'
-    const expectedModId = awaitingAppliedPromptUpdate.target_mod_id?.trim().toUpperCase()
-    const currentModId = context?.agent_workshop?.selected_mod_id?.trim().toUpperCase()
-    if (targetPrompt === 'mod' && expectedModId && currentModId !== expectedModId) return
+    const targetPrompt = awaitingAppliedPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
+    const expectedGroupId = awaitingAppliedPromptUpdate.target_group_id?.trim().toUpperCase()
+    const currentGroupId = context?.agent_workshop?.selected_group_id?.trim().toUpperCase()
+    if (targetPrompt === 'group' && expectedGroupId && currentGroupId !== expectedGroupId) return
 
-    const sourcePrompt = targetPrompt === 'mod'
-      ? context?.agent_workshop?.selected_mod_prompt_draft
+    const sourcePrompt = targetPrompt === 'group'
+      ? context?.agent_workshop?.selected_group_prompt_draft
       : context?.agent_workshop?.prompt_draft
     if (!sourcePrompt) return
 
@@ -708,8 +708,8 @@ function OpusChat({
 
     const autoReviewRequest = buildAutoReviewRequest(awaitingAppliedPromptUpdate)
     setAwaitingAppliedPromptUpdate(null)
-    const targetLabel = targetPrompt === 'mod'
-      ? `MOD prompt${expectedModId ? ` (${expectedModId})` : ''}`
+    const targetLabel = targetPrompt === 'group'
+      ? `group prompt${expectedGroupId ? ` (${expectedGroupId})` : ''}`
       : 'main prompt'
     setMessages((prev) => [
       ...prev,
@@ -729,8 +729,8 @@ function OpusChat({
     awaitingAppliedPromptUpdate,
     context?.active_tab,
     context?.agent_workshop?.prompt_draft,
-    context?.agent_workshop?.selected_mod_prompt_draft,
-    context?.agent_workshop?.selected_mod_id,
+    context?.agent_workshop?.selected_group_prompt_draft,
+    context?.agent_workshop?.selected_group_id,
     isStreaming,
   ])
 
@@ -985,14 +985,14 @@ OUTPUT:
                               const parts: string[] = []
                               if (input.entity_type) parts.push(`Entity: ${input.entity_type}`)
                               if (input.search_term) parts.push(`Search: "${input.search_term}"`)
-                              if (input.mod_id) parts.push(`MOD: ${input.mod_id}`)
+                              if (input.group_id) parts.push(`Group: ${input.group_id}`)
                               if (input.limit) parts.push(`Limit: ${input.limit}`)
                               return parts.length > 0 ? parts.join('\n') : JSON.stringify(input, null, 2)
                             }
                             if (tc.tool_name === 'get_prompt') {
                               const parts: string[] = []
                               if (input.agent_id) parts.push(`Agent: ${input.agent_id}`)
-                              if (input.mod_id) parts.push(`MOD: ${input.mod_id}`)
+                              if (input.group_id) parts.push(`Group: ${input.group_id}`)
                               return parts.length > 0 ? parts.join(', ') : JSON.stringify(input, null, 2)
                             }
                             if (tc.tool_name.includes('api_call')) {
@@ -1239,7 +1239,7 @@ Claude is responding...
         <DialogTitle>Apply Claude Prompt Update?</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 1.5 }}>
-            Claude generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your {pendingPromptUpdate?.target_prompt === 'mod' ? `MOD prompt${pendingPromptUpdate?.target_mod_id ? ` (${pendingPromptUpdate.target_mod_id})` : ''}` : 'main prompt'} draft. Review below, then choose whether to apply it.
+            Claude generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your {pendingPromptUpdate?.target_prompt === 'group' ? `group prompt${pendingPromptUpdate?.target_group_id ? ` (${pendingPromptUpdate.target_group_id})` : ''}` : 'main prompt'} draft. Review below, then choose whether to apply it.
           </DialogContentText>
           {pendingPromptUpdate?.summary && (
             <Alert severity="info" sx={{ mb: 1.5 }}>

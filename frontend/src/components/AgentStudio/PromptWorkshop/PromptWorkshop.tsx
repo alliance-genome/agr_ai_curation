@@ -308,9 +308,9 @@ function PromptWorkshop({
   const [description, setDescription] = useState('')
   const [customPrompt, setCustomPrompt] = useState('')
   const [debouncedPromptDraft, setDebouncedPromptDraft] = useState('')
-  const [modPromptOverrides, setModPromptOverrides] = useState<Record<string, string>>({})
-  const [debouncedModPromptOverrides, setDebouncedModPromptOverrides] = useState<Record<string, string>>({})
-  const [includeModRules, setIncludeModRules] = useState(true)
+  const [groupPromptOverrides, setGroupPromptOverrides] = useState<Record<string, string>>({})
+  const [debouncedGroupPromptOverrides, setDebouncedGroupPromptOverrides] = useState<Record<string, string>>({})
+  const [includeGroupRules, setIncludeGroupRules] = useState(true)
   const [selectedVisibility, setSelectedVisibility] = useState<'private' | 'project'>('private')
   const [selectedModelId, setSelectedModelId] = useState('')
   const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
@@ -318,7 +318,7 @@ function PromptWorkshop({
   const [outputSchemaKey, setOutputSchemaKey] = useState('')
   const [icon, setIcon] = useState('🔧')
   const [saveNotes, setSaveNotes] = useState('')
-  const [modId, setModId] = useState('')
+  const [groupId, setGroupId] = useState('')
 
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [toolLibrary, setToolLibrary] = useState<ToolLibraryItem[]>([])
@@ -378,7 +378,7 @@ function PromptWorkshop({
     [customAgents, cloneSourceAgentId]
   )
 
-  const modRuleSourceAgent = useMemo(() => {
+  const groupRuleSourceAgent = useMemo(() => {
     const templateId = selectedCustomAgent?.template_source
       || selectedCloneSource?.template_source
       || (gettingStartedMode === 'template' ? parentAgentId : undefined)
@@ -392,42 +392,42 @@ function PromptWorkshop({
     selectedCustomAgent?.template_source,
   ])
 
-  const availableModIds = useMemo(
-    () => Object.keys(modRuleSourceAgent?.mod_rules || {}).sort(),
-    [modRuleSourceAgent]
+  const availableGroupIds = useMemo(
+    () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
+    [groupRuleSourceAgent]
   )
 
-  const selectedModId = useMemo(() => modId.trim().toUpperCase(), [modId])
+  const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
 
-  const selectedModBasePrompt = useMemo(() => {
-    if (!selectedModId) return ''
-    return modRuleSourceAgent?.mod_rules[selectedModId]?.content || ''
-  }, [modRuleSourceAgent, selectedModId])
+  const selectedGroupBasePrompt = useMemo(() => {
+    if (!selectedGroupId) return ''
+    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content || ''
+  }, [groupRuleSourceAgent, selectedGroupId])
 
-  const selectedModPrompt = useMemo(() => {
-    if (!selectedModId) return ''
-    if (Object.prototype.hasOwnProperty.call(modPromptOverrides, selectedModId)) {
-      return modPromptOverrides[selectedModId]
+  const selectedGroupPrompt = useMemo(() => {
+    if (!selectedGroupId) return ''
+    if (Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)) {
+      return groupPromptOverrides[selectedGroupId]
     }
-    return selectedModBasePrompt
-  }, [modPromptOverrides, selectedModId, selectedModBasePrompt])
+    return selectedGroupBasePrompt
+  }, [groupPromptOverrides, selectedGroupId, selectedGroupBasePrompt])
 
-  const selectedModPromptForContext = useMemo(() => {
-    if (!selectedModId) return undefined
-    if (Object.prototype.hasOwnProperty.call(debouncedModPromptOverrides, selectedModId)) {
-      return debouncedModPromptOverrides[selectedModId]
+  const selectedGroupPromptForContext = useMemo(() => {
+    if (!selectedGroupId) return undefined
+    if (Object.prototype.hasOwnProperty.call(debouncedGroupPromptOverrides, selectedGroupId)) {
+      return debouncedGroupPromptOverrides[selectedGroupId]
     }
-    return modRuleSourceAgent?.mod_rules[selectedModId]?.content
-  }, [debouncedModPromptOverrides, modRuleSourceAgent, selectedModId])
+    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content
+  }, [debouncedGroupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
 
-  const hasSelectedModOverride = useMemo(
-    () => Boolean(selectedModId && Object.prototype.hasOwnProperty.call(modPromptOverrides, selectedModId)),
-    [modPromptOverrides, selectedModId]
+  const hasSelectedGroupOverride = useMemo(
+    () => Boolean(selectedGroupId && Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)),
+    [groupPromptOverrides, selectedGroupId]
   )
 
-  const hasAnyModOverrides = useMemo(
-    () => Object.keys(modPromptOverrides).length > 0,
-    [modPromptOverrides]
+  const hasAnyGroupOverrides = useMemo(
+    () => Object.keys(groupPromptOverrides).length > 0,
+    [groupPromptOverrides]
   )
 
   const iconOptions = useMemo(() => {
@@ -649,9 +649,9 @@ function PromptWorkshop({
         setDescription(selectedCloneSource.description || '')
         setCustomPrompt(selectedCloneSource.custom_prompt)
         setDebouncedPromptDraft(selectedCloneSource.custom_prompt)
-        setModPromptOverrides(selectedCloneSource.mod_prompt_overrides || {})
-        setDebouncedModPromptOverrides(selectedCloneSource.mod_prompt_overrides || {})
-        setIncludeModRules(selectedCloneSource.include_mod_rules)
+        setGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
+        setDebouncedGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
+        setIncludeGroupRules(selectedCloneSource.include_group_rules)
         setSelectedVisibility('private')
         const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
         setSelectedModelId(cloneModelId)
@@ -672,9 +672,9 @@ function PromptWorkshop({
         setDescription('')
         setCustomPrompt('')
         setDebouncedPromptDraft('')
-        setModPromptOverrides({})
-        setDebouncedModPromptOverrides({})
-        setIncludeModRules(false)
+        setGroupPromptOverrides({})
+        setDebouncedGroupPromptOverrides({})
+        setIncludeGroupRules(false)
         setSelectedVisibility('private')
         setSelectedModelId(defaultModelId)
         setSelectedModelReasoning(resolveReasoningSelection(modelOptions, defaultModelId))
@@ -689,9 +689,9 @@ function PromptWorkshop({
       setDescription('')
       setCustomPrompt(basePrompt)
       setDebouncedPromptDraft(basePrompt)
-      setModPromptOverrides({})
-      setDebouncedModPromptOverrides({})
-      setIncludeModRules(true)
+      setGroupPromptOverrides({})
+      setDebouncedGroupPromptOverrides({})
+      setIncludeGroupRules(true)
       setSelectedVisibility('private')
       const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
       setSelectedModelId(templateModelId)
@@ -706,9 +706,9 @@ function PromptWorkshop({
     setDescription(selectedCustomAgent.description || '')
     setCustomPrompt(selectedCustomAgent.custom_prompt)
     setDebouncedPromptDraft(selectedCustomAgent.custom_prompt)
-    setModPromptOverrides(selectedCustomAgent.mod_prompt_overrides || {})
-    setDebouncedModPromptOverrides(selectedCustomAgent.mod_prompt_overrides || {})
-    setIncludeModRules(selectedCustomAgent.include_mod_rules)
+    setGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
+    setDebouncedGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
+    setIncludeGroupRules(selectedCustomAgent.include_group_rules)
     setSelectedVisibility(selectedCustomAgent.visibility === 'project' ? 'project' : 'private')
     const customModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCustomAgent.model_id)
     setSelectedModelId(customModelId)
@@ -732,14 +732,14 @@ function PromptWorkshop({
   ])
 
   useEffect(() => {
-    if (availableModIds.length === 0) {
-      if (modId) setModId('')
+    if (availableGroupIds.length === 0) {
+      if (groupId) setGroupId('')
       return
     }
-    if (!modId || !availableModIds.includes(modId)) {
-      setModId(availableModIds[0])
+    if (!groupId || !availableGroupIds.includes(groupId)) {
+      setGroupId(availableGroupIds[0])
     }
-  }, [availableModIds, modId])
+  }, [availableGroupIds, groupId])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -753,13 +753,13 @@ function PromptWorkshop({
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      setDebouncedModPromptOverrides(modPromptOverrides)
+      setDebouncedGroupPromptOverrides(groupPromptOverrides)
     }, 450)
 
     return () => {
       window.clearTimeout(timeout)
     }
-  }, [modPromptOverrides])
+  }, [groupPromptOverrides])
 
   useEffect(() => {
     if (!onContextChange) return
@@ -773,12 +773,12 @@ function PromptWorkshop({
       template_name: contextTemplateName,
       custom_agent_id: selectedCustomAgent?.agent_id,
       custom_agent_name: selectedCustomAgent?.name,
-      include_mod_rules: includeModRules,
-      selected_mod_id: selectedModId || undefined,
+      include_group_rules: includeGroupRules,
+      selected_group_id: selectedGroupId || undefined,
       prompt_draft: debouncedPromptDraft,
-      selected_mod_prompt_draft: selectedModPromptForContext,
-      mod_prompt_override_count: Object.keys(debouncedModPromptOverrides).length,
-      has_mod_prompt_overrides: Object.keys(debouncedModPromptOverrides).length > 0,
+      selected_group_prompt_draft: selectedGroupPromptForContext,
+      group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
+      has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
       template_prompt_stale: selectedCustomAgent?.parent_prompt_stale,
       template_exists: selectedCustomAgent?.parent_exists,
       draft_tool_ids: selectedToolIds,
@@ -796,11 +796,11 @@ function PromptWorkshop({
     selectedCustomAgent?.template_source,
     selectedCustomAgent?.parent_prompt_stale,
     selectedCustomAgent?.parent_exists,
-    includeModRules,
-    selectedModId,
+    includeGroupRules,
+    selectedGroupId,
     debouncedPromptDraft,
-    selectedModPromptForContext,
-    debouncedModPromptOverrides,
+    selectedGroupPromptForContext,
+    debouncedGroupPromptOverrides,
     selectedToolIds,
     selectedModelId,
     selectedModelReasoning,
@@ -824,32 +824,32 @@ function PromptWorkshop({
       return
     }
 
-    const targetPrompt = incomingPromptUpdate.target_prompt === 'mod' ? 'mod' : 'main'
-    if (targetPrompt === 'mod') {
-      const targetModId = (incomingPromptUpdate.target_mod_id || selectedModId || '').trim().toUpperCase()
-      if (!targetModId) {
-        setError('Cannot apply MOD prompt update because no MOD is selected.')
+    const targetPrompt = incomingPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
+    if (targetPrompt === 'group') {
+      const targetGroupId = (incomingPromptUpdate.target_group_id || selectedGroupId || '').trim().toUpperCase()
+      if (!targetGroupId) {
+        setError('Cannot apply group prompt update because no group is selected.')
         return
       }
-      if (availableModIds.length > 0 && !availableModIds.includes(targetModId)) {
-        setError(`Cannot apply MOD prompt update: ${targetModId} is not available for this template.`)
+      if (availableGroupIds.length > 0 && !availableGroupIds.includes(targetGroupId)) {
+        setError(`Cannot apply group prompt update: ${targetGroupId} is not available for this template.`)
         return
       }
 
-      setModId(targetModId)
-      setModPromptOverrides((prev) => ({
+      setGroupId(targetGroupId)
+      setGroupPromptOverrides((prev) => ({
         ...prev,
-        [targetModId]: incomingPromptUpdate.prompt,
+        [targetGroupId]: incomingPromptUpdate.prompt,
       }))
-      setDebouncedModPromptOverrides((prev) => ({
+      setDebouncedGroupPromptOverrides((prev) => ({
         ...prev,
-        [targetModId]: incomingPromptUpdate.prompt,
+        [targetGroupId]: incomingPromptUpdate.prompt,
       }))
       setError(null)
       setStatus(
         incomingPromptUpdate.summary?.trim()
-          ? `Applied Claude MOD update (${targetModId}): ${incomingPromptUpdate.summary.trim()}`
-          : `Applied Claude prompt update to ${targetModId} MOD draft`
+          ? `Applied Claude group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
+          : `Applied Claude prompt update to ${targetGroupId} group draft`
       )
       return
     }
@@ -862,7 +862,7 @@ function PromptWorkshop({
         ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
         : 'Applied Claude prompt update to the draft'
     )
-  }, [incomingPromptUpdate, availableModIds, selectedModId])
+  }, [incomingPromptUpdate, availableGroupIds, selectedGroupId])
 
   const handleNew = () => {
     if (selectedCustomAgent) {
@@ -936,8 +936,8 @@ function PromptWorkshop({
           name: nameToSave,
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
-          mod_prompt_overrides: modPromptOverrides,
-          include_mod_rules: includeModRules,
+          group_prompt_overrides: groupPromptOverrides,
+          include_group_rules: includeGroupRules,
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning || undefined,
           tool_ids: selectedToolIds,
@@ -961,8 +961,8 @@ function PromptWorkshop({
           name: nameToSave,
           description: description.trim() || undefined,
           custom_prompt: customPrompt,
-          mod_prompt_overrides: modPromptOverrides,
-          include_mod_rules: includeModRules,
+          group_prompt_overrides: groupPromptOverrides,
+          include_group_rules: includeGroupRules,
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning || undefined,
           tool_ids: selectedToolIds,
@@ -1019,25 +1019,25 @@ function PromptWorkshop({
     }
   }
 
-  const handleSelectedModPromptChange = (value: string) => {
-    if (!selectedModId) return
-    setModPromptOverrides((prev) => {
+  const handleSelectedGroupPromptChange = (value: string) => {
+    if (!selectedGroupId) return
+    setGroupPromptOverrides((prev) => {
       const next = { ...prev }
-      if (value === selectedModBasePrompt || (!value.trim() && !selectedModBasePrompt.trim())) {
-        delete next[selectedModId]
+      if (value === selectedGroupBasePrompt || (!value.trim() && !selectedGroupBasePrompt.trim())) {
+        delete next[selectedGroupId]
       } else {
-        next[selectedModId] = value
+        next[selectedGroupId] = value
       }
       return next
     })
   }
 
-  const handleResetSelectedModPrompt = () => {
-    if (!selectedModId) return
-    setModPromptOverrides((prev) => {
-      if (!Object.prototype.hasOwnProperty.call(prev, selectedModId)) return prev
+  const handleResetSelectedGroupPrompt = () => {
+    if (!selectedGroupId) return
+    setGroupPromptOverrides((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, selectedGroupId)) return prev
       const next = { ...prev }
-      delete next[selectedModId]
+      delete next[selectedGroupId]
       return next
     })
   }
@@ -1198,8 +1198,8 @@ function PromptWorkshop({
   const handleDiscussWithClaude = () => {
     const targetName = selectedCustomAgent?.name || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const modPart = selectedModId ? `Selected MOD: ${selectedModId}` : 'Selected MOD: none'
-    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n\nAgent ID: ${targetId}\n${modPart}\n\n[Request ID: ${Date.now()}]`
+    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
+    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
 
     onVerifyRequest?.(message)
   }
@@ -1226,8 +1226,8 @@ function PromptWorkshop({
   const handleDiscussPromptChangesWithClaude = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const modPart = selectedModId ? `Selected MOD: ${selectedModId}` : 'Selected MOD: none'
-    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n\nAgent ID: ${targetId}\n${modPart}\n\n[Request ID: ${Date.now()}]`
+    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
+    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
 
     onVerifyRequest?.(message)
     setStatus('Opened system-prompt discussion with Claude')
@@ -1617,9 +1617,9 @@ function PromptWorkshop({
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>MOD Prompt Overrides</Typography>
-                    {hasAnyModOverrides && (
-                      <Chip size="small" label={`${Object.keys(modPromptOverrides).length} override${Object.keys(modPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group Prompt Overrides</Typography>
+                    {hasAnyGroupOverrides && (
+                      <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                     )}
                   </Stack>
                 </AccordionSummary>
@@ -1631,50 +1631,50 @@ function PromptWorkshop({
                         control={
                           <Switch
                             size="small"
-                            checked={includeModRules}
-                            onChange={(event) => setIncludeModRules(event.target.checked)}
+                            checked={includeGroupRules}
+                            onChange={(event) => setIncludeGroupRules(event.target.checked)}
                           />
                         }
                         label={
                           <Typography variant="body2" color="text.secondary">
-                            Add MOD prompts at runtime
+                            Add group prompts at runtime
                           </Typography>
                         }
                       />
                       <Tooltip
-                        title="When enabled, MOD-specific prompts/rules are included at runtime for this agent."
+                        title="When enabled, group-specific prompts and rules are included at runtime for this agent."
                         placement="top"
                       >
-                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="MOD prompt runtime help">
+                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="group prompt runtime help">
                           <HelpOutlineIcon sx={{ fontSize: 14 }} />
                         </IconButton>
                       </Tooltip>
                     </Stack>
 
-                    {availableModIds.length === 0 ? (
+                    {availableGroupIds.length === 0 ? (
                       <Typography variant="body2" color="text.secondary">
-                        This template has no MOD-specific prompts to override.
+                        This template has no group-specific prompts to override.
                       </Typography>
                     ) : (
                       <Stack spacing={1.5}>
                         <Stack direction="row" spacing={1} alignItems="center">
                           <Select
                             size="small"
-                            value={modId}
-                            onChange={(event) => setModId(event.target.value)}
+                            value={groupId}
+                            onChange={(event) => setGroupId(event.target.value)}
                             sx={{ minWidth: 160 }}
                           >
-                            {availableModIds.map((availableModId) => (
-                              <MenuItem key={availableModId} value={availableModId}>
-                                {availableModId}
+                            {availableGroupIds.map((availableGroupId) => (
+                              <MenuItem key={availableGroupId} value={availableGroupId}>
+                                {availableGroupId}
                               </MenuItem>
                             ))}
                           </Select>
                           <Button
                             size="small"
                             variant="outlined"
-                            onClick={handleResetSelectedModPrompt}
-                            disabled={!hasSelectedModOverride}
+                            onClick={handleResetSelectedGroupPrompt}
+                            disabled={!hasSelectedGroupOverride}
                           >
                             Reset to Template
                           </Button>
@@ -1683,9 +1683,9 @@ function PromptWorkshop({
                           fullWidth
                           multiline
                           minRows={8}
-                          label={selectedModId ? `${selectedModId} Prompt` : 'MOD Prompt'}
-                          value={selectedModPrompt}
-                          onChange={(event) => handleSelectedModPromptChange(event.target.value)}
+                          label={selectedGroupId ? `${selectedGroupId} Prompt` : 'Group Prompt'}
+                          value={selectedGroupPrompt}
+                          onChange={(event) => handleSelectedGroupPromptChange(event.target.value)}
                           sx={{
                             '& .MuiInputBase-root': {
                               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
@@ -1699,10 +1699,10 @@ function PromptWorkshop({
                           }}
                         />
                         <Typography variant="caption" color="text.secondary">
-                          {hasSelectedModOverride
-                            ? `Custom override active for ${selectedModId}.`
-                            : `Using template ${selectedModId} prompt content.`}
-                          {hasAnyModOverrides ? ` Total overrides: ${Object.keys(modPromptOverrides).length}.` : ''}
+                          {hasSelectedGroupOverride
+                            ? `Custom override active for ${selectedGroupId}.`
+                            : `Using template ${selectedGroupId} prompt content.`}
+                          {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
                         </Typography>
                       </Stack>
                     )}

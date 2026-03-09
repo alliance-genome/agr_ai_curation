@@ -227,7 +227,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           >
             <DescriptionIcon sx={{ fontSize: 18 }} />
             <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem' }}>
-              View base prompt & MOD rules
+              View base prompt & group rules
             </Typography>
           </Box>
         )}
@@ -238,7 +238,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
             <Typography variant="caption" fontWeight={600}>
               Custom Instructions (Optional)
             </Typography>
-            <Tooltip title="These instructions take the highest priority — they override the agent's base prompt and MOD rules for this flow step. Use them to add constraints or focus the agent's behavior.">
+            <Tooltip title="These instructions take the highest priority and override the agent's base prompt and group rules for this flow step. Use them to add constraints or focus the agent's behavior.">
               <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
             </Tooltip>
           </FieldLabel>

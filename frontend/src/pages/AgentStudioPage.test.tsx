@@ -70,7 +70,7 @@ describe('AgentStudioPage', () => {
     serviceMocks.fetchPromptCatalog.mockResolvedValue({
       categories: [],
       total_agents: 0,
-      available_mods: [],
+      available_groups: [],
       last_updated: '2026-02-23T00:00:00Z',
     })
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
@@ -105,7 +105,7 @@ describe('AgentStudioPage', () => {
     serviceMocks.fetchPromptCatalog.mockResolvedValue({
       categories: [],
       total_agents: 0,
-      available_mods: [],
+      available_groups: [],
       last_updated: '2026-02-23T00:00:00Z',
     })
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({

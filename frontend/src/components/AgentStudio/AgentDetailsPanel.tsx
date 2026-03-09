@@ -4,7 +4,7 @@
  * Displays detailed information about a selected agent with 3 tabs:
  * - Overview: Summary, capabilities with examples, data sources
  * - Guidance: Limitations, best practices, common issues
- * - Prompts: Base prompt viewer, MOD selector, Combined view
+ * - Prompts: Base prompt viewer, group selector, combined view
  *
  * Also includes a "Discuss with Claude" button for context-aware help.
  */
@@ -150,19 +150,19 @@ type TabValue = 'overview' | 'guidance' | 'prompts'
 
 interface AgentDetailsPanelProps {
   agent: PromptInfo | null
-  selectedModId: string | null
-  viewMode: 'base' | 'mod' | 'combined'
-  onModSelect: (modId: string | null) => void
-  onViewModeChange: (mode: 'base' | 'mod' | 'combined') => void
+  selectedGroupId: string | null
+  viewMode: 'base' | 'group' | 'combined'
+  onGroupSelect: (groupId: string | null) => void
+  onViewModeChange: (mode: 'base' | 'group' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
   onCloneToWorkshop?: (agentId: string) => void
 }
 
 function AgentDetailsPanel({
   agent,
-  selectedModId,
+  selectedGroupId,
   viewMode,
-  onModSelect,
+  onGroupSelect,
   onViewModeChange,
   onDiscussWithClaude,
   onCloneToWorkshop,
@@ -174,9 +174,9 @@ function AgentDetailsPanel({
 
   // Load combined prompt when needed
   useEffect(() => {
-    if (viewMode === 'combined' && agent && selectedModId && agent.has_mod_rules) {
+    if (viewMode === 'combined' && agent && selectedGroupId && agent.has_group_rules) {
       setLoadingCombined(true)
-      fetchCombinedPrompt(agent.agent_id, selectedModId)
+      fetchCombinedPrompt(agent.agent_id, selectedGroupId)
         .then(setCombinedPrompt)
         .catch((err) => {
           console.error('Failed to fetch combined prompt:', err)
@@ -184,7 +184,7 @@ function AgentDetailsPanel({
         })
         .finally(() => setLoadingCombined(false))
     }
-  }, [viewMode, agent, selectedModId])
+  }, [viewMode, agent, selectedGroupId])
 
   // Handle tab change
   const handleTabChange = (_: React.SyntheticEvent, newValue: TabValue) => {
@@ -199,8 +199,8 @@ function AgentDetailsPanel({
       return agent.base_prompt
     }
 
-    if (viewMode === 'mod' && selectedModId && agent.mod_rules[selectedModId]) {
-      return agent.mod_rules[selectedModId].content
+    if (viewMode === 'group' && selectedGroupId && agent.group_rules[selectedGroupId]) {
+      return agent.group_rules[selectedGroupId].content
     }
 
     if (viewMode === 'combined' && combinedPrompt) {
@@ -484,13 +484,13 @@ function AgentDetailsPanel({
                     primaryTypographyProps={{ variant: 'body2' }}
                   />
                 </ListItem>
-                {agent.has_mod_rules && (
+                {agent.has_group_rules && (
                   <ListItem sx={{ pl: 0 }}>
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
                     </ListItemIcon>
                     <ListItemText
-                      primary="This agent has MOD-specific rules - check the Prompts tab to see how behavior varies by species"
+                      primary="This agent has group-specific rules - check the Prompts tab to see how behavior varies by species"
                       primaryTypographyProps={{ variant: 'body2' }}
                     />
                   </ListItem>
@@ -514,7 +514,7 @@ function AgentDetailsPanel({
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
             {/* View Mode Controls */}
             <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-              {agent.has_mod_rules && (
+              {agent.has_group_rules && (
                 <>
                   <ToggleButtonGroup
                     value={viewMode}
@@ -523,27 +523,27 @@ function AgentDetailsPanel({
                     size="small"
                   >
                     <ToggleButton value="base">Base</ToggleButton>
-                    <ToggleButton value="mod" disabled={!selectedModId}>
-                      MOD Only
+                    <ToggleButton value="group" disabled={!selectedGroupId}>
+                      Group Only
                     </ToggleButton>
-                    <ToggleButton value="combined" disabled={!selectedModId}>
+                    <ToggleButton value="combined" disabled={!selectedGroupId}>
                       Combined
                     </ToggleButton>
                   </ToggleButtonGroup>
 
                   <FormControl size="small" sx={{ minWidth: 120 }}>
-                    <InputLabel>MOD</InputLabel>
+                    <InputLabel>Group</InputLabel>
                     <Select
-                      value={selectedModId || ''}
-                      label="MOD"
-                      onChange={(e) => onModSelect(e.target.value || null)}
+                      value={selectedGroupId || ''}
+                      label="Group"
+                      onChange={(e) => onGroupSelect(e.target.value || null)}
                     >
                       <MenuItem value="">
                         <em>None</em>
                       </MenuItem>
-                      {Object.keys(agent.mod_rules).map((modId) => (
-                        <MenuItem key={modId} value={modId}>
-                          {modId}
+                      {Object.keys(agent.group_rules).map((groupId) => (
+                        <MenuItem key={groupId} value={groupId}>
+                          {groupId}
                         </MenuItem>
                       ))}
                     </Select>
