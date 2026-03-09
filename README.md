@@ -213,6 +213,8 @@ Contributions are welcome! Please:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+For additional setup and usage guidance, see the documentation linked above.
+
 ## Acknowledgments
 
 - [Alliance of Genome Resources](https://www.alliancegenome.org/)
