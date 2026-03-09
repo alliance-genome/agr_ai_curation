@@ -260,6 +260,13 @@ main() {
       read -r -p "Description (press Enter to skip): " custom_description
       read -r -p "Species (press Enter to skip): " custom_species
       read -r -p "Taxon ID (press Enter to skip): " custom_taxon
+      echo
+      echo "  Provider group names are the group/role names from your identity"
+      echo "  provider (Keycloak, Auth0, Okta, etc.) that should map to this group."
+      echo "  Example: go-curators,go-admins"
+      if [[ "$auth_type" == "dev" ]]; then
+        echo "  In dev mode you can use any placeholder (e.g., ${custom_group_id,,}-curators)."
+      fi
       custom_provider_groups="$(prompt_required_value "Provider group names (comma-separated)")"
 
       write_identity_provider_header "$tmp_output" "$auth_type" "$group_claim"
