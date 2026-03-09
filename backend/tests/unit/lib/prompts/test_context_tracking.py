@@ -65,11 +65,12 @@ def test_prompt_override_set_get_and_clear():
         content="custom prompt",
         agent_name="gene",
         custom_agent_id=str(uuid.uuid4()),
-        mod_overrides={"WB": "wb rules"},
+        group_overrides={"WB": "wb rules"},
     )
     set_prompt_override(override)
     assert get_prompt_override() == override
+    assert override.group_overrides == {"WB": "wb rules"}
+    assert override.mod_overrides == {"WB": "wb rules"}
 
     clear_prompt_override()
     assert get_prompt_override() is None
-

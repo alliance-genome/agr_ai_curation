@@ -408,7 +408,7 @@ def get_supervisor_tools() -> List[Dict[str, Any]]:
         - batching_instructions: How to format batch requests
         - agent_id: The agent's identifier
         - requires_document: Whether agent needs a loaded document
-        - group_rules_enabled: Whether agent uses MOD-specific rules
+        - group_rules_enabled: Whether agent uses group-specific rules
     """
     if not _initialized:
         load_agent_definitions()

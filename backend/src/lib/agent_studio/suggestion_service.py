@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Optional
 
 import boto3
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,9 @@ def _format_suggestion_email(message: dict) -> str:
     lines.append("TARGET")
     lines.append("-" * 40)
     lines.append(f"Agent:           {message.get('agent_id', 'N/A')}")
-    if message.get('mod_id'):
-        lines.append(f"MOD:             {message.get('mod_id')}")
+    group_id = message.get("group_id") or message.get("mod_id")
+    if group_id:
+        lines.append(f"Group:           {group_id}")
     lines.append(f"Suggestion Type: {message.get('suggestion_type', 'N/A')}")
     lines.append("")
 
@@ -104,21 +105,34 @@ class SuggestionType(str, Enum):
     IMPROVEMENT = "improvement"  # General improvement to prompt
     BUG = "bug"  # Prompt produces incorrect behavior
     CLARIFICATION = "clarification"  # Prompt is ambiguous
-    MOD_SPECIFIC = "mod_specific"  # MOD-specific rule addition/change
+    GROUP_SPECIFIC = "group_specific"  # Group-specific rule addition/change
     MISSING_CASE = "missing_case"  # Prompt doesn't handle a case
     GENERAL = "general"  # General feedback based on conversation/trace (no specific agent)
 
 
 class PromptSuggestion(BaseModel):
     """A prompt improvement suggestion."""
+    model_config = ConfigDict(populate_by_name=True)
+
     agent_id: Optional[str] = Field(None, description="Which agent's prompt this applies to (optional for general feedback)")
     suggestion_type: SuggestionType = Field(..., description="Type of suggestion")
     summary: str = Field(..., description="Brief summary of the suggestion (1-2 sentences)")
     detailed_reasoning: str = Field(..., description="Full explanation of why this change is needed")
     proposed_change: Optional[str] = Field(None, description="Specific text change if applicable")
-    mod_id: Optional[str] = Field(None, description="MOD ID if this is MOD-specific")
+    group_id: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("group_id", "mod_id"),
+        description="Group ID if this is group-specific",
+    )
     trace_id: Optional[str] = Field(None, description="Related trace ID for context")
     conversation_context: Optional[str] = Field(None, description="Recent conversation excerpt")
+
+    @field_validator("suggestion_type", mode="before")
+    @classmethod
+    def normalize_suggestion_type(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() == "mod_specific":
+            return SuggestionType.GROUP_SPECIFIC.value
+        return value
 
 
 class SuggestionSubmission(BaseModel):
@@ -154,7 +168,7 @@ async def submit_suggestion_sns(
         "type": "prompt_suggestion",
         "suggestion_id": suggestion_id,
         "agent_id": suggestion.agent_id,
-        "mod_id": suggestion.mod_id,
+        "group_id": suggestion.group_id,
         "suggestion_type": suggestion.suggestion_type.value,
         "summary": suggestion.summary,
         "detailed_reasoning": suggestion.detailed_reasoning,
@@ -184,8 +198,8 @@ async def submit_suggestion_sns(
             # Format subject for email (use 'General' if no agent_id)
             agent_label = suggestion.agent_id or "General"
             subject = f"[Prompt Suggestion] {suggestion.suggestion_type.value}: {agent_label}"
-            if suggestion.mod_id:
-                subject += f" ({suggestion.mod_id})"
+            if suggestion.group_id:
+                subject += f" ({suggestion.group_id})"
 
             # Format message for human readability
             formatted_message = _format_suggestion_email(message)
@@ -261,8 +275,8 @@ The suggestion will be sent to the development team for review.""",
             },
             "suggestion_type": {
                 "type": "string",
-                "enum": ["improvement", "bug", "clarification", "mod_specific", "missing_case", "general"],
-                "description": "Type of suggestion: improvement (general enhancement), bug (incorrect behavior), clarification (ambiguous), mod_specific (MOD rule change), missing_case (unhandled scenario), general (feedback based on trace/conversation not tied to specific prompt)"
+                "enum": ["improvement", "bug", "clarification", "group_specific", "mod_specific", "missing_case", "general"],
+                "description": "Type of suggestion: improvement (general enhancement), bug (incorrect behavior), clarification (ambiguous), group_specific (group rule change; legacy mod_specific also accepted), missing_case (unhandled scenario), general (feedback based on trace/conversation not tied to specific prompt)"
             },
             "summary": {
                 "type": "string",
@@ -275,8 +289,23 @@ The suggestion will be sent to the development team for review.""",
             "proposed_change": {
                 "type": "string",
                 "description": "Optional: The specific text or structural change you're proposing"
+            },
+            "group_id": {
+                "type": "string",
+                "description": "Optional group identifier for group-specific prompt changes (for example 'WB')."
+            },
+            "mod_id": {
+                "type": "string",
+                "description": "Legacy alias for group_id. MOD ID if the suggestion only applies to one group."
             }
         },
         "required": ["suggestion_type", "summary", "detailed_reasoning"]
     }
 }
+
+
+PromptSuggestion.mod_id = property(
+    lambda self: self.group_id,
+    lambda self, value: setattr(self, "group_id", value),
+)
+SuggestionType.MOD_SPECIFIC = SuggestionType.GROUP_SPECIFIC

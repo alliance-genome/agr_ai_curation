@@ -52,6 +52,7 @@ def test_agent_to_execution_spec_maps_and_normalizes_json_fields():
         output_schema_key="GeneResultEnvelope",
         group_rules_enabled=True,
         group_rules_component="gene",
+        group_prompt_overrides={"WB": "WormBase rules"},
         mod_prompt_overrides={"WB": "WormBase rules"},
         supervisor_enabled=True,
         show_in_palette=True,
@@ -61,4 +62,5 @@ def test_agent_to_execution_spec_maps_and_normalizes_json_fields():
     assert spec.agent_key == "gene_validation"
     assert spec.model_id == "gpt-4o"
     assert spec.tool_ids == ["agr_query"]
+    assert spec.group_prompt_overrides == {"WB": "WormBase rules"}
     assert spec.mod_prompt_overrides == {"WB": "WormBase rules"}

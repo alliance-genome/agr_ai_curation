@@ -1,8 +1,6 @@
 """Tests for agent metadata API endpoint."""
 from types import SimpleNamespace
 
-import pytest
-
 
 class TestGetRegistryMetadata:
     """Tests for GET /api/agent-studio/registry/metadata endpoint."""
@@ -134,7 +132,7 @@ class TestGetRegistryMetadata:
     def test_merge_custom_agents_into_catalog(self, monkeypatch):
         """Catalog augmentation should add custom agents under a custom subcategory."""
         from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo, MODRuleInfo
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo, GroupRuleInfo
 
         base_catalog = PromptCatalog(
             categories=[
@@ -147,10 +145,10 @@ class TestGetRegistryMetadata:
                             description="Curate genes",
                             base_prompt="Base prompt",
                             source_file="database",
-                            has_mod_rules=True,
-                            mod_rules={
-                                "WB": MODRuleInfo(
-                                    mod_id="WB",
+                            has_group_rules=True,
+                            group_rules={
+                                "WB": GroupRuleInfo(
+                                    group_id="WB",
                                     content="Parent WB Rules",
                                     source_file="database",
                                 )
@@ -162,7 +160,7 @@ class TestGetRegistryMetadata:
                 )
             ],
             total_agents=1,
-            available_mods=[],
+            available_groups=[],
         )
 
         fake_custom = SimpleNamespace(
@@ -175,7 +173,7 @@ class TestGetRegistryMetadata:
             name="Doug's Gene Agent",
             description="Custom prompt variant",
             custom_prompt="Custom prompt text",
-            mod_prompt_overrides={"WB": "Custom WB Rules"},
+            group_prompt_overrides={"WB": "Custom WB Rules"},
             created_at=None,
         )
 
@@ -205,8 +203,8 @@ class TestGetRegistryMetadata:
         all_agents = [a for c in catalog.categories for a in c.agents]
         custom = next(a for a in all_agents if a.agent_name == "Doug's Gene Agent")
         assert custom.subcategory == "My Custom Agents"
-        assert custom.has_mod_rules is True
-        assert custom.mod_rules["WB"].content == "Custom WB Rules"
+        assert custom.has_group_rules is True
+        assert custom.group_rules["WB"].content == "Custom WB Rules"
 
     def test_merge_custom_agents_marks_project_shared_agents(self, monkeypatch):
         """Catalog augmentation should label non-owner custom agents as shared."""
@@ -224,8 +222,8 @@ class TestGetRegistryMetadata:
                             description="Curate genes",
                             base_prompt="Base prompt",
                             source_file="database",
-                            has_mod_rules=False,
-                            mod_rules={},
+                            has_group_rules=False,
+                            group_rules={},
                             tools=[],
                             subcategory="Data Validation",
                         )
@@ -233,7 +231,7 @@ class TestGetRegistryMetadata:
                 )
             ],
             total_agents=1,
-            available_mods=[],
+            available_groups=[],
         )
 
         shared_custom = SimpleNamespace(
@@ -245,7 +243,7 @@ class TestGetRegistryMetadata:
             name="Shared Gene Agent",
             description="Shared",
             custom_prompt="Custom prompt text",
-            mod_prompt_overrides={},
+            group_prompt_overrides={},
             created_at=None,
         )
 
@@ -271,7 +269,7 @@ class TestGetRegistryMetadata:
         assert custom.subcategory == "Shared Agents"
 
     def test_get_prompt_preview_system_agent(self, monkeypatch):
-        """Prompt preview should return base prompt for system agent without mod_id."""
+        """Prompt preview should return base prompt for system agent without group_id."""
         import asyncio
         from src.api import agent_studio as api_module
 
@@ -285,7 +283,7 @@ class TestGetRegistryMetadata:
         result = asyncio.run(
             api_module.get_prompt_preview(
                 agent_id="gene",
-                mod_id=None,
+                group_id=None,
                 user={"sub": "test-sub"},
                 db=SimpleNamespace(),
             )
@@ -293,7 +291,7 @@ class TestGetRegistryMetadata:
         assert result.source == "system_agent"
         assert result.prompt == "SYSTEM BASE PROMPT"
 
-    def test_get_prompt_preview_custom_agent_with_mod_rules(self, monkeypatch):
+    def test_get_prompt_preview_custom_agent_with_group_rules(self, monkeypatch):
         """Prompt preview should append group rules for custom agent when enabled."""
         import asyncio
         from src.api import agent_studio as api_module
@@ -301,8 +299,8 @@ class TestGetRegistryMetadata:
         fake_custom = SimpleNamespace(
             parent_agent_key="gene",
             custom_prompt="CUSTOM BASE PROMPT",
-            mod_prompt_overrides={},
-            include_mod_rules=True,
+            group_prompt_overrides={},
+            group_rules_enabled=True,
         )
         fake_rule_prompt = "WB ONLY RULES"
 
@@ -320,9 +318,9 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_mod_prompt",
-            lambda parent_agent_key, mod_id, mod_prompt_overrides: (
-                fake_rule_prompt if parent_agent_key == "gene" and mod_id == "WB" else None
+            "get_custom_agent_group_prompt",
+            lambda parent_agent_key, group_id, group_prompt_overrides: (
+                fake_rule_prompt if parent_agent_key == "gene" and group_id == "WB" else None
             ),
         )
         monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
@@ -330,7 +328,7 @@ class TestGetRegistryMetadata:
         result = asyncio.run(
             api_module.get_prompt_preview(
                 agent_id="ca_11111111-2222-3333-4444-555555555555",
-                mod_id="WB",
+                group_id="WB",
                 user={"sub": "test-sub"},
                 db=SimpleNamespace(),
             )
@@ -340,16 +338,16 @@ class TestGetRegistryMetadata:
         assert "CUSTOM BASE PROMPT" in result.prompt
         assert "WB ONLY RULES" in result.prompt
 
-    def test_get_prompt_preview_custom_agent_prefers_custom_mod_override(self, monkeypatch):
-        """Prompt preview should use custom MOD override content when present."""
+    def test_get_prompt_preview_custom_agent_prefers_custom_group_override(self, monkeypatch):
+        """Prompt preview should use custom group override content when present."""
         import asyncio
         from src.api import agent_studio as api_module
 
         fake_custom = SimpleNamespace(
             parent_agent_key="gene",
             custom_prompt="CUSTOM BASE PROMPT",
-            mod_prompt_overrides={"WB": "CUSTOM WB OVERRIDE"},
-            include_mod_rules=True,
+            group_prompt_overrides={"WB": "CUSTOM WB OVERRIDE"},
+            group_rules_enabled=True,
         )
 
         fake_custom_module = SimpleNamespace(
@@ -366,18 +364,91 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_mod_prompt",
-            lambda parent_agent_key, mod_id, mod_prompt_overrides: mod_prompt_overrides.get(mod_id),
+            "get_custom_agent_group_prompt",
+            lambda parent_agent_key, group_id, group_prompt_overrides: group_prompt_overrides.get(group_id),
         )
         monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
                 agent_id="ca_11111111-2222-3333-4444-555555555555",
-                mod_id="WB",
+                group_id="WB",
                 user={"sub": "test-sub"},
                 db=SimpleNamespace(),
             )
         )
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
+
+    def test_group_rule_info_legacy_alias_serializes_canonical_group_id(self):
+        from src.lib.agent_studio.models import GroupRuleInfo
+
+        rule = GroupRuleInfo(
+            mod_id="WB",
+            content="WormBase rules",
+            source_file="database",
+        )
+
+        assert rule.group_id == "WB"
+        assert rule.mod_id == "WB"
+
+        dumped = rule.model_dump()
+        assert dumped["group_id"] == "WB"
+        assert "mod_id" not in dumped
+
+    def test_prompt_info_legacy_aliases_dump_canonical_fields(self):
+        from src.lib.agent_studio.models import GroupRuleInfo, PromptInfo
+
+        prompt = PromptInfo(
+            agent_id="gene",
+            agent_name="Gene Specialist",
+            description="Curate genes",
+            base_prompt="Base prompt",
+            source_file="database",
+            has_mod_rules=True,
+            mod_rules={
+                "WB": GroupRuleInfo(
+                    mod_id="WB",
+                    content="WormBase rules",
+                    source_file="database",
+                )
+            },
+            tools=[],
+        )
+
+        assert prompt.has_group_rules is True
+        assert prompt.has_mod_rules is True
+
+        dumped = prompt.model_dump()
+        assert dumped["has_group_rules"] is True
+        assert dumped["group_rules"]["WB"]["group_id"] == "WB"
+        assert "has_mod_rules" not in dumped
+        assert "mod_rules" not in dumped
+
+    def test_agent_workshop_legacy_aliases_dump_canonical_fields(self):
+        from src.lib.agent_studio.models import AgentWorkshopContext
+
+        workshop = AgentWorkshopContext(
+            include_mod_rules=True,
+            selected_mod_id="WB",
+            selected_mod_prompt_draft="WB group draft",
+            mod_prompt_override_count=2,
+            has_mod_prompt_overrides=True,
+        )
+
+        assert workshop.include_group_rules is True
+        assert workshop.include_mod_rules is True
+        assert workshop.selected_group_id == "WB"
+        assert workshop.selected_mod_id == "WB"
+
+        dumped = workshop.model_dump()
+        assert dumped["include_group_rules"] is True
+        assert dumped["selected_group_id"] == "WB"
+        assert dumped["selected_group_prompt_draft"] == "WB group draft"
+        assert dumped["group_prompt_override_count"] == 2
+        assert dumped["has_group_prompt_overrides"] is True
+        assert "include_mod_rules" not in dumped
+        assert "selected_mod_id" not in dumped
+        assert "selected_mod_prompt_draft" not in dumped
+        assert "mod_prompt_override_count" not in dumped
+        assert "has_mod_prompt_overrides" not in dumped

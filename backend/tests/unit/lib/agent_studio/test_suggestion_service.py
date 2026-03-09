@@ -12,10 +12,23 @@ def _build_suggestion(agent_id: str | None = "gene_expression_extractor"):
         summary="Improve exclusion handling",
         detailed_reasoning="Need better handling for marker-only statements.",
         proposed_change="Add explicit marker exclusion rule.",
-        mod_id="WB",
+        group_id="WB",
         trace_id="trace-123",
         conversation_context="Curator asked to remove marker-only annotation.",
     )
+
+
+def test_prompt_suggestion_accepts_legacy_mod_specific_alias():
+    suggestion = svc.PromptSuggestion(
+        agent_id="gene",
+        suggestion_type="mod_specific",
+        summary="Legacy alias",
+        detailed_reasoning="Should normalize to group_specific.",
+        mod_id="WB",
+    )
+
+    assert suggestion.suggestion_type == svc.SuggestionType.GROUP_SPECIFIC
+    assert suggestion.group_id == "WB"
 
 
 def test_format_suggestion_email_includes_optional_sections():
@@ -25,7 +38,7 @@ def test_format_suggestion_email_includes_optional_sections():
         "submitted_by": "curator@example.org",
         "source": "manual",
         "agent_id": "gene_expression_extractor",
-        "mod_id": "WB",
+        "group_id": "WB",
         "suggestion_type": "improvement",
         "summary": "Improve extraction specificity",
         "detailed_reasoning": "Marker-only lines should be excluded.",
@@ -38,7 +51,7 @@ def test_format_suggestion_email_includes_optional_sections():
 
     assert "PROMPT IMPROVEMENT SUGGESTION" in rendered
     assert "Agent:           gene_expression_extractor" in rendered
-    assert "MOD:             WB" in rendered
+    assert "Group:           WB" in rendered
     assert "PROPOSED CHANGE" in rendered
     assert "DEBUG INFO" in rendered
     assert "CONVERSATION CONTEXT" in rendered

@@ -12,7 +12,6 @@ Tool Categories:
 """
 
 import logging
-import os
 import inspect
 from typing import Any, Callable, Dict, List, Optional
 
@@ -200,13 +199,18 @@ def _create_get_prompt_handler():
     """
     from src.lib.agent_studio.catalog_service import get_prompt_catalog
 
-    def handler(agent_id: str, mod_id: Optional[str] = None) -> Dict[str, Any]:
+    def handler(
+        agent_id: str,
+        group_id: Optional[str] = None,
+        mod_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Get an agent's prompt from the catalog.
 
         Args:
             agent_id: Agent identifier (e.g., "supervisor", "gene", "pdf_extraction")
-            mod_id: Optional MOD identifier for MOD-specific rules (e.g., "WB", "FB")
+            group_id: Optional group identifier for group-specific rules (e.g., "WB", "FB")
+            mod_id: Legacy alias for group_id
 
         Returns:
             Dict with prompt content and metadata
@@ -225,13 +229,16 @@ def _create_get_prompt_handler():
                 "available_agents": available_agents
             }
 
-        # Get the prompt (with MOD rules if specified)
-        if mod_id:
-            prompt = catalog.get_combined_prompt(agent_id, mod_id)
-            has_mod_rules = mod_id in agent.mod_rules if agent.mod_rules else False
+        # Get the prompt (with group rules if specified)
+        resolved_group_id = group_id or mod_id
+        if resolved_group_id:
+            prompt = catalog.get_combined_prompt(agent_id, resolved_group_id)
+            has_group_rules = (
+                resolved_group_id in agent.group_rules if agent.group_rules else False
+            )
         else:
             prompt = agent.base_prompt
-            has_mod_rules = False
+            has_group_rules = False
 
         return {
             "status": "ok",
@@ -240,9 +247,9 @@ def _create_get_prompt_handler():
             "description": agent.description,
             "prompt": prompt,
             "source_file": agent.source_file,
-            "has_mod_rules": agent.has_mod_rules,
-            "mod_id_applied": mod_id if has_mod_rules else None,
-            "available_mods": list(agent.mod_rules.keys()) if agent.mod_rules else [],
+            "has_group_rules": agent.has_group_rules,
+            "group_id_applied": resolved_group_id if has_group_rules else None,
+            "available_groups": list(agent.group_rules.keys()) if agent.group_rules else [],
             "tools": agent.tools
         }
 
@@ -531,8 +538,8 @@ Useful for understanding agent behavior and troubleshooting routing issues.
 - gene_ontology, go_annotations, orthologs: GO and orthology agents
 - ontology_mapping: Maps text labels to ontology IDs
 
-**MOD-specific rules (pass mod_id to see combined prompt):**
-Some agents have organism-specific rules. Use these MOD aliases:
+**Group-specific rules (pass group_id to see combined prompt):**
+Some agents have organism-specific rules. Use these group aliases:
 - WB = WormBase (C. elegans / worm) - "worm prompt", "WormBase rules"
 - FB = FlyBase (Drosophila / fly) - "fly prompt", "FlyBase rules"
 - MGI = Mouse Genome Informatics (mouse) - "mouse prompt"
@@ -541,8 +548,8 @@ Some agents have organism-specific rules. Use these MOD aliases:
 - ZFIN = Zebrafish Information Network (zebrafish) - "zebrafish prompt"
 
 **Example usage:**
-- "Show me the worm gene expression prompt" → get_prompt(agent_id="gene_expression", mod_id="WB")
-- "What are the fly-specific rules for gene agent?" → get_prompt(agent_id="gene", mod_id="FB")
+- "Show me the worm gene expression prompt" → get_prompt(agent_id="gene_expression", group_id="WB")
+- "What are the fly-specific rules for gene agent?" → get_prompt(agent_id="gene", group_id="FB")
 - "Show the supervisor base prompt" → get_prompt(agent_id="supervisor")""",
         input_schema={
             "type": "object",
@@ -551,9 +558,13 @@ Some agents have organism-specific rules. Use these MOD aliases:
                     "type": "string",
                     "description": "Agent identifier (e.g., 'supervisor', 'gene', 'gene_expression', 'pdf_extraction')"
                 },
+                "group_id": {
+                    "type": "string",
+                    "description": "Group identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
+                },
                 "mod_id": {
                     "type": "string",
-                    "description": "MOD identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
+                    "description": "Legacy alias for group_id. MOD identifier for organism-specific rules: WB (worm), FB (fly), MGI (mouse), RGD (rat), SGD (yeast), ZFIN (zebrafish)"
                 }
             },
             "required": ["agent_id"]

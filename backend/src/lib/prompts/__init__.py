@@ -11,7 +11,7 @@ Usage:
 
     # Get active prompt (nanosecond lookup)
     prompt = get_prompt("pdf_extraction")  # Base prompt
-    prompt = get_prompt("gene", mod_id="FB")  # MOD-specific rules
+    prompt = get_prompt("gene", group_id="FB")  # Group-specific rules
 
     # Get pinned version (for flows)
     prompt = get_prompt_by_version("gene", version=3)

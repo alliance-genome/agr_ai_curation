@@ -12,7 +12,7 @@ import os
 
 from .models import (
     # Prompt catalog models
-    MODRuleInfo,
+    GroupRuleInfo,
     PromptInfo,
     AgentPrompts,
     PromptCatalog,
@@ -74,7 +74,7 @@ if auto_register_flow_tools:
 
 __all__ = [
     # Prompt catalog models
-    "MODRuleInfo",
+    "GroupRuleInfo",
     "PromptInfo",
     "AgentPrompts",
     "PromptCatalog",

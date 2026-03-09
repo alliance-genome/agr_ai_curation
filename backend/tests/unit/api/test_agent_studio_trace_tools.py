@@ -1,6 +1,5 @@
 """Unit tests for Agent Studio trace/tool helper functions."""
 
-import asyncio
 import sys
 import types
 from types import SimpleNamespace
@@ -155,7 +154,7 @@ async def test_handle_tool_call_submit_prompt_suggestion_reports_sns_failed(monk
             "detailed_reasoning": "Needs better constraints",
             "proposed_change": "Add explicit rule",
         },
-        context=ChatContext(trace_id="trace-1", selected_mod_id="WB"),
+        context=ChatContext(trace_id="trace-1", selected_group_id="WB"),
         user_email="dev@example.org",
         messages=[{"role": "user", "content": "help"}],
     )
@@ -202,4 +201,3 @@ def test_fetch_trace_for_opus_formats_trace_and_tool_calls(monkeypatch):
 def test_fetch_trace_for_opus_returns_none_on_exception(monkeypatch):
     _install_langfuse(monkeypatch, raise_on_init=True)
     assert api_module._fetch_trace_for_opus("trace-1") is None
-

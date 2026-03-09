@@ -24,6 +24,8 @@ from .database import Base
 
 CustomAgent = Agent
 
+__all__ = ["CustomAgent", "CustomAgentVersion"]
+
 
 class CustomAgentVersion(Base):
     """Version snapshots of custom agent prompt content."""

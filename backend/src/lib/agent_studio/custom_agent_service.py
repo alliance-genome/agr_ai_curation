@@ -32,6 +32,25 @@ class CustomAgentAccessError(CustomAgentError):
     """Raised when a user attempts to access another user's custom agent."""
 
 
+def _read_group_prompt_overrides(agent_obj: Any) -> Dict[str, str]:
+    """Read group overrides from either the new or legacy attribute name."""
+    raw_overrides = getattr(agent_obj, "group_prompt_overrides", None)
+    if raw_overrides is None:
+        raw_overrides = getattr(agent_obj, "mod_prompt_overrides", None)
+    return normalize_group_prompt_overrides(raw_overrides)
+
+
+def _write_group_prompt_overrides(agent_obj: Any, overrides: Dict[str, str]) -> None:
+    """Write group overrides back to SQL models and simple test doubles."""
+    if hasattr(type(agent_obj), "group_prompt_overrides"):
+        agent_obj.group_prompt_overrides = dict(overrides)
+        return
+    if hasattr(agent_obj, "group_prompt_overrides"):
+        agent_obj.group_prompt_overrides = dict(overrides)
+    if hasattr(agent_obj, "mod_prompt_overrides"):
+        agent_obj.mod_prompt_overrides = dict(overrides)
+
+
 def make_custom_agent_id(custom_agent_uuid: uuid.UUID | str) -> str:
     """Build runtime agent ID format used by flows and palette."""
     return f"{CUSTOM_AGENT_PREFIX}{str(custom_agent_uuid)}"
@@ -48,25 +67,25 @@ def parse_custom_agent_id(agent_id: str) -> Optional[uuid.UUID]:
         return None
 
 
-def normalize_mod_prompt_overrides(
-    mod_prompt_overrides: Optional[Dict[str, str]],
+def normalize_group_prompt_overrides(
+    group_prompt_overrides: Optional[Dict[str, str]],
 ) -> Dict[str, str]:
-    """Normalize MOD override payloads to a clean MOD_ID -> prompt map."""
-    if not mod_prompt_overrides:
+    """Normalize group override payloads to a clean GROUP_ID -> prompt map."""
+    if not group_prompt_overrides:
         return {}
 
     normalized: Dict[str, str] = {}
-    for raw_mod_id, raw_prompt in mod_prompt_overrides.items():
-        if raw_mod_id is None:
+    for raw_group_id, raw_prompt in group_prompt_overrides.items():
+        if raw_group_id is None:
             continue
-        mod_id = str(raw_mod_id).strip().upper()
-        if not mod_id:
+        group_id = str(raw_group_id).strip().upper()
+        if not group_id:
             continue
         prompt = str(raw_prompt or "")
         if not prompt.strip():
             # Empty overrides are treated as "no override" and omitted.
             continue
-        normalized[mod_id] = prompt
+        normalized[group_id] = prompt
 
     return normalized
 
@@ -178,18 +197,25 @@ def create_custom_agent(
     name: str,
     template_source: Optional[str] = None,
     custom_prompt: Optional[str] = None,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+    group_prompt_overrides: Optional[Dict[str, str]] = None,
     description: Optional[str] = None,
     icon: Optional[str] = None,
-    include_mod_rules: bool = True,
+    include_group_rules: bool = True,
     model_id: Optional[str] = None,
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
     category: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+    include_mod_rules: Optional[bool] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
+    if group_prompt_overrides is None and mod_prompt_overrides is not None:
+        group_prompt_overrides = mod_prompt_overrides
+    if include_mod_rules is not None:
+        include_group_rules = include_mod_rules
+
     selected_template_key = str(template_source or "").strip()
     parent_defaults: Dict[str, Any] = {}
     parent_prompt = ""
@@ -220,7 +246,7 @@ def create_custom_agent(
         }
 
     agent_prompt = custom_prompt if custom_prompt is not None else parent_prompt
-    normalized_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
+    normalized_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
     custom_uuid = uuid.uuid4()
 
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
@@ -248,9 +274,9 @@ def create_custom_agent(
             else parent_defaults["tool_ids"]
         ),
         output_schema_key=output_schema_key if output_schema_key is not None else parent_defaults["output_schema_key"],
-        group_rules_enabled=include_mod_rules,
+        group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
-        mod_prompt_overrides=normalized_mod_overrides,
+        mod_prompt_overrides=normalized_group_overrides,
         icon=(icon or "\U0001F527"),
         category=category if category is not None else parent_defaults["category"],
         template_source=parent_agent_key,
@@ -278,7 +304,7 @@ def create_custom_agent(
         custom_agent_id=custom_agent.id,
         version=1,
         custom_prompt=agent_prompt,
-        mod_prompt_overrides=normalized_mod_overrides,
+        mod_prompt_overrides=normalized_group_overrides,
         notes="Initial version",
     ))
 
@@ -460,10 +486,10 @@ def clone_visible_agent_for_user(
         name=clone_name,
         template_source=template_source,
         custom_prompt=source_agent.instructions,
-        mod_prompt_overrides=dict(source_agent.mod_prompt_overrides or {}),
+        group_prompt_overrides=_read_group_prompt_overrides(source_agent),
         description=source_agent.description,
         icon=source_agent.icon,
-        include_mod_rules=bool(source_agent.group_rules_enabled),
+        include_group_rules=bool(source_agent.group_rules_enabled),
         model_id=source_agent.model_id,
         tool_ids=list(source_agent.tool_ids or []),
         output_schema_key=source_agent.output_schema_key,
@@ -479,9 +505,9 @@ def update_custom_agent(
     name: Optional[str] = None,
     description: Optional[str] = None,
     custom_prompt: Optional[str] = None,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+    group_prompt_overrides: Optional[Dict[str, str]] = None,
     icon: Optional[str] = None,
-    include_mod_rules: Optional[bool] = None,
+    include_group_rules: Optional[bool] = None,
     notes: Optional[str] = None,
     model_id: Optional[str] = None,
     model_temperature: Optional[float] = None,
@@ -489,8 +515,15 @@ def update_custom_agent(
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
     allow_empty_tool_ids: bool = False,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+    include_mod_rules: Optional[bool] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
+    if group_prompt_overrides is None and mod_prompt_overrides is not None:
+        group_prompt_overrides = mod_prompt_overrides
+    if include_mod_rules is not None:
+        include_group_rules = include_mod_rules
+
     if name is not None:
         existing_name = db.query(CustomAgent).filter(
             CustomAgent.user_id == custom_agent.user_id,
@@ -502,38 +535,36 @@ def update_custom_agent(
         if existing_name:
             raise ValueError("A custom agent with this name already exists")
 
-    current_mod_overrides = normalize_mod_prompt_overrides(
-        custom_agent.mod_prompt_overrides
-    )
-    next_mod_overrides: Optional[Dict[str, str]] = None
-    if mod_prompt_overrides is not None:
-        next_mod_overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
+    current_group_overrides = _read_group_prompt_overrides(custom_agent)
+    next_group_overrides: Optional[Dict[str, str]] = None
+    if group_prompt_overrides is not None:
+        next_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
 
     prompt_changed = (
         custom_prompt is not None
         and custom_prompt != custom_agent.custom_prompt
     )
-    mod_overrides_changed = (
-        next_mod_overrides is not None
-        and next_mod_overrides != current_mod_overrides
+    group_overrides_changed = (
+        next_group_overrides is not None
+        and next_group_overrides != current_group_overrides
     )
 
-    if prompt_changed or mod_overrides_changed:
+    if prompt_changed or group_overrides_changed:
         next_version = _get_next_version(db, custom_agent.id)
         db.add(
             CustomAgentVersion(
                 custom_agent_id=custom_agent.id,
                 version=next_version,
                 custom_prompt=custom_agent.custom_prompt,
-                mod_prompt_overrides=current_mod_overrides,
+                mod_prompt_overrides=current_group_overrides,
                 notes=notes or "Auto-snapshot before prompt update",
             )
         )
 
     if prompt_changed:
         custom_agent.custom_prompt = custom_prompt
-    if mod_overrides_changed and next_mod_overrides is not None:
-        custom_agent.mod_prompt_overrides = next_mod_overrides
+    if group_overrides_changed and next_group_overrides is not None:
+        _write_group_prompt_overrides(custom_agent, next_group_overrides)
 
     if name is not None:
         custom_agent.name = name
@@ -541,8 +572,8 @@ def update_custom_agent(
         custom_agent.description = description
     if icon is not None:
         custom_agent.icon = icon
-    if include_mod_rules is not None:
-        custom_agent.include_mod_rules = include_mod_rules
+    if include_group_rules is not None:
+        custom_agent.group_rules_enabled = include_group_rules
     if model_id is not None:
         clean_model_id = _validate_model_id(model_id)
         custom_agent.model_id = clean_model_id
@@ -562,7 +593,7 @@ def update_custom_agent(
     if output_schema_key is not None:
         custom_agent.output_schema_key = output_schema_key
 
-    if prompt_changed or mod_overrides_changed:
+    if prompt_changed or group_overrides_changed:
         custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
@@ -607,17 +638,13 @@ def revert_custom_agent_to_version(
             custom_agent_id=custom_agent.id,
             version=snapshot_version,
             custom_prompt=custom_agent.custom_prompt,
-            mod_prompt_overrides=normalize_mod_prompt_overrides(
-                custom_agent.mod_prompt_overrides
-            ),
+            mod_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             notes=notes or f"Snapshot before revert to v{version}",
         )
     )
 
     custom_agent.custom_prompt = target.custom_prompt
-    custom_agent.mod_prompt_overrides = normalize_mod_prompt_overrides(
-        target.mod_prompt_overrides
-    )
+    _write_group_prompt_overrides(custom_agent, _read_group_prompt_overrides(target))
     custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
@@ -630,8 +657,8 @@ class CustomAgentRuntimeInfo:
     custom_agent_id: str
     display_name: str
     custom_prompt: str
-    mod_prompt_overrides: Dict[str, str]
-    include_mod_rules: bool
+    group_prompt_overrides: Dict[str, str]
+    include_group_rules: bool
     requires_document: bool
     parent_exists: bool
 
@@ -670,10 +697,10 @@ def get_custom_agent_runtime_info(
             custom_agent_id=make_custom_agent_id(custom_agent.id),
             display_name=custom_agent.name,
             custom_prompt=custom_agent.custom_prompt,
-            mod_prompt_overrides=normalize_mod_prompt_overrides(
-                custom_agent.mod_prompt_overrides
+            group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
+            include_group_rules=bool(
+                getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
             ),
-            include_mod_rules=custom_agent.include_mod_rules,
             requires_document=requires_document,
             parent_exists=parent_exists,
         )
@@ -688,6 +715,11 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     # regardless of whether they originated from a template.
     parent_exists = True
 
+    group_prompt_overrides = _read_group_prompt_overrides(custom_agent)
+    include_group_rules = bool(
+        getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
+    )
+
     return {
         "id": str(custom_agent.id),
         "agent_id": make_custom_agent_id(custom_agent.id),
@@ -696,11 +728,11 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "name": custom_agent.name,
         "description": custom_agent.description,
         "custom_prompt": custom_agent.custom_prompt,
-        "mod_prompt_overrides": normalize_mod_prompt_overrides(
-            custom_agent.mod_prompt_overrides
-        ),
+        "group_prompt_overrides": group_prompt_overrides,
+        "mod_prompt_overrides": group_prompt_overrides,
         "icon": custom_agent.icon,
-        "include_mod_rules": custom_agent.include_mod_rules,
+        "include_group_rules": include_group_rules,
+        "include_mod_rules": include_group_rules,
         "model_id": custom_agent.model_id,
         "model_temperature": float(custom_agent.model_temperature or 0.1),
         "model_reasoning": custom_agent.model_reasoning,
@@ -715,18 +747,18 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     }
 
 
-def get_custom_agent_mod_prompt(
+def get_custom_agent_group_prompt(
     parent_agent_key: str,
-    mod_id: str,
-    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+    group_id: str,
+    group_prompt_overrides: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
-    """Resolve effective MOD prompt content with custom overrides first."""
-    normalized_mod_id = (mod_id or "").strip().upper()
-    if not normalized_mod_id:
+    """Resolve effective group prompt content with custom overrides first."""
+    normalized_group_id = (group_id or "").strip().upper()
+    if not normalized_group_id:
         return None
 
-    overrides = normalize_mod_prompt_overrides(mod_prompt_overrides)
-    override = overrides.get(normalized_mod_id)
+    overrides = normalize_group_prompt_overrides(group_prompt_overrides)
+    override = overrides.get(normalized_group_id)
     if override:
         return override
 
@@ -735,12 +767,28 @@ def get_custom_agent_mod_prompt(
     rule_prompt = get_prompt_optional(
         parent_agent_key,
         prompt_type="group_rules",
-        mod_id=normalized_mod_id,
+        group_id=normalized_group_id,
     ) or get_prompt_optional(
         parent_agent_key,
         prompt_type="mod_rules",
-        mod_id=normalized_mod_id,
+        group_id=normalized_group_id,
     )
     if not rule_prompt:
         return None
     return rule_prompt.content
+
+
+normalize_mod_prompt_overrides = normalize_group_prompt_overrides
+
+
+def get_custom_agent_mod_prompt(
+    parent_agent_key: str,
+    mod_id: str,
+    mod_prompt_overrides: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Legacy wrapper retained for one release cycle."""
+    return get_custom_agent_group_prompt(
+        parent_agent_key=parent_agent_key,
+        group_id=mod_id,
+        group_prompt_overrides=mod_prompt_overrides,
+    )

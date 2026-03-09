@@ -78,6 +78,7 @@ class TestCustomAgentTestEndpoint:
         import src.api.agent_studio_custom as api_module
 
         custom_agent_id = uuid.uuid4()
+        run_kwargs = {}
 
         monkeypatch.setattr(
             api_module,
@@ -100,7 +101,8 @@ class TestCustomAgentTestEndpoint:
         )
         monkeypatch.setattr(api_module, "get_agent_by_id", lambda _aid, **_kwargs: object())
 
-        async def _fake_run_agent_streamed(**_kwargs):
+        async def _fake_run_agent_streamed(**kwargs):
+            run_kwargs.update(kwargs)
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
             yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
             yield {
@@ -113,7 +115,7 @@ class TestCustomAgentTestEndpoint:
         response = asyncio.run(
             api_module.test_custom_agent_endpoint(
                 custom_agent_id=custom_agent_id,
-                request=api_module.TestCustomAgentRequest(input="test query"),
+                request=api_module.TestCustomAgentRequest(input="test query", group_id="WB"),
                 user={"sub": "auth-sub"},
                 db=SimpleNamespace(),
             )
@@ -135,6 +137,14 @@ class TestCustomAgentTestEndpoint:
         assert '"delta": "hello"' in stream_text
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
+        assert run_kwargs["active_groups"] == ["WB"]
+
+    def test_test_request_accepts_legacy_mod_id_alias(self):
+        import src.api.agent_studio_custom as api_module
+
+        request = api_module.TestCustomAgentRequest(input="test query", mod_id="WB")
+
+        assert request.group_id == "WB"
 
 
 def _custom_agent_payload(template_source: str = "gene") -> dict:
@@ -146,9 +156,9 @@ def _custom_agent_payload(template_source: str = "gene") -> dict:
         "name": "My Agent",
         "description": "Desc",
         "custom_prompt": "Prompt",
-        "mod_prompt_overrides": {},
+        "group_prompt_overrides": {},
         "icon": "🔧",
-        "include_mod_rules": True,
+        "include_group_rules": True,
         "model_id": "gpt-4o",
         "model_temperature": 0.1,
         "model_reasoning": None,
@@ -220,6 +230,30 @@ class TestCustomAgentCrudContract:
                 name="My Agent",
                 parent_agent_id="gene",  # legacy field should be rejected
             )
+
+    def test_create_request_accepts_legacy_mod_alias_fields(self):
+        import src.api.agent_studio_custom as api_module
+
+        request = api_module.CreateCustomAgentRequest(
+            template_source="gene",
+            name="My Agent",
+            mod_prompt_overrides={"WB": "Rules"},
+            include_mod_rules=False,
+        )
+
+        assert request.group_prompt_overrides == {"WB": "Rules"}
+        assert request.include_group_rules is False
+
+    def test_update_request_accepts_legacy_mod_alias_fields(self):
+        import src.api.agent_studio_custom as api_module
+
+        request = api_module.UpdateCustomAgentRequest(
+            mod_prompt_overrides={"WB": "Rules"},
+            include_mod_rules=True,
+        )
+
+        assert request.group_prompt_overrides == {"WB": "Rules"}
+        assert request.include_group_rules is True
 
     def test_create_endpoint_returns_400_for_unknown_model(self, monkeypatch):
         import src.api.agent_studio_custom as api_module

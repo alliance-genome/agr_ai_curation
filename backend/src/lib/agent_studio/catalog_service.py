@@ -5,7 +5,7 @@ Retrieves agent prompts from the database for display in the Prompt Explorer.
 Prompts are loaded at startup via the prompt cache and organized by category.
 
 The catalog is organized by category (Routing, Extraction, Validation)
-and includes both base prompts and MOD-specific rules.
+and includes both base prompts and group-specific rules.
 
 **Database-backed**: All prompts now come from the prompt_templates table
 via src.lib.prompts.cache. File parsing has been removed.
@@ -25,13 +25,13 @@ from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 
 # Config-driven registry builder (loads metadata from YAML definitions)
-from .registry_builder import build_agent_registry, AGENT_DOCUMENTATION
+from .registry_builder import build_agent_registry
 
 from .models import (
     PromptInfo,
     AgentPrompts,
     PromptCatalog,
-    MODRuleInfo,
+    GroupRuleInfo,
     AgentDocumentation,
     AgentCapability,
     DataSourceInfo,
@@ -166,7 +166,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "name": "data_provider",
                     "type": "string",
                     "required": False,
-                    "description": "Filter by MOD: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.",
+                    "description": "Filter by group/provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.",
                 },
                 {
                     "name": "limit",
@@ -311,7 +311,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             },
             "get_data_providers": {
                 "name": "Get Data Providers",
-                "description": "List all MOD data providers with their taxon mappings.",
+                "description": "List all Alliance group data providers with their taxon mappings.",
                 "required_params": [],
                 "optional_params": [],
                 "example": {
@@ -1330,7 +1330,7 @@ def _build_catalog() -> PromptCatalog:
         return PromptCatalog(
             categories=[],
             total_agents=0,
-            available_mods=[],
+            available_groups=[],
             last_updated=datetime.utcnow(),
         )
 
@@ -1338,7 +1338,7 @@ def _build_catalog() -> PromptCatalog:
     all_prompts = get_all_active_prompts()
 
     # Group prompts by agent_name for easy lookup
-    # Key format: agent_name:prompt_type:mod_id_or_base
+    # Key format: agent_name:prompt_type:group_id_or_base
     prompts_by_agent: Dict[str, Dict[str, Any]] = {}
     for cache_key, prompt in all_prompts.items():
         parts = cache_key.split(":")
@@ -1357,7 +1357,7 @@ def _build_catalog() -> PromptCatalog:
 
     # Build catalog by combining AGENT_REGISTRY metadata with database prompts
     categories_map: Dict[str, List[PromptInfo]] = {}
-    available_mods = set()
+    available_groups = set()
 
     for agent_id, config in AGENT_REGISTRY.items():
         agent_prompts = prompts_by_agent.get(agent_id, {})
@@ -1376,8 +1376,8 @@ def _build_catalog() -> PromptCatalog:
                 description=config["description"],
                 base_prompt="",  # No prompt for non-agent entries
                 source_file="built-in",
-                has_mod_rules=False,
-                mod_rules={},
+                has_group_rules=False,
+                group_rules={},
                 tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
                 subcategory=config.get("subcategory"),
                 show_in_palette=show_in_palette,
@@ -1397,12 +1397,12 @@ def _build_catalog() -> PromptCatalog:
             logger.warning('Skipping %s: no system prompt found in database', agent_id)
             continue
 
-        # Build MOD rules dict from database prompts
-        mod_rules: Dict[str, MODRuleInfo] = {}
-        for mod_id, prompt in agent_prompts.get("group_rules", {}).items():
-            available_mods.add(mod_id)
-            mod_rules[mod_id] = MODRuleInfo(
-                mod_id=mod_id,
+        # Build group-rules dict from database prompts
+        group_rules: Dict[str, GroupRuleInfo] = {}
+        for group_id, prompt in agent_prompts.get("group_rules", {}).items():
+            available_groups.add(group_id)
+            group_rules[group_id] = GroupRuleInfo(
+                group_id=group_id,
                 content=prompt.content,
                 source_file=prompt.source_file or "database",
                 description=prompt.description,
@@ -1424,8 +1424,8 @@ def _build_catalog() -> PromptCatalog:
             description=config["description"],
             base_prompt=system_prompt.content,
             source_file=system_prompt.source_file or "database",
-            has_mod_rules=bool(mod_rules),
-            mod_rules=mod_rules,
+            has_group_rules=bool(group_rules),
+            group_rules=group_rules,
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
             show_in_palette=show_in_palette,
@@ -1452,7 +1452,7 @@ def _build_catalog() -> PromptCatalog:
     return PromptCatalog(
         categories=categories,
         total_agents=sum(len(cat.agents) for cat in categories),
-        available_mods=sorted(available_mods),
+        available_groups=sorted(available_groups),
         last_updated=datetime.utcnow(),
     )
 
@@ -1478,7 +1478,7 @@ class PromptCatalogService:
             self._catalog = _build_catalog()
             logger.info(
                 f"Built prompt catalog: {self._catalog.total_agents} agents, "
-                f"{len(self._catalog.available_mods)} MODs"
+                f"{len(self._catalog.available_groups)} groups"
             )
         return self._catalog
 
@@ -1503,35 +1503,36 @@ class PromptCatalogService:
                 return cat.agents
         return []
 
-    def get_combined_prompt(self, agent_id: str, mod_id: str) -> Optional[str]:
+    def get_combined_prompt(self, agent_id: str, group_id: str) -> Optional[str]:
         """
-        Get the combined prompt for an agent with MOD rules injected.
+        Get the combined prompt for an agent with group rules injected.
 
         Args:
             agent_id: Agent identifier
-            mod_id: MOD identifier (e.g., "WB", "FB")
+            group_id: Group identifier (for example "WB", "FB")
 
         Returns:
-            Combined prompt string, or None if agent/MOD not found
+            Combined prompt string, or None if agent/group not found
         """
         agent = self.get_agent(agent_id)
         if not agent:
             return None
 
-        if not agent.has_mod_rules or mod_id not in agent.mod_rules:
+        has_group_rules = bool(getattr(agent, "has_group_rules", getattr(agent, "has_mod_rules", False)))
+        group_rules = getattr(agent, "group_rules", getattr(agent, "mod_rules", {}))
+        if not has_group_rules or group_id not in group_rules:
             return agent.base_prompt
 
-        # Inject MOD rules into base prompt
-        mod_rule = agent.mod_rules[mod_id]
+        group_rule = group_rules[group_id]
         combined = f"""{agent.base_prompt}
 
-## MOD-SPECIFIC RULES
+## GROUP-SPECIFIC RULES
 
-The following rules are specific to {mod_id}:
+The following rules are specific to {group_id}:
 
-{mod_rule.content}
+{group_rule.content}
 
-## END MOD-SPECIFIC RULES
+## END GROUP-SPECIFIC RULES
 """
         return combined
 
@@ -1601,6 +1602,7 @@ def _inject_group_rules_with_overrides(
     base_prompt: str,
     group_ids: List[str],
     component_name: str,
+    group_overrides: Optional[Dict[str, str]] = None,
     mod_overrides: Optional[Dict[str, str]] = None,
     injection_marker: str = "## GROUP-SPECIFIC RULES",
 ) -> str:
@@ -1616,7 +1618,8 @@ def _inject_group_rules_with_overrides(
         return base_prompt
 
     normalized_overrides: Dict[str, str] = {}
-    for raw_group, raw_content in (mod_overrides or {}).items():
+    raw_override_map = group_overrides if group_overrides is not None else mod_overrides
+    for raw_group, raw_content in (raw_override_map or {}).items():
         group_id = str(raw_group or "").strip().upper()
         content = str(raw_content or "").strip()
         if group_id and content:
@@ -1698,7 +1701,7 @@ def _build_runtime_instructions(
                 base_prompt=instructions,
                 group_ids=active_groups,
                 component_name=component_name,
-                mod_overrides=dict(getattr(db_agent, "mod_prompt_overrides", {}) or {}),
+                group_overrides=dict(getattr(db_agent, "mod_prompt_overrides", {}) or {}),
             )
         except Exception:
             logger.exception(
