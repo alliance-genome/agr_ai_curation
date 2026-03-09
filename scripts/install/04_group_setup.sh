@@ -177,22 +177,24 @@ main() {
   echo
   log_info "=== Stage 4: Group Mapping ==="
   echo
-  echo "  Groups connect authenticated users to Model Organism Databases (MODs)."
-  echo "  Each group defines a species context (e.g., mouse, zebrafish, fly) that"
-  echo "  customizes how the AI agents behave for curators in that group."
+  echo "  Groups control how users are organized and how the AI agents behave."
+  echo "  Each group can define a species, taxon, and organization-specific rules"
+  echo "  that customize agent prompts for curators in that group."
+  echo
+  echo "  The Alliance uses groups for its Model Organism Databases (MODs), but"
+  echo "  groups can represent any organization, team, or community."
   echo
   echo "    Option 1: All Alliance groups (default)"
-  echo "      Installs all 10 standard MOD groups (MGI, ZFIN, FlyBase, WormBase,"
-  echo "      SGD, RGD, XenBase, GOREF, Alliance, and Undefined). Best for full"
-  echo "      Alliance deployments."
+  echo "      Installs the standard Alliance groups (MGI, ZFIN, FlyBase, WormBase,"
+  echo "      SGD, RGD, XenBase, and others). Choose this for Alliance deployments."
   echo
   echo "    Option 2: Single Alliance group"
-  echo "      Pick just one MOD. Good if your instance serves a single community."
+  echo "      Pick just one Alliance group. Good if your instance serves a single"
+  echo "      community within the Alliance."
   echo
   echo "    Option 3: Custom group"
-  echo "      Define your own group with a custom species, taxon ID, and provider"
-  echo "      group names from your identity provider. Use this for non-Alliance"
-  echo "      organizations or custom setups."
+  echo "      Define your own group with a custom name, species, taxon ID, and"
+  echo "      identity provider group names. Use this for non-Alliance organizations."
   echo
 
   mkdir -p "$(dirname "$groups_output_path")"
