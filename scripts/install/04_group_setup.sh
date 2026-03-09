@@ -267,6 +267,7 @@ main() {
       if [[ "$auth_type" == "dev" ]]; then
         echo "  In dev mode you can use any placeholder (e.g., ${custom_group_id,,}-curators)."
       fi
+      echo "  You can change this later by editing config/groups.yaml."
       custom_provider_groups="$(prompt_required_value "Provider group names (comma-separated)")"
 
       write_identity_provider_header "$tmp_output" "$auth_type" "$group_claim"
