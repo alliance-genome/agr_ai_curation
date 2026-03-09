@@ -44,7 +44,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 - **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
-- **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-MOD overrides, version history, and icon customization
+- **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-group overrides, version history, and icon customization
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -84,7 +84,7 @@ Tools for understanding, building, and improving AI behavior:
 
 **Agents Tab**
 - Browse all agent prompts organized by category
-- See MOD-specific rules for each agent
+- See group-specific rules for each agent
 - Click tool names to view detailed tool documentation
 - Chat with Opus about how agents and prompts work
 
@@ -97,7 +97,7 @@ Tools for understanding, building, and improving AI behavior:
 
 **Agent Workshop Tab**
 - Clone any system agent's prompt to create a custom version
-- Edit instructions, choose an icon, and add per-MOD prompt overrides
+- Edit instructions, choose an icon, and add per-group prompt overrides
 - File menu for managing agents (New, Open, Save, Manage, Delete)
 - Version history with revert support and save notes
 - Custom agents appear in Flow Builder for use in workflows

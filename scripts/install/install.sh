@@ -106,7 +106,7 @@ BANNER
   printf "    ${green}Stage 1${reset}  Preflight checks    -- Docker, disk space, ports, memory\n"
   printf "    ${green}Stage 2${reset}  Core configuration  -- .env file, API keys, database secrets\n"
   printf "    ${green}Stage 3${reset}  Auth setup           -- OIDC / authentication provider\n"
-  printf "    ${green}Stage 4${reset}  Group mapping        -- MOD curator group assignments\n"
+  printf "    ${green}Stage 4${reset}  Group mapping        -- curator group assignments\n"
   printf "    ${green}Stage 5${reset}  PDF extraction       -- PDF processing service config\n"
   printf "    ${green}Stage 6${reset}  Start & verify       -- docker compose up + health checks\n"
   printf "\n"

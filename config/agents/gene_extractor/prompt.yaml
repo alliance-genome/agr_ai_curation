@@ -70,18 +70,18 @@ content: |
   - Many organisms have gene names that overlap with common English words or short codes.
   - When a gene symbol could be a common word, require surrounding biological/experimental
     context to confirm it is a gene mention.
-  - MOD-specific group rules provide organism-specific examples of common-word genes.
+  - Group-specific rules provide organism-specific examples of common-word genes.
 
   Multi-species disambiguation:
   - The same gene symbol can refer to different genes in different species.
     Use surrounding species/strain mentions to resolve.
   - When ambiguous, record both candidates in ambiguities[].
-  - MOD-specific group rules provide ortholog mappings and nomenclature conventions.
+  - Group-specific rules provide ortholog mappings and nomenclature conventions.
 
   Nomenclature conventions (use to validate species assignment):
   - Each organism has distinct gene naming conventions (case, formatting, prefixes).
   - Use these conventions to validate species assignment when species context is implicit.
-  - MOD-specific group rules provide detailed nomenclature patterns for each organism.
+  - Group-specific rules provide detailed nomenclature patterns for each organism.
 
   Entity boundary rules:
   - Include the full gene name span, not partial matches.
