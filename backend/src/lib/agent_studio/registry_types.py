@@ -108,7 +108,7 @@ class AgentRegistryEntry:
         requires_document: Whether the agent needs a document context
         required_params: Parameters required by the factory function
         batch_capabilities: Special capabilities for batching (e.g., "pdf_extraction")
-        has_mod_rules: Whether this agent has MOD-specific prompt rules
+        has_group_rules: Whether this agent has group-specific prompt rules
         config_defaults: Default config values (reasoning, temperature, etc.)
         batching: Optional batching configuration for supervisor hints
         supervisor: Optional supervisor routing metadata
@@ -124,7 +124,7 @@ class AgentRegistryEntry:
     requires_document: bool = False
     required_params: List[str] = field(default_factory=list)
     batch_capabilities: List[str] = field(default_factory=list)
-    has_mod_rules: bool = False
+    has_group_rules: bool = False
     config_defaults: Optional[Dict[str, Any]] = None
     batching: Optional[BatchingConfig] = None
     supervisor: Optional[SupervisorMetadata] = None
@@ -147,7 +147,8 @@ class AgentRegistryEntry:
             "requires_document": self.requires_document,
             "required_params": self.required_params,
             "batch_capabilities": self.batch_capabilities,
-            "has_mod_rules": self.has_mod_rules,
+            "has_group_rules": self.has_group_rules,
+            "has_mod_rules": self.has_group_rules,
         }
         if self.config_defaults:
             result["config_defaults"] = self.config_defaults
@@ -272,13 +273,19 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
         requires_document=data.get("requires_document", False),
         required_params=data.get("required_params", []),
         batch_capabilities=data.get("batch_capabilities", []),
-        has_mod_rules=data.get("has_mod_rules", False),
+        has_group_rules=data.get("has_group_rules", data.get("has_mod_rules", False)),
         config_defaults=data.get("config_defaults"),
         batching=batching,
         supervisor=supervisor,
         frontend=frontend,
         documentation=data.get("documentation"),
     )
+
+
+AgentRegistryEntry.has_mod_rules = property(
+    lambda self: self.has_group_rules,
+    lambda self, value: setattr(self, "has_group_rules", value),
+)
 
 
 # Backwards-compatibility aliases (deprecated, use AgentRegistryEntry instead)

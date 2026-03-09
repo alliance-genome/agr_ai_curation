@@ -160,7 +160,7 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
 
     Returns None when:
         - fullname is None or empty
-        - MOD doesn't typically have attribution info (WB, SGD, ZFIN, FB)
+        - Source group doesn't typically have attribution info (WB, SGD, ZFIN, FB)
         - No comma-separated suffix found
         - Fullname is uninformative (e.g., "wild type")
         - Extracted text is too short (< 4 chars)
@@ -176,7 +176,7 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     if not fullname:
         return None
 
-    # Determine MOD from taxon
+    # Determine source group from taxon
     mod = TAXON_TO_PROVIDER.get(taxon_id)
     if not mod:
         logger.debug('Unknown taxon %s, skipping fullname attribution extraction', taxon_id)

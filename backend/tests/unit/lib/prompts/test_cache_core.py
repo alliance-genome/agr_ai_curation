@@ -53,7 +53,7 @@ def test_initialize_populates_active_and_version_caches():
 
     assert prompt_cache.is_initialized() is True
     assert prompt_cache.get_prompt("gene").content == "v2"
-    assert prompt_cache.get_prompt("gene", prompt_type="group_rules", mod_id="WB").content == "wb"
+    assert prompt_cache.get_prompt("gene", prompt_type="group_rules", group_id="WB").content == "wb"
     assert prompt_cache.get_prompt_by_version("gene", version=1).content == "v1"
 
     info = prompt_cache.get_cache_info()
@@ -64,6 +64,14 @@ def test_initialize_populates_active_and_version_caches():
 
     active = prompt_cache.get_all_active_prompts()
     assert sorted(active.keys()) == ["gene:group_rules:WB", "gene:system:base"]
+
+
+def test_get_prompt_reads_group_rules_by_group_id(monkeypatch):
+    prompt = _prompt("gene", "group_rules", 1, group_id="WB", is_active=True, content="wb")
+    monkeypatch.setattr(prompt_cache, "_initialized", True)
+    monkeypatch.setattr(prompt_cache, "_active_cache", {"gene:group_rules:WB": prompt})
+
+    assert prompt_cache.get_prompt("gene", prompt_type="group_rules", group_id="WB").content == "wb"
 
 
 def test_refresh_reinitializes_cache(monkeypatch):
@@ -111,4 +119,3 @@ def test_get_prompt_optional_returns_none_for_missing_prompt(monkeypatch):
     monkeypatch.setattr(prompt_cache, "_active_cache", {})
 
     assert prompt_cache.get_prompt_optional("missing") is None
-

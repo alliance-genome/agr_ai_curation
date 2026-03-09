@@ -13,20 +13,21 @@ import re
 import asyncio
 import uuid
 from datetime import datetime
+from pathlib import Path as FilePath
 from typing import Any, Dict, List, Literal, Optional
 
 import anthropic
 import boto3
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
 from src.lib.agent_studio import (
     get_prompt_catalog,
     PromptCatalog,
-    MODRuleInfo,
+    GroupRuleInfo,
     PromptInfo,
     AgentPrompts,
     ChatMessage,
@@ -52,7 +53,7 @@ from src.lib.agent_studio.custom_agent_service import (
     CustomAgentNotFoundError,
     clone_visible_agent_for_user,
     custom_agent_to_dict,
-    get_custom_agent_mod_prompt,
+    get_custom_agent_group_prompt,
     get_custom_agent_for_user,
     list_custom_agents_visible_to_user,
     make_custom_agent_id,
@@ -80,6 +81,11 @@ logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
+AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
+    FilePath(__file__).with_name("agent_studio_system_prompt.md"),
+    FilePath(__file__).resolve().parents[3] / "alliance_config" / "agent_studio_system_prompt.md",
+    FilePath(__file__).resolve().parents[2] / "alliance_config" / "agent_studio_system_prompt.md",
+]
 
 
 def _list_anthropic_catalog_models() -> List[Any]:
@@ -142,6 +148,29 @@ def _resolve_prompt_explorer_model() -> tuple[str, str]:
         "(or legacy ANTHROPIC_OPUS_MODEL), or add an anthropic model to config/models.yaml."
     )
 
+
+def _load_agent_studio_system_prompt_template() -> str:
+    """Load the shared Agent Studio system prompt template from alliance_config."""
+    for candidate in AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES:
+        try:
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+        except OSError:
+            logger.debug("Failed to read Agent Studio system prompt template candidate: %s", candidate)
+
+    candidate_list = ", ".join(str(path) for path in AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES)
+    raise RuntimeError(
+        "Failed to load Agent Studio system prompt template from any candidate path: "
+        f"{candidate_list}"
+    )
+
+
+def _normalize_suggestion_type(value: Any) -> Any:
+    """Normalize legacy suggestion type aliases during the MOD->Group migration."""
+    if isinstance(value, str) and value.strip().lower() == "mod_specific":
+        return "group_specific"
+    return value
+
 # Create router with prefix
 router = APIRouter(prefix="/api/agent-studio")
 
@@ -162,46 +191,64 @@ class CatalogResponse(BaseModel):
 
 
 class CombinedPromptRequest(BaseModel):
-    """Request for a combined prompt (base + MOD)."""
+    """Request for a combined prompt (base + group rules)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     agent_id: str
-    mod_id: str
+    group_id: str = Field(
+        ...,
+        validation_alias=AliasChoices("group_id", "mod_id"),
+    )
 
 
 class CombinedPromptResponse(BaseModel):
     """Response with combined prompt."""
     agent_id: str
-    mod_id: str
+    group_id: str
     combined_prompt: str
 
 
 class PromptPreviewResponse(BaseModel):
     """Response with resolved prompt text for preview/testing."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     agent_id: str
     prompt: str
-    mod_id: Optional[str] = None
+    group_id: Optional[str] = None
     source: str
     parent_agent_key: Optional[str] = None
-    include_mod_rules: Optional[bool] = None
+    include_group_rules: Optional[bool] = None
 
 
 class AgentTestRequest(BaseModel):
     """Request for isolated agent test streaming."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     input: str
-    mod_id: Optional[str] = None
+    group_id: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("group_id", "mod_id"),
+    )
     document_id: Optional[str] = None
     session_id: Optional[str] = None
 
 
 class ManualSuggestionRequest(BaseModel):
     """Request to manually submit a prompt suggestion."""
+
+    model_config = ConfigDict(populate_by_name=True)
     agent_id: Optional[str] = None  # Optional for trace-based/general feedback
     suggestion_type: str  # Will be validated against SuggestionType
     summary: str
     detailed_reasoning: str
     proposed_change: Optional[str] = None
-    mod_id: Optional[str] = None
+    group_id: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("group_id", "mod_id"),
+    )
     trace_id: Optional[str] = None  # When provided without agent_id, this is conversation-based feedback
 
 
@@ -369,26 +416,30 @@ def _merge_custom_agents_into_catalog(
         template_name = template_prompt_info.agent_name if template_prompt_info else template_source
         category = getattr(custom, "category", None) or "Custom"
         tools = list(getattr(custom, "tool_ids", None) or [])
-        template_mod_rules = template_prompt_info.mod_rules if template_prompt_info else {}
-        raw_overrides = getattr(custom, "mod_prompt_overrides", None) or {}
+        template_group_rules = template_prompt_info.group_rules if template_prompt_info else {}
+        raw_overrides = (
+            getattr(custom, "group_prompt_overrides", None)
+            or getattr(custom, "mod_prompt_overrides", None)
+            or {}
+        )
         normalized_overrides = {
-            str(mod_id).strip().upper(): content
-            for mod_id, content in raw_overrides.items()
-            if str(mod_id).strip() and isinstance(content, str) and content.strip()
+            str(group_id).strip().upper(): content
+            for group_id, content in raw_overrides.items()
+            if str(group_id).strip() and isinstance(content, str) and content.strip()
         }
-        effective_mod_rules: Dict[str, MODRuleInfo] = {}
+        effective_group_rules: Dict[str, GroupRuleInfo] = {}
 
-        for mod_id, parent_mod_rule in template_mod_rules.items():
-            override_content = normalized_overrides.get(mod_id.upper())
-            effective_mod_rules[mod_id] = MODRuleInfo(
-                mod_id=mod_id,
-                content=override_content if override_content else parent_mod_rule.content,
-                source_file=parent_mod_rule.source_file,
-                description=parent_mod_rule.description,
-                prompt_id=parent_mod_rule.prompt_id,
-                prompt_version=parent_mod_rule.prompt_version,
-                created_at=parent_mod_rule.created_at,
-                created_by=parent_mod_rule.created_by,
+        for group_id, parent_group_rule in template_group_rules.items():
+            override_content = normalized_overrides.get(group_id.upper())
+            effective_group_rules[group_id] = GroupRuleInfo(
+                group_id=group_id,
+                content=override_content if override_content else parent_group_rule.content,
+                source_file=parent_group_rule.source_file,
+                description=parent_group_rule.description,
+                prompt_id=parent_group_rule.prompt_id,
+                prompt_version=parent_group_rule.prompt_version,
+                created_at=parent_group_rule.created_at,
+                created_by=parent_group_rule.created_by,
             )
 
         prompt_info = PromptInfo(
@@ -399,8 +450,8 @@ def _merge_custom_agents_into_catalog(
             ),
             base_prompt=custom.custom_prompt,
             source_file=f"custom_agent:{custom.id}",
-            has_mod_rules=bool(effective_mod_rules),
-            mod_rules=effective_mod_rules,
+            has_group_rules=bool(effective_group_rules),
+            group_rules=effective_group_rules,
             tools=tools,
             subcategory=(
                 "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
@@ -738,7 +789,7 @@ async def get_registry_metadata(
     "/catalog",
     response_model=CatalogResponse,
     summary="Get prompt catalog",
-    description="Returns all agent prompts organized by category, including MOD-specific rules.",
+    description="Returns all agent prompts organized by category, including group-specific rules.",
 )
 async def get_catalog(
     user: Dict[str, Any] = get_auth_dependency(),
@@ -779,24 +830,24 @@ async def refresh_catalog(
     "/catalog/combined",
     response_model=CombinedPromptResponse,
     summary="Get combined prompt",
-    description="Returns the base prompt with MOD-specific rules injected.",
+    description="Returns the base prompt with group-specific rules injected.",
 )
 async def get_combined_prompt(
     request: CombinedPromptRequest,
     user: Dict[str, Any] = get_auth_dependency()
 ):
-    """Get a combined prompt (base + MOD rules)."""
+    """Get a combined prompt (base + group rules)."""
     try:
         service = get_prompt_catalog()
-        combined = service.get_combined_prompt(request.agent_id, request.mod_id)
+        combined = service.get_combined_prompt(request.agent_id, request.group_id)
         if combined is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Agent '{request.agent_id}' or MOD '{request.mod_id}' not found"
+                detail=f"Agent '{request.agent_id}' or group '{request.group_id}' not found"
             )
         return CombinedPromptResponse(
             agent_id=request.agent_id,
-            mod_id=request.mod_id,
+            group_id=request.group_id,
             combined_prompt=combined,
         )
     except HTTPException:
@@ -814,12 +865,14 @@ async def get_combined_prompt(
 )
 async def get_prompt_preview(
     agent_id: str = Path(..., description="Agent ID (system ID or custom ca_<uuid>)"),
+    group_id: Optional[str] = None,
     mod_id: Optional[str] = None,
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> PromptPreviewResponse:
     """Get prompt preview for system or custom agents."""
     try:
+        resolved_group_id = group_id or mod_id
         # Custom agent preview with ownership check
         if agent_id.startswith("ca_"):
             from src.lib.agent_studio.custom_agent_service import (
@@ -842,36 +895,49 @@ async def get_prompt_preview(
                 raise HTTPException(status_code=403, detail=str(exc))
             preview = custom_agent.custom_prompt
 
-            if mod_id and custom_agent.include_mod_rules:
-                mod_prompt = get_custom_agent_mod_prompt(
-                    parent_agent_key=custom_agent.parent_agent_key,
-                    mod_id=mod_id,
-                    mod_prompt_overrides=custom_agent.mod_prompt_overrides,
+            custom_group_rules_enabled = bool(
+                getattr(
+                    custom_agent,
+                    "group_rules_enabled",
+                    getattr(custom_agent, "include_mod_rules", False),
                 )
-                if mod_prompt:
+            )
+            custom_group_overrides = (
+                getattr(custom_agent, "group_prompt_overrides", None)
+                or getattr(custom_agent, "mod_prompt_overrides", None)
+                or {}
+            )
+
+            if resolved_group_id and custom_group_rules_enabled:
+                group_prompt = get_custom_agent_group_prompt(
+                    parent_agent_key=custom_agent.parent_agent_key,
+                    group_id=resolved_group_id,
+                    group_prompt_overrides=custom_group_overrides,
+                )
+                if group_prompt:
                     preview = (
-                        f"{preview}\n\n## MOD-SPECIFIC RULES\n\n"
-                        f"The following rules are specific to {mod_id}:\n\n"
-                        f"{mod_prompt}\n\n## END MOD-SPECIFIC RULES\n"
+                        f"{preview}\n\n## GROUP-SPECIFIC RULES\n\n"
+                        f"The following rules are specific to {resolved_group_id}:\n\n"
+                        f"{group_prompt}\n\n## END GROUP-SPECIFIC RULES\n"
                     )
 
             return PromptPreviewResponse(
                 agent_id=agent_id,
                 prompt=preview,
-                mod_id=mod_id,
+                group_id=resolved_group_id,
                 source="custom_agent",
                 parent_agent_key=custom_agent.parent_agent_key,
-                include_mod_rules=custom_agent.include_mod_rules,
+                include_group_rules=custom_group_rules_enabled,
             )
 
         # System agent preview
         service = get_prompt_catalog()
-        if mod_id:
-            prompt = service.get_combined_prompt(agent_id, mod_id)
+        if resolved_group_id:
+            prompt = service.get_combined_prompt(agent_id, resolved_group_id)
             if prompt is None:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Agent '{agent_id}' or MOD '{mod_id}' not found",
+                    detail=f"Agent '{agent_id}' or group '{resolved_group_id}' not found",
                 )
         else:
             agent = service.get_agent(agent_id)
@@ -882,10 +948,10 @@ async def get_prompt_preview(
         return PromptPreviewResponse(
             agent_id=agent_id,
             prompt=prompt,
-            mod_id=mod_id,
+            group_id=resolved_group_id,
             source="system_agent",
             parent_agent_key=None,
-            include_mod_rules=None,
+            include_group_rules=None,
         )
     except HTTPException:
         raise
@@ -937,7 +1003,7 @@ async def test_agent_endpoint(
         raise HTTPException(status_code=401, detail="User identifier not found in token")
 
     session_id = request.session_id or f"agent-test-{uuid.uuid4()}"
-    active_groups = [request.mod_id] if request.mod_id else []
+    active_groups = [request.group_id] if request.group_id else []
 
     set_current_session_id(session_id)
     set_current_user_id(str(user_sub))
@@ -1027,7 +1093,7 @@ UPDATE_WORKSHOP_PROMPT_TOOL = {
     "description": """Propose a prompt update for the current Agent Workshop draft.
 
 Use this when the curator asks you to rewrite, replace, or significantly refactor
-their current workshop prompt (main prompt or selected MOD prompt). This tool does
+their current workshop prompt (main prompt or selected group prompt). This tool does
 NOT auto-apply or auto-save changes.
 The UI will show the proposal and require explicit curator approval before applying.
 """,
@@ -1036,13 +1102,13 @@ The UI will show the proposal and require explicit curator approval before apply
         "properties": {
             "target_prompt": {
                 "type": "string",
-                "enum": ["main", "mod"],
-                "description": "Which workshop prompt to update. Use 'main' for the base system prompt and 'mod' for the selected MOD prompt override.",
+                "enum": ["main", "group", "mod"],
+                "description": "Which workshop prompt to update. Use 'main' for the base system prompt and 'group' for the selected group prompt override. Legacy 'mod' is accepted during migration.",
                 "default": "main",
             },
-            "target_mod_id": {
+            "target_group_id": {
                 "type": "string",
-                "description": "Optional MOD ID when target_prompt='mod' (for example 'WB'). Must match the currently selected MOD in Agent Workshop.",
+                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop. Legacy 'target_mod_id' is accepted during migration.",
             },
             "updated_prompt": {
                 "type": "string",
@@ -1244,7 +1310,7 @@ GET_TRACE_CONVERSATION_TOOL = {
 
 GET_TRACE_VIEW_TOOL = {
     "name": "get_trace_view",
-    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, mod_context, trace_summary.",
+    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -1254,7 +1320,7 @@ GET_TRACE_VIEW_TOOL = {
             },
             "view_name": {
                 "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "mod_context", "trace_summary"],
+                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary"],
                 "description": "Which view to fetch"
             }
         },
@@ -1748,7 +1814,7 @@ async def _handle_tool_call(
                 "data": None,
                 "token_info": None,
                 "error": f"Missing required parameters: {', '.join(missing)}",
-                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, mod_context, trace_summary"
+                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary"
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 
@@ -1771,7 +1837,9 @@ async def _handle_tool_call(
 
         # Validate suggestion_type
         try:
-            suggestion_type = SuggestionType(tool_input["suggestion_type"])
+            suggestion_type = SuggestionType(
+                _normalize_suggestion_type(tool_input["suggestion_type"])
+            )
         except ValueError:
             valid_types = [t.value for t in SuggestionType]
             return {
@@ -1789,7 +1857,7 @@ async def _handle_tool_call(
             summary=tool_input["summary"],
             detailed_reasoning=tool_input["detailed_reasoning"],
             proposed_change=tool_input.get("proposed_change"),
-            mod_id=context.selected_mod_id if context else None,
+            group_id=context.selected_group_id if context else None,
             trace_id=context.trace_id if context else None,
             conversation_context=conversation_context,
         )
@@ -1824,30 +1892,32 @@ async def _handle_tool_call(
                 "error": "This tool is only available while the curator is on the Agent Workshop tab.",
             }
 
-        target_prompt = tool_input.get("target_prompt", "main")
-        if target_prompt not in {"main", "mod"}:
+        target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
+        if target_prompt == "mod":
+            target_prompt = "group"
+        if target_prompt not in {"main", "group"}:
             return {
                 "success": False,
-                "error": "Unsupported target_prompt. Must be 'main' or 'mod'.",
+                "error": "Unsupported target_prompt. Must be 'main' or 'group'. Legacy 'mod' is also accepted.",
             }
 
-        target_mod_id = ""
-        if target_prompt == "mod":
-            selected_mod_id = (context.agent_workshop.selected_mod_id or "").strip().upper()
-            raw_target_mod = tool_input.get("target_mod_id")
-            if raw_target_mod is not None and not isinstance(raw_target_mod, str):
+        target_group_id = ""
+        if target_prompt == "group":
+            selected_group_id = (context.agent_workshop.selected_group_id or "").strip().upper()
+            raw_target_group = tool_input.get("target_group_id", tool_input.get("target_mod_id"))
+            if raw_target_group is not None and not isinstance(raw_target_group, str):
                 return {
                     "success": False,
-                    "error": "target_mod_id must be a string when provided.",
+                    "error": "target_group_id must be a string when provided.",
                 }
-            requested_mod_id = raw_target_mod.strip().upper() if isinstance(raw_target_mod, str) else ""
-            target_mod_id = requested_mod_id or selected_mod_id
+            requested_group_id = raw_target_group.strip().upper() if isinstance(raw_target_group, str) else ""
+            target_group_id = requested_group_id or selected_group_id
 
-            if not target_mod_id or selected_mod_id != target_mod_id:
+            if not target_group_id or selected_group_id != target_group_id:
                 return {
                     "success": False,
                     "error": (
-                        "To edit a MOD prompt, select that MOD in Agent Workshop first "
+                        "To edit a group prompt, select that group in Agent Workshop first "
                         "and then retry this update."
                     ),
                 }
@@ -1879,14 +1949,14 @@ async def _handle_tool_call(
             updated_prompt = candidate_prompt
         else:
             base_prompt = (
-                context.agent_workshop.selected_mod_prompt_draft
-                if target_prompt == "mod"
+                context.agent_workshop.selected_group_prompt_draft
+                if target_prompt == "group"
                 else context.agent_workshop.prompt_draft
             ) or ""
             if not base_prompt.strip():
                 missing_target = (
-                    "selected MOD prompt"
-                    if target_prompt == "mod"
+                    "selected group prompt"
+                    if target_prompt == "group"
                     else "workshop draft prompt"
                 )
                 return {
@@ -1926,7 +1996,8 @@ async def _handle_tool_call(
             "apply_mode": apply_mode,
             "proposed_prompt": updated_prompt,
             "target_prompt": target_prompt,
-            "target_mod_id": target_mod_id if target_prompt == "mod" else None,
+            "target_group_id": target_group_id if target_prompt == "group" else None,
+            "target_mod_id": target_group_id if target_prompt == "group" else None,
             "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
             "applied_edits": applied_edits,
             "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
@@ -2721,284 +2792,10 @@ def _build_opus_system_prompt(
             )
             user_greeting += f"\n{dev_prompt}\n"
 
-    base_prompt = f"""<role>
-You are a senior prompt engineering consultant with expertise in:
-- Multi-agent AI system design and debugging
-- Translating technical AI concepts for domain experts
-- Systematic trace analysis and root cause identification
-
-You are embedded in the Prompt Explorer tool at the Alliance of Genome Resources. You help curators understand, analyze, and improve the AI prompts that power their curation assistant.{user_greeting}
-</role>
-
-<context>
-## The Alliance of Genome Resources
-
-The Alliance of Genome Resources (AGR) is a consortium of Model Organism Databases (MODs) that curate biological knowledge from scientific literature:
-
-- **WormBase (WB)**: C. elegans (nematode worm)
-- **FlyBase (FB)**: Drosophila melanogaster (fruit fly)
-- **MGI**: Mus musculus (mouse)
-- **RGD**: Rattus norvegicus (rat)
-- **SGD**: Saccharomyces cerevisiae (yeast)
-- **ZFIN**: Danio rerio (zebrafish)
-
-Each MOD has organism-specific annotation conventions. The AI curation system respects these via MOD-specific rule files injected into base prompts.
-
-## The Curators You're Helping
-
-Curators are PhD-level scientists with deep expertise in genetics, molecular biology, and their model organism. They extract structured biological facts from papers: gene expression patterns, disease associations, allele phenotypes, protein interactions, etc.
-
-**Curators know well:** Biology, genetics, organism nomenclature, valid annotations vs. speculation, experimental evidence nuances, when AI output is biologically wrong.
-
-**Curators may be less familiar with:** Prompt engineering techniques, why phrasings affect AI behavior, instruction structuring, prompt design tradeoffs.
-
-Your job: Bridge this gap by translating prompt engineering concepts into biological curation terms.
-</context>
-
-<architecture>
-## The AI Curation System Architecture
-
-The system uses a multi-agent architecture:
-
-**Routing Layer:**
-- **Supervisor**: Orchestrator that routes curator queries to appropriate specialists.
-
-**Extraction Agents (work with uploaded papers):**
-- **Gene Expression Specialist**: Extracts where, when, and how genes are expressed.
-- **General PDF Extraction Agent**: Answers broad questions about PDF documents.
-- **Formatter**: Converts natural language into structured JSON matching the Alliance data model.
-
-**Database Query Agents (query external sources):**
-- **Gene Agent**: Queries Alliance Curation Database for gene information
-- **Allele Agent**: Queries for allele/variant information
-- **Disease Agent**: Queries Disease Ontology (DOID)
-- **Chemical Agent**: Queries ChEBI chemical ontology
-- **GO Term Agent**: Queries Gene Ontology terms and hierarchy
-- **GO Annotations Agent**: Retrieves existing GO annotations for genes
-- **Orthologs Agent**: Queries orthology relationships across species
-
-**Validation Agents:**
-- **Ontology Mapping**: Maps free-text labels to ontology term IDs.
-
-## MOD-Specific Rules
-
-Many agents have MOD-specific rule files (e.g., WormBase anatomy terms WBbt, FlyBase allele nomenclature). When a curator selects their MOD, these rules are injected into the base prompt. Understanding base prompt + MOD rule interactions is key to diagnosing issues.
-</architecture>
-
-<trace_analysis>
-## When a Curator Shares a Trace ID
-
-**90% of issues fall into THREE categories. Investigate ALL THREE before responding:**
-
-### Category 1: MISSING AGENT
-The system lacks an agent for the requested task.
-
-**Check:** Look at trace tool_calls - did supervisor route correctly? Did it answer from its own knowledge (bad)?
-
-**Signs:** Supervisor answered directly without calling specialist; query was about something no agent handles (protein sequences, strain stocks, etc.); wrong agent called.
-
-**Response template:** "The system doesn't currently have an agent for [X]. The supervisor tried to handle this directly/routed to the wrong agent. This is a feature gap we should report to the developers."
-
-### Category 2: MISSING DATA
-Agent exists but underlying database lacks the data.
-
-**Check:** Use `curation_db_sql` to query Alliance Curation Database directly.
-
-**Limitation:** We only access Alliance Curation Database - NOT individual MOD databases (WormBase, FlyBase, etc.). If data is missing here, the curator must verify if it exists in their MOD.
-
-**Signs:** Agent returned empty/not found; gene/allele recently added to MOD (sync delay); entity exists in MOD but not Alliance database.
-
-**Response template:** "The [agent] was called correctly, but the data doesn't exist in our Alliance Curation Database. Let me verify... [run SQL query]. The [entity] isn't here. This is a data gap - the developers should investigate the sync."
-
-### Category 3: PROMPT NEEDS IMPROVEMENT
-Agent and data exist, but prompt instructions led to wrong behavior.
-
-**Check:** Use `get_prompt(agent_id, mod_id)` to see exact instructions. Compare to curator expectations.
-
-**Signs:** Agent called, data exists, output wrong; extracted/formatted incorrectly; missed something; MOD conventions not followed.
-
-**Response template:** "The prompt tells the agent to [X], but for [MOD/situation], it should [Y]. Here's the specific section: [quote]. I can submit this as a suggestion to the development team."
-</trace_analysis>
-
-<token_budget>
-## Token Budget Awareness
-
-You have a 200K token context window. Large traces can exceed this.
-
-**Strategy:**
-- Each tool response includes `token_info` with `estimated_tokens` and `within_budget` (50K limit per response)
-- If `within_budget` is false, request less data
-- On CONTEXT_OVERFLOW error, use lighter-weight tool calls
-
-**Tool Token Costs (approximate):**
-- `get_trace_summary`: ~500 tokens (ALWAYS safe, start here)
-- `get_tool_calls_summary`: ~100 tokens per call
-- `get_trace_conversation`: 1-10K tokens (varies by response length)
-- `get_tool_calls_page`: varies (use page_size=5 for large traces)
-- `get_tool_call_detail`: 1-5K tokens per call
-
-**If you hit limits:** Use summaries instead of full data; reduce page_size; fetch specific calls one at a time; filter by tool_name.
-</token_budget>
-
-<workflow>
-## Proactive Trace Analysis Workflow
-
-**When a curator shares a trace ID, execute this workflow AUTOMATICALLY:**
-
-1. **Start with `get_trace_summary(trace_id)`** - Get name, duration, cost, tool_call_count (~500 tokens, always safe)
-
-2. **Get `get_tool_calls_summary(trace_id)`** - Lightweight summaries of ALL calls (call_id, name, duration, status, input_summary, result_summary)
-
-3. **Get `get_trace_conversation(trace_id)`** - What did they ask? What response did they get?
-
-4. **Drill into specific calls ON DEMAND** - Use `get_tool_call_detail(trace_id, call_id)` for details; use `get_tool_calls_page` with page_size=5 for multiple calls
-
-5. **Investigate all three categories:**
-   - **Missing Agent?** Did supervisor route correctly?
-   - **Missing Data?** Verify empty results with `curation_db_sql`
-   - **Prompt Issue?** Check `get_prompt(agent_id, mod_id)`
-
-6. **Report findings using this format:**
-   - "✅ Agent routing: Correct - supervisor called [agent]"
-   - "⚠️ Data availability: The gene 'xyz' was not found. Let me verify..."
-   - "📝 Prompt review: The agent's instructions say [X], which may not handle [situation]"
-
-7. **Offer to submit feedback (see rules below)**
-</workflow>
-
-<feedback_submission_rules>
-## Feedback Submission Protocol
-
-**When to offer:** Always offer ONCE in your initial findings after investigating a trace issue.
-
-**Offer templates:**
-- Missing agent: "This is a feature gap. Want me to submit this to the developers?"
-- Missing data: "This data isn't in our database. Want me to let the developers know to investigate the sync?"
-- Prompt issue: "I found a prompt improvement opportunity. Want me to submit this to Chris?"
-
-**Frequency rules:**
-1. Offer once in initial findings (mandatory)
-2. Do NOT repeat offer in the next 3 exchanges unless curator brings it up
-3. If conversation exceeds 5 exchanges without submission, offer once more: "Before we wrap up, want me to submit what we found to Chris?"
-4. Maximum 2 offers per conversation unless curator asks
-
-**Rationale:** Chris needs to hear about issues to improve the system, but repeated offers feel pushy. Two well-timed offers strikes the right balance.
-</feedback_submission_rules>
-
-<tool_failure_reporting>
-## Tool Failure Reporting
-
-When any tool call returns a service/infrastructure failure (status "error", timeout,
-connection failure, service unavailable, or unexpected empty response), you MUST:
-
-1. Call `report_tool_failure` immediately
-2. Tell the user exactly: "I've flagged this issue for the dev team."
-3. Continue helping with an alternative approach whenever possible
-
-Do NOT report user input errors such as invalid gene names, invalid IDs, or malformed curator queries.
-</tool_failure_reporting>
-
-<constraints>
-## Critical Constraints
-
-**NEVER:**
-- Claim a service is unavailable without trying the call first - always make the tool call and report actual errors
-- Fabricate excuses like "the service isn't responding" without evidence
-- Obsess over missing token counts, trace formatting issues, or metadata gaps
-- Mention technical glitches unless they directly caused the curator's issue
-- Start responses by explaining what's in your context (e.g., "I already have the prompt...", "The prompt is displayed above..."). Just use the information directly without meta-commentary about having it.
-
-**ALWAYS:**
-- Focus on: user intent, AI actions (tool calls, routing), results (found/not found), whether response addressed need
-- Try tool calls before reporting failures
-- Let actual error messages guide your troubleshooting
-- When discussing prompts already in your context, dive straight into the explanation without announcing you have the prompt
-</constraints>
-
-<tools>
-## Your Toolset
-
-### Token-Aware Trace Analysis Tools (RECOMMENDED)
-Include `token_info` in responses for budget management:
-
-- **`get_trace_summary(trace_id)`** - ALWAYS START HERE (~500 tokens). Returns trace name, duration, cost, tool_call_count, unique_tools, errors.
-- **`get_tool_calls_summary(trace_id)`** - Lightweight summaries (~100 tokens/call). Returns call_id, name, duration, status, input_summary, result_summary.
-- **`get_trace_conversation(trace_id)`** - User query and response (1-10K tokens).
-- **`get_tool_calls_page(trace_id, page, page_size, tool_name)`** - Paginated full calls. Use page_size=5 for large traces.
-- **`get_tool_call_detail(trace_id, call_id)`** - Single call full details.
-- **`get_trace_view(trace_id, view_name)`** - Specialized views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, mod_context, trace_summary.
-
-### System Tools
-- **`get_docker_logs(container, lines)`** - System logs. Use only for failed calls or reported errors. Containers: backend, weaviate, postgres.
-
-### Database Query Tools (Category 2 Investigation)
-- **`curation_db_sql`** - Direct SQL to Alliance Curation Database. Example: `SELECT * FROM gene WHERE symbol = 'daf-16'`
-- **`agr_curation_query`** - Structured API (search_genes, search_genes_bulk, get_gene_by_id, search_alleles, search_alleles_bulk, get_allele_by_id). Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.
-
-### Prompt Inspection (Category 3 Investigation)
-- **`get_prompt(agent_id, mod_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_mapping, chat_output, csv_formatter, tsv_formatter, json_formatter
-  - mod_id (optional): WB, FB, MGI, RGD, SGD, ZFIN
-  - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or MOD variant.
-  - **Do NOT announce or explain** that you already have the prompt in context. Just use it naturally.
-
-### External API Tools
-- **`chebi_api_call`** - ChEBI chemical ontology
-- **`quickgo_api_call`** - GO terms via QuickGO
-- **`go_api_call`** - GO annotations
-
-### Feedback Submission
-- **`submit_prompt_suggestion`** - Submit improvement suggestions.
-  - Types: improvement, bug, clarification, mod_specific, missing_case
-  - Use when: concrete improvement identified, curator agrees, sufficient detail available
-- **`update_workshop_prompt_draft`** - Propose updates for the Agent Workshop draft prompt.
-  - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
-  - Set `target_prompt="main"` for base system prompt edits.
-  - Set `target_prompt="mod"` for MOD-specific edits to the currently selected MOD prompt (include `target_mod_id` for clarity).
-  - For full rewrites: use `apply_mode="replace"` with `updated_prompt`.
-  - For focused changes: use `apply_mode="targeted_edit"` with `edits` (`replace_text` or `replace_section`).
-  - In casual discussion, proactively offer help like: "Want me to apply this as a targeted edit to the Output section?"
-  - Do not call this tool until the curator clearly approves applying the change.
-  - The UI requires explicit curator approval before applying. Never claim it is applied until approval happens.
-- **`report_tool_failure`** - Report infrastructure/service tool failures to the development team.
-  - Use immediately for tool errors/timeouts/connection failures
-  - Do not use for user input mistakes (bad IDs, invalid symbols)
-</tools>
-
-<guidelines>
-## Conversation Guidelines
-
-1. **Cite specific prompt sections** when discussing issues - quote what needs changing.
-2. **Trust curator expertise** - if they say output is biologically wrong, believe them. Find out WHY.
-3. **Lead with findings** - curators are busy. Provide findings first, clear next steps, skip theory unless asked.
-4. **Acknowledge limitations** honestly:
-   - Model limitations that prompt changes can't fix
-   - Genuinely ambiguous source text
-   - Fixes that might help one case but break others
-</guidelines>
-
-<model_selection_playbook>
-## Agent Workshop Model Recommendation Playbook
-
-When curators ask which model to use, give a concrete recommendation (not just generic tradeoffs):
-
-1. **Database lookups and validation-heavy work**
-   - Recommend: `openai/gpt-oss-120b`
-   - Why: fast retrieval-oriented performance and good structured extraction throughput
-
-2. **Complex PDF extraction or difficult reasoning**
-   - Recommend: `gpt-5.4` with `medium` reasoning as default
-   - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
-
-3. **Fast balanced option between those two**
-   - Recommend: `gpt-5-mini`
-   - Position it as the "start here" option for quick drafting and iterative prompt work
-
-How to coach:
-- Ask 1-3 focused clarifying questions when requirements are unclear.
-- Provide a primary recommendation plus one backup option.
-- If asked for defaults, suggest `gpt-5.4` at `medium` for deep reasoning tasks.
-</model_selection_playbook>"""
+    base_prompt = _load_agent_studio_system_prompt_template().replace(
+        "{{USER_GREETING}}",
+        user_greeting,
+    )
 
     if context:
         additions = []
@@ -3008,25 +2805,25 @@ How to coach:
             workshop = context.agent_workshop
             workshop_draft_tools = workshop.draft_tool_ids or []
             draft_prompt = workshop.prompt_draft or ""
-            selected_mod_prompt = workshop.selected_mod_prompt_draft or ""
+            selected_group_prompt = workshop.selected_group_prompt_draft or ""
             truncated = ""
-            mod_truncated = ""
+            group_truncated = ""
             max_prompt_chars = 12000
-            max_mod_prompt_chars = 6000
+            max_group_prompt_chars = 6000
             if len(draft_prompt) > max_prompt_chars:
                 draft_prompt = draft_prompt[:max_prompt_chars]
                 truncated = f"\n\n[Truncated to first {max_prompt_chars} chars for context.]"
-            if len(selected_mod_prompt) > max_mod_prompt_chars:
-                selected_mod_prompt = selected_mod_prompt[:max_mod_prompt_chars]
-                mod_truncated = f"\n\n[Truncated to first {max_mod_prompt_chars} chars for context.]"
+            if len(selected_group_prompt) > max_group_prompt_chars:
+                selected_group_prompt = selected_group_prompt[:max_group_prompt_chars]
+                group_truncated = f"\n\n[Truncated to first {max_group_prompt_chars} chars for context.]"
 
-            selected_mod_prompt_block = ""
-            if workshop.selected_mod_id and selected_mod_prompt:
-                selected_mod_prompt_block = f"""
+            selected_group_prompt_block = ""
+            if workshop.selected_group_id and selected_group_prompt:
+                selected_group_prompt_block = f"""
 
-<workshop_selected_mod_prompt mod="{workshop.selected_mod_id}">
-{selected_mod_prompt}
-</workshop_selected_mod_prompt>{mod_truncated}"""
+<workshop_selected_group_prompt group="{workshop.selected_group_id}">
+{selected_group_prompt}
+</workshop_selected_group_prompt>{group_truncated}"""
 
             model_catalog_lines: List[str] = []
             try:
@@ -3061,10 +2858,10 @@ The curator is actively iterating an agent draft in Agent Workshop.
 
 - Template source: {workshop.template_name or workshop.template_source or 'Unknown'}
 - Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
-- Include MOD rules: {"Yes" if workshop.include_mod_rules else "No"}
-- Selected MOD: {workshop.selected_mod_id or "None"}
-- Has MOD prompt overrides: {"Yes" if workshop.has_mod_prompt_overrides else "No"}
-- MOD override count: {workshop.mod_prompt_override_count or 0}
+- Include group rules: {"Yes" if workshop.include_group_rules else "No"}
+- Selected group: {workshop.selected_group_id or "None"}
+- Has group prompt overrides: {"Yes" if workshop.has_group_prompt_overrides else "No"}
+- Group override count: {workshop.group_prompt_override_count or 0}
 - Template prompt stale: {"Yes" if workshop.template_prompt_stale else "No"}
 - Template exists: {"Yes" if workshop.template_exists is not False else "No"}
 - Draft attached tools: {", ".join(workshop_draft_tools) if workshop_draft_tools else "None"}
@@ -3082,12 +2879,12 @@ Configured model options:
 Use this workshop context to give concrete prompt-engineering feedback, especially:
 1. how to improve the draft prompt structure and specificity,
 2. what to test next in flow execution (and when to compare with the template-source prompt),
-3. how MOD rules may interact with the current draft.
+3. how group rules may interact with the current draft.
 4. proactively identify concrete prompt improvements during normal conversation and suggest them.
 5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
 6. after clear approval, call `update_workshop_prompt_draft`:
    - set `target_prompt="main"` for general/global draft behavior changes,
-   - set `target_prompt="mod"` for MOD-specific wording/rules and include `target_mod_id`,
+   - set `target_prompt="group"` for group-specific wording/rules and include `target_group_id`,
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
 7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
@@ -3102,13 +2899,13 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - for extraction/factual behavior, prioritize deterministic wording over creative language.
 10. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
 11. choose the right target for edits:
-   - use main prompt updates for behavior that should apply across all MODs,
-   - use MOD prompt updates only for organism/MOD-specific exceptions or conventions.
+   - use main prompt updates for behavior that should apply across all groups,
+   - use group prompt updates only for organism/group-specific exceptions or conventions.
 
 <workshop_prompt_draft>
 {draft_prompt}
 </workshop_prompt_draft>{truncated}
-{selected_mod_prompt_block}
+{selected_group_prompt_block}
 
 Prompt injection note:
 - Structured output instructions are inserted near the first `## ` heading.
@@ -3136,19 +2933,19 @@ The curator is viewing the **{agent.agent_name}** agent.
 
 **{tools_label}:** {', '.join(tools_for_context) if tools_for_context else 'None'}
 
-**Has MOD-specific rules:** {'Yes' if agent.has_mod_rules else 'No'}""")
+**Has group-specific rules:** {'Yes' if agent.has_group_rules else 'No'}""")
 
                 # Include the prompt content based on view mode
-                if context.selected_mod_id and context.selected_mod_id in agent.mod_rules:
-                    mod_rule = agent.mod_rules[context.selected_mod_id]
+                if context.selected_group_id and context.selected_group_id in agent.group_rules:
+                    group_rule = agent.group_rules[context.selected_group_id]
                     additions.append(f"""
-### Currently Viewing: {context.selected_mod_id}-Specific Rules
+### Currently Viewing: {context.selected_group_id}-Specific Rules
 
-The curator is looking at the MOD-specific rules for {context.selected_mod_id}. Here are those rules:
+The curator is looking at the group-specific rules for {context.selected_group_id}. Here are those rules:
 
-<mod_rules mod="{context.selected_mod_id}">
-{mod_rule.content}
-</mod_rules>
+<group_rules group="{context.selected_group_id}">
+{group_rule.content}
+</group_rules>
 
 And here is the base prompt that these rules extend:
 
@@ -3164,10 +2961,10 @@ And here is the base prompt that these rules extend:
 {agent.base_prompt}
 </base_prompt>""")
 
-                    if agent.has_mod_rules:
-                        available_mods = list(agent.mod_rules.keys())
+                    if agent.has_group_rules:
+                        available_groups = list(agent.group_rules.keys())
                         additions.append(f"""
-This agent has MOD-specific rules available for: {', '.join(available_mods)}. The curator can select a MOD to see how the base prompt is customized.""")
+This agent has group-specific rules available for: {', '.join(available_groups)}. The curator can select a group to see how the base prompt is customized.""")
 
         if context.trace_id:
             # Provide lightweight trace context with tool usage instructions
@@ -3343,7 +3140,7 @@ async def submit_suggestion(
     """Submit a prompt suggestion manually."""
     # Validate suggestion type
     try:
-        suggestion_type = SuggestionType(request.suggestion_type)
+        suggestion_type = SuggestionType(_normalize_suggestion_type(request.suggestion_type))
     except ValueError:
         valid_types = [t.value for t in SuggestionType]
         raise HTTPException(
@@ -3365,7 +3162,7 @@ async def submit_suggestion(
         summary=request.summary,
         detailed_reasoning=request.detailed_reasoning,
         proposed_change=request.proposed_change,
-        mod_id=request.mod_id,
+        group_id=request.group_id,
         trace_id=request.trace_id,
         conversation_context=None,
     )

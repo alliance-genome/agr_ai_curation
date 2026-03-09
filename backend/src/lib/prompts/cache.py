@@ -5,9 +5,9 @@ Usage:
 
     # Anywhere in the codebase - no dependencies needed
     # Agent IDs match catalog_service.py AGENT_REGISTRY keys
-    prompt = get_prompt("pdf_extraction")  # Base prompt (mod_id=None)
-    prompt = get_prompt("gene", mod_id="FB")  # MOD-specific rules for FlyBase
-    prompt = get_prompt_by_version("gene", version=3, mod_id="WB")  # Pinned version
+    prompt = get_prompt("pdf_extraction")  # Base prompt
+    prompt = get_prompt("gene", group_id="FB")  # Group-specific rules for FlyBase
+    prompt = get_prompt_by_version("gene", version=3, group_id="WB")  # Pinned version
 """
 
 from typing import Dict, Optional
@@ -29,8 +29,8 @@ class PromptNotFoundError(Exception):
 
 
 # Module-level state
-_active_cache: Dict[str, PromptTemplate] = {}  # agent:type:mod -> active prompt
-_version_cache: Dict[str, PromptTemplate] = {}  # agent:type:mod:version -> specific version
+_active_cache: Dict[str, PromptTemplate] = {}  # agent:type:group -> active prompt
+_version_cache: Dict[str, PromptTemplate] = {}  # agent:type:group:version -> specific version
 _lock = threading.Lock()
 _initialized: bool = False
 _loaded_at: Optional[datetime] = None
@@ -90,7 +90,6 @@ def refresh(db: Session) -> None:
 def get_prompt(
     agent_name: str,
     prompt_type: str = "system",
-    mod_id: Optional[str] = None,
     group_id: Optional[str] = None,
 ) -> PromptTemplate:
     """
@@ -99,7 +98,7 @@ def get_prompt(
     Args:
         agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
-        mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
+        group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
         PromptTemplate with content and version info
@@ -113,8 +112,6 @@ def get_prompt(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
-    resolved_mod_id = mod_id or group_id
-
     override = get_prompt_override()
     if (
         override
@@ -130,26 +127,26 @@ def get_prompt(
         override
         and prompt_type in {"group_rules", "mod_rules"}
         and override.agent_name == agent_name
-        and resolved_mod_id
+        and group_id
     ):
-        normalized_mod_id = resolved_mod_id.upper()
-        override_content = (override.mod_overrides or {}).get(normalized_mod_id)
+        normalized_group_id = group_id.upper()
+        override_content = (override.group_overrides or {}).get(normalized_group_id)
         if override_content:
             return _build_override_prompt_template(
                 agent_name=agent_name,
                 content=override_content,
                 custom_agent_id=override.custom_agent_id,
                 prompt_type=prompt_type,
-                mod_id=normalized_mod_id,
+                group_id=normalized_group_id,
             )
 
     # Cache key includes group ID for group-specific prompts
-    key = f"{agent_name}:{prompt_type}:{resolved_mod_id or 'base'}"
+    key = f"{agent_name}:{prompt_type}:{group_id or 'base'}"
 
     if key not in _active_cache:
         raise PromptNotFoundError(
             f"No active prompt found for agent='{agent_name}', "
-            f"type='{prompt_type}', mod='{mod_id}'. Database prompts are required."
+            f"type='{prompt_type}', group='{group_id}'. Database prompts are required."
         )
 
     return _active_cache[key]
@@ -159,7 +156,6 @@ def get_prompt_by_version(
     agent_name: str,
     version: int,
     prompt_type: str = "system",
-    mod_id: Optional[str] = None,
     group_id: Optional[str] = None,
 ) -> PromptTemplate:
     """
@@ -169,7 +165,7 @@ def get_prompt_by_version(
         agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         version: Specific version number to retrieve
         prompt_type: e.g., 'system' (default), 'group_rules'
-        mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
+        group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
         PromptTemplate for the specified version
@@ -183,12 +179,12 @@ def get_prompt_by_version(
             "Prompt cache not initialized. Call initialize() at startup."
         )
 
-    key = f"{agent_name}:{prompt_type}:{mod_id or group_id or 'base'}:v{version}"
+    key = f"{agent_name}:{prompt_type}:{group_id or 'base'}:v{version}"
 
     if key not in _version_cache:
         raise PromptNotFoundError(
             f"Prompt version {version} not found for agent='{agent_name}', "
-            f"type='{prompt_type}', mod='{mod_id}'."
+            f"type='{prompt_type}', group='{group_id}'."
         )
 
     return _version_cache[key]
@@ -197,18 +193,17 @@ def get_prompt_by_version(
 def get_prompt_optional(
     agent_name: str,
     prompt_type: str = "system",
-    mod_id: Optional[str] = None,
     group_id: Optional[str] = None,
 ) -> Optional[PromptTemplate]:
     """
     Get the active prompt if it exists, None otherwise.
 
-    Use this for optional prompts like MOD rules where missing is acceptable.
+    Use this for optional prompts like group rules where missing is acceptable.
 
     Args:
         agent_name: Catalog ID, e.g., 'pdf_extraction', 'gene', 'supervisor'
         prompt_type: e.g., 'system' (default), 'group_rules'
-        mod_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
+        group_id: e.g., 'FB', 'WB', 'MGI' (None for base prompts)
 
     Returns:
         PromptTemplate if found, None otherwise
@@ -220,8 +215,6 @@ def get_prompt_optional(
         raise RuntimeError(
             "Prompt cache not initialized. Call initialize() at startup."
         )
-
-    resolved_mod_id = mod_id or group_id
 
     override = get_prompt_override()
     if (
@@ -238,20 +231,20 @@ def get_prompt_optional(
         override
         and prompt_type in {"group_rules", "mod_rules"}
         and override.agent_name == agent_name
-        and resolved_mod_id
+        and group_id
     ):
-        normalized_mod_id = resolved_mod_id.upper()
-        override_content = (override.mod_overrides or {}).get(normalized_mod_id)
+        normalized_group_id = group_id.upper()
+        override_content = (override.group_overrides or {}).get(normalized_group_id)
         if override_content:
             return _build_override_prompt_template(
                 agent_name=agent_name,
                 content=override_content,
                 custom_agent_id=override.custom_agent_id,
                 prompt_type=prompt_type,
-                mod_id=normalized_mod_id,
+                group_id=normalized_group_id,
             )
 
-    key = f"{agent_name}:{prompt_type}:{resolved_mod_id or 'base'}"
+    key = f"{agent_name}:{prompt_type}:{group_id or 'base'}"
     return _active_cache.get(key)
 
 
@@ -260,14 +253,14 @@ def _build_override_prompt_template(
     content: str,
     custom_agent_id: str,
     prompt_type: str = "system",
-    mod_id: Optional[str] = None,
+    group_id: Optional[str] = None,
 ) -> PromptTemplate:
     """Build an in-memory PromptTemplate object for custom-agent prompt overrides."""
     return PromptTemplate(
         id=None,
         agent_name=agent_name,
         prompt_type=prompt_type,
-        group_id=mod_id,
+        group_id=group_id,
         content=content,
         version=1,
         is_active=True,

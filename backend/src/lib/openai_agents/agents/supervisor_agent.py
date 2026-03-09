@@ -440,7 +440,7 @@ def create_supervisor_agent(
     # =========================================================================
     # Discover enabled agents from unified records and create streaming tool wrappers.
     # Document-dependent agents are automatically filtered if no document is loaded.
-    # MOD-specific rules are injected for agents with group_rules_enabled=True.
+    # Group-specific rules are injected for agents with group_rules_enabled=True.
     # =========================================================================
     specialist_tools = _create_dynamic_specialist_tools(
         document_id=document_id,
@@ -555,7 +555,7 @@ The tool returns file information including a download URL that will render as a
             )
             logger.info("Supervisor configured with group-specific dispatch rules: %s", active_groups)
         except ImportError as e:
-            logger.warning("Could not import mod_config for supervisor, skipping injection: %s", e)
+            logger.warning("Could not import group config for supervisor, skipping injection: %s", e)
         except Exception as e:
             # Don't fail if supervisor rules don't exist - they're optional
             logger.debug("No supervisor group rules found or error: %s", e)

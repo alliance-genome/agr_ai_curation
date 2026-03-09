@@ -103,7 +103,7 @@ class TestAgentTestEndpoint:
                 agent_id="gene",
                 request=api_module.AgentTestRequest(
                     input="test query",
-                    mod_id="WB",
+                    group_id="WB",
                     session_id="session-1",
                 ),
                 user={"sub": "auth-sub"},
@@ -131,6 +131,26 @@ class TestAgentTestEndpoint:
         assert '"session_id": "session-1"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
         assert run_kwargs["session_id"] == "session-1"
+
+    def test_agent_test_request_accepts_legacy_mod_id_alias(self):
+        import src.api.agent_studio as api_module
+
+        request = api_module.AgentTestRequest(input="test query", mod_id="WB")
+
+        assert request.group_id == "WB"
+
+    def test_manual_suggestion_request_accepts_legacy_mod_id_alias(self):
+        import src.api.agent_studio as api_module
+
+        request = api_module.ManualSuggestionRequest(
+            agent_id="gene",
+            suggestion_type="group_specific",
+            summary="Summary",
+            detailed_reasoning="Reasoning",
+            mod_id="WB",
+        )
+
+        assert request.group_id == "WB"
 
     def test_endpoint_resolves_custom_agent_ids_with_ownership_check(self, monkeypatch):
         import src.api.agent_studio as api_module
@@ -399,6 +419,13 @@ class TestAgentTestEndpoint:
 class TestAgentWorkshopSystemPrompt:
     """Tests for agent workshop context injection into Opus system prompt."""
 
+    def test_chat_context_normalizes_legacy_mod_view_mode(self):
+        from src.lib.agent_studio.models import ChatContext
+
+        context = ChatContext(view_mode="mod")
+
+        assert context.view_mode == "group"
+
     def test_build_opus_system_prompt_includes_workshop_context_and_truncates_draft(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
@@ -411,12 +438,12 @@ class TestAgentWorkshopSystemPrompt:
                 template_name="Gene Validation",
                 custom_agent_id="ca_123",
                 custom_agent_name="Gene Custom v3",
-                include_mod_rules=True,
-                selected_mod_id="WB",
+                include_group_rules=True,
+                selected_group_id="WB",
                 prompt_draft=draft,
-                selected_mod_prompt_draft="WB MOD DRAFT CONTENT",
-                mod_prompt_override_count=2,
-                has_mod_prompt_overrides=True,
+                selected_group_prompt_draft="WB GROUP DRAFT CONTENT",
+                group_prompt_override_count=2,
+                has_group_prompt_overrides=True,
                 template_prompt_stale=True,
                 template_exists=True,
                 draft_tool_ids=["search_document", "read_section", "read_subsection", "agr_curation_query"],
@@ -429,17 +456,17 @@ class TestAgentWorkshopSystemPrompt:
         assert "Current Context: Agent Workshop" in system_prompt
         assert "Template source: Gene Validation" in system_prompt
         assert "Custom agent: Gene Custom v3" in system_prompt
-        assert "Selected MOD: WB" in system_prompt
-        assert "Has MOD prompt overrides: Yes" in system_prompt
-        assert "MOD override count: 2" in system_prompt
+        assert "Selected group: WB" in system_prompt
+        assert "Has group prompt overrides: Yes" in system_prompt
+        assert "Group override count: 2" in system_prompt
         assert "Draft attached tools: search_document, read_section, read_subsection, agr_curation_query" in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
         assert "ask for permission in plain language" in system_prompt
         assert "distilled OpenAI-style prompt playbook" in system_prompt
         assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
         assert "<workshop_prompt_draft>" in system_prompt
-        assert "<workshop_selected_mod_prompt mod=\"WB\">" in system_prompt
-        assert "WB MOD DRAFT CONTENT" in system_prompt
+        assert "<workshop_selected_group_prompt group=\"WB\">" in system_prompt
+        assert "WB GROUP DRAFT CONTENT" in system_prompt
         assert "Truncated to first 12000 chars for context." in system_prompt
         assert "Prompt injection note:" in system_prompt
 
@@ -621,7 +648,7 @@ class TestAgentWorkshopSystemPrompt:
         assert "Return JSON with evidence and citations." in result["proposed_prompt"]
         assert "Return concise bullet points." not in result["proposed_prompt"]
 
-    def test_handle_update_workshop_prompt_tool_supports_mod_targeted_edit(self):
+    def test_handle_update_workshop_prompt_tool_supports_group_targeted_edit(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
@@ -629,8 +656,49 @@ class TestAgentWorkshopSystemPrompt:
             active_tab="agent_workshop",
             agent_workshop=AgentWorkshopContext(
                 template_source="gene",
-                selected_mod_id="WB",
-                selected_mod_prompt_draft="Use WB IDs and anatomy terms.\n",
+                selected_group_id="WB",
+                selected_group_prompt_draft="Use WB IDs and anatomy terms.\n",
+            ),
+        )
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={
+                    "target_prompt": "group",
+                    "target_group_id": "WB",
+                    "apply_mode": "targeted_edit",
+                    "edits": [
+                        {
+                            "operation": "replace_text",
+                            "find_text": "WB IDs",
+                            "replacement_text": "WormBase IDs",
+                            "occurrence": "first",
+                        }
+                    ],
+                },
+                context=context,
+                user_email="dev@example.org",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is True
+        assert result["target_prompt"] == "group"
+        assert result["target_group_id"] == "WB"
+        assert result["target_mod_id"] == "WB"
+        assert "WormBase IDs" in result["proposed_prompt"]
+
+    def test_handle_update_workshop_prompt_tool_accepts_legacy_mod_target_alias(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                template_source="gene",
+                selected_group_id="WB",
+                selected_group_prompt_draft="Use WB IDs and anatomy terms.\n",
             ),
         )
 
@@ -657,11 +725,11 @@ class TestAgentWorkshopSystemPrompt:
         )
 
         assert result["success"] is True
-        assert result["target_prompt"] == "mod"
+        assert result["target_prompt"] == "group"
+        assert result["target_group_id"] == "WB"
         assert result["target_mod_id"] == "WB"
-        assert "WormBase IDs" in result["proposed_prompt"]
 
-    def test_handle_update_workshop_prompt_tool_rejects_mod_target_without_selected_mod(self):
+    def test_handle_update_workshop_prompt_tool_rejects_group_target_without_selected_group(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
@@ -669,7 +737,7 @@ class TestAgentWorkshopSystemPrompt:
             active_tab="agent_workshop",
             agent_workshop=AgentWorkshopContext(
                 template_source="gene",
-                selected_mod_id=None,
+                selected_group_id=None,
                 prompt_draft="Main prompt",
             ),
         )
@@ -678,7 +746,7 @@ class TestAgentWorkshopSystemPrompt:
             api_module._handle_tool_call(
                 tool_name="update_workshop_prompt_draft",
                 tool_input={
-                    "target_prompt": "mod",
+                    "target_prompt": "group",
                     "updated_prompt": "WB-specific update",
                 },
                 context=context,
@@ -688,7 +756,7 @@ class TestAgentWorkshopSystemPrompt:
         )
 
         assert result["success"] is False
-        assert "select that MOD in Agent Workshop first" in result["error"]
+        assert "select that group in Agent Workshop first" in result["error"]
 
     def test_handle_update_workshop_prompt_tool_rejects_targeted_edit_without_edits(self):
         from src.api import agent_studio as api_module

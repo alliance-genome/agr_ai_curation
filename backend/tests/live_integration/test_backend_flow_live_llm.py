@@ -217,7 +217,7 @@ def _run_live_flow_case(
                 "name": f"Live {provider.title()} Flow Agent {uuid4().hex[:8]}",
                 "custom_prompt": "Answer the user request directly in one short sentence.",
                 "description": f"Manual live {provider} test agent",
-                "include_mod_rules": False,
+                "include_group_rules": False,
                 "model_id": model_id,
                 "model_reasoning": "low",
             }

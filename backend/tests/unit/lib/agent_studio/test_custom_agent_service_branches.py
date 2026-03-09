@@ -289,7 +289,7 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
     custom_agent = SimpleNamespace(
         id=uuid.uuid4(),
         custom_prompt="current prompt",
-        mod_prompt_overrides={" wb ": "keep"},
+        group_prompt_overrides={" wb ": "keep"},
         version=4,
     )
 
@@ -300,12 +300,12 @@ def test_revert_custom_agent_to_version_paths(monkeypatch):
             version=9,
         )
 
-    target = SimpleNamespace(custom_prompt="old prompt", mod_prompt_overrides={"mgi": "m rules"})
+    target = SimpleNamespace(custom_prompt="old prompt", group_prompt_overrides={"mgi": "m rules"})
     db = _FakeDB([_FakeQuery(first_value=target)])
     monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
     updated = service.revert_custom_agent_to_version(db, custom_agent=custom_agent, version=3, notes=None)
     assert updated.custom_prompt == "old prompt"
-    assert updated.mod_prompt_overrides == {"MGI": "m rules"}
+    assert updated.group_prompt_overrides == {"MGI": "m rules"}
     assert updated.version == 5
     assert len(db.added) == 1
     snapshot = db.added[0]
@@ -324,8 +324,8 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         agent_key=service.make_custom_agent_id(custom_uuid),
         name="Runtime Agent",
         custom_prompt="prompt",
-        mod_prompt_overrides={" wb ": "rules"},
-        include_mod_rules=True,
+        group_prompt_overrides={" wb ": "rules"},
+        include_group_rules=True,
         tool_ids=["search_document"],
         template_source="gene",
         user_id=7,
@@ -353,15 +353,15 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
 
     as_dict = service.custom_agent_to_dict(runtime_agent)
     assert as_dict["agent_id"].startswith("ca_")
-    assert as_dict["mod_prompt_overrides"] == {"WB": "rules"}
+    assert as_dict["group_prompt_overrides"] == {"WB": "rules"}
     assert as_dict["parent_exists"] is True
 
 
-def test_get_custom_agent_mod_prompt_additional_paths(monkeypatch):
-    assert service.get_custom_agent_mod_prompt("gene", "", {"WB": "rules"}) is None
+def test_get_custom_agent_group_prompt_additional_paths(monkeypatch):
+    assert service.get_custom_agent_group_prompt("gene", "", {"WB": "rules"}) is None
 
-    def _get_prompt_optional(_agent_name, prompt_type, mod_id=None, **_kwargs):
-        _ = mod_id
+    def _get_prompt_optional(_agent_name, prompt_type, group_id=None, **_kwargs):
+        _ = group_id
         if prompt_type == "group_rules":
             return None
         return SimpleNamespace(content="fallback mod rules")
@@ -380,4 +380,4 @@ def test_get_custom_agent_mod_prompt_additional_paths(monkeypatch):
 
     fake_cache_none = SimpleNamespace(get_prompt_optional=lambda *_args, **_kwargs: None)
     monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_cache_none)
-    assert service.get_custom_agent_mod_prompt("gene", "WB", None) is None
+    assert service.get_custom_agent_group_prompt("gene", "WB", None) is None

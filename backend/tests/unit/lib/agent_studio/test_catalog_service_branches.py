@@ -220,10 +220,14 @@ def test_build_catalog_and_service_branches(monkeypatch):
     assert service.get_agent("missing") is None
     assert service.get_agents_by_category("missing") == []
 
-    fake_agent = SimpleNamespace(base_prompt="BASE", has_mod_rules=True, mod_rules={"WB": SimpleNamespace(content="WB rules")})
+    fake_agent = SimpleNamespace(
+        base_prompt="BASE",
+        has_group_rules=True,
+        group_rules={"WB": SimpleNamespace(content="WB rules")},
+    )
     monkeypatch.setattr(service, "get_agent", lambda _agent_id: fake_agent)
     combined = service.get_combined_prompt("gene", "WB")
-    assert "MOD-SPECIFIC RULES" in combined
+    assert "GROUP-SPECIFIC RULES" in combined
     assert "WB rules" in combined
     assert service.get_combined_prompt("gene", "FB") == "BASE"
     monkeypatch.setattr(service, "get_agent", lambda _agent_id: None)
@@ -267,7 +271,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         base_prompt="BASE\n## GROUP-SPECIFIC RULES",
         group_ids=[" wb "],
         component_name="gene",
-        mod_overrides={"WB": "override rule"},
+        group_overrides={"WB": "override rule"},
     )
     assert "override rule" in injected
 
@@ -282,7 +286,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         base_prompt="BASE",
         group_ids=["WB"],
         component_name="gene",
-        mod_overrides={},
+        group_overrides={},
     )
     assert "group rule" in fallback
 

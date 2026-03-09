@@ -12,7 +12,7 @@ class TestAgentStudioCatalogEndpoints:
         import src.api.agent_studio as api_module
         from src.lib.agent_studio.models import PromptCatalog
 
-        service = SimpleNamespace(catalog=PromptCatalog(total_agents=1, available_mods=["WB"]))
+        service = SimpleNamespace(catalog=PromptCatalog(total_agents=1, available_groups=["WB"]))
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
         observed = {"called": False}
 
@@ -31,7 +31,7 @@ class TestAgentStudioCatalogEndpoints:
 
         assert observed["called"] is True
         assert result.catalog.total_agents == 1
-        assert result.catalog.available_mods == ["WB"]
+        assert result.catalog.available_groups == ["WB"]
 
     def test_get_catalog_maps_unexpected_errors_to_500(self, monkeypatch):
         import src.api.agent_studio as api_module
@@ -58,7 +58,7 @@ class TestAgentStudioCatalogEndpoints:
             refreshed["value"] = True
 
         service = SimpleNamespace(
-            catalog=PromptCatalog(total_agents=2, available_mods=["WB", "RGD"]),
+            catalog=PromptCatalog(total_agents=2, available_groups=["WB", "RGD"]),
             refresh=_refresh,
         )
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
@@ -84,16 +84,17 @@ class TestAgentStudioCatalogEndpoints:
     def test_get_combined_prompt_success_and_404(self, monkeypatch):
         import src.api.agent_studio as api_module
 
-        service = SimpleNamespace(get_combined_prompt=lambda agent_id, mod_id: f"{agent_id}-{mod_id}-prompt")
+        service = SimpleNamespace(get_combined_prompt=lambda agent_id, group_id: f"{agent_id}-{group_id}-prompt")
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
 
         success = asyncio.run(
             api_module.get_combined_prompt(
-                request=api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB"),
+                request=api_module.CombinedPromptRequest(agent_id="gene", group_id="WB"),
                 user={"sub": "auth-sub"},
             )
         )
         assert success.combined_prompt == "gene-WB-prompt"
+        assert success.group_id == "WB"
 
         monkeypatch.setattr(
             api_module,
@@ -103,7 +104,7 @@ class TestAgentStudioCatalogEndpoints:
         with pytest.raises(HTTPException) as not_found_exc:
             asyncio.run(
                 api_module.get_combined_prompt(
-                    request=api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB"),
+                    request=api_module.CombinedPromptRequest(agent_id="gene", group_id="WB"),
                     user={"sub": "auth-sub"},
                 )
             )
@@ -126,3 +127,10 @@ class TestAgentStudioCatalogEndpoints:
             )
         assert exc_info.value.status_code == 500
         assert "boom" in str(exc_info.value.detail)
+
+    def test_combined_prompt_request_accepts_legacy_mod_id_alias(self):
+        import src.api.agent_studio as api_module
+
+        request = api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB")
+
+        assert request.group_id == "WB"

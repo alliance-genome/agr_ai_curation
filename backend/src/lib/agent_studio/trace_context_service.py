@@ -143,7 +143,7 @@ def _extract_prompts_executed(observations: List[Any]) -> List[PromptExecution]:
                     agent_id=agent_id,
                     agent_name=_agent_id_to_name(agent_id),
                     prompt_preview=prompt_preview,
-                    mod_applied=_extract_group_from_observation(obs),
+                    group_applied=_extract_group_from_observation(obs),
                     model=getattr(obs, 'model', None),
                     tokens_used=obs.usage.total if hasattr(obs, 'usage') and obs.usage else None,
                 ))

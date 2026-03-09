@@ -77,15 +77,15 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
 
     catalog = catalog_service._build_catalog()
     assert catalog.total_agents == 1
-    assert sorted(catalog.available_mods) == ["FB", "WB"]
+    assert sorted(catalog.available_groups) == ["FB", "WB"]
     assert len(catalog.categories) == 1
     assert len(catalog.categories[0].agents) == 1
 
     agent = catalog.categories[0].agents[0]
-    assert agent.has_mod_rules is True
-    assert sorted(agent.mod_rules.keys()) == ["FB", "WB"]
-    assert agent.mod_rules["WB"].content == "wb rules"
-    assert agent.mod_rules["FB"].content == "fb rules"
+    assert agent.has_group_rules is True
+    assert sorted(agent.group_rules.keys()) == ["FB", "WB"]
+    assert agent.group_rules["WB"].content == "wb rules"
+    assert agent.group_rules["FB"].content == "fb rules"
 
 
 def test_get_agent_by_id_requires_unified_agents_table(monkeypatch):

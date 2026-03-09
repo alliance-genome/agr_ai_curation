@@ -13,7 +13,7 @@ at creation would overcount (prompts logged for agents that never run). Instead:
 Usage:
     # In agent factory
     from src.lib.prompts.context import set_pending_prompts
-    set_pending_prompts("Gene Specialist", [base_prompt, mod_rule_prompt])
+    set_pending_prompts("Gene Specialist", [base_prompt, group_rule_prompt])
 
     # In execution wrapper (when agent actually runs)
     from src.lib.prompts.context import commit_pending_prompts
@@ -44,14 +44,28 @@ _used_prompts: ContextVar[Optional[List[PromptTemplate]]] = ContextVar(
 )
 
 
-@dataclass
+@dataclass(init=False)
 class PromptOverride:
     """Full system-prompt replacement for a specific agent in this request context."""
 
     content: str
     agent_name: str
     custom_agent_id: str
-    mod_overrides: Optional[Dict[str, str]] = None
+    group_overrides: Optional[Dict[str, str]] = None
+
+    def __init__(
+        self,
+        content: str,
+        agent_name: str,
+        custom_agent_id: str,
+        group_overrides: Optional[Dict[str, str]] = None,
+        mod_overrides: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.content = content
+        self.agent_name = agent_name
+        self.custom_agent_id = custom_agent_id
+        self.group_overrides = group_overrides if group_overrides is not None else mod_overrides
+        self.mod_overrides = self.group_overrides
 
 
 prompt_override_var: ContextVar[Optional[PromptOverride]] = ContextVar(
@@ -88,7 +102,7 @@ def set_pending_prompts(agent_name: str, prompts: List[PromptTemplate]) -> None:
 
     Args:
         agent_name: The Agent.name value (e.g., "Gene Specialist", "PDF Specialist")
-        prompts: List of PromptTemplate objects (base prompt + any MOD rules)
+        prompts: List of PromptTemplate objects (base prompt + any group rules)
     """
     pending = _get_pending().copy()
     pending[agent_name] = list(prompts)

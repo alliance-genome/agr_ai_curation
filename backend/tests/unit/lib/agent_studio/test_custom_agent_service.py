@@ -9,10 +9,10 @@ from src.lib.agent_studio.custom_agent_service import (
     CUSTOM_AGENT_PREFIX,
     clone_visible_agent_for_user,
     create_custom_agent,
-    get_custom_agent_mod_prompt,
+    get_custom_agent_group_prompt,
     set_custom_agent_visibility,
     make_custom_agent_id,
-    normalize_mod_prompt_overrides,
+    normalize_group_prompt_overrides,
     parse_custom_agent_id,
 )
 
@@ -30,8 +30,8 @@ def test_parse_custom_agent_id_rejects_invalid_values():
     assert parse_custom_agent_id("") is None
 
 
-def test_normalize_mod_prompt_overrides_cleans_keys_and_empty_values():
-    normalized = normalize_mod_prompt_overrides({
+def test_normalize_group_prompt_overrides_cleans_keys_and_empty_values():
+    normalized = normalize_group_prompt_overrides({
         " wb ": "WormBase custom rules",
         "FB": "",
         "": "ignored",
@@ -44,30 +44,29 @@ def test_normalize_mod_prompt_overrides_cleans_keys_and_empty_values():
     }
 
 
-def test_get_custom_agent_mod_prompt_prefers_override():
-    override_content = get_custom_agent_mod_prompt(
+def test_get_custom_agent_group_prompt_prefers_override():
+    override_content = get_custom_agent_group_prompt(
         parent_agent_key="gene",
-        mod_id="WB",
-        mod_prompt_overrides={"WB": "custom wb rules"},
+        group_id="WB",
+        group_prompt_overrides={"WB": "custom wb rules"},
     )
     assert override_content == "custom wb rules"
 
 
-def test_get_custom_agent_mod_prompt_falls_back_to_cached_rules(monkeypatch):
-    fake_cache_module = SimpleNamespace(
-        get_prompt_optional=lambda agent_name, prompt_type, mod_id: (
-            type("Prompt", (), {"content": "cached wb rules"})()
-            if agent_name == "gene" and prompt_type == "group_rules" and mod_id == "WB"
-            else None
-        )
-    )
+def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
+    def _get_prompt_optional(agent_name, prompt_type, group_id=None):
+        if agent_name == "gene" and prompt_type == "group_rules" and group_id == "WB":
+            return type("Prompt", (), {"content": "cached wb rules"})()
+        return None
+
+    fake_cache_module = SimpleNamespace(get_prompt_optional=_get_prompt_optional)
 
     monkeypatch.setitem(__import__("sys").modules, "src.lib.prompts.cache", fake_cache_module)
 
-    content = get_custom_agent_mod_prompt(
+    content = get_custom_agent_group_prompt(
         parent_agent_key="gene",
-        mod_id="WB",
-        mod_prompt_overrides={},
+        group_id="WB",
+        group_prompt_overrides={},
     )
     assert content == "cached wb rules"
 
@@ -215,8 +214,8 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         user_id=7,
         name="Existing Agent",
         custom_prompt="Prompt",
-        mod_prompt_overrides={},
-        include_mod_rules=True,
+        group_prompt_overrides={},
+        include_group_rules=True,
         model_id="gpt-4o",
         model_temperature=0.1,
         model_reasoning=None,
@@ -253,8 +252,8 @@ def test_update_custom_agent_rejects_clearing_existing_tool_ids_without_override
         user_id=7,
         name="Existing Agent",
         custom_prompt="Prompt",
-        mod_prompt_overrides={},
-        include_mod_rules=True,
+        group_prompt_overrides={},
+        include_group_rules=True,
         model_id="gpt-4o",
         model_temperature=0.1,
         model_reasoning=None,
@@ -324,8 +323,8 @@ def test_update_custom_agent_rejects_unknown_model_id(monkeypatch):
         user_id=7,
         name="Existing Agent",
         custom_prompt="Prompt",
-        mod_prompt_overrides={},
-        include_mod_rules=True,
+        group_prompt_overrides={},
+        include_group_rules=True,
         model_id="gpt-4o",
         model_temperature=0.1,
         model_reasoning=None,
@@ -412,7 +411,7 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         name="Shared Agent",
         template_source="gene",
         instructions="prompt",
-        mod_prompt_overrides={"WB": "rules"},
+        group_prompt_overrides={"WB": "rules"},
         description="desc",
         icon="🔧",
         group_rules_enabled=True,
