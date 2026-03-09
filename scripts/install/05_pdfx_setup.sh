@@ -12,6 +12,7 @@ pdfx_state_path="${INSTALL_PDFX_STATE_PATH:-${install_home_dir}/.install_pdfx.en
 git_cmd="${INSTALL_GIT_CMD:-git}"
 pdfx_repo_url="${INSTALL_PDFX_REPO_URL:-https://github.com/alliance-genome/agr_pdf_extraction_service.git}"
 default_clone_path="${INSTALL_PDFX_CLONE_PATH_DEFAULT:-${repo_root}/../agr_pdf_extraction_service}"
+PDFX_SKIP_CLONE="false"
 
 validate_port_number() {
   local port="$1"
@@ -73,8 +74,15 @@ resolve_clone_path() {
     fi
 
     if [[ -d "$clone_path" ]] && [[ -n "$(ls -A "$clone_path")" ]]; then
-      log_warn "Clone path already exists and is not empty: ${clone_path}" >&2
-      continue
+      if prompt_yes_no "Clone path already exists: ${clone_path}. Wipe and re-clone?" "no" >&2; then
+        rm -rf "$clone_path"
+      else
+        if prompt_yes_no "Reuse existing directory as-is? (only the .env will be regenerated)" "yes" >&2; then
+          PDFX_SKIP_CLONE="true"
+        else
+          continue
+        fi
+      fi
     fi
 
     printf '%s\n' "$clone_path"
@@ -228,8 +236,12 @@ main() {
     fi
   fi
 
-  log_info "Cloning PDF extraction service into ${clone_path}"
-  "$git_cmd" clone "$pdfx_repo_url" "$clone_path"
+  if [[ "$PDFX_SKIP_CLONE" == "true" ]]; then
+    log_info "Reusing existing PDF extraction service at ${clone_path}"
+  else
+    log_info "Cloning PDF extraction service into ${clone_path}"
+    "$git_cmd" clone "$pdfx_repo_url" "$clone_path"
+  fi
 
   main_openai_key="$(read_env_value "$env_output_path" "OPENAI_API_KEY")"
   if [[ -z "$main_openai_key" ]]; then
