@@ -244,6 +244,26 @@ main() {
     "$git_cmd" clone "$pdfx_repo_url" "$clone_path"
   fi
 
+  # Detect system resources and set PDFX worker limits
+  local total_cpus
+  local total_mem_gb
+  local worker_cpus
+  local worker_mem
+
+  total_cpus="$(nproc 2>/dev/null || echo 4)"
+  total_mem_gb="$(awk '/^MemTotal:/ { printf "%d", $2 / 1048576 }' /proc/meminfo 2>/dev/null || echo 16)"
+
+  # Reserve 1 CPU for the OS and other containers; minimum 1 for the worker
+  worker_cpus="$(( total_cpus > 2 ? total_cpus - 1 : total_cpus ))"
+  if (( worker_cpus < 1 )); then worker_cpus=1; fi
+
+  # Give the worker ~half the system RAM (other containers need some too)
+  worker_mem="$(( total_mem_gb / 2 ))"
+  if (( worker_mem < 2 )); then worker_mem=2; fi
+
+  log_info "Detected ${total_cpus} CPUs and ${total_mem_gb}GB RAM"
+  log_info "PDFX worker limits: ${worker_cpus} CPUs, ${worker_mem}GB RAM"
+
   main_openai_key="$(read_env_value "$env_output_path" "OPENAI_API_KEY")"
   if [[ -z "$main_openai_key" ]]; then
     log_warn "OPENAI_API_KEY is empty in main .env; PDFX merge will fail unless key is added later." >&2
@@ -261,6 +281,8 @@ CONSENSUS_ENABLED=${consensus_enabled}
 PDFX_SELECTED_METHODS=${methods}
 PDFX_DEFAULT_MERGE=${merge_enabled}
 PDFX_GPU_ENABLED=${gpu_available}
+PDFX_WORKER_CPUS=${worker_cpus}.0
+PDFX_WORKER_MEM_LIMIT=${worker_mem}g
 EOF
   )
   chmod 600 "$pdfx_env_path"
