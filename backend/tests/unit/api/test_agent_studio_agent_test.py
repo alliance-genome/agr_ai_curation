@@ -470,6 +470,37 @@ class TestAgentWorkshopSystemPrompt:
         assert "Truncated to first 12000 chars for context." in system_prompt
         assert "Prompt injection note:" in system_prompt
 
+    def test_load_system_prompt_template_prefers_canonical_alliance_config(self, monkeypatch, tmp_path):
+        from src.api import agent_studio as api_module
+
+        canonical = tmp_path / "canonical_prompt.md"
+        fallback = tmp_path / "packaged_prompt.md"
+        canonical.write_text("canonical prompt", encoding="utf-8")
+        fallback.write_text("fallback prompt", encoding="utf-8")
+
+        monkeypatch.setattr(
+            api_module,
+            "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES",
+            [canonical, fallback],
+        )
+
+        assert api_module._load_agent_studio_system_prompt_template() == "canonical prompt"
+
+    def test_load_system_prompt_template_falls_back_when_canonical_missing(self, monkeypatch, tmp_path):
+        from src.api import agent_studio as api_module
+
+        missing = tmp_path / "missing_prompt.md"
+        fallback = tmp_path / "packaged_prompt.md"
+        fallback.write_text("fallback prompt", encoding="utf-8")
+
+        monkeypatch.setattr(
+            api_module,
+            "AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES",
+            [missing, fallback],
+        )
+
+        assert api_module._load_agent_studio_system_prompt_template() == "fallback prompt"
+
     def test_get_all_opus_tools_includes_workshop_prompt_update_tool(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext

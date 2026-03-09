@@ -379,3 +379,76 @@ class TestGetRegistryMetadata:
         )
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
+
+    def test_group_rule_info_legacy_alias_serializes_canonical_group_id(self):
+        from src.lib.agent_studio.models import GroupRuleInfo
+
+        rule = GroupRuleInfo(
+            mod_id="WB",
+            content="WormBase rules",
+            source_file="database",
+        )
+
+        assert rule.group_id == "WB"
+        assert rule.mod_id == "WB"
+
+        dumped = rule.model_dump()
+        assert dumped["group_id"] == "WB"
+        assert "mod_id" not in dumped
+
+    def test_prompt_info_legacy_aliases_dump_canonical_fields(self):
+        from src.lib.agent_studio.models import GroupRuleInfo, PromptInfo
+
+        prompt = PromptInfo(
+            agent_id="gene",
+            agent_name="Gene Specialist",
+            description="Curate genes",
+            base_prompt="Base prompt",
+            source_file="database",
+            has_mod_rules=True,
+            mod_rules={
+                "WB": GroupRuleInfo(
+                    mod_id="WB",
+                    content="WormBase rules",
+                    source_file="database",
+                )
+            },
+            tools=[],
+        )
+
+        assert prompt.has_group_rules is True
+        assert prompt.has_mod_rules is True
+
+        dumped = prompt.model_dump()
+        assert dumped["has_group_rules"] is True
+        assert dumped["group_rules"]["WB"]["group_id"] == "WB"
+        assert "has_mod_rules" not in dumped
+        assert "mod_rules" not in dumped
+
+    def test_agent_workshop_legacy_aliases_dump_canonical_fields(self):
+        from src.lib.agent_studio.models import AgentWorkshopContext
+
+        workshop = AgentWorkshopContext(
+            include_mod_rules=True,
+            selected_mod_id="WB",
+            selected_mod_prompt_draft="WB group draft",
+            mod_prompt_override_count=2,
+            has_mod_prompt_overrides=True,
+        )
+
+        assert workshop.include_group_rules is True
+        assert workshop.include_mod_rules is True
+        assert workshop.selected_group_id == "WB"
+        assert workshop.selected_mod_id == "WB"
+
+        dumped = workshop.model_dump()
+        assert dumped["include_group_rules"] is True
+        assert dumped["selected_group_id"] == "WB"
+        assert dumped["selected_group_prompt_draft"] == "WB group draft"
+        assert dumped["group_prompt_override_count"] == 2
+        assert dumped["has_group_prompt_overrides"] is True
+        assert "include_mod_rules" not in dumped
+        assert "selected_mod_id" not in dumped
+        assert "selected_mod_prompt_draft" not in dumped
+        assert "mod_prompt_override_count" not in dumped
+        assert "has_mod_prompt_overrides" not in dumped
