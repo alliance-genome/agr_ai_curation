@@ -74,7 +74,8 @@ resolve_clone_path() {
     fi
 
     if [[ -d "$clone_path" ]] && [[ -n "$(ls -A "$clone_path")" ]]; then
-      if prompt_yes_no "Clone path already exists: ${clone_path}. Wipe and re-clone?" "no" >&2; then
+      log_warn "Clone path already exists and is not empty: ${clone_path}" >&2
+      if prompt_yes_no "Wipe and re-clone?" "no" >&2; then
         rm -rf "$clone_path"
       else
         if prompt_yes_no "Reuse existing directory as-is? (only the .env will be regenerated)" "yes" >&2; then
