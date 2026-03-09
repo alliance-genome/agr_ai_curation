@@ -104,7 +104,7 @@ The AI Curation System connects to **specialized agents** that query authoritati
 
 ### Available Agent Categories
 
-- **Ontology Mapping** (45+ ontologies): Anatomical, developmental, phenotype, disease, chemical, and biological ontologies across multiple MODs
+- **Ontology Mapping** (45+ ontologies): Anatomical, developmental, phenotype, disease, chemical, and biological ontologies across multiple groups
 - **Gene Information**: WormBase, FlyBase, MGI, RGD, SGD, Xenbase, ZFIN gene data
 - **Disease Ontology**: Disease classifications, hierarchies, and relationships (DOID)
 - **Gene Ontology**: GO terms, annotations with evidence codes, term hierarchies
@@ -206,7 +206,7 @@ The right-side audit panel shows you:
 
 ### ❌ Skipping Organism Information
 "Find orthologs for this gene."
-- Orthologs in which species? All species? Specific MODs?
+- Orthologs in which species? All species? Specific groups?
 
 ## Summary
 
