@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AgentMetadataProvider } from './contexts/AgentMetadataContext'
 import LogoutDialog from './components/LogoutDialog'
 import WeaviateNavIcon from './components/weaviate/WeaviateNavIcon'
+import WeaviateLayout from './components/weaviate/WeaviateLayout'
 import BatchNavIcon from './components/BatchNavIcon'
 import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
@@ -29,7 +30,6 @@ const ViewerSettings = lazy(() => import('./pages/ViewerSettings'))
 const AgentStudioPage = lazy(() => import('./pages/AgentStudioPage'))
 const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
-const WeaviateLayout = lazy(() => import('./components/weaviate/WeaviateLayout'))
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
 const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
@@ -496,7 +496,7 @@ export function AppContent() {
               </Typography>
             </Box>
           } />
-          <Route path="/weaviate/*" element={renderLazyRoute(<WeaviateLayout />)}>
+          <Route path="/weaviate/*" element={<WeaviateLayout />}>
             <Route index element={<Navigate to="/weaviate/documents" replace />} />
             <Route path="documents" element={renderLazyRoute(<DocumentsPage />)} />
             <Route path="documents/:id" element={renderLazyRoute(<DocumentDetail />)} />
