@@ -1,17 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
 import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import DocumentList from '../../components/weaviate/DocumentList';
-import PdfJobsPanel from '../../components/weaviate/PdfJobsPanel';
-import InlineFilterBar from '../../components/weaviate/InlineFilterBar';
 import {
   cancelPdfJob,
-  DocumentSummary,
-  DocumentListResponse,
-  DocumentFilter,
   fetchPdfJobs,
-  PdfProcessingJob,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
 import {
@@ -19,6 +12,16 @@ import {
   loadDocumentForChat,
 } from '@/features/documents/pdfUploadFlow';
 import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
+import type {
+  DocumentSummary,
+  DocumentListResponse,
+  DocumentFilter,
+  PdfProcessingJob,
+} from '../../services/weaviate';
+
+const DocumentList = lazy(() => import('../../components/weaviate/DocumentList'));
+const PdfJobsPanel = lazy(() => import('../../components/weaviate/PdfJobsPanel'));
+const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilterBar'));
 
 type PipelineState = {
   busy: boolean;
@@ -26,6 +29,16 @@ type PipelineState = {
 };
 
 const MAX_BATCH_DOCUMENT_SELECTION = 10;
+
+function DocumentsPageSectionFallback() {
+  return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 160 }}>
+      <Typography variant="body2" color="text.secondary">
+        Loading documents UI...
+      </Typography>
+    </Box>
+  );
+}
 
 const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
   if (previous === next) {
@@ -458,11 +471,13 @@ const DocumentsPage: React.FC = () => {
   const filterBar = React.useMemo(
     () => (
       <Box sx={{ py: 1, borderBottom: 1, borderColor: 'divider' }}>
-        <InlineFilterBar
-          filters={filters}
-          onFilterChange={handleFilterChange}
-          onClear={handleClearFilters}
-        />
+        <Suspense fallback={<DocumentsPageSectionFallback />}>
+          <InlineFilterBar
+            filters={filters}
+            onFilterChange={handleFilterChange}
+            onClear={handleClearFilters}
+          />
+        </Suspense>
       </Box>
     ),
     [filters, handleClearFilters, handleFilterChange]
@@ -513,24 +528,26 @@ const DocumentsPage: React.FC = () => {
 
       {/* Main Content */}
       <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
-        <DocumentList
-          documents={filteredDocuments}
-          loading={loading}
-          totalCount={filteredDocuments.length}
-          onDelete={handleDelete}
-          onReembed={handleReembed}
-          onRefresh={handleRefresh}
-          onLoad={handleLoad}
-          onTitleUpdate={handleTitleUpdate}
-          pipelineBusy={pipelineState.busy}
-          pipelineMessage={pipelineState.message}
-          onPipelineStateChange={handlePipelineStateChange}
-          checkboxSelection={true}
-          selectedIds={selectedDocumentIds}
-          onSelectionChange={handleSelectionChange}
-          filterBar={filterBar}
-        />
+        <Suspense fallback={<DocumentsPageSectionFallback />}>
+          <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
+          <DocumentList
+            documents={filteredDocuments}
+            loading={loading}
+            totalCount={filteredDocuments.length}
+            onDelete={handleDelete}
+            onReembed={handleReembed}
+            onRefresh={handleRefresh}
+            onLoad={handleLoad}
+            onTitleUpdate={handleTitleUpdate}
+            pipelineBusy={pipelineState.busy}
+            pipelineMessage={pipelineState.message}
+            onPipelineStateChange={handlePipelineStateChange}
+            checkboxSelection={true}
+            selectedIds={selectedDocumentIds}
+            onSelectionChange={handleSelectionChange}
+            filterBar={filterBar}
+          />
+        </Suspense>
       </Box>
 
       <Snackbar

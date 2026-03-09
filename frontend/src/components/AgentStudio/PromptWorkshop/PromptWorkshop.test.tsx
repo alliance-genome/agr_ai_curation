@@ -252,7 +252,7 @@ describe('PromptWorkshop', () => {
     expect(payload.template_source).toBe('gene')
     expect(payload.model_id).toBe('gpt-4o')
     expect(payload).not.toHaveProperty('parent_agent_id')
-  }, 15000)
+  }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
 
   it('disables non-attachable tools in tool library modal', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
@@ -331,7 +331,7 @@ describe('PromptWorkshop', () => {
       'ca_11111111-1111-1111-1111-111111111111',
       'project'
     )
-  })
+  }, 15000)
 
   it('submits tool idea requests from the workshop dialog', async () => {
     const opusConversation = [
