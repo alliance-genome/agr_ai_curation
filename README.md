@@ -27,6 +27,8 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 
 ### Setup
 
+Run the following commands from the repository root unless noted otherwise.
+
 1. **Clone the repository**
    ```bash
    git clone https://github.com/alliance-genome/agr_ai_curation.git
