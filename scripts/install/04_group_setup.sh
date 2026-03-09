@@ -199,6 +199,8 @@ main() {
   echo "    Option 3: Custom group"
   echo "      Define your own group with a custom name, species, taxon ID, and"
   echo "      identity provider group names. Use this for non-Alliance organizations."
+  echo "      Species and taxon are optional -- if omitted, the group still works"
+  echo "      but organism-scoped queries (gene/allele lookup by taxon) won't apply."
   echo
 
   mkdir -p "$(dirname "$groups_output_path")"
