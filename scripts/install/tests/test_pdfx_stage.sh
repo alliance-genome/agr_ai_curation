@@ -150,6 +150,7 @@ test_pdfx_setup_clones_and_generates_env() {
   assert_contains '^PDF_EXTRACTION_MERGE=true$' "$main_env"
   assert_contains "^INSTALL_PDFX_CLONE_PATH=${clone_path}$" "$pdfx_state"
   assert_contains '^INSTALL_PDFX_PORT=8501$' "$pdfx_state"
+  assert_contains '^INSTALL_PDFX_GPU_ENABLED=true$' "$pdfx_state"
 }
 
 test_pdfx_setup_handles_port_conflict() {

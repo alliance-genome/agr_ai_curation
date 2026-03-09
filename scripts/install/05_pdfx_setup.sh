@@ -146,10 +146,12 @@ remove_pdf_env_vars_from_main_env() {
 write_pdfx_state() {
   local clone_path="$1"
   local port="$2"
+  local gpu="$3"
 
   cat >"$pdfx_state_path" <<STATE
 INSTALL_PDFX_CLONE_PATH=${clone_path}
 INSTALL_PDFX_PORT=${port}
+INSTALL_PDFX_GPU_ENABLED=${gpu}
 STATE
   chmod 600 "$pdfx_state_path"
 }
@@ -255,7 +257,7 @@ EOF
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_METHODS" "$methods"
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_MERGE" "$merge_enabled"
   chmod 600 "$env_output_path"
-  write_pdfx_state "$clone_path" "$pdfx_port"
+  write_pdfx_state "$clone_path" "$pdfx_port" "$gpu_available"
 
   log_success "PDF extraction service cloned to ${clone_path}"
   log_success "Generated PDFX config at ${pdfx_env_path}"

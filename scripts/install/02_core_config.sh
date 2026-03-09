@@ -38,7 +38,7 @@ print_stage_intro() {
   echo
   echo "    1. OpenAI API key      (REQUIRED - used for embeddings and default models)"
   echo "    2. Groq API key        (optional - adds Groq as an LLM provider)"
-  echo "    3. Anthropic API key   (optional - adds Claude models)"
+  echo "    3. Anthropic API key   (recommended - powers the in-app Claude help agent)"
   echo "    4. Gemini API key      (optional - adds Google Gemini models)"
   echo
   echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"

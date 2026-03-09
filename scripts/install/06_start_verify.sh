@@ -267,8 +267,13 @@ start_pdfx_stack_if_configured() {
     exit 1
   fi
 
-  log_info "Starting PDF extraction stack"
-  run_compose "${INSTALL_PDFX_CLONE_PATH}" up -d
+  local pdfx_compose_file="docker-compose.yml"
+  if [[ "${INSTALL_PDFX_GPU_ENABLED:-false}" == "true" ]]; then
+    pdfx_compose_file="docker-compose.gpu.yml"
+  fi
+
+  log_info "Starting PDF extraction stack (${pdfx_compose_file})"
+  run_compose "${INSTALL_PDFX_CLONE_PATH}/deploy" -f "$pdfx_compose_file" up -d
 }
 
 start_main_stack() {
