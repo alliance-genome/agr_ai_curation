@@ -21,6 +21,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from .agent import Agent as CustomAgent
 from .database import Base
 
+__all__ = ["CustomAgent", "CustomAgentVersion"]
+
 
 class CustomAgentVersion(Base):
     """Version snapshots of custom agent prompt content."""

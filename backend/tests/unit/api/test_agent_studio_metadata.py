@@ -1,8 +1,6 @@
 """Tests for agent metadata API endpoint."""
 from types import SimpleNamespace
 
-import pytest
-
 
 class TestGetRegistryMetadata:
     """Tests for GET /api/agent-studio/registry/metadata endpoint."""

@@ -7,10 +7,8 @@ import pytest
 
 from src.lib.agent_studio.custom_agent_service import (
     CUSTOM_AGENT_PREFIX,
-    clone_visible_agent_for_user,
     create_custom_agent,
     get_custom_agent_group_prompt,
-    set_custom_agent_visibility,
     make_custom_agent_id,
     normalize_group_prompt_overrides,
     parse_custom_agent_id,

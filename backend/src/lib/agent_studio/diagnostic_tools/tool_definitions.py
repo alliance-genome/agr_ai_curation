@@ -12,7 +12,6 @@ Tool Categories:
 """
 
 import logging
-import os
 import inspect
 from typing import Any, Callable, Dict, List, Optional
 

@@ -28,7 +28,7 @@ import logging
 import time
 from typing import Optional, List, Literal, Dict, Any, Callable
 
-from agents import Agent, ModelSettings, Runner, RunConfig, function_tool
+from agents import Agent, ModelSettings, RunConfig, function_tool
 
 from ..streaming_tools import run_specialist_with_events
 

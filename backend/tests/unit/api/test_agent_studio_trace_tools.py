@@ -1,6 +1,5 @@
 """Unit tests for Agent Studio trace/tool helper functions."""
 
-import asyncio
 import sys
 import types
 from types import SimpleNamespace

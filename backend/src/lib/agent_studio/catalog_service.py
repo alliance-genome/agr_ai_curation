@@ -25,7 +25,7 @@ from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 
 # Config-driven registry builder (loads metadata from YAML definitions)
-from .registry_builder import build_agent_registry, AGENT_DOCUMENTATION
+from .registry_builder import build_agent_registry
 
 from .models import (
     PromptInfo,
