@@ -83,34 +83,44 @@ resolve_clone_path() {
 }
 
 prompt_extractor_methods() {
-  local response=""
+  local use_grobid="y"
+  local use_docling="n"
+  local use_marker="n"
+  local methods=""
+
+  echo "Select which PDF extractors to enable." >&2
+  echo "You can enable any combination. At least one is required." >&2
+  echo >&2
 
   while true; do
-    echo "Extractor selection:" >&2
-    echo "  1) GROBID only (CPU-friendly, recommended)" >&2
-    echo "  2) Marker only (GPU-intensive)" >&2
-    echo "  3) Both GROBID and Marker (best quality)" >&2
-    read -r -p "Choose extractor mode (default 1): " response
-    response="${response:-1}"
-
-    case "$response" in
-      1)
-        printf 'grobid\n'
-        return 0
-        ;;
-      2)
-        printf 'marker\n'
-        return 0
-        ;;
-      3)
-        printf 'grobid,marker\n'
-        return 0
-        ;;
-      *)
-        log_warn "Please choose 1, 2, or 3." >&2
-        ;;
-    esac
+    read -r -p "  Enable GROBID?  (CPU-friendly, fast, good quality) [Y/n]: " use_grobid
+    use_grobid="${use_grobid:-y}"
+    case "$use_grobid" in [yYnN]) break ;; *) log_warn "Please enter y or n." >&2 ;; esac
   done
+
+  while true; do
+    read -r -p "  Enable Docling? (CPU-friendly, good table extraction) [y/N]: " use_docling
+    use_docling="${use_docling:-n}"
+    case "$use_docling" in [yYnN]) break ;; *) log_warn "Please enter y or n." >&2 ;; esac
+  done
+
+  while true; do
+    read -r -p "  Enable Marker?  (GPU-intensive, high quality) [y/N]: " use_marker
+    use_marker="${use_marker:-n}"
+    case "$use_marker" in [yYnN]) break ;; *) log_warn "Please enter y or n." >&2 ;; esac
+  done
+
+  methods=""
+  [[ "$use_grobid" == [yY] ]] && methods="grobid"
+  [[ "$use_docling" == [yY] ]] && methods="${methods:+${methods},}docling"
+  [[ "$use_marker" == [yY] ]] && methods="${methods:+${methods},}marker"
+
+  if [[ -z "$methods" ]]; then
+    log_warn "At least one extractor is required. Defaulting to GROBID." >&2
+    methods="grobid"
+  fi
+
+  printf '%s\n' "$methods"
 }
 
 read_env_value() {
@@ -157,12 +167,17 @@ main() {
   echo "  This is a separate service (agr_pdf_extraction_service) that will be"
   echo "  cloned alongside this repository and run its own Docker containers."
   echo
-  echo "  Extractor options (you'll choose one):"
+  echo "  Three extractors are available (enable any combination):"
   echo
-  echo "    GROBID only    -- CPU-friendly, fast, good quality. Recommended default."
-  echo "    Marker only    -- Higher quality, but GPU-intensive (needs CUDA)."
-  echo "    Both           -- Best quality. Uses both extractors and an LLM to"
-  echo "                      merge results. Requires more resources."
+  echo "    GROBID  -- CPU-friendly, fast, good quality. Recommended default."
+  echo "    Docling -- CPU-friendly, good table/figure extraction."
+  echo "    Marker  -- Higher quality, but GPU-intensive (needs CUDA)."
+  echo
+  echo "  When two or more extractors are enabled, an LLM-based consensus"
+  echo "  merge can combine their outputs for the best overall quality."
+  echo
+  echo "  You can change extractor settings later by editing the .env files"
+  echo "  in both repositories and restarting the services."
   echo
   echo "  If you skip this stage, everything else works -- curators just won't"
   echo "  be able to upload PDFs directly."
@@ -191,19 +206,21 @@ main() {
   clone_path="$(resolve_clone_path)"
   methods="$(prompt_extractor_methods)"
 
-  if prompt_yes_no "GPU available? (enables CUDA if yes + Marker selected)" "no"; then
+  if prompt_yes_no "GPU available? (enables CUDA for Marker/Docling if selected)" "no"; then
     gpu_available="true"
   fi
 
-  if [[ "$methods" == *"marker"* ]]; then
-    if [[ "$gpu_available" == "true" ]]; then
+  if [[ "$gpu_available" == "true" ]]; then
+    if [[ "$methods" == *"marker"* ]]; then
       marker_device="auto"
+    fi
+    if [[ "$methods" == *"docling"* ]]; then
       docling_device="cuda"
     fi
   fi
 
-  if [[ "$methods" == "grobid,marker" ]]; then
-    if prompt_yes_no "Enable LLM merge? (uses same OpenAI key)" "yes"; then
+  if [[ "$methods" == *","* ]]; then
+    if prompt_yes_no "Enable LLM merge? (combines outputs from multiple extractors, uses same OpenAI key)" "yes"; then
       merge_enabled="true"
       consensus_enabled="true"
     fi

@@ -114,7 +114,8 @@ test_pdfx_setup_clones_and_generates_env() {
   make_stub_tools "$stub_dir" "free"
 
   local clone_path="${temp_home}/pdfx-service"
-  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n'"${clone_path}"$'\n3\ny\ny\n' "$output_path"
+  # Extractors: GROBID=y, Docling=y, Marker=y; GPU=y; Merge=y
+  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n'"${clone_path}"$'\ny\ny\ny\ny\ny\n' "$output_path"
 
   local pdfx_env="${clone_path}/.env"
   local main_env="${temp_home}/.agr_ai_curation/.env"
@@ -140,12 +141,12 @@ test_pdfx_setup_clones_and_generates_env() {
   assert_contains '^DOCLING_DEVICE=cuda$' "$pdfx_env"
   assert_contains '^MARKER_DEVICE=auto$' "$pdfx_env"
   assert_contains '^CONSENSUS_ENABLED=true$' "$pdfx_env"
-  assert_contains '^PDFX_SELECTED_METHODS=grobid,marker$' "$pdfx_env"
+  assert_contains '^PDFX_SELECTED_METHODS=grobid,docling,marker$' "$pdfx_env"
   assert_contains '^PDFX_DEFAULT_MERGE=true$' "$pdfx_env"
   assert_contains '^PDFX_GPU_ENABLED=true$' "$pdfx_env"
 
   assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:8501$' "$main_env"
-  assert_contains '^PDF_EXTRACTION_METHODS=grobid,marker$' "$main_env"
+  assert_contains '^PDF_EXTRACTION_METHODS=grobid,docling,marker$' "$main_env"
   assert_contains '^PDF_EXTRACTION_MERGE=true$' "$main_env"
   assert_contains "^INSTALL_PDFX_CLONE_PATH=${clone_path}$" "$pdfx_state"
   assert_contains '^INSTALL_PDFX_PORT=8501$' "$pdfx_state"
@@ -164,7 +165,8 @@ test_pdfx_setup_handles_port_conflict() {
   make_stub_tools "$stub_dir" "conflict-8501"
 
   local clone_path="${temp_home}/pdfx-port-override"
-  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n8511\n'"${clone_path}"$'\n1\nn\n' "$output_path"
+  # Extractors: GROBID=y, Docling=n, Marker=n; GPU=n
+  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n8511\n'"${clone_path}"$'\ny\nn\nn\nn\n' "$output_path"
 
   local main_env="${temp_home}/.agr_ai_curation/.env"
 
@@ -186,7 +188,8 @@ test_pdfx_setup_skip_removes_main_env_vars() {
   make_stub_tools "$stub_dir" "free"
 
   local clone_path="${temp_home}/pdfx-skip-reset"
-  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n'"${clone_path}"$'\n2\nn\n' "$output_path"
+  # First run: Extractors: GROBID=n, Docling=n, Marker=y; GPU=n (marker only)
+  run_pdfx_setup "$temp_home" "$stub_dir" $'y\n'"${clone_path}"$'\nn\nn\ny\nn\n' "$output_path"
   run_pdfx_setup "$temp_home" "$stub_dir" $'n\n' "$output_path"
 
   local main_env="${temp_home}/.agr_ai_curation/.env"
