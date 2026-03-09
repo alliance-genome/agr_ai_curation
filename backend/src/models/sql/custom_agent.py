@@ -19,8 +19,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import synonym
 
-from .agent import Agent as CustomAgent
+from .agent import Agent
 from .database import Base
+
+CustomAgent = Agent
 
 
 class CustomAgentVersion(Base):
