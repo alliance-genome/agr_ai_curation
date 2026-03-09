@@ -129,9 +129,9 @@ Click the variable chips shown below the text field to insert available variable
 
 Set a name for this step's output so later steps can reference it with `{{variable_name}}`. Names can contain letters, numbers, and underscores. Example: `validated_genes`
 
-**View Base Prompt & MOD Rules**
+**View Base Prompt & Group Rules**
 
-Click the **"View base prompt & MOD rules"** link to see the full prompt and any MOD-specific overrides for this agent.
+Click the **"View base prompt & group rules"** link to see the full prompt and any group-specific overrides for this agent.
 
 ### Step 4: Verify with Claude
 
@@ -185,23 +185,23 @@ Each agent has multiple prompt layers that combine when the agent runs. Understa
 ```
 Flow Custom Instructions   ← HIGHEST priority (prepended, overrides everything)
 Base Prompt                ← Core agent behavior (from config/YAML)
-MOD-Specific Rules         ← Appended when your MOD groups are active
+Group-Specific Rules       ← Appended when your groups are active
 Document Context           ← Auto-injected (document hierarchy, sections, abstract)
 Output Schema              ← Auto-injected when structured output is configured
 ```
 
 **Layer 1 — Base Prompt:** The core instructions that define the agent's role, mission, and workflow. You can view these in the Agent Browser on the Agents tab.
 
-**Layer 2 — MOD-Specific Rules:** Customizations for each Model Organism Database (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your MOD groups are active. You can view these via the "Combined View" in the Agent Browser or via "View base prompt & MOD rules" in the node Properties Panel.
+**Layer 2 — Group-Specific Rules:** Customizations for each curator group (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your groups are active. You can view these via the "Combined View" in the Agent Browser or via "View base prompt & group rules" in the node Properties Panel.
 
-**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a node in the flow Properties Panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and MOD rules for that flow step.
+**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a node in the flow Properties Panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and group rules for that flow step.
 
 **What this means in practice:**
 - If the base prompt says "extract all genes" but your flow custom instructions say "only extract C. elegans genes," the flow instructions win.
-- MOD rules and the base prompt still apply for anything your flow instructions don't address.
-- Each layer has its place: base prompts define core behavior, MOD rules add organism-specific conventions, and flow instructions give you fine-grained control for specific workflows.
+- Group rules and the base prompt still apply for anything your flow instructions don't address.
+- Each layer has its place: base prompts define core behavior, group rules add organism-specific conventions, and flow instructions give you fine-grained control for specific workflows.
 
-> **Tip:** When writing flow custom instructions, you don't need to repeat what's already in the base prompt or MOD rules. Just add what's different or more specific for this particular workflow step.
+> **Tip:** When writing flow custom instructions, you don't need to repeat what's already in the base prompt or group rules. Just add what's different or more specific for this particular workflow step.
 
 ## How Flows Execute
 

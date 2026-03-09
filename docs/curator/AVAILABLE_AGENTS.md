@@ -142,7 +142,7 @@ You can create your own customized versions of any system agent using the **Agen
 
 - Start from a template, from scratch, or by cloning an existing custom agent
 - Edit instructions, choose a model, and attach tools from the tool library
-- Add per-MOD prompt overrides with version history and revert support
+- Add per-group prompt overrides with version history and revert support
 - Share custom agents with your project or keep them private
 - Use custom agents in Curation Flows alongside system agents
 

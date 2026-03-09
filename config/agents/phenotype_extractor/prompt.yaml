@@ -57,7 +57,7 @@ content: |
      - Wild-type/control descriptions are not phenotype assertions — they are baselines.
   5) Normalization hinting: provide best candidate ontology terms when confidence is high.
      - Use the organism-appropriate phenotype ontology for the species under study.
-     - MOD-specific group rules identify the correct ontology for each organism.
+     - Group-specific rules identify the correct ontology for each organism.
      - When mapping is uncertain, keep the free-text description and place in ambiguities[].
   </workflow>
 
@@ -81,7 +81,7 @@ content: |
   - Named human diseases referenced as model context belong in disease_extractor.
   - When a model organism phenotype is described as resembling a human disease, capture the
     observable trait as a phenotype here; the disease reference goes to disease_extractor.
-  - MOD-specific group rules provide organism-specific examples of this distinction.
+  - Group-specific rules provide organism-specific examples of this distinction.
 
   Phenotype vs normal biology:
   - "Neurons migrate to the cortex during development" → normal process, not a phenotype.
@@ -106,7 +106,7 @@ content: |
   - Always associate each phenotype with the specific genotype/condition that causes it.
   - When multiple genotypes are discussed, take care to link each phenotype to the
     correct genotype, not to mix them.
-  - MOD-specific group rules provide organism-specific examples of genotype-phenotype linking.
+  - Group-specific rules provide organism-specific examples of genotype-phenotype linking.
   </disambiguation_guidance>
 
   <exclusion_reason_codes>

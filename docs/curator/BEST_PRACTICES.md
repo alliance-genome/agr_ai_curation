@@ -4,7 +4,7 @@ Get the most out of the AI Curation System by following these guidelines for wri
 
 ## Core Principle: Be Explicit
 
-**Think of the AI as an experienced biocurator who just started working at your MOD (Model Organism Database).**
+**Think of the AI as an experienced biocurator who just started working with your group.**
 
 ✅ **What the AI knows:**
 - General biocuration concepts and practices
@@ -13,7 +13,7 @@ Get the most out of the AI Curation System by following these guidelines for wri
 - Standard data formats and evidence codes
 
 ❌ **What the AI may not know:**
-- Specific conventions unique to your MOD
+- Specific conventions unique to your group
 - Your organization's preferred ontologies
 - Custom annotation rules or policies
 - Implicit assumptions about your curation workflow
@@ -192,7 +192,7 @@ The right-side audit panel shows you:
 
 ## Common Pitfalls to Avoid
 
-### ❌ Assuming MOD-Specific Knowledge
+### ❌ Assuming Group-Specific Knowledge
 "Tag this gene with the standard markers we use."
 - The AI doesn't know your organization's "standard markers"
 
