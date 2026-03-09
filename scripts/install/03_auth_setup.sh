@@ -48,7 +48,20 @@ main() {
 
   backup_file_with_timestamp "$env_output_path"
 
-  log_info "Stage 3: Authentication setup"
+  echo
+  log_info "=== Stage 3: Authentication Setup ==="
+  echo
+  echo "  Choose how users will log in to AI Curation."
+  echo
+  echo "    Option 1: Dev mode (default)"
+  echo "      No login required. Anyone who can reach the URL has full access."
+  echo "      Great for local testing or evaluation. Not suitable for production."
+  echo
+  echo "    Option 2: OIDC (OpenID Connect)"
+  echo "      Production-grade single sign-on. Works with Keycloak, Auth0, Okta,"
+  echo "      or any OIDC-compliant provider. You'll need your provider's issuer"
+  echo "      URL, client ID, client secret, and redirect URI."
+  echo
 
   local auth_mode
   auth_mode="$(prompt_auth_mode)"

@@ -27,6 +27,27 @@ generate_prefixed_langfuse_key() {
   printf '%s%s\n' "$prefix" "$(generate_hex_secret 16)"
 }
 
+print_stage_intro() {
+  echo
+  log_info "=== Stage 2: Core Configuration ==="
+  echo
+  echo "  This stage creates the main environment file that holds API keys,"
+  echo "  database passwords, and encryption secrets."
+  echo
+  echo "  What you'll be asked:"
+  echo
+  echo "    1. OpenAI API key      (REQUIRED - used for embeddings and default models)"
+  echo "    2. Groq API key        (optional - adds Groq as an LLM provider)"
+  echo "    3. Anthropic API key   (optional - adds Claude models)"
+  echo "    4. Gemini API key      (optional - adds Google Gemini models)"
+  echo
+  echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"
+  echo "  is generated automatically. You don't need to prepare anything for those."
+  echo
+  echo "  Config location: ${install_home_dir}/.env"
+  echo
+}
+
 main() {
   require_file_exists "$env_template_path"
   require_command "openssl"
@@ -40,7 +61,8 @@ main() {
   cp "$env_template_path" "$env_output_path"
   chmod 600 "$env_output_path"
 
-  log_info "Stage 2: Core configuration"
+  print_stage_intro
+
   local openai_api_key
   local groq_api_key
   local anthropic_api_key

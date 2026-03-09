@@ -148,7 +148,25 @@ main() {
   require_file_exists "$env_output_path"
   require_command "$git_cmd"
 
-  log_info "Stage 5: PDF extraction setup"
+  echo
+  log_info "=== Stage 5: PDF Extraction Setup ==="
+  echo
+  echo "  The PDF extraction service lets curators upload research papers and"
+  echo "  have them automatically parsed into text that the AI agents can read."
+  echo
+  echo "  This is a separate service (agr_pdf_extraction_service) that will be"
+  echo "  cloned alongside this repository and run its own Docker containers."
+  echo
+  echo "  Extractor options (you'll choose one):"
+  echo
+  echo "    GROBID only    -- CPU-friendly, fast, good quality. Recommended default."
+  echo "    Marker only    -- Higher quality, but GPU-intensive (needs CUDA)."
+  echo "    Both           -- Best quality. Uses both extractors and an LLM to"
+  echo "                      merge results. Requires more resources."
+  echo
+  echo "  If you skip this stage, everything else works -- curators just won't"
+  echo "  be able to upload PDFs directly."
+  echo
 
   if ! prompt_yes_no "Install PDF extraction service? (enables document upload)" "yes"; then
     backup_file_with_timestamp "$env_output_path"

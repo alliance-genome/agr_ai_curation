@@ -281,7 +281,20 @@ main() {
   require_command "$docker_cmd"
   require_command "$curl_cmd"
 
-  log_info "Stage 6: Start and verify services"
+  echo
+  log_info "=== Stage 6: Start & Verify ==="
+  echo
+  echo "  Launching all services with docker compose and verifying they're healthy."
+  echo
+  echo "  This will:"
+  echo "    - Pull Docker images (first run can take 5-15 minutes on a fresh machine)"
+  echo "    - Start the database, vector store, backend, frontend, and observability stack"
+  echo "    - Run database migrations automatically"
+  echo "    - Poll health endpoints until everything reports OK (up to 5 min timeout)"
+  echo
+  echo "  If the PDF extraction service was configured in Stage 5, it will be"
+  echo "  started first in its own Docker Compose stack."
+  echo
 
   load_main_env
   start_pdfx_stack_if_configured

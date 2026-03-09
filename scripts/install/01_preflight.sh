@@ -263,7 +263,25 @@ emit_summary_and_exit() {
   exit "$exit_code"
 }
 
+print_stage_intro() {
+  echo
+  log_info "=== Stage 1: Preflight Checks ==="
+  echo
+  echo "  Verifying that this machine has everything needed to run AI Curation."
+  echo "  This checks for:"
+  echo
+  echo "    - Docker & Docker Compose v2+ (required to run all services)"
+  echo "    - Git (required to clone the PDF extraction service, if enabled)"
+  echo "    - At least 8 GiB RAM (the reranker model is memory-intensive)"
+  echo "    - At least 10 GiB free disk (Docker images are large on first pull)"
+  echo "    - 13 TCP ports are free (frontend, backend, databases, etc.)"
+  echo
+  echo "  No changes are made to your system in this stage."
+  echo
+}
+
 main() {
+  print_stage_intro
   log_info "Running install preflight checks"
   check_required_tools
   check_memory_warning
