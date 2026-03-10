@@ -278,7 +278,7 @@ start_pdfx_stack_if_configured() {
 
 start_main_stack() {
   log_info "Starting main stack"
-  RUN_DB_BOOTSTRAP_ON_START=true RUN_DB_MIGRATIONS_ON_START=true run_compose "$repo_root" up -d
+  RUN_DB_BOOTSTRAP_ON_START=true RUN_DB_MIGRATIONS_ON_START=true run_compose "$repo_root" --env-file "$env_output_path" up -d
 }
 
 main() {
