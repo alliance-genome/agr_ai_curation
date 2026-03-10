@@ -109,7 +109,7 @@ container_status_ok() {
 
 check_http_ok() {
   local url="$1"
-  "$curl_cmd" -fsS -o /dev/null --max-time 5 "$url"
+  "$curl_cmd" -fs -o /dev/null --max-time 5 "$url" 2>/dev/null
 }
 
 refresh_service_statuses() {
@@ -305,6 +305,10 @@ main() {
   if ! supports_color; then yellow="" reset=""; fi
   printf "  ${yellow}This is the slowest stage -- first run can take 10-20 minutes${reset}\n"
   printf "  ${yellow}while Docker pulls and builds all the images. Grab a coffee!${reset}\n"
+  printf "\n"
+  printf "  ${yellow}NOTE: You will see docker WARN messages, curl errors, and 404s${reset}\n"
+  printf "  ${yellow}during startup -- this is normal while services are initializing.${reset}\n"
+  printf "  ${yellow}The health check loop will keep retrying until everything is up.${reset}\n"
   echo
 
   load_main_env
