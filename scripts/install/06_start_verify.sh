@@ -273,7 +273,7 @@ start_pdfx_stack_if_configured() {
   fi
 
   log_info "Starting PDF extraction stack (${pdfx_compose_file})"
-  run_compose "${INSTALL_PDFX_CLONE_PATH}/deploy" -f "$pdfx_compose_file" up -d
+  run_compose "${INSTALL_PDFX_CLONE_PATH}/deploy" --env-file "${INSTALL_PDFX_CLONE_PATH}/.env" -f "$pdfx_compose_file" up -d
 }
 
 start_main_stack() {
