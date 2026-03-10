@@ -300,6 +300,12 @@ main() {
   echo "  If the PDF extraction service was configured in Stage 5, it will be"
   echo "  started first in its own Docker Compose stack."
   echo
+  local yellow='\033[1;33m'
+  local reset='\033[0m'
+  if ! supports_color; then yellow="" reset=""; fi
+  printf "  ${yellow}This is the slowest stage -- first run can take 10-20 minutes${reset}\n"
+  printf "  ${yellow}while Docker pulls and builds all the images. Grab a coffee!${reset}\n"
+  echo
 
   load_main_env
   start_pdfx_stack_if_configured
