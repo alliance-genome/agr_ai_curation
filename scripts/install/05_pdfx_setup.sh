@@ -20,7 +20,7 @@ validate_port_number() {
 }
 
 resolve_pdfx_port() {
-  local port="8501"
+  local port="5000"
   local owner=""
   local response=""
 

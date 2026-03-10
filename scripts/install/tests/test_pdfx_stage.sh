@@ -57,12 +57,12 @@ echo "unexpected git args: $*" >&2
 exit 2
 EOF
 
-  if [[ "$lsof_mode" == "conflict-8501" ]]; then
+  if [[ "$lsof_mode" == "conflict-5000" ]]; then
     cat >"${stub_dir}/lsof" <<'EOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"-iTCP:8501"* ]]; then
+if [[ "$*" == *"-iTCP:5000"* ]]; then
   echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
-  echo "python 4321 codex 11u IPv4 0t0 TCP *:8501 (LISTEN)"
+  echo "python 4321 codex 11u IPv4 0t0 TCP *:5000 (LISTEN)"
   exit 0
 fi
 exit 1
@@ -145,11 +145,11 @@ test_pdfx_setup_clones_and_generates_env() {
   assert_contains '^PDFX_DEFAULT_MERGE=true$' "$pdfx_env"
   assert_contains '^PDFX_GPU_ENABLED=true$' "$pdfx_env"
 
-  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:8501$' "$main_env"
+  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:5000$' "$main_env"
   assert_contains '^PDF_EXTRACTION_METHODS=grobid,docling,marker$' "$main_env"
   assert_contains '^PDF_EXTRACTION_MERGE=true$' "$main_env"
   assert_contains "^INSTALL_PDFX_CLONE_PATH=${clone_path}$" "$pdfx_state"
-  assert_contains '^INSTALL_PDFX_PORT=8501$' "$pdfx_state"
+  assert_contains '^INSTALL_PDFX_PORT=5000$' "$pdfx_state"
   assert_contains '^INSTALL_PDFX_GPU_ENABLED=true$' "$pdfx_state"
 }
 
@@ -163,7 +163,7 @@ test_pdfx_setup_handles_port_conflict() {
   trap 'rm -rf "$temp_home" "$stub_dir" "$output_path"' RETURN
 
   run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
-  make_stub_tools "$stub_dir" "conflict-8501"
+  make_stub_tools "$stub_dir" "conflict-5000"
 
   local clone_path="${temp_home}/pdfx-port-override"
   # Extractors: GROBID=y, Docling=n, Marker=n; GPU=n
