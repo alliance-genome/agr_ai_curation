@@ -148,14 +148,23 @@ BANNER
   printf "    - Optional: Anthropic, Gemini, or Groq API keys for additional models\n"
   printf "    - ~8 GiB RAM recommended, ~10 GiB free disk minimum\n"
   printf "\n"
-  printf "${yellow}  Tip: re-run with --from-stage N to resume from a specific stage.${reset}\n"
-  printf "${dim}  Run with --help for all options.${reset}\n"
-  printf "\n"
-
-  # Pause so the user can read before output scrolls
-  if [[ -t 0 ]]; then
-    read -r -p "  Press Enter to continue (or Ctrl-C to abort)... "
+  if (( from_stage > 1 )); then
+    local red='\033[1;31m'
+    if ! supports_color; then red=""; fi
+    local stage_names=("" "Preflight" "Core config" "Auth setup" "Group setup" "PDF extraction" "Start & verify")
+    printf "${red}  NOTE: Starting from Stage %d (%s) -- stages 1-%d skipped${reset}\n" \
+      "$from_stage" "${stage_names[$from_stage]}" "$((from_stage - 1))"
     printf "\n"
+  else
+    printf "${yellow}  Tip: re-run with --from-stage N to resume from a specific stage.${reset}\n"
+    printf "${dim}  Run with --help for all options.${reset}\n"
+    printf "\n"
+
+    # Pause so the user can read before output scrolls
+    if [[ -t 0 ]]; then
+      read -r -p "  Press Enter to continue (or Ctrl-C to abort)... "
+      printf "\n"
+    fi
   fi
 }
 
@@ -173,15 +182,6 @@ main() {
     apply_from_stage
   fi
   print_welcome
-
-  local stage_names=("" "Preflight" "Core config" "Auth setup" "Group setup" "PDF extraction" "Start & verify")
-  if (( from_stage > 1 )); then
-    local red='\033[1;31m'
-    local reset='\033[0m'
-    if ! supports_color; then red="" reset=""; fi
-    printf "\n${red}  NOTE: Starting from Stage %d (%s) -- stages 1-%d skipped${reset}\n\n" \
-      "$from_stage" "${stage_names[$from_stage]}" "$((from_stage - 1))"
-  fi
 
   local stage1="${script_dir}/01_preflight.sh"
   local stage2="${script_dir}/02_core_config.sh"
