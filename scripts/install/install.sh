@@ -45,6 +45,21 @@ run_stage() {
   log_success "Completed ${stage_label}"
 }
 
+maybe_run_stage() {
+  local stage_num="$1"
+  local stage_label="$2"
+  local stage_script="$3"
+  local skip="$4"
+
+  if (( skip == 0 )); then
+    run_stage "$stage_label" "$stage_script"
+  elif (( from_stage == 0 )); then
+    # Only show individual skip warnings when using --skip-* flags,
+    # not when using --from-stage (the banner already explains it)
+    log_warn "Skipping ${stage_label}"
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -159,6 +174,15 @@ main() {
   fi
   print_welcome
 
+  local stage_names=("" "Preflight" "Core config" "Auth setup" "Group setup" "PDF extraction" "Start & verify")
+  if (( from_stage > 1 )); then
+    local red='\033[1;31m'
+    local reset='\033[0m'
+    if ! supports_color; then red="" reset=""; fi
+    printf "\n${red}  NOTE: Starting from Stage %d (%s) -- stages 1-%d skipped${reset}\n\n" \
+      "$from_stage" "${stage_names[$from_stage]}" "$((from_stage - 1))"
+  fi
+
   local stage1="${script_dir}/01_preflight.sh"
   local stage2="${script_dir}/02_core_config.sh"
   local stage3="${script_dir}/03_auth_setup.sh"
@@ -166,41 +190,12 @@ main() {
   local stage5="${script_dir}/05_pdfx_setup.sh"
   local stage6="${script_dir}/06_start_verify.sh"
 
-  if (( skip_preflight == 0 )); then
-    run_stage "Stage 1 - Preflight" "$stage1"
-  else
-    log_warn "Skipping Stage 1 - Preflight"
-  fi
-
-  if (( skip_core_config == 0 )); then
-    run_stage "Stage 2 - Core config" "$stage2"
-  else
-    log_warn "Skipping Stage 2 - Core config"
-  fi
-
-  if (( skip_auth_setup == 0 )); then
-    run_stage "Stage 3 - Auth setup" "$stage3"
-  else
-    log_warn "Skipping Stage 3 - Auth setup"
-  fi
-
-  if (( skip_group_setup == 0 )); then
-    run_stage "Stage 4 - Group setup" "$stage4"
-  else
-    log_warn "Skipping Stage 4 - Group setup"
-  fi
-
-  if (( skip_pdfx_setup == 0 )); then
-    run_stage "Stage 5 - PDF extraction setup" "$stage5"
-  else
-    log_warn "Skipping Stage 5 - PDF extraction setup"
-  fi
-
-  if (( skip_start_verify == 0 )); then
-    run_stage "Stage 6 - Start and verify services" "$stage6"
-  else
-    log_warn "Skipping Stage 6 - Start and verify services"
-  fi
+  maybe_run_stage 1 "Stage 1 - Preflight" "$stage1" "$skip_preflight"
+  maybe_run_stage 2 "Stage 2 - Core config" "$stage2" "$skip_core_config"
+  maybe_run_stage 3 "Stage 3 - Auth setup" "$stage3" "$skip_auth_setup"
+  maybe_run_stage 4 "Stage 4 - Group setup" "$stage4" "$skip_group_setup"
+  maybe_run_stage 5 "Stage 5 - PDF extraction setup" "$stage5" "$skip_pdfx_setup"
+  maybe_run_stage 6 "Stage 6 - Start and verify services" "$stage6" "$skip_start_verify"
 
   log_success "Installer completed"
 }
