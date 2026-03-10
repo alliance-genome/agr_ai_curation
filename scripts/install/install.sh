@@ -12,12 +12,14 @@ skip_auth_setup=0
 skip_group_setup=0
 skip_pdfx_setup=0
 skip_start_verify=0
+from_stage=0
 
 print_usage() {
   cat <<USAGE
 Usage: scripts/install/install.sh [options]
 
 Options:
+  --from-stage N       Start from stage N (1-6), skipping all earlier stages
   --skip-preflight     Skip Stage 1 (01_preflight.sh)
   --skip-core-config   Skip Stage 2 (02_core_config.sh)
   --skip-auth-setup    Skip Stage 3 (03_auth_setup.sh)
@@ -25,6 +27,11 @@ Options:
   --skip-pdfx-setup    Skip Stage 5 (05_pdfx_setup.sh)
   --skip-start-verify  Skip Stage 6 (06_start_verify.sh)
   -h, --help           Show this help message
+
+Examples:
+  scripts/install/install.sh                  # Run all stages
+  scripts/install/install.sh --from-stage 5   # Re-run from PDF extraction onward
+  scripts/install/install.sh --from-stage 6   # Just start & verify
 USAGE
 }
 
@@ -58,6 +65,15 @@ parse_args() {
         ;;
       --skip-start-verify)
         skip_start_verify=1
+        ;;
+      --from-stage)
+        shift
+        if [[ -z "${1:-}" ]] || ! [[ "$1" =~ ^[1-6]$ ]]; then
+          log_error "--from-stage requires a number between 1 and 6"
+          print_usage
+          exit 1
+        fi
+        from_stage="$1"
         ;;
       -h|--help)
         print_usage
@@ -117,7 +133,7 @@ BANNER
   printf "    - Optional: Anthropic, Gemini, or Groq API keys for additional models\n"
   printf "    - ~8 GiB RAM recommended, ~10 GiB free disk minimum\n"
   printf "\n"
-  printf "${yellow}  Tip: re-run with --skip-<stage> flags to skip completed stages.${reset}\n"
+  printf "${yellow}  Tip: re-run with --from-stage N to resume from a specific stage.${reset}\n"
   printf "${dim}  Run with --help for all options.${reset}\n"
   printf "\n"
 
@@ -128,8 +144,19 @@ BANNER
   fi
 }
 
+apply_from_stage() {
+  if (( from_stage >= 2 )); then skip_preflight=1; fi
+  if (( from_stage >= 3 )); then skip_core_config=1; fi
+  if (( from_stage >= 4 )); then skip_auth_setup=1; fi
+  if (( from_stage >= 5 )); then skip_group_setup=1; fi
+  if (( from_stage >= 6 )); then skip_pdfx_setup=1; fi
+}
+
 main() {
   parse_args "$@"
+  if (( from_stage > 0 )); then
+    apply_from_stage
+  fi
   print_welcome
 
   local stage1="${script_dir}/01_preflight.sh"
