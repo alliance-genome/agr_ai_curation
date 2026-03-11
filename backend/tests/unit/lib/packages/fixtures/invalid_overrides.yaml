@@ -1,0 +1,11 @@
+overrides_api_version: 1.0.0
+package_precedence:
+  - agr.base
+  - org.custom
+selections:
+  - export_kind: agent
+    name: supervisor
+    package_id: agr.base
+  - export_kind: agent
+    name: supervisor
+    package_id: org.custom

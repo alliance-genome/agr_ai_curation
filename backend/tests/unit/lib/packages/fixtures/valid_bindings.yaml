@@ -1,0 +1,9 @@
+package_id: agr.base
+bindings_api_version: 1.0.0
+tools:
+  - tool_name: ask_gene_specialist
+    binding_type: python_callable
+    target: agr_base.tools.genes:ask_gene_specialist
+    description: Gene lookup tool binding
+  - tool_name: file_output
+    target: agr_base.tools.file_output:write_output

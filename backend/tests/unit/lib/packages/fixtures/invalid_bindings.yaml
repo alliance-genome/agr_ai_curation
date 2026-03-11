@@ -1,0 +1,5 @@
+package_id: AGR.Base
+bindings_api_version: 1
+tools:
+  - tool_name: bad tool
+    target: missing_callable_syntax
