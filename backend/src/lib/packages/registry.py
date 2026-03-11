@@ -18,7 +18,8 @@ def _parse_core_semver(value: str) -> tuple[int, int, int]:
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)", value)
     if match is None:
         raise ValueError(f"Invalid semantic version: {value}")
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = (int(part) for part in match.groups())
+    return (major, minor, patch)
 
 
 def _validate_semver_arg(value: str, field_name: str) -> str:

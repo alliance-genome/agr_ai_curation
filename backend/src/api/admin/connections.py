@@ -106,12 +106,12 @@ class PackageHealthItem(BaseModel):
     """Health status for one discovered runtime package."""
 
     package_id: str
-    display_name: Optional[str]
-    version: Optional[str]
+    display_name: Optional[str] = None
+    version: Optional[str] = None
     status: str  # "loaded" | "failed"
     package_path: str
     manifest_path: str
-    reason: Optional[str]
+    reason: Optional[str] = None
 
 
 class PackageHealthSummary(BaseModel):
