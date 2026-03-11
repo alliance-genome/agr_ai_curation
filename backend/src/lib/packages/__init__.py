@@ -68,6 +68,7 @@ __all__ = [
     "DiscoveredPackage",
     "ExportKind",
     "LoadedPackage",
+    "LoadedToolBindingExport",
     "PackageContractError",
     "PackageDiscoveryFailure",
     "PackageExport",
