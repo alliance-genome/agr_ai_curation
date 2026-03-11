@@ -7,32 +7,24 @@ import json
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 CURRENT_DIR = Path(__file__).resolve().parent
-if str(CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(CURRENT_DIR))
-
-from runner_protocol import (  # type: ignore[import-not-found]
-    RunnerError,
-    RunnerProtocolError,
-    decode_request,
-    encode_error_response,
-    encode_success_response,
-)
 
 
 def main() -> int:
+    protocol = _load_runner_protocol()
     try:
-        request = decode_request(sys.stdin.read())
+        request = protocol["decode_request"](sys.stdin.read())
         tool_callable = _resolve_tool_callable(request)
         result = tool_callable(*request.args, **request.kwargs)
         json.dumps(result)
-        sys.stdout.write(encode_success_response(result))
+        sys.stdout.write(protocol["encode_success_response"](result))
         return 0
-    except RunnerProtocolError as exc:
+    except protocol["RunnerProtocolError"] as exc:
         sys.stdout.write(
-            encode_error_response(
-                RunnerError(
+            protocol["encode_error_response"](
+                protocol["RunnerError"](
                     code="invalid_request",
                     message=str(exc),
                 )
@@ -41,8 +33,8 @@ def main() -> int:
         return 1
     except (ImportError, AttributeError) as exc:
         sys.stdout.write(
-            encode_error_response(
-                RunnerError(
+            protocol["encode_error_response"](
+                protocol["RunnerError"](
                     code="import_failure",
                     message=str(exc),
                     details={
@@ -55,8 +47,8 @@ def main() -> int:
         return 1
     except Exception as exc:  # pragma: no cover - exercised via subprocess tests
         sys.stdout.write(
-            encode_error_response(
-                RunnerError(
+            protocol["encode_error_response"](
+                protocol["RunnerError"](
                     code="execution_failure",
                     message=str(exc),
                     details={
@@ -69,7 +61,28 @@ def main() -> int:
         return 1
 
 
-def _resolve_tool_callable(request):
+def _load_runner_protocol() -> dict[str, Any]:
+    if str(CURRENT_DIR) not in sys.path:
+        sys.path.insert(0, str(CURRENT_DIR))
+
+    from runner_protocol import (  # type: ignore[import-not-found]
+        RunnerError,
+        RunnerProtocolError,
+        decode_request,
+        encode_error_response,
+        encode_success_response,
+    )
+
+    return {
+        "RunnerError": RunnerError,
+        "RunnerProtocolError": RunnerProtocolError,
+        "decode_request": decode_request,
+        "encode_error_response": encode_error_response,
+        "encode_success_response": encode_success_response,
+    }
+
+
+def _resolve_tool_callable(request) -> Any:
     _extend_sys_path(request)
     module_name, attribute_name = request.import_path.split(":", 1)
     module = importlib.import_module(module_name)
