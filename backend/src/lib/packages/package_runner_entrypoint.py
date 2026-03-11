@@ -131,6 +131,8 @@ def _execute_tool_target(target: Any, request) -> Any:
     else:
         result = target(*request.args, **request.kwargs)
 
+    # This entrypoint always runs in a fresh subprocess, so asyncio.run() is the
+    # correct way to drive async tool objects without relying on a shared loop.
     if inspect.isawaitable(result):
         return asyncio.run(result)
     return result

@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from datetime import datetime
 import re
 from dataclasses import dataclass, replace
@@ -826,9 +826,73 @@ def _resolve_packages_dir() -> Path:
     return _REPO_ROOT / "packages"
 
 
+class _LazyDictProxy(dict):
+    """Lazy dict wrapper for runtime registries that are expensive to build."""
+
+    def __init__(self, loader: Callable[[], Dict[str, Dict[str, Any]]]) -> None:
+        super().__init__()
+        self._loader = loader
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        super().clear()
+        super().update(self._loader())
+        self._loaded = True
+
+    def reset(self) -> None:
+        self._loaded = False
+        super().clear()
+
+    def __getitem__(self, key: str) -> Dict[str, Any]:
+        self._ensure_loaded()
+        return super().__getitem__(key)
+
+    def __iter__(self) -> Iterator[str]:
+        self._ensure_loaded()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._ensure_loaded()
+        return super().__len__()
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure_loaded()
+        return super().__contains__(key)
+
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+        self._ensure_loaded()
+        return super().get(key, default)
+
+    def items(self):
+        self._ensure_loaded()
+        return super().items()
+
+    def keys(self):
+        self._ensure_loaded()
+        return super().keys()
+
+    def values(self):
+        self._ensure_loaded()
+        return super().values()
+
+    def copy(self) -> Dict[str, Dict[str, Any]]:
+        self._ensure_loaded()
+        return dict(super().items())
+
+    def __repr__(self) -> str:
+        self._ensure_loaded()
+        return super().__repr__()
+
+
 @lru_cache(maxsize=1)
 def _load_package_tool_registry():
-    """Load the merged package-backed tool registry for live runtime/catalog use."""
+    """Load the merged package-backed tool registry for live runtime/catalog use.
+
+    Tests should patch this boundary directly, or call
+    clear_package_tool_runtime_caches() after patching deeper loader dependencies.
+    """
     from src.lib.packages.paths import get_runtime_overrides_path
     from src.lib.packages.tool_registry import load_tool_registry
 
@@ -1024,7 +1088,7 @@ def _merge_tool_metadata(base: Dict[str, Any], override: Dict[str, Any]) -> Dict
     return merged
 
 
-def get_tool_registry() -> Dict[str, Dict[str, Any]]:
+def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
     """
     Build the Agent Studio tool catalog from package bindings plus curated metadata.
 
@@ -1102,17 +1166,7 @@ def get_tool_registry() -> Dict[str, Dict[str, Any]]:
     return registry
 
 
-TOOL_REGISTRY = get_tool_registry()
-
-
-# =============================================================================
-# Method-Level Tool Entries
-# =============================================================================
-# These entries provide first-class access to individual methods of multi-method
-# tools like agr_curation_query. When displayed in the UI, users see these
-# descriptive method names instead of the underlying tool mechanism.
-
-def _generate_method_tool_entries() -> Dict[str, Dict[str, Any]]:
+def _build_method_tool_entries() -> Dict[str, Dict[str, Any]]:
     """
     Generate first-class tool entries for methods of multi-method tools.
 
@@ -1165,19 +1219,6 @@ def _generate_method_tool_entries() -> Dict[str, Dict[str, Any]]:
 
     return entries
 
-# Add method-level entries to a separate registry for lookup
-METHOD_TOOL_ENTRIES = _generate_method_tool_entries()
-
-
-@dataclass(frozen=True)
-class ToolExecutionContext:
-    """Context used to resolve runtime tool factories deterministically."""
-
-    document_id: Optional[str] = None
-    user_id: Optional[str] = None
-    database_url: Optional[str] = None
-    tool_tracker: Optional[Any] = None
-
 
 def _build_tool_bindings() -> Dict[str, Dict[str, Any]]:
     """Build the live runtime binding table from the merged package registry."""
@@ -1198,8 +1239,44 @@ def _build_tool_bindings() -> Dict[str, Dict[str, Any]]:
     return bindings
 
 
-TOOL_BINDINGS = _build_tool_bindings()
+TOOL_REGISTRY = _LazyDictProxy(_build_tool_registry)
+METHOD_TOOL_ENTRIES = _LazyDictProxy(_build_method_tool_entries)
+TOOL_BINDINGS = _LazyDictProxy(_build_tool_bindings)
 
+
+def clear_package_tool_runtime_caches() -> None:
+    """Reset cached package-tool loaders and lazy registries for tests/runtime refresh."""
+    for cached_func in (_load_package_tool_registry, _get_package_tool_runner):
+        cache_clear = getattr(cached_func, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+
+    for registry in (TOOL_REGISTRY, METHOD_TOOL_ENTRIES, TOOL_BINDINGS):
+        reset = getattr(registry, "reset", None)
+        if callable(reset):
+            reset()
+
+
+def get_tool_registry() -> Dict[str, Dict[str, Any]]:
+    """Return a copy of the lazily materialized tool registry."""
+    return TOOL_REGISTRY.copy()
+
+
+# =============================================================================
+# Method-Level Tool Entries
+# =============================================================================
+# These entries provide first-class access to individual methods of multi-method
+# tools like agr_curation_query. When displayed in the UI, users see these
+# descriptive method names instead of the underlying tool mechanism.
+
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    """Context used to resolve runtime tool factories deterministically."""
+
+    document_id: Optional[str] = None
+    user_id: Optional[str] = None
+    database_url: Optional[str] = None
+    tool_tracker: Optional[Any] = None
 
 def _canonicalize_tool_id(tool_id: str) -> str:
     """Map method-level tool aliases back to concrete runtime tool IDs."""

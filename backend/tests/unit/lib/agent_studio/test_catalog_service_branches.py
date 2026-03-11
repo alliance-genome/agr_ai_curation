@@ -105,7 +105,59 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     assert registry["broken_tool"]["package_backed"] is True
 
 
-def test_resolver_helpers_and_resolve_tools_error_paths(monkeypatch):
+def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
+    call_counter = {"count": 0}
+    fake_binding = SimpleNamespace(
+        tool_id="search_document",
+        description="Search docs",
+        required_context=("document_id", "user_id"),
+        binding_kind=SimpleNamespace(value="context_factory"),
+        source=SimpleNamespace(
+            package_id="agr.core",
+            package_version="1.0.0",
+            package_display_name="AGR Core Package",
+            export_name="default",
+            source_file="packages/core/python/src/agr_ai_curation_core/tools/documents.py",
+        ),
+    )
+
+    def _fake_load_registry():
+        call_counter["count"] += 1
+        return SimpleNamespace(bindings=(fake_binding,))
+
+    monkeypatch.setattr(catalog_service, "_load_package_tool_registry", _fake_load_registry)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda binding, execution_context=None: SimpleNamespace(params_json_schema={}, description="desc"),
+    )
+
+    from src.lib.agent_studio import tool_introspection
+
+    monkeypatch.setattr(
+        tool_introspection,
+        "introspect_tool",
+        lambda _obj: SimpleNamespace(
+            name="search_document",
+            description="Search docs",
+            parameters={},
+            source_file="x.py",
+        ),
+    )
+
+    catalog_service.clear_package_tool_runtime_caches()
+    assert call_counter["count"] == 0
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 1
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 1
+
+    catalog_service.clear_package_tool_runtime_caches()
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 2
+
+
+def test_resolve_tools_error_paths(monkeypatch):
     monkeypatch.setattr(
         catalog_service,
         "TOOL_BINDINGS",
