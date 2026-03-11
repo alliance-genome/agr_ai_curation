@@ -14,6 +14,8 @@ from typing import Optional, List, TYPE_CHECKING
 from pydantic import BaseModel
 from agents import function_tool
 
+# TODO: Replace backend src.* imports with package-local/public runtime
+# dependencies before agr.core ships independently.
 from src.lib.weaviate_client.chunks import (
     hybrid_search_chunks,
     get_document_sections,

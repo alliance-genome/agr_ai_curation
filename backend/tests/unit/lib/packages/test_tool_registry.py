@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from . import find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import (
@@ -12,8 +13,11 @@ from src.lib.packages.tool_registry import (
     load_tool_registry,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
+REPO_ROOT = find_repo_root(Path(__file__))
 CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
+BOOTSTRAP_SRC_IMPORT_TODO = (
+    "TODO: Replace backend src.* imports with package-local/public runtime"
+)
 
 
 def _write_package(
@@ -314,6 +318,11 @@ def test_repo_core_package_exports_current_built_in_tools():
 
 
 def test_repo_core_package_copies_tool_implementations_locally():
+    temporarily_coupled_modules = {
+        "agr_curation.py",
+        "file_output_tools.py",
+        "weaviate_search.py",
+    }
     copied_modules = [
         "agr_curation.py",
         "search_helpers.py",
@@ -328,3 +337,10 @@ def test_repo_core_package_copies_tool_implementations_locally():
         assert module_path.exists()
         source = module_path.read_text(encoding="utf-8")
         assert "src.lib.openai_agents.tools" not in source
+        has_backend_src_dependency = "from src." in source or "src.models." in source
+
+        if module_name in temporarily_coupled_modules:
+            assert has_backend_src_dependency
+            assert BOOTSTRAP_SRC_IMPORT_TODO in source
+        else:
+            assert not has_backend_src_dependency

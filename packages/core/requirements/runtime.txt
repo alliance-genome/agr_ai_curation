@@ -1,7 +1,9 @@
 # Temporary bootstrap dependencies for the tracked AGR core package.
 # The migrated entrypoints currently delegate to the existing backend
 # implementations until runtime tool resolution switches to packages.
+# TODO: Replace these bootstrap dependencies and remaining backend src.*
+# imports before agr.core ships independently outside the monorepo runtime.
 agents
-pydantic
-requests
-SQLAlchemy
+pydantic>=2.0
+requests>=2.0
+SQLAlchemy>=2.0

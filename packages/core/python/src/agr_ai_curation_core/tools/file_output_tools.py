@@ -44,6 +44,8 @@ from typing import Any, List, Optional
 
 from agents import function_tool
 
+# TODO: Replace backend src.* imports with package-local/public runtime
+# dependencies before agr.core ships independently.
 from src.lib.file_outputs.storage import FileOutputStorageService
 from src.models.sql.database import SessionLocal
 from src.models.sql.file_output import FileOutput

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from . import find_repo_root
 from src.lib.packages.health import build_package_health_report
 from src.lib.packages.registry import (
     PackageRegistryValidationError,
@@ -11,7 +12,7 @@ from src.lib.packages.registry import (
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-REPO_ROOT = Path(__file__).resolve().parents[5]
+REPO_ROOT = find_repo_root(Path(__file__))
 
 
 def _fixture_text(name: str) -> str:

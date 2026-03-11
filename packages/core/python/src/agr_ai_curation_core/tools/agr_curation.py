@@ -16,6 +16,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
 from agents import function_tool
 
+# TODO: Replace backend src.* imports with package-local/public runtime
+# dependencies before agr.core ships independently.
 from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.identifier_validation import is_valid_curie
 from .search_helpers import (
