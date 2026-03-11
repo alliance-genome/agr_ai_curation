@@ -8,6 +8,7 @@ REPORT_PATH="${AGENT_PR_GATE_REPORT:-file_outputs/ci/agent_pr_gate_report.json}"
 mkdir -p "$(dirname "${REPORT_PATH}")"
 
 BASE_REF="${GITHUB_BASE_REF:-main}"
+PYTHON_BIN="${AGENT_GATE_PYTHON_BIN:-python3}"
 git fetch --no-tags --depth=200 origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
 if git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
   DIFF_RANGE="origin/${BASE_REF}...HEAD"
@@ -65,11 +66,11 @@ mapfile -t CHANGED_BACKEND_PY_FILES < <(
   git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
 )
 
-if python3 -m ruff --version >/dev/null 2>&1; then
+if "${PYTHON_BIN}" -m ruff --version >/dev/null 2>&1; then
   if (( ${#CHANGED_BACKEND_PY_FILES[@]} > 0 )); then
     RUFF_FILE_ARGS="$(printf '%q ' "${CHANGED_BACKEND_PY_FILES[@]}")"
     run_check "ruff-lint" \
-      "python3 -m ruff check ${RUFF_FILE_ARGS}"
+      "${PYTHON_BIN} -m ruff check ${RUFF_FILE_ARGS}"
   else
     record_check "ruff-lint" "pass" "no changed backend Python files; lint not required"
   fi
@@ -78,7 +79,7 @@ if python3 -m ruff --version >/dev/null 2>&1; then
     if (( ${#CHANGED_BACKEND_PY_FILES[@]} > 0 )); then
       RUFF_FILE_ARGS="$(printf '%q ' "${CHANGED_BACKEND_PY_FILES[@]}")"
       run_check "ruff-format-check" \
-        "python3 -m ruff format --check ${RUFF_FILE_ARGS}"
+        "${PYTHON_BIN} -m ruff format --check ${RUFF_FILE_ARGS}"
     else
       record_check "ruff-format-check" "pass" "no changed backend Python files; format check not required"
     fi
@@ -104,7 +105,7 @@ else
 fi
 
 run_check "yaml-schema-parse-check" \
-  "python3 - <<'PY'
+  "${PYTHON_BIN} - <<'PY'
 from pathlib import Path
 import sys
 import yaml
@@ -161,7 +162,7 @@ if (( FAIL_COUNT > 0 )); then
   OVERALL="fail"
 fi
 
-python3 - "${CHECKS_TSV}" "${REPORT_PATH}" "${OVERALL}" "${BASE_REF}" "${DIFF_RANGE}" "${PASS_COUNT}" "${FAIL_COUNT}" <<'PY'
+"${PYTHON_BIN}" - "${CHECKS_TSV}" "${REPORT_PATH}" "${OVERALL}" "${BASE_REF}" "${DIFF_RANGE}" "${PASS_COUNT}" "${FAIL_COUNT}" <<'PY'
 import csv
 import json
 import sys
