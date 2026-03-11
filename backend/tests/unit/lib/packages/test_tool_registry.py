@@ -4,12 +4,19 @@ from pathlib import Path
 
 import pytest
 
+from . import find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import (
     ToolRegistryValidationError,
     build_tool_registry,
     load_tool_registry,
+)
+
+REPO_ROOT = find_repo_root(Path(__file__))
+CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
+BOOTSTRAP_SRC_IMPORT_TODO = (
+    "TODO: Replace backend src.* imports with package-local/public runtime"
 )
 
 
@@ -280,3 +287,60 @@ tools:
         "Multiple override selections match conflicting tool 'shared_tool'" in error
         for error in registry.validation_errors
     )
+
+
+def test_repo_core_package_exports_current_built_in_tools():
+    registry = load_tool_registry(REPO_ROOT / "packages")
+
+    expected_bindings = {
+        "agr_curation_query": ("static", (), "agr.core"),
+        "search_document": ("context_factory", ("document_id", "user_id"), "agr.core"),
+        "read_section": ("context_factory", ("document_id", "user_id"), "agr.core"),
+        "read_subsection": ("context_factory", ("document_id", "user_id"), "agr.core"),
+        "curation_db_sql": ("context_factory", ("database_url",), "agr.core"),
+        "chebi_api_call": ("static", (), "agr.core"),
+        "quickgo_api_call": ("static", (), "agr.core"),
+        "go_api_call": ("static", (), "agr.core"),
+        "alliance_api_call": ("static", (), "agr.core"),
+        "save_csv_file": ("static", (), "agr.core"),
+        "save_tsv_file": ("static", (), "agr.core"),
+        "save_json_file": ("static", (), "agr.core"),
+    }
+
+    assert set(expected_bindings).issubset(registry.bindings_by_tool_id)
+
+    for tool_id, (binding_kind, required_context, package_id) in expected_bindings.items():
+        binding = registry.get(tool_id)
+        assert binding is not None
+        assert binding.binding_kind.value == binding_kind
+        assert binding.required_context == required_context
+        assert binding.source.package_id == package_id
+
+
+def test_repo_core_package_copies_tool_implementations_locally():
+    temporarily_coupled_modules = {
+        "agr_curation.py",
+        "file_output_tools.py",
+        "weaviate_search.py",
+    }
+    copied_modules = [
+        "agr_curation.py",
+        "search_helpers.py",
+        "weaviate_search.py",
+        "sql_query.py",
+        "rest_api.py",
+        "file_output_tools.py",
+    ]
+
+    for module_name in copied_modules:
+        module_path = CORE_TOOLS_DIR / module_name
+        assert module_path.exists()
+        source = module_path.read_text(encoding="utf-8")
+        assert "src.lib.openai_agents.tools" not in source
+        has_backend_src_dependency = "from src." in source or "src.models." in source
+
+        if module_name in temporarily_coupled_modules:
+            assert has_backend_src_dependency
+            assert BOOTSTRAP_SRC_IMPORT_TODO in source
+        else:
+            assert not has_backend_src_dependency

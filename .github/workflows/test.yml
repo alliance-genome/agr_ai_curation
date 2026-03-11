@@ -8,6 +8,7 @@ on:
       - 'frontend/**'
       - 'config/**'
       - 'alliance_agents/**'
+      - 'packages/**'
       - 'docker-compose.test.yml'
       - '.github/workflows/test.yml'
   push:
@@ -17,6 +18,7 @@ on:
       - 'frontend/**'
       - 'config/**'
       - 'alliance_agents/**'
+      - 'packages/**'
       - 'docker-compose.test.yml'
       - '.github/workflows/test.yml'
 

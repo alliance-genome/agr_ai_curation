@@ -42,6 +42,7 @@ COPY backend/pytest.ini ./
 # Copy config directories needed by config-driven architecture tests
 COPY config/ /app/config/
 COPY alliance_agents/ /app/alliance_agents/
+COPY packages/ /app/packages/
 
 # Set Python path
 ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH

@@ -1,0 +1,13 @@
+package_id: agr.core
+display_name: AGR Core Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default AGR built-in tool bindings

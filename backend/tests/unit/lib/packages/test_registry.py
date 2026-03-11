@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from . import find_repo_root
 from src.lib.packages.health import build_package_health_report
 from src.lib.packages.registry import (
     PackageRegistryValidationError,
@@ -11,6 +12,7 @@ from src.lib.packages.registry import (
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+REPO_ROOT = find_repo_root(Path(__file__))
 
 
 def _fixture_text(name: str) -> str:
@@ -143,3 +145,18 @@ def test_build_package_health_report_uses_configured_runtime_versions_by_default
     assert report["runtime_version"] == "1.5.0"
     assert report["supported_package_api_version"] == "1.0.0"
     assert report["summary"]["loaded_count"] == 1
+
+
+def test_repo_core_package_is_discoverable_and_compatible():
+    packages_dir = REPO_ROOT / "packages"
+
+    registry = load_package_registry(packages_dir)
+
+    core_package = registry.get_package("agr.core")
+    assert core_package is not None
+    assert core_package.package_path == packages_dir / "core"
+    assert core_package.manifest.python_package_root == "python/src/agr_ai_curation_core"
+    assert core_package.manifest.requirements_file == "requirements/runtime.txt"
+    assert [export.kind.value for export in core_package.manifest.exports] == [
+        "tool_binding"
+    ]
