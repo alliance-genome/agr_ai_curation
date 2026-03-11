@@ -276,6 +276,19 @@ local_db_tunnel_hash_string() {
   cksum <<<"$1" | awk '{print $1}'
 }
 
+local_db_tunnel_state_root_writable() {
+  local candidate="$1"
+  local probe_dir
+
+  if ! mkdir -p "${candidate}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  probe_dir="$(mktemp -d "${candidate}/.probe.XXXXXX" 2>/dev/null)" || return 1
+  rmdir "${probe_dir}" >/dev/null 2>&1 || true
+  return 0
+}
+
 local_db_tunnel_state_root() {
   local explicit_root="${SYMPHONY_LOCAL_DB_TUNNEL_STATE_ROOT:-}"
   local candidates=()
@@ -294,7 +307,7 @@ local_db_tunnel_state_root() {
   fi
 
   for candidate in "${candidates[@]}"; do
-    if mkdir -p "${candidate}" >/dev/null 2>&1; then
+    if local_db_tunnel_state_root_writable "${candidate}"; then
       echo "${candidate}"
       return 0
     fi
