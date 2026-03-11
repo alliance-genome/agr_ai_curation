@@ -1,0 +1,14 @@
+overrides_api_version: 1.0.0
+package_precedence:
+  - agr.base
+  - org.custom
+disabled_packages:
+  - experimental.package
+selections:
+  - export_kind: agent
+    name: supervisor
+    package_id: org.custom
+    reason: Prefer the organization-specific supervisor contract.
+  - export_kind: tool_binding
+    name: default
+    package_id: agr.base

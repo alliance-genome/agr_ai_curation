@@ -1,0 +1,11 @@
+display_name: Broken Package
+version: 1.0
+package_api_version: 1.0.0
+min_runtime_version: 2.0.0
+max_runtime_version: 1.5.0
+python_package_root: /opt/package
+requirements_file: ../requirements.txt
+exports:
+  - kind: agent
+    name: bad name!
+    path: ../agents/bad

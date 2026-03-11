@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 
-# Repository root (project root containing this backend/ directory)
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from src.lib.packages.paths import (
+    get_file_output_dir,
+    get_pdf_storage_dir,
+    get_pdfx_json_storage_dir,
+    get_processed_json_storage_dir,
+)
 
 # Load .env file from secure home directory location ONLY.
 # This prevents accidental commits of secrets to the repository.
@@ -105,58 +109,30 @@ def get_app_database_url() -> str:
 
 def get_pdf_storage_path() -> Path:
     """Return filesystem path used for storing original PDF files."""
-    raw_path = os.getenv('PDF_STORAGE_PATH', 'pdf_storage')
-    path = Path(raw_path)
-
-    if path.is_absolute():
-        return path
-
-    # Resolve relative to repository root so defaults map to /pdf_storage
-    return (REPO_ROOT / path).resolve()
+    return get_pdf_storage_dir()
 
 
 def get_pdfx_json_storage_path() -> Path:
     """Return filesystem path used for storing raw PDFX JSON outputs."""
-    raw_path = os.getenv('PDFX_JSON_STORAGE_PATH', 'pdf_storage/pdfx_json')
-    path = Path(raw_path)
-
-    if path.is_absolute():
-        return path
-
-    # Resolve relative to repository root
-    return (REPO_ROOT / path).resolve()
+    return get_pdfx_json_storage_dir()
 
 
 def get_processed_json_storage_path() -> Path:
     """Return filesystem path used for storing processed JSON before embedding."""
-    raw_path = os.getenv('PROCESSED_JSON_STORAGE_PATH', 'pdf_storage/processed_json')
-    path = Path(raw_path)
-
-    if path.is_absolute():
-        return path
-
-    # Resolve relative to repository root
-    return (REPO_ROOT / path).resolve()
+    return get_processed_json_storage_dir()
 
 
 def get_file_output_storage_path() -> Path:
     """Return filesystem path for storing generated file outputs (CSV, TSV, JSON).
 
     This is used by file output agents to store downloadable exports.
-    The path supports both absolute paths (from environment) and relative paths
-    (resolved relative to repository root).
+    Resolution is delegated to the runtime package contract so deployments can
+    mount writable state outside a repository checkout.
 
     Returns:
         Path to file_outputs directory
     """
-    raw_path = os.getenv('FILE_OUTPUT_STORAGE_PATH', 'file_outputs')
-    path = Path(raw_path)
-
-    if path.is_absolute():
-        return path
-
-    # Resolve relative to repository root
-    return (REPO_ROOT / path).resolve()
+    return get_file_output_dir()
 
 
 def validate_extraction_strategy(strategy: str) -> None:
