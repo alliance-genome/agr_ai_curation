@@ -1,0 +1,9 @@
+# Maintenance Message Configuration
+#
+# This file is mounted by docker-compose.yml for the maintenance banner feature.
+# To display a maintenance message in the UI, add your message below.
+# Leave empty or delete content to disable the banner.
+#
+# Example:
+# System maintenance scheduled for Sunday 2am-4am EST.
+#

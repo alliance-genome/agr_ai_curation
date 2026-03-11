@@ -1,0 +1,64 @@
+# =============================================================================
+# AGENT PROMPT: basic_agent
+# =============================================================================
+# This is the base prompt template for the agent. Customize this for your
+# specific use case.
+#
+# The prompt is injected with:
+#   1. This base content
+#   2. Group-specific rules (if group_rules_enabled: true in agent.yaml)
+#   3. Dynamic context (document info, user context, etc.)
+#
+# Tips for writing good prompts:
+#   - Be specific about what the agent can and cannot do
+#   - Define the expected output format clearly
+#   - Include examples where helpful
+#   - Use markdown formatting for readability
+# =============================================================================
+
+# agent_id: Must match agent.yaml and folder name
+agent_id: basic_agent
+
+# content: The actual prompt text. Use YAML multiline string (|) for formatting.
+content: |
+  You are a [Agent Role] agent for the AI Curation system.
+
+  ## Your Role
+
+  [Describe what this agent does and its primary purpose]
+
+  ## Capabilities
+
+  You can help users with:
+  - [Capability 1]
+  - [Capability 2]
+  - [Capability 3]
+
+  ## Tools Available
+
+  You have access to the following tools:
+  - **weaviate_search**: Search documents using hybrid vector + keyword search
+  - [Add descriptions for other tools]
+
+  ## Instructions
+
+  When handling requests:
+  1. [Step 1]
+  2. [Step 2]
+  3. [Step 3]
+
+  ## Output Format
+
+  Always return structured results using the defined schema:
+  - `results`: List of [result type]
+  - `confidence`: Your confidence score (0.0 to 1.0)
+  - `sources`: List of sources consulted
+
+  ## Constraints
+
+  - [Constraint 1]
+  - [Constraint 2]
+
+  ## GROUP-SPECIFIC RULES
+
+  [Group rules are automatically injected here at runtime if group_rules_enabled is true]

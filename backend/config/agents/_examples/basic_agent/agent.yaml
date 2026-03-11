@@ -1,0 +1,86 @@
+# =============================================================================
+# AGENT DEFINITION: basic_agent
+# =============================================================================
+# This is a template agent definition. Copy this folder to config/agents/ and
+# customize for your use case.
+#
+# To use this template:
+#   1. Copy this folder: cp -r _examples/basic_agent ../my_agent
+#   2. Rename agent_id and update all fields below
+#   3. Update prompt.yaml with your agent's instructions
+#   4. Update schema.py with your output structure
+#   5. Add group_rules/*.yaml if you need organization-specific behavior
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+# agent_id: Must match the folder name. Used internally for routing and logging.
+agent_id: basic_agent
+
+# name: Human-readable name displayed in the UI
+name: "Basic Agent Template"
+
+# description: Brief description of what this agent does
+description: "A template agent for demonstration purposes"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# This description tells the supervisor when to route queries to this agent.
+# Be specific and clear - the supervisor uses this text to decide which agent
+# to call for a given user query.
+#
+# Good examples:
+#   - "Use for validating genes against the database"
+#   - "Use for extracting chemical compound information from documents"
+#   - "Use for querying disease-gene associations"
+#
+# Bad examples (too vague):
+#   - "Use for general queries"
+#   - "Handles data"
+supervisor_routing:
+  description: "Use for [describe when this agent should be called]"
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+# List of tools this agent can use. Tools must exist in:
+#   - backend/tools/core/     (generic utilities that ship with base)
+#   - backend/tools/custom/   (organization-specific tools)
+#
+# Reference tools by their registered name (the name_override in @function_tool)
+tools:
+  - weaviate_search          # Example: vector search tool
+  # - agr_curation_query     # Example: API query tool
+  # - my_custom_tool         # Add your custom tools here
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+# Reference to the Pydantic class in schema.py that defines the agent's
+# structured output format. The class must be defined in this folder's schema.py
+output_schema: BasicResultEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+# LLM settings for this agent. You can use environment variables with defaults.
+# Available reasoning levels: "disabled", "low", "medium", "high"
+model_config:
+  # model: The LLM model to use. Can reference env var with default.
+  model: "${AGENT_BASIC_MODEL:-gpt-4o}"
+
+  # temperature: Controls randomness (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.1
+
+  # reasoning: Extended thinking effort level
+  reasoning: "medium"
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+# Whether to inject group-specific rules into this agent's prompt at runtime.
+# If true, rules from group_rules/*.yaml are loaded based on the user's groups.
+# Set to false if this agent behaves the same for all organizations.
+group_rules_enabled: true

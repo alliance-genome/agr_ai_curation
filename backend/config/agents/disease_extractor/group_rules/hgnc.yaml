@@ -1,0 +1,25 @@
+group_id: HGNC
+content: |
+  ## HGNC-SPECIFIC RULES (Human Disease Extraction)
+
+  ### Direct clinical associations
+  - Human studies provide direct gene-disease associations rather than model-based evidence.
+  - Clinical papers typically describe disease in patients or families, not in model organisms.
+  - GWAS findings identify genetic risk factors (contributes_to association type).
+
+  ### Common human disease study types
+  - Mendelian disease: loss-of-function or gain-of-function variants causing disease (is_implicated_in).
+  - Complex/common disease: GWAS associations, polygenic risk (contributes_to).
+  - Cancer genomics: driver mutations, tumor suppressor loss, oncogene activation.
+  - Pharmacogenomics: gene variants affecting drug response.
+  - Biomarker studies: gene products as diagnostic/prognostic markers (is_marker_for).
+
+  ### Clinical nomenclature
+  - Diseases may be referred to by OMIM numbers (e.g., "OMIM #606764").
+  - Clinical syndromes may have eponymous names (e.g., "Lynch syndrome", "Marfan syndrome").
+  - Cancer types follow WHO/ICD classification terminology.
+  - Normalize all disease mentions to DOID, MONDO, or OMIM identifiers.
+
+  ### Phenotype vs disease in clinical context
+  - Individual clinical features (e.g., "aortic root dilation") are phenotypes → phenotype_extractor.
+  - The named disease/syndrome (e.g., "Marfan syndrome") is a disease → capture here.

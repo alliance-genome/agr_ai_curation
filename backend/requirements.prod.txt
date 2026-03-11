@@ -1,0 +1,44 @@
+# Production runtime dependencies for backend/Dockerfile.prod.
+# Keep this aligned with requirements.txt, excluding test/dev-only tooling.
+
+# Core dependencies
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic>=2.0
+pydantic-settings
+python-dotenv
+pyyaml
+
+# Authentication
+boto3>=1.34.0
+fastapi-cognito>=1.0.0
+pyjwt[crypto]>=2.8.0
+python-jose[cryptography]>=3.3.0
+
+# AI and Chat dependencies
+openai
+tiktoken
+openai-agents[litellm]
+anthropic>=0.40.0
+aiohttp
+langfuse>=3.0.0
+
+# Database dependencies
+sqlalchemy>=2.0
+psycopg2-binary
+alembic
+git+https://github.com/alliance-genome/agr_curation_api_client.git@feature/ontology-search-methods
+
+# Ontology processing
+pronto
+
+# Weaviate and Redis
+weaviate-client>=4.0
+grpcio>=1.72.0
+redis>=5.0
+
+# Runtime HTTP and utility deps
+click
+httpx
+numpy>=2.0.0

@@ -1,0 +1,25 @@
+group_id: WB
+content: |
+  ## WB-SPECIFIC RULES (C. elegans Phenotype Extraction)
+
+  ### Phenotype ontology
+  - Use WBPhenotype ontology terms for C. elegans phenotype annotations.
+  - WBPhenotype IDs follow the format WBPhenotype:NNNNNNN.
+
+  ### Life stage specificity
+  - C. elegans has well-defined developmental stages: embryo, L1, L2, L3, L4, young adult, adult, dauer.
+  - Phenotypes should be annotated with the most specific life stage supported by evidence.
+  - Examples: "L1 larval lethal", "embryonic lethal", "adult-onset sterility".
+
+  ### Common C. elegans phenotype patterns
+  - Movement/locomotion: Unc (uncoordinated), paralysis, coiling, loopy movement.
+  - Body morphology: Dpy (dumpy/short), Lon (long), Sma (small), Rol (roller).
+  - Lethality: embryonic lethal, larval lethal (specify stage: L1, L2, etc.), larval arrest.
+  - Reproduction: Egl (egg-laying defective), sterile, brood size reduction.
+  - Lifespan: extended lifespan, reduced lifespan, dauer formation.
+    Example: "daf-2(e1370) animals show extended lifespan" → phenotype=extended lifespan, genotype=daf-2(e1370).
+  - Neurodegeneration: neuronal cell death, axon degeneration — these are phenotypes in a worm context, not diseases.
+
+  ### Phenotype vs disease distinction
+  - "Neurodegeneration in a C. elegans mutant" → phenotype (not a disease in worms).
+  - C. elegans models of human diseases produce phenotypes that model disease features.

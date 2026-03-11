@@ -1,0 +1,49 @@
+FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.prod.txt .
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip wheel --no-cache-dir --wheel-dir /tmp/wheels -r requirements.prod.txt
+
+
+FROM public.ecr.aws/docker/library/python:3.11-slim
+
+WORKDIR /app/backend
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /tmp/wheels /tmp/wheels
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir /tmp/wheels/*.whl && \
+    rm -rf /tmp/wheels
+
+COPY src/ ./src/
+COPY main.py .
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+COPY config/ ./config/
+COPY scripts/ ./scripts/
+
+RUN chmod +x /app/backend/scripts/utilities/ensure_postgres_db_exists.sh && \
+    mkdir -p /app/pdf_storage /app/file_outputs
+
+ENV PYTHONPATH=/app/backend:/app/backend/src
+ENV AGENTS_CONFIG_PATH=/app/backend/config/agents
+ENV GROUPS_CONFIG_PATH=/app/backend/config/groups.yaml
+ENV CONNECTIONS_CONFIG_PATH=/app/backend/config/connections.yaml
+ENV MODELS_CONFIG_PATH=/app/backend/config/models.yaml
+ENV PROVIDERS_CONFIG_PATH=/app/backend/config/providers.yaml
+ENV MAINTENANCE_MESSAGE_FILE=/app/backend/config/maintenance_message.txt
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "cd /app/backend && if [ \"${RUN_DB_BOOTSTRAP_ON_START:-false}\" = \"true\" ]; then /app/backend/scripts/utilities/ensure_postgres_db_exists.sh; fi && if [ \"${RUN_DB_MIGRATIONS_ON_START:-false}\" = \"true\" ]; then alembic upgrade head; fi && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
