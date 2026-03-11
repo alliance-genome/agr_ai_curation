@@ -26,6 +26,8 @@ STATE_DIR="${LOCAL_DB_TUNNEL_STATE_DIR:-$(local_db_tunnel_state_dir "${WORKSPACE
 STATE_FILE="${STATE_DIR}/tunnel.state"
 SSM_LOG_FILE="${STATE_DIR}/ssm.log"
 SOCAT_LOG_FILE="${STATE_DIR}/socat.log"
+SSM_PID_FILE="${STATE_DIR}/ssm.pid"
+SOCAT_PID_FILE="${STATE_DIR}/socat.pid"
 TUNNEL_WAIT_ITERATIONS="${LOCAL_DB_TUNNEL_WAIT_ITERATIONS:-60}"
 TUNNEL_WAIT_SLEEP_SECONDS="${LOCAL_DB_TUNNEL_WAIT_SLEEP_SECONDS:-2}"
 FORWARD_WAIT_ITERATIONS="${LOCAL_DB_TUNNEL_FORWARD_WAIT_ITERATIONS:-30}"
@@ -48,7 +50,7 @@ cleanup_on_error() {
   if [[ -n "${SSM_SESSION_ID:-}" ]]; then
     aws ssm terminate-session --profile "${AWS_PROFILE:-ctabone}" --session-id "${SSM_SESSION_ID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${STATE_FILE}" "${ENV_FILE}" "${SSM_LOG_FILE}" "${SOCAT_LOG_FILE}"
+  rm -f "${STATE_FILE}" "${ENV_FILE}" "${SSM_LOG_FILE}" "${SOCAT_LOG_FILE}" "${SSM_PID_FILE}" "${SOCAT_PID_FILE}"
   rmdir "${STATE_DIR}" >/dev/null 2>&1 || true
 }
 trap cleanup_on_error EXIT
@@ -94,23 +96,29 @@ local_db_tunnel_write_env_file \
 local_db_tunnel_info "✅ Created environment file: ${ENV_FILE}"
 
 if command -v timeout >/dev/null 2>&1; then
-  nohup timeout --foreground "${LOCAL_DB_TUNNEL_MAX_RUNTIME:-4h}" \
-    aws ssm start-session \
-      --profile "${AWS_PROFILE:-ctabone}" \
-      --target "${SSM_INSTANCE_ID}" \
-      --document-name AWS-StartPortForwardingSessionToRemoteHost \
-      --parameters "{\"host\":[\"${DB_HOST}\"],\"portNumber\":[\"${DB_PORT}\"],\"localPortNumber\":[\"${LOCAL_PORT}\"]}" \
-      >"${SSM_LOG_FILE}" 2>&1 &
+  SSM_PID="$(
+    local_db_tunnel_spawn_detached \
+      "${SSM_PID_FILE}" \
+      "${SSM_LOG_FILE}" \
+      timeout --foreground "${LOCAL_DB_TUNNEL_MAX_RUNTIME:-4h}" \
+      aws ssm start-session \
+        --profile "${AWS_PROFILE:-ctabone}" \
+        --target "${SSM_INSTANCE_ID}" \
+        --document-name AWS-StartPortForwardingSessionToRemoteHost \
+        --parameters "{\"host\":[\"${DB_HOST}\"],\"portNumber\":[\"${DB_PORT}\"],\"localPortNumber\":[\"${LOCAL_PORT}\"]}"
+  )"
 else
-  nohup aws ssm start-session \
-    --profile "${AWS_PROFILE:-ctabone}" \
-    --target "${SSM_INSTANCE_ID}" \
-    --document-name AWS-StartPortForwardingSessionToRemoteHost \
-    --parameters "{\"host\":[\"${DB_HOST}\"],\"portNumber\":[\"${DB_PORT}\"],\"localPortNumber\":[\"${LOCAL_PORT}\"]}" \
-    >"${SSM_LOG_FILE}" 2>&1 &
+  SSM_PID="$(
+    local_db_tunnel_spawn_detached \
+      "${SSM_PID_FILE}" \
+      "${SSM_LOG_FILE}" \
+      aws ssm start-session \
+        --profile "${AWS_PROFILE:-ctabone}" \
+        --target "${SSM_INSTANCE_ID}" \
+        --document-name AWS-StartPortForwardingSessionToRemoteHost \
+        --parameters "{\"host\":[\"${DB_HOST}\"],\"portNumber\":[\"${DB_PORT}\"],\"localPortNumber\":[\"${LOCAL_PORT}\"]}"
+  )"
 fi
-
-SSM_PID=$!
 sleep 2
 if ! local_db_tunnel_pid_running "${SSM_PID}"; then
   local_db_tunnel_error "❌ SSM session failed to start"
@@ -126,11 +134,14 @@ fi
 
 SSM_SESSION_ID="$(local_db_tunnel_extract_session_id "${SSM_LOG_FILE}")"
 
-nohup socat \
-  "TCP-LISTEN:${DOCKER_PORT},bind=${FORWARD_BIND_IP},fork,reuseaddr" \
-  "TCP:127.0.0.1:${LOCAL_PORT}" \
-  >"${SOCAT_LOG_FILE}" 2>&1 &
-SOCAT_PID=$!
+SOCAT_PID="$(
+  local_db_tunnel_spawn_detached \
+    "${SOCAT_PID_FILE}" \
+    "${SOCAT_LOG_FILE}" \
+    socat \
+      "TCP-LISTEN:${DOCKER_PORT},bind=${FORWARD_BIND_IP},fork,reuseaddr" \
+      "TCP:127.0.0.1:${LOCAL_PORT}"
+)"
 sleep 1
 
 if ! local_db_tunnel_pid_running "${SOCAT_PID}"; then

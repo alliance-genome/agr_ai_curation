@@ -297,11 +297,11 @@ local_db_tunnel_state_root() {
   if [[ -n "${explicit_root}" ]]; then
     candidates+=("${explicit_root}")
   else
-    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-      candidates+=("${XDG_RUNTIME_DIR}/agr_ai_curation_symphony_db_tunnels")
-    fi
     if [[ -n "${HOME:-}" ]]; then
       candidates+=("${HOME}/.local/state/agr_ai_curation_symphony_db_tunnels")
+    fi
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      candidates+=("${XDG_RUNTIME_DIR}/agr_ai_curation_symphony_db_tunnels")
     fi
     candidates+=("/tmp/agr_ai_curation_symphony_db_tunnels")
   fi
@@ -330,6 +330,51 @@ local_db_tunnel_state_dir() {
 local_db_tunnel_pid_running() {
   local pid="${1:-}"
   [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+local_db_tunnel_spawn_detached() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
+
+  rm -f "${pid_file}"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash -c '
+      pid_file="$1"
+      log_file="$2"
+      shift 2
+      umask 077
+      exec </dev/null >>"${log_file}" 2>&1
+      echo "$$" > "${pid_file}"
+      exec "$@"
+    ' bash "${pid_file}" "${log_file}" "$@" &
+  else
+    nohup bash -c '
+      pid_file="$1"
+      log_file="$2"
+      shift 2
+      umask 077
+      exec </dev/null >>"${log_file}" 2>&1
+      echo "$$" > "${pid_file}"
+      exec "$@"
+    ' bash "${pid_file}" "${log_file}" "$@" >/dev/null 2>&1 &
+  fi
+
+  local launcher_pid=$!
+  local i
+  for i in $(seq 1 20); do
+    if [[ -s "${pid_file}" ]]; then
+      cat "${pid_file}"
+      return 0
+    fi
+    if ! kill -0 "${launcher_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+  done
+
+  return 1
 }
 
 local_db_tunnel_tcp_ready() {
