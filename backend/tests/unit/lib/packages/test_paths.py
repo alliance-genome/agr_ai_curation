@@ -40,6 +40,16 @@ def test_default_runtime_layout_does_not_depend_on_repo_checkout():
     assert paths.get_identifier_prefix_file_path() == Path(
         "/runtime/state/identifier_prefixes/identifier_prefixes.json"
     )
+    assert paths.get_package_runner_state_dir() == Path("/runtime/state/package_runner")
+    assert paths.get_package_runner_package_state_dir("agr.base") == Path(
+        "/runtime/state/package_runner/agr.base"
+    )
+    assert paths.get_package_runner_venv_dir("agr.base") == Path(
+        "/runtime/state/package_runner/agr.base/venv"
+    )
+    assert paths.get_package_runner_metadata_path("agr.base") == Path(
+        "/runtime/state/package_runner/agr.base/environment.json"
+    )
 
 
 def test_runtime_layout_honors_rooted_relative_overrides(monkeypatch, tmp_path):
@@ -67,6 +77,16 @@ def test_runtime_layout_honors_rooted_relative_overrides(monkeypatch, tmp_path):
     assert paths.get_file_output_dir() == runtime_root / "mutable" / "exports"
     assert paths.get_identifier_prefix_state_dir() == runtime_root / "mutable" / "prefix-state"
     assert paths.get_identifier_prefix_file_path() == runtime_root / "mutable" / "prefix-state/active/prefixes.json"
+    assert paths.get_package_runner_state_dir() == runtime_root / "mutable" / "package_runner"
+    assert paths.get_package_runner_package_state_dir("agr.base") == (
+        runtime_root / "mutable" / "package_runner/agr.base"
+    )
+    assert paths.get_package_runner_venv_dir("agr.base") == (
+        runtime_root / "mutable" / "package_runner/agr.base/venv"
+    )
+    assert paths.get_package_runner_metadata_path("agr.base") == (
+        runtime_root / "mutable" / "package_runner/agr.base/environment.json"
+    )
 
 
 def test_package_contract_file_helpers_build_expected_relative_paths(tmp_path):
@@ -92,3 +112,27 @@ def test_relative_runtime_override_rejects_parent_directory_traversal(monkeypatc
 
     with pytest.raises(ValueError, match="must not traverse parent directories"):
         paths.get_runtime_state_dir()
+
+
+@pytest.mark.parametrize(
+    "bad_package_id, expected_message",
+    (
+        ("../escape", "must not contain path separators"),
+        ("nested/package", "must not contain path separators"),
+        ("/absolute", "must not contain path separators"),
+        ("", "must not be empty"),
+    ),
+)
+def test_package_runner_paths_reject_unsafe_package_ids(
+    monkeypatch,
+    tmp_path,
+    bad_package_id,
+    expected_message,
+):
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+
+    with pytest.raises(ValueError, match=expected_message):
+        paths.get_package_runner_package_state_dir(bad_package_id)
+
+    with pytest.raises(ValueError, match=expected_message):
+        paths.get_runtime_package_dir(bad_package_id)
