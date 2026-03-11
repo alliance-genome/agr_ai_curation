@@ -1,5 +1,11 @@
 package_id: AGR.Base
 bindings_api_version: 1
 tools:
-  - tool_name: bad tool
-    target: missing_callable_syntax
+  - tool_id: bad tool
+    binding_kind: dynamic
+    callable: missing_callable_syntax
+    callable_factory: agr_base.tools.file_output:create_write_output_tool
+    required_context:
+      - document_id
+      - document_id
+    source_file: ../escape.py

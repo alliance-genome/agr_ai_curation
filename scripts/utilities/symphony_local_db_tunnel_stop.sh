@@ -53,7 +53,7 @@ if [[ ${KEEP_ENV_FILE} -ne 1 && -n "${ENV_FILE_PATH:-}" ]]; then
   rm -f "${ENV_FILE_PATH}"
 fi
 
-rm -f "${STATE_FILE}" "${SSM_LOG_FILE:-}" "${SOCAT_LOG_FILE:-}"
+rm -f "${STATE_FILE}" "${SSM_LOG_FILE:-}" "${SOCAT_LOG_FILE:-}" "${STATE_DIR}/ssm.pid" "${STATE_DIR}/socat.pid"
 rmdir "${STATE_DIR}" >/dev/null 2>&1 || true
 
 local_db_tunnel_info "✅ Stopped Symphony DB tunnel for ${WORKSPACE_DIR}"

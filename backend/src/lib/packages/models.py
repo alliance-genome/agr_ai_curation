@@ -100,6 +100,13 @@ class ToolBindingType(str, Enum):
     PYTHON_CALLABLE = "python_callable"
 
 
+class ToolBindingKind(str, Enum):
+    """Supported runtime binding behaviors for exported tools."""
+
+    STATIC = "static"
+    CONTEXT_FACTORY = "context_factory"
+
+
 class PackageExport(BaseModel):
     """One exported runtime artifact declared by a package manifest."""
 
@@ -168,24 +175,64 @@ class ToolBinding(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    tool_name: str = Field(min_length=1)
+    tool_id: str = Field(min_length=1)
+    binding_kind: ToolBindingKind
+    callable: str | None = None
+    callable_factory: str | None = None
     binding_type: ToolBindingType = ToolBindingType.PYTHON_CALLABLE
-    target: str = Field(min_length=1)
+    required_context: list[str] = Field(default_factory=list)
     description: str = ""
+    source_file: str | None = None
 
-    @field_validator("tool_name")
+    @field_validator("tool_id")
     @classmethod
-    def _validate_tool_name(cls, value: str) -> str:
-        return _validate_symbolic_name(value, "tool_name")
+    def _validate_tool_id(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "tool_id")
 
-    @field_validator("target")
+    @field_validator("callable", "callable_factory")
     @classmethod
-    def _validate_target(cls, value: str) -> str:
+    def _validate_callable_import(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not PYTHON_CALLABLE_PATTERN.match(value):
             raise ValueError(
-                "target must use python callable syntax like package.module:function"
+                "must use python callable syntax like package.module:function"
             )
         return value
+
+    @field_validator("required_context")
+    @classmethod
+    def _validate_required_context(cls, value: list[str]) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, "required_context entry")
+            for item in value
+        ]
+        return _require_unique(validated, "required_context")
+
+    @field_validator("source_file")
+    @classmethod
+    def _validate_source_file(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_relative_package_path(value, "source_file")
+
+    @model_validator(mode="after")
+    def _validate_import_target(self) -> "ToolBinding":
+        if self.binding_type is not ToolBindingType.PYTHON_CALLABLE:
+            raise ValueError(
+                f"Unsupported binding_type '{self.binding_type.value}'"
+            )
+
+        declared_targets = [
+            value
+            for value in (self.callable, self.callable_factory)
+            if value is not None
+        ]
+        if len(declared_targets) != 1:
+            raise ValueError(
+                "exactly one of callable or callable_factory must be provided"
+            )
+        return self
 
 
 class ToolBindingsManifest(BaseModel):
@@ -209,7 +256,7 @@ class ToolBindingsManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_unique_tools(self) -> "ToolBindingsManifest":
-        _require_unique([tool.tool_name for tool in self.tools], "tools")
+        _require_unique([tool.tool_id for tool in self.tools], "tools")
         return self
 
 

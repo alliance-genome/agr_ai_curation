@@ -173,7 +173,18 @@ def _seed_prompt_template(connection: sa.Connection, agent_name: str, content: s
     return content
 
 
-def _agents_table() -> sa.Table:
+def _prompt_overrides_column_name(connection: sa.Connection) -> str:
+    columns = {column["name"] for column in sa.inspect(connection).get_columns("agents")}
+    if "group_prompt_overrides" in columns:
+        return "group_prompt_overrides"
+    if "mod_prompt_overrides" in columns:
+        return "mod_prompt_overrides"
+    raise RuntimeError(
+        "agents table is missing both group_prompt_overrides and mod_prompt_overrides"
+    )
+
+
+def _agents_table(prompt_overrides_column: str) -> sa.Table:
     return sa.table(
         "agents",
         sa.column("id", UUID(as_uuid=True)),
@@ -189,7 +200,7 @@ def _agents_table() -> sa.Table:
         sa.column("output_schema_key", sa.String()),
         sa.column("group_rules_enabled", sa.Boolean()),
         sa.column("group_rules_component", sa.String()),
-        sa.column("mod_prompt_overrides", JSONB),
+        sa.column(prompt_overrides_column, JSONB),
         sa.column("icon", sa.String()),
         sa.column("category", sa.String()),
         sa.column("visibility", sa.String()),
@@ -210,12 +221,13 @@ def _agents_table() -> sa.Table:
 def upgrade() -> None:
     connection = op.get_bind()
     spec, prompt_content = _load_phenotype_spec()
+    prompt_overrides_column = _prompt_overrides_column_name(connection)
 
     instructions = _active_system_prompt(connection, _AGENT_KEY)
     if instructions is None:
         instructions = _seed_prompt_template(connection, _AGENT_KEY, prompt_content)
 
-    agents = _agents_table()
+    agents = _agents_table(prompt_overrides_column)
     connection.execute(
         insert(agents)
         .values(
@@ -232,7 +244,7 @@ def upgrade() -> None:
             output_schema_key=spec["output_schema_key"],
             group_rules_enabled=spec["group_rules_enabled"],
             group_rules_component=spec["agent_key"] if spec["group_rules_enabled"] else None,
-            mod_prompt_overrides={},
+            **{prompt_overrides_column: {}},
             icon=spec["icon"],
             category=spec["category"],
             visibility="system",
@@ -262,7 +274,7 @@ def upgrade() -> None:
                 "output_schema_key": spec["output_schema_key"],
                 "group_rules_enabled": spec["group_rules_enabled"],
                 "group_rules_component": spec["agent_key"] if spec["group_rules_enabled"] else None,
-                "mod_prompt_overrides": {},
+                prompt_overrides_column: {},
                 "icon": spec["icon"],
                 "category": spec["category"],
                 "visibility": "system",

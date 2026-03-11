@@ -276,6 +276,19 @@ local_db_tunnel_hash_string() {
   cksum <<<"$1" | awk '{print $1}'
 }
 
+local_db_tunnel_state_root_writable() {
+  local candidate="$1"
+  local probe_dir
+
+  if ! mkdir -p "${candidate}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  probe_dir="$(mktemp -d "${candidate}/.probe.XXXXXX" 2>/dev/null)" || return 1
+  rmdir "${probe_dir}" >/dev/null 2>&1 || true
+  return 0
+}
+
 local_db_tunnel_state_root() {
   local explicit_root="${SYMPHONY_LOCAL_DB_TUNNEL_STATE_ROOT:-}"
   local candidates=()
@@ -284,17 +297,17 @@ local_db_tunnel_state_root() {
   if [[ -n "${explicit_root}" ]]; then
     candidates+=("${explicit_root}")
   else
-    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-      candidates+=("${XDG_RUNTIME_DIR}/agr_ai_curation_symphony_db_tunnels")
-    fi
     if [[ -n "${HOME:-}" ]]; then
       candidates+=("${HOME}/.local/state/agr_ai_curation_symphony_db_tunnels")
+    fi
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      candidates+=("${XDG_RUNTIME_DIR}/agr_ai_curation_symphony_db_tunnels")
     fi
     candidates+=("/tmp/agr_ai_curation_symphony_db_tunnels")
   fi
 
   for candidate in "${candidates[@]}"; do
-    if mkdir -p "${candidate}" >/dev/null 2>&1; then
+    if local_db_tunnel_state_root_writable "${candidate}"; then
       echo "${candidate}"
       return 0
     fi
@@ -317,6 +330,51 @@ local_db_tunnel_state_dir() {
 local_db_tunnel_pid_running() {
   local pid="${1:-}"
   [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+local_db_tunnel_spawn_detached() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
+
+  rm -f "${pid_file}"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash -c '
+      pid_file="$1"
+      log_file="$2"
+      shift 2
+      umask 077
+      exec </dev/null >>"${log_file}" 2>&1
+      echo "$$" > "${pid_file}"
+      exec "$@"
+    ' bash "${pid_file}" "${log_file}" "$@" &
+  else
+    nohup bash -c '
+      pid_file="$1"
+      log_file="$2"
+      shift 2
+      umask 077
+      exec </dev/null >>"${log_file}" 2>&1
+      echo "$$" > "${pid_file}"
+      exec "$@"
+    ' bash "${pid_file}" "${log_file}" "$@" >/dev/null 2>&1 &
+  fi
+
+  local launcher_pid=$!
+  local i
+  for i in $(seq 1 20); do
+    if [[ -s "${pid_file}" ]]; then
+      cat "${pid_file}"
+      return 0
+    fi
+    if ! kill -0 "${launcher_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+  done
+
+  return 1
 }
 
 local_db_tunnel_tcp_ready() {
