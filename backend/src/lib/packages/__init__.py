@@ -23,6 +23,7 @@ from .models import (
     RuntimeOverrideSelection,
     RuntimeOverrides,
     ToolBinding,
+    ToolBindingKind,
     ToolBindingsManifest,
 )
 from .paths import (
@@ -48,6 +49,20 @@ from .registry import (
     PackageRegistryValidationError,
     load_package_registry,
 )
+from .tool_bindings_loader import (
+    LoadedToolBindingExport,
+    ToolBindingLoadError,
+    load_package_tool_binding_exports,
+)
+from .tool_registry import (
+    RegisteredToolBinding,
+    ToolBindingCollision,
+    ToolBindingSource,
+    ToolRegistry,
+    ToolRegistryValidationError,
+    build_tool_registry,
+    load_tool_registry,
+)
 
 __all__ = [
     "DiscoveredPackage",
@@ -61,13 +76,21 @@ __all__ = [
     "PackageManifestError",
     "PackageRegistry",
     "PackageRegistryValidationError",
+    "RegisteredToolBinding",
     "RuntimeOverrideSelection",
     "RuntimeOverrides",
     "RuntimeOverridesError",
     "ToolBinding",
+    "ToolBindingCollision",
+    "ToolBindingKind",
+    "ToolBindingLoadError",
+    "ToolBindingSource",
     "ToolBindingsError",
     "ToolBindingsManifest",
+    "ToolRegistry",
+    "ToolRegistryValidationError",
     "build_package_health_report",
+    "build_tool_registry",
     "discover_package_manifests",
     "get_file_output_dir",
     "get_identifier_prefix_file_path",
@@ -84,8 +107,10 @@ __all__ = [
     "get_runtime_state_dir",
     "get_tool_bindings_path",
     "iter_runtime_package_dirs",
+    "load_package_tool_binding_exports",
     "load_package_manifest",
     "load_package_registry",
+    "load_tool_registry",
     "load_runtime_overrides",
     "load_tool_bindings",
 ]

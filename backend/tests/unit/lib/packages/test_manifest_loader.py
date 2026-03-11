@@ -12,7 +12,7 @@ from src.lib.packages.manifest_loader import (
     load_runtime_overrides,
     load_tool_bindings,
 )
-from src.lib.packages.models import ExportKind
+from src.lib.packages.models import ExportKind, ToolBindingKind
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -37,11 +37,16 @@ def test_load_tool_bindings_parses_representative_fixture():
 
     assert bindings.package_id == "agr.base"
     assert bindings.bindings_api_version == "1.0.0"
-    assert [tool.tool_name for tool in bindings.tools] == [
+    assert [tool.tool_id for tool in bindings.tools] == [
         "ask_gene_specialist",
         "file_output",
     ]
-    assert bindings.tools[0].target == "agr_base.tools.genes:ask_gene_specialist"
+    assert bindings.tools[0].binding_kind is ToolBindingKind.STATIC
+    assert bindings.tools[0].callable == "agr_base.tools.genes:ask_gene_specialist"
+    assert bindings.tools[0].required_context == []
+    assert bindings.tools[1].callable_factory == (
+        "agr_base.tools.file_output:create_write_output_tool"
+    )
 
 
 def test_load_runtime_overrides_parses_collision_resolution_fixture():
@@ -77,8 +82,9 @@ def test_invalid_tool_bindings_report_actionable_field_errors():
     assert "invalid_bindings.yaml" in message
     assert "package_id" in message
     assert "bindings_api_version" in message
-    assert "tool_name" in message
-    assert "target" in message
+    assert "tool_id" in message
+    assert "binding_kind" in message
+    assert "callable" in message
 
 
 def test_invalid_runtime_overrides_report_duplicate_selections():

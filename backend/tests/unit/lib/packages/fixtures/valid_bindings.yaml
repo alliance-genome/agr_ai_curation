@@ -1,9 +1,15 @@
 package_id: agr.base
 bindings_api_version: 1.0.0
 tools:
-  - tool_name: ask_gene_specialist
+  - tool_id: ask_gene_specialist
+    binding_kind: static
     binding_type: python_callable
-    target: agr_base.tools.genes:ask_gene_specialist
+    callable: agr_base.tools.genes:ask_gene_specialist
+    required_context: []
     description: Gene lookup tool binding
-  - tool_name: file_output
-    target: agr_base.tools.file_output:write_output
+    source_file: src/agr_base/tools/genes.py
+  - tool_id: file_output
+    binding_kind: static
+    callable_factory: agr_base.tools.file_output:create_write_output_tool
+    required_context: []
+    source_file: src/agr_base/tools/file_output.py
