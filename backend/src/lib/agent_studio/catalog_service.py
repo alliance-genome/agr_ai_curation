@@ -14,12 +14,18 @@ via src.lib.prompts.cache. File parsing has been removed.
 Runtime instantiation resolves directly from unified DB-backed agent records.
 """
 
+import asyncio
+import importlib
+import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+import sys
+from pathlib import Path
+from functools import lru_cache
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from datetime import datetime
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
@@ -110,7 +116,7 @@ AGENT_REGISTRY = build_agent_registry()
 
 # Tool metadata registry - provides detailed documentation about each tool
 # available to agents, including parameters, methods, and usage examples.
-TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
+CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # AGR Curation Database Query Tool (multi-method tool)
     "agr_curation_query": {
         "name": "AGR Curation Query",
@@ -802,60 +808,365 @@ TOOL_OVERRIDES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_tool_registry() -> Dict[str, Dict[str, Any]]:
-    """
-    Build tool registry: introspection + manual overrides.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_DEFAULT_CATALOG_CONTEXT = {
+    "document_id": "tool-catalog-document-id",
+    "user_id": "tool-catalog-user-id",
+    "database_url": "postgresql://tool-catalog.example/db",
+}
 
-    Scans tool modules for @function_tool decorated functions,
-    extracts metadata via introspection, then merges manual
-    overrides for rich documentation.
+
+def _resolve_packages_dir() -> Path:
+    """Use the runtime packages mount when present, otherwise the repo packages dir."""
+    from src.lib.packages.paths import get_runtime_packages_dir
+
+    runtime_packages_dir = get_runtime_packages_dir()
+    if runtime_packages_dir.exists():
+        return runtime_packages_dir
+    return _REPO_ROOT / "packages"
+
+
+class _LazyDictProxy(dict):
+    """Lazy dict wrapper for runtime registries that are expensive to build."""
+
+    def __init__(self, loader: Callable[[], Dict[str, Dict[str, Any]]]) -> None:
+        super().__init__()
+        self._loader = loader
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        super().clear()
+        super().update(self._loader())
+        self._loaded = True
+
+    def reset(self) -> None:
+        self._loaded = False
+        super().clear()
+
+    def __getitem__(self, key: str) -> Dict[str, Any]:
+        self._ensure_loaded()
+        return super().__getitem__(key)
+
+    def __iter__(self) -> Iterator[str]:
+        self._ensure_loaded()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._ensure_loaded()
+        return super().__len__()
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure_loaded()
+        return super().__contains__(key)
+
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+        self._ensure_loaded()
+        return super().get(key, default)
+
+    def items(self):
+        self._ensure_loaded()
+        return super().items()
+
+    def keys(self):
+        self._ensure_loaded()
+        return super().keys()
+
+    def values(self):
+        self._ensure_loaded()
+        return super().values()
+
+    def copy(self) -> Dict[str, Dict[str, Any]]:
+        self._ensure_loaded()
+        return dict(super().items())
+
+    def __repr__(self) -> str:
+        self._ensure_loaded()
+        return super().__repr__()
+
+
+@lru_cache(maxsize=1)
+def _load_package_tool_registry():
+    """Load the merged package-backed tool registry for live runtime/catalog use.
+
+    Tests should patch this boundary directly, or call
+    clear_package_tool_runtime_caches() after patching deeper loader dependencies.
+    """
+    from src.lib.packages.paths import get_runtime_overrides_path
+    from src.lib.packages.tool_registry import load_tool_registry
+
+    overrides_path = get_runtime_overrides_path()
+    load_kwargs: Dict[str, Any] = {}
+    if overrides_path.exists():
+        load_kwargs["overrides_path"] = overrides_path
+
+    return load_tool_registry(_resolve_packages_dir(), **load_kwargs)
+
+
+def _get_package_tool_binding(tool_id: str):
+    """Resolve one merged package tool binding by runtime tool ID."""
+    return _load_package_tool_registry().get(tool_id)
+
+
+@lru_cache(maxsize=1)
+def _get_package_tool_runner():
+    """Create a package tool runner bound to the merged runtime registry."""
+    from src.lib.packages.package_runner import PackageToolRunner
+
+    return PackageToolRunner(tool_registry=_load_package_tool_registry())
+
+
+def _extend_sys_path_for_package(package: Any) -> None:
+    """Make one loaded package importable inside the live backend process."""
+    python_package_root = (
+        package.package_path / package.manifest.python_package_root
+    ).expanduser().resolve(strict=False)
+    for candidate in (python_package_root.parent, python_package_root, package.package_path):
+        candidate_text = str(candidate)
+        if candidate_text not in sys.path:
+            sys.path.insert(0, candidate_text)
+
+
+def _get_loaded_package_for_binding(binding: Any) -> Any:
+    """Look up the loaded package that owns one merged tool binding."""
+    package = _load_package_tool_registry().package_registry.get_package(
+        binding.source.package_id
+    )
+    if package is None:
+        raise ValueError(
+            f"Package '{binding.source.package_id}' is not available for tool '{binding.tool_id}'"
+        )
+    return package
+
+
+def _import_package_binding_target(binding: Any) -> Any:
+    """Import the package-declared callable or factory for one binding."""
+    package = _get_loaded_package_for_binding(binding)
+    _extend_sys_path_for_package(package)
+
+    module_name, attribute_name = binding.import_path.split(":", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, attribute_name)
+
+
+def _binding_context_payload(
+    binding: Any,
+    execution_context: Optional["ToolExecutionContext"] = None,
+) -> Dict[str, Any]:
+    """Build the context payload used for factories and runner execution."""
+    if execution_context is None:
+        values = dict(_DEFAULT_CATALOG_CONTEXT)
+    else:
+        values = {
+            "document_id": execution_context.document_id,
+            "user_id": execution_context.user_id,
+            "database_url": execution_context.database_url,
+        }
+
+    required_context = set(binding.required_context)
+    return {
+        key: value
+        for key, value in values.items()
+        if key in required_context and value not in (None, "")
+    }
+
+
+def _instantiate_package_tool(
+    binding: Any,
+    *,
+    execution_context: Optional["ToolExecutionContext"] = None,
+) -> Any:
+    """Instantiate the package-exported SDK tool for metadata/runtime wrapping."""
+    imported = _import_package_binding_target(binding)
+    if binding.import_attribute_kind == "callable_factory":
+        if not callable(imported):
+            raise TypeError(f"Imported factory '{binding.import_path}' is not callable")
+        return imported(_binding_context_payload(binding, execution_context))
+    return imported
+
+
+def _decode_tool_input(tool_id: str, input_str: str) -> Dict[str, Any]:
+    """Decode the SDK tool input payload into kwargs for the package runner."""
+    raw_payload = (input_str or "").strip()
+    if not raw_payload:
+        return {}
+
+    try:
+        parsed = json.loads(raw_payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Tool '{tool_id}' received invalid JSON input: {exc}"
+        ) from exc
+
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"Tool '{tool_id}' input must decode to a JSON object"
+        )
+    return parsed
+
+
+def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext") -> Any:
+    """Wrap one package-backed tool in a runtime-compatible SDK tool object."""
+    binding = _get_package_tool_binding(tool_id)
+    if binding is None:
+        raise ValueError(f"Unknown tool binding '{tool_id}'")
+
+    base_tool = _instantiate_package_tool(binding, execution_context=execution_context)
+    if not hasattr(base_tool, "on_invoke_tool"):
+        raise ValueError(
+            f"Package tool '{tool_id}' does not expose on_invoke_tool"
+        )
+
+    runner = _get_package_tool_runner()
+    tracker = execution_context.tool_tracker
+    context_payload = _binding_context_payload(binding, execution_context)
+
+    async def _runner_invoke(ctx, input_str):
+        if tracker:
+            tracker.record_call(tool_id)
+
+        result = await asyncio.to_thread(
+            runner.execute_tool,
+            tool_id,
+            kwargs=_decode_tool_input(tool_id, input_str),
+            context=context_payload,
+        )
+        if not result.ok:
+            error_message = result.error.message if result.error else "Unknown package tool error"
+            raise RuntimeError(
+                f"Package tool '{tool_id}' execution failed: {error_message}"
+            )
+        return result.result
+
+    return replace(base_tool, on_invoke_tool=_runner_invoke)
+
+
+def _tool_category_for_binding(binding: Any) -> str:
+    """Infer a coarse tool category when curated metadata does not provide one."""
+    if binding.tool_id in {"agr_curation_query", "curation_db_sql"}:
+        return "Database"
+    if binding.tool_id in {"search_document", "read_section", "read_subsection"}:
+        return "Document"
+    if binding.tool_id.startswith("save_"):
+        return "Output"
+    if binding.tool_id.endswith("_api_call"):
+        return "API"
+    return "Tool"
+
+
+def _merge_tool_metadata(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge curated UI metadata on top of package-backed tool metadata."""
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key == "documentation"
+            and isinstance(value, dict)
+            and isinstance(merged.get("documentation"), dict)
+        ):
+            documentation = dict(merged["documentation"])
+            documentation.update(value)
+            merged["documentation"] = documentation
+            continue
+        merged[key] = value
+
+    for preserved_key in (
+        "source_file",
+        "binding_kind",
+        "required_context",
+        "package_backed",
+        "package_id",
+        "package_version",
+        "package_display_name",
+        "package_export_name",
+    ):
+        if preserved_key in base:
+            merged[preserved_key] = base[preserved_key]
+
+    return merged
+
+
+def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
+    """
+    Build the Agent Studio tool catalog from package bindings plus curated metadata.
 
     Returns:
         Dict mapping tool_id to metadata dict
     """
-    from src.lib.openai_agents.tools import agr_curation
-    from src.lib.openai_agents.tools import weaviate_search
     from .tool_introspection import introspect_tool
 
-    # List of tool modules to scan
-    tool_modules = [agr_curation, weaviate_search]
-
     registry: Dict[str, Dict[str, Any]] = {}
+    for binding in _load_package_tool_registry().bindings:
+        try:
+            tool = _instantiate_package_tool(binding)
+            metadata = introspect_tool(tool)
+            parameters = [
+                {"name": name, **param_info}
+                for name, param_info in metadata.parameters.items()
+            ]
+            registry[binding.tool_id] = {
+                "name": metadata.name or binding.tool_id,
+                "description": binding.description or metadata.description,
+                "category": _tool_category_for_binding(binding),
+                "source_file": binding.source.source_file or metadata.source_file,
+                "documentation": {
+                    "summary": binding.description or metadata.description,
+                    "parameters": parameters,
+                },
+                "methods": None,
+                "agent_methods": None,
+                "binding_kind": binding.binding_kind.value,
+                "required_context": list(binding.required_context),
+                "package_backed": True,
+                "package_id": binding.source.package_id,
+                "package_version": binding.source.package_version,
+                "package_display_name": binding.source.package_display_name,
+                "package_export_name": binding.source.export_name,
+            }
+        except Exception as exc:
+            logger.warning(
+                "Failed to build package-backed tool catalog entry for %s: %s",
+                binding.tool_id,
+                exc,
+            )
+            registry[binding.tool_id] = {
+                "name": binding.tool_id,
+                "description": binding.description,
+                "category": _tool_category_for_binding(binding),
+                "source_file": binding.source.source_file,
+                "documentation": {
+                    "summary": binding.description,
+                    "parameters": [],
+                },
+                "methods": None,
+                "agent_methods": None,
+                "binding_kind": binding.binding_kind.value,
+                "required_context": list(binding.required_context),
+                "package_backed": True,
+                "package_id": binding.source.package_id,
+                "package_version": binding.source.package_version,
+                "package_display_name": binding.source.package_display_name,
+                "package_export_name": binding.source.export_name,
+            }
 
-    for module in tool_modules:
-        # Find all function_tool decorated functions (they have params_json_schema)
-        for name in dir(module):
-            obj = getattr(module, name)
-            # FunctionTool objects have params_json_schema attribute
-            if hasattr(obj, 'params_json_schema') and hasattr(obj, 'description'):
-                try:
-                    metadata = introspect_tool(obj)
-                    tool_dict = {
-                        "name": metadata.name,
-                        "description": metadata.description,
-                        "parameters": metadata.parameters,
-                        "source_file": metadata.source_file,
-                    }
+    for tool_id, metadata in CURATED_TOOL_REGISTRY.items():
+        if tool_id in registry:
+            registry[tool_id] = _merge_tool_metadata(registry[tool_id], metadata)
+        else:
+            registry[tool_id] = dict(metadata)
 
-                    # Apply manual overrides
-                    if metadata.name in TOOL_OVERRIDES:
-                        tool_dict.update(TOOL_OVERRIDES[metadata.name])
-
-                    registry[metadata.name] = tool_dict
-                except Exception as e:
-                    logger.warning('Failed to introspect %s: %s', name, e)
+    for tool_id, metadata in TOOL_OVERRIDES.items():
+        if tool_id in registry:
+            registry[tool_id] = _merge_tool_metadata(registry[tool_id], metadata)
+        else:
+            registry[tool_id] = dict(metadata)
 
     return registry
 
 
-# =============================================================================
-# Method-Level Tool Entries
-# =============================================================================
-# These entries provide first-class access to individual methods of multi-method
-# tools like agr_curation_query. When displayed in the UI, users see these
-# descriptive method names instead of the underlying tool mechanism.
-
-def _generate_method_tool_entries() -> Dict[str, Dict[str, Any]]:
+def _build_method_tool_entries() -> Dict[str, Dict[str, Any]]:
     """
     Generate first-class tool entries for methods of multi-method tools.
 
@@ -908,9 +1219,55 @@ def _generate_method_tool_entries() -> Dict[str, Dict[str, Any]]:
 
     return entries
 
-# Add method-level entries to a separate registry for lookup
-METHOD_TOOL_ENTRIES = _generate_method_tool_entries()
 
+def _build_tool_bindings() -> Dict[str, Dict[str, Any]]:
+    """Build the live runtime binding table from the merged package registry."""
+    bindings: Dict[str, Dict[str, Any]] = {}
+    for binding in _load_package_tool_registry().bindings:
+        bindings[binding.tool_id] = {
+            "binding": binding.binding_kind.value,
+            "required_context": list(binding.required_context),
+            "resolver": (
+                lambda context, resolved_tool_id=binding.tool_id: _resolve_package_tool(
+                    resolved_tool_id, context
+                )
+            ),
+            "package_id": binding.source.package_id,
+            "package_version": binding.source.package_version,
+            "package_export_name": binding.source.export_name,
+        }
+    return bindings
+
+
+TOOL_REGISTRY = _LazyDictProxy(_build_tool_registry)
+METHOD_TOOL_ENTRIES = _LazyDictProxy(_build_method_tool_entries)
+TOOL_BINDINGS = _LazyDictProxy(_build_tool_bindings)
+
+
+def clear_package_tool_runtime_caches() -> None:
+    """Reset cached package-tool loaders and lazy registries for tests/runtime refresh."""
+    for cached_func in (_load_package_tool_registry, _get_package_tool_runner):
+        cache_clear = getattr(cached_func, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+
+    for registry in (TOOL_REGISTRY, METHOD_TOOL_ENTRIES, TOOL_BINDINGS):
+        reset = getattr(registry, "reset", None)
+        if callable(reset):
+            reset()
+
+
+def get_tool_registry() -> Dict[str, Dict[str, Any]]:
+    """Return a copy of the lazily materialized tool registry."""
+    return TOOL_REGISTRY.copy()
+
+
+# =============================================================================
+# Method-Level Tool Entries
+# =============================================================================
+# These entries provide first-class access to individual methods of multi-method
+# tools like agr_curation_query. When displayed in the UI, users see these
+# descriptive method names instead of the underlying tool mechanism.
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
@@ -920,196 +1277,6 @@ class ToolExecutionContext:
     user_id: Optional[str] = None
     database_url: Optional[str] = None
     tool_tracker: Optional[Any] = None
-
-
-def _resolve_agr_curation_tool(context: ToolExecutionContext) -> Any:
-    from dataclasses import replace
-    from src.lib.openai_agents.tools.agr_curation import agr_curation_query
-
-    if not context.tool_tracker:
-        return agr_curation_query
-
-    # Wrap with ToolCallTracker recording so the output guardrail
-    # sees the call count.  Uses dataclasses.replace to create an
-    # independent copy of the FunctionTool — the module-level
-    # singleton is never mutated.
-    tracker = context.tool_tracker
-    original_invoke = agr_curation_query.on_invoke_tool
-
-    async def _tracked_invoke(ctx, input_str):
-        tracker.record_call("agr_curation_query")
-        return await original_invoke(ctx, input_str)
-
-    return replace(agr_curation_query, on_invoke_tool=_tracked_invoke)
-
-
-def _resolve_search_document_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.weaviate_search import create_search_tool
-
-    return create_search_tool(
-        document_id=context.document_id,
-        user_id=context.user_id,
-        tracker=context.tool_tracker,
-    )
-
-
-def _resolve_read_section_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.weaviate_search import create_read_section_tool
-
-    return create_read_section_tool(
-        document_id=context.document_id,
-        user_id=context.user_id,
-        tracker=context.tool_tracker,
-    )
-
-
-def _resolve_read_subsection_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.weaviate_search import create_read_subsection_tool
-
-    return create_read_subsection_tool(
-        document_id=context.document_id,
-        user_id=context.user_id,
-        tracker=context.tool_tracker,
-    )
-
-
-def _resolve_curation_db_sql_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.sql_query import create_sql_query_tool
-
-    return create_sql_query_tool(context.database_url, tool_name="curation_db_sql")
-
-
-def _resolve_chebi_api_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
-
-    return create_rest_api_tool(
-        allowed_domains=["ebi.ac.uk", "www.ebi.ac.uk"],
-        tool_name="chebi_api_call",
-        tool_description="Query ChEBI chemical database API (ebi.ac.uk only)",
-    )
-
-
-def _resolve_quickgo_api_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
-
-    return create_rest_api_tool(
-        allowed_domains=["ebi.ac.uk", "www.ebi.ac.uk"],
-        tool_name="quickgo_api_call",
-        tool_description=(
-            "Query QuickGO Gene Ontology API for GO terms, hierarchy, and relationships "
-            "(ebi.ac.uk only)"
-        ),
-    )
-
-
-def _resolve_go_api_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
-
-    return create_rest_api_tool(
-        allowed_domains=["geneontology.org", "api.geneontology.org"],
-        tool_name="go_api_call",
-        tool_description=(
-            "Query Gene Ontology API for gene annotations with evidence codes "
-            "(geneontology.org only)"
-        ),
-    )
-
-
-def _resolve_alliance_api_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.rest_api import create_rest_api_tool
-
-    return create_rest_api_tool(
-        allowed_domains=["alliancegenome.org", "www.alliancegenome.org"],
-        tool_name="alliance_api_call",
-        tool_description=(
-            "Query Alliance of Genome Resources API for orthology data "
-            "(alliancegenome.org only)"
-        ),
-    )
-
-
-def _resolve_save_csv_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.file_output_tools import create_csv_tool
-
-    return create_csv_tool()
-
-
-def _resolve_save_tsv_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.file_output_tools import create_tsv_tool
-
-    return create_tsv_tool()
-
-
-def _resolve_save_json_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.file_output_tools import create_json_tool
-
-    return create_json_tool()
-
-
-# Declarative runtime bindings used by the unified agent builder.
-TOOL_BINDINGS: Dict[str, Dict[str, Any]] = {
-    "agr_curation_query": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_agr_curation_tool,
-    },
-    "search_document": {
-        "binding": "context_factory",
-        "required_context": ["document_id", "user_id"],
-        "resolver": _resolve_search_document_tool,
-    },
-    "read_section": {
-        "binding": "context_factory",
-        "required_context": ["document_id", "user_id"],
-        "resolver": _resolve_read_section_tool,
-    },
-    "read_subsection": {
-        "binding": "context_factory",
-        "required_context": ["document_id", "user_id"],
-        "resolver": _resolve_read_subsection_tool,
-    },
-    "curation_db_sql": {
-        "binding": "context_factory",
-        "required_context": ["database_url"],
-        "resolver": _resolve_curation_db_sql_tool,
-    },
-    "chebi_api_call": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_chebi_api_tool,
-    },
-    "quickgo_api_call": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_quickgo_api_tool,
-    },
-    "go_api_call": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_go_api_tool,
-    },
-    "alliance_api_call": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_alliance_api_tool,
-    },
-    "save_csv_file": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_save_csv_tool,
-    },
-    "save_tsv_file": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_save_tsv_tool,
-    },
-    "save_json_file": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_save_json_tool,
-    },
-}
-
 
 def _canonicalize_tool_id(tool_id: str) -> str:
     """Map method-level tool aliases back to concrete runtime tool IDs."""

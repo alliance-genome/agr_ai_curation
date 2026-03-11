@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
 import json
 import sys
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -16,8 +19,8 @@ def main() -> int:
     protocol = _load_runner_protocol()
     try:
         request = protocol["decode_request"](sys.stdin.read())
-        tool_callable = _resolve_tool_callable(request)
-        result = tool_callable(*request.args, **request.kwargs)
+        tool_target = _resolve_tool_target(request)
+        result = _execute_tool_target(tool_target, request)
         json.dumps(result)
         sys.stdout.write(protocol["encode_success_response"](result))
         return 0
@@ -82,7 +85,7 @@ def _load_runner_protocol() -> dict[str, Any]:
     }
 
 
-def _resolve_tool_callable(request) -> Any:
+def _resolve_tool_target(request) -> Any:
     _extend_sys_path(request)
     module_name, attribute_name = request.import_path.split(":", 1)
     module = importlib.import_module(module_name)
@@ -105,9 +108,34 @@ def _resolve_tool_callable(request) -> Any:
             )
         imported = imported(dict(request.context))
 
-    if not callable(imported):
+    if not callable(imported) and not hasattr(imported, "on_invoke_tool"):
         raise TypeError(f"Imported target '{request.import_path}' is not callable")
     return imported
+
+
+def _execute_tool_target(target: Any, request) -> Any:
+    """Execute either a plain callable or an SDK-style tool object."""
+    if hasattr(target, "on_invoke_tool"):
+        payload: Any
+        if request.kwargs:
+            payload = request.kwargs
+        elif request.args:
+            payload = request.args
+        else:
+            payload = {}
+
+        result = target.on_invoke_tool(
+            SimpleNamespace(tool_name=request.tool_id),
+            json.dumps(payload),
+        )
+    else:
+        result = target(*request.args, **request.kwargs)
+
+    # This entrypoint always runs in a fresh subprocess, so asyncio.run() is the
+    # correct way to drive async tool objects without relying on a shared loop.
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
 
 
 def _extend_sys_path(request) -> None:

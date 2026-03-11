@@ -1,7 +1,7 @@
 """Additional branch tests for catalog_service helpers and service methods."""
 
 import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,21 +44,50 @@ def test_prompt_key_and_documentation_conversion_branches(monkeypatch):
 
 def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     fake_good = SimpleNamespace(params_json_schema={}, description="desc")
-    fake_bad = SimpleNamespace(params_json_schema={}, description="desc")
-    module_a = ModuleType("fake_agr")
-    module_b = ModuleType("fake_weaviate")
-    module_a.good_tool = fake_good
-    module_b.bad_tool = fake_bad
-
-    import src.lib.openai_agents.tools as tools_pkg
-    monkeypatch.setattr(tools_pkg, "agr_curation", module_a, raising=False)
-    monkeypatch.setattr(tools_pkg, "weaviate_search", module_b, raising=False)
+    binding_good = SimpleNamespace(
+        tool_id="search_document",
+        description="Search docs",
+        required_context=("document_id", "user_id"),
+        binding_kind=SimpleNamespace(value="context_factory"),
+        source=SimpleNamespace(
+            package_id="agr.core",
+            package_version="1.0.0",
+            package_display_name="AGR Core Package",
+            export_name="default",
+            source_file="packages/core/python/src/agr_ai_curation_core/tools/documents.py",
+        ),
+    )
+    binding_bad = SimpleNamespace(
+        tool_id="broken_tool",
+        description="Broken tool",
+        required_context=(),
+        binding_kind=SimpleNamespace(value="static"),
+        source=SimpleNamespace(
+            package_id="agr.core",
+            package_version="1.0.0",
+            package_display_name="AGR Core Package",
+            export_name="default",
+            source_file="packages/core/python/src/agr_ai_curation_core/tools/broken.py",
+        ),
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_load_package_tool_registry",
+        lambda: SimpleNamespace(bindings=(binding_good, binding_bad)),
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda binding, execution_context=None: (
+            (_ for _ in ()).throw(RuntimeError("boom"))
+            if binding.tool_id == "broken_tool"
+            else fake_good
+        ),
+    )
 
     from src.lib.agent_studio import tool_introspection
 
     def _fake_introspect(obj):
-        if obj is fake_bad:
-            raise RuntimeError("boom")
         return SimpleNamespace(
             name="search_document",
             description="Search docs",
@@ -72,55 +101,63 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     registry = catalog_service.get_tool_registry()
     assert "search_document" in registry
     assert registry["search_document"]["category"] == "Document"
+    assert registry["search_document"]["package_backed"] is True
+    assert registry["broken_tool"]["package_backed"] is True
 
 
-def test_resolver_helpers_and_resolve_tools_error_paths(monkeypatch):
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.weaviate_search.create_search_tool",
-        lambda **kwargs: ("search", kwargs),
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.weaviate_search.create_read_section_tool",
-        lambda **kwargs: ("section", kwargs),
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.weaviate_search.create_read_subsection_tool",
-        lambda **kwargs: ("subsection", kwargs),
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.sql_query.create_sql_query_tool",
-        lambda db_url, tool_name: ("sql", db_url, tool_name),
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.rest_api.create_rest_api_tool",
-        lambda **kwargs: ("rest", kwargs),
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.file_output_tools.create_csv_tool",
-        lambda: "csv-tool",
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.file_output_tools.create_tsv_tool",
-        lambda: "tsv-tool",
-    )
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.file_output_tools.create_json_tool",
-        lambda: "json-tool",
+def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
+    call_counter = {"count": 0}
+    fake_binding = SimpleNamespace(
+        tool_id="search_document",
+        description="Search docs",
+        required_context=("document_id", "user_id"),
+        binding_kind=SimpleNamespace(value="context_factory"),
+        source=SimpleNamespace(
+            package_id="agr.core",
+            package_version="1.0.0",
+            package_display_name="AGR Core Package",
+            export_name="default",
+            source_file="packages/core/python/src/agr_ai_curation_core/tools/documents.py",
+        ),
     )
 
-    ctx = catalog_service.ToolExecutionContext(document_id="d1", user_id="u1", database_url="postgres://db")
-    assert catalog_service._resolve_search_document_tool(ctx)[0] == "search"
-    assert catalog_service._resolve_read_section_tool(ctx)[0] == "section"
-    assert catalog_service._resolve_read_subsection_tool(ctx)[0] == "subsection"
-    assert catalog_service._resolve_curation_db_sql_tool(ctx)[0] == "sql"
-    assert catalog_service._resolve_chebi_api_tool(ctx)[0] == "rest"
-    assert catalog_service._resolve_quickgo_api_tool(ctx)[0] == "rest"
-    assert catalog_service._resolve_go_api_tool(ctx)[0] == "rest"
-    assert catalog_service._resolve_alliance_api_tool(ctx)[0] == "rest"
-    assert catalog_service._resolve_save_csv_tool(ctx) == "csv-tool"
-    assert catalog_service._resolve_save_tsv_tool(ctx) == "tsv-tool"
-    assert catalog_service._resolve_save_json_tool(ctx) == "json-tool"
+    def _fake_load_registry():
+        call_counter["count"] += 1
+        return SimpleNamespace(bindings=(fake_binding,))
 
+    monkeypatch.setattr(catalog_service, "_load_package_tool_registry", _fake_load_registry)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda binding, execution_context=None: SimpleNamespace(params_json_schema={}, description="desc"),
+    )
+
+    from src.lib.agent_studio import tool_introspection
+
+    monkeypatch.setattr(
+        tool_introspection,
+        "introspect_tool",
+        lambda _obj: SimpleNamespace(
+            name="search_document",
+            description="Search docs",
+            parameters={},
+            source_file="x.py",
+        ),
+    )
+
+    catalog_service.clear_package_tool_runtime_caches()
+    assert call_counter["count"] == 0
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 1
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 1
+
+    catalog_service.clear_package_tool_runtime_caches()
+    assert "search_document" in catalog_service.TOOL_REGISTRY
+    assert call_counter["count"] == 2
+
+
+def test_resolve_tools_error_paths(monkeypatch):
     monkeypatch.setattr(
         catalog_service,
         "TOOL_BINDINGS",

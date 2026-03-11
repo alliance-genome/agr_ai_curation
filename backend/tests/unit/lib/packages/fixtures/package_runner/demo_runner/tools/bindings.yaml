@@ -18,3 +18,15 @@ tools:
     callable: demo_runner.tools:explode_value
     required_context: []
     source_file: src/demo_runner/tools.py
+  - tool_id: sdk_static_tool
+    binding_kind: static
+    callable: demo_runner.tools:sdk_static_tool
+    required_context: []
+    source_file: src/demo_runner/tools.py
+  - tool_id: sdk_context_tool
+    binding_kind: context_factory
+    callable_factory: demo_runner.tools:create_sdk_context_tool
+    required_context:
+      - document_id
+      - user_id
+    source_file: src/demo_runner/tools.py

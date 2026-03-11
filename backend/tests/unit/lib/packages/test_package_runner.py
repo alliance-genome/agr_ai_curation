@@ -68,6 +68,31 @@ def test_package_runner_executes_context_factory(monkeypatch, tmp_path):
     assert result.result == {"message": "Curation for DOC-1 by user-7?"}
 
 
+def test_package_runner_executes_static_sdk_style_tool(monkeypatch, tmp_path):
+    runner = _build_runner(monkeypatch, tmp_path)
+
+    result = runner.execute_tool(
+        "sdk_static_tool",
+        kwargs={"message": "hello", "punctuation": "?"},
+    )
+
+    assert result.ok is True
+    assert result.result == {"message": "static:hello?"}
+
+
+def test_package_runner_executes_context_factory_sdk_style_tool(monkeypatch, tmp_path):
+    runner = _build_runner(monkeypatch, tmp_path)
+
+    result = runner.execute_tool(
+        "sdk_context_tool",
+        kwargs={"message": "hello"},
+        context={"document_id": "DOC-9", "user_id": "user-4"},
+    )
+
+    assert result.ok is True
+    assert result.result == {"message": "DOC-9:user-4:hello!"}
+
+
 def test_package_runner_reuses_existing_virtual_environment(monkeypatch, tmp_path):
     runner = _build_runner(monkeypatch, tmp_path)
 
