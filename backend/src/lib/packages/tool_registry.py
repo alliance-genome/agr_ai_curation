@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from .manifest_loader import load_runtime_overrides
 from .models import ExportKind, RuntimeOverrides, ToolBinding, ToolBindingKind
@@ -88,8 +87,8 @@ def load_tool_registry(
     packages_dir: Path | None = None,
     *,
     overrides_path: Path | None = None,
-    runtime_version: Optional[str] = None,
-    supported_package_api_version: Optional[str] = None,
+    runtime_version: str | None = None,
+    supported_package_api_version: str | None = None,
     fail_on_validation_error: bool = True,
 ) -> ToolRegistry:
     """Build the merged runtime tool registry from loaded packages."""
@@ -155,11 +154,13 @@ def build_tool_registry(
             merged_bindings.append(ordered_candidates[0])
             continue
 
-        selected = _select_override_winner(
+        selected, override_error = _select_override_winner(
             tool_id,
             ordered_candidates,
             runtime_overrides=runtime_overrides,
         )
+        if override_error is not None:
+            validation_errors.append(override_error)
         collisions.append(
             ToolBindingCollision(
                 tool_id=tool_id,
@@ -203,11 +204,12 @@ def _build_registered_binding(
 ) -> RegisteredToolBinding:
     import_path = binding.callable or binding.callable_factory
     import_attribute_kind = "callable" if binding.callable else "callable_factory"
+    assert import_path is not None
 
     return RegisteredToolBinding(
         tool_id=binding.tool_id,
         binding_kind=binding.binding_kind,
-        import_path=import_path or "",
+        import_path=import_path,
         import_attribute_kind=import_attribute_kind,
         required_context=tuple(binding.required_context),
         description=binding.description or binding_export.export_description,
@@ -229,9 +231,9 @@ def _select_override_winner(
     candidates: tuple[RegisteredToolBinding, ...],
     *,
     runtime_overrides: RuntimeOverrides | None,
-) -> RegisteredToolBinding | None:
+) -> tuple[RegisteredToolBinding | None, str | None]:
     if runtime_overrides is None:
-        return None
+        return None, None
 
     matching_candidates = [
         candidate
@@ -244,16 +246,16 @@ def _select_override_winner(
         )
     ]
     if len(matching_candidates) == 1:
-        return matching_candidates[0]
+        return matching_candidates[0], None
     if len(matching_candidates) > 1:
-        raise ToolRegistryValidationError(
+        return None, (
             f"Multiple override selections match conflicting tool '{tool_id}': "
             + ", ".join(
                 f"{candidate.source.package_id}:{candidate.source.export_name}"
                 for candidate in matching_candidates
             )
         )
-    return None
+    return None, None
 
 
 def _format_collision_error(

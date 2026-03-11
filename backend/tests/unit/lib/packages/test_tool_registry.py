@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
+from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import (
     ToolRegistryValidationError,
+    build_tool_registry,
     load_tool_registry,
 )
 
@@ -208,3 +211,72 @@ tools:
     assert selected.import_attribute_kind == "callable_factory"
     assert selected.required_context == ("user_id",)
     assert registry.collisions[0].selected == selected
+
+
+def test_build_tool_registry_soft_fails_for_multiple_matching_override_selections(tmp_path):
+    packages_dir = tmp_path / "packages"
+
+    _write_package(
+        packages_dir,
+        directory_name="agr-base",
+        package_id="agr.base",
+        bindings_text="""package_id: agr.base
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: shared_tool
+    binding_kind: static
+    callable: agr_base.tools.shared:shared_tool
+    required_context: []
+""",
+    )
+    _write_package(
+        packages_dir,
+        directory_name="org-custom",
+        package_id="org.custom",
+        bindings_text="""package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: shared_tool
+    binding_kind: static
+    callable: org_custom.tools.shared:shared_tool
+    required_context: []
+""",
+    )
+
+    package_registry = load_package_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+        fail_on_validation_error=False,
+    )
+    invalid_overrides = RuntimeOverrides.model_construct(
+        overrides_api_version="1.0.0",
+        package_precedence=[],
+        disabled_packages=[],
+        selections=[
+            RuntimeOverrideSelection(
+                export_kind=ExportKind.TOOL_BINDING,
+                name="default",
+                package_id="agr.base",
+            ),
+            RuntimeOverrideSelection(
+                export_kind=ExportKind.TOOL_BINDING,
+                name="default",
+                package_id="org.custom",
+            ),
+        ],
+    )
+
+    registry = build_tool_registry(
+        package_registry,
+        runtime_overrides=invalid_overrides,
+        fail_on_validation_error=False,
+    )
+
+    assert registry.get("shared_tool") is None
+    assert len(registry.collisions) == 1
+    assert registry.collisions[0].selected is None
+    assert any(
+        "Multiple override selections match conflicting tool 'shared_tool'" in error
+        for error in registry.validation_errors
+    )
