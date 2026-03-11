@@ -1,11 +1,12 @@
 """Unit tests for runtime package admin health endpoint."""
 
-import asyncio
+import pytest
 
 import src.api.admin.connections as admin_connections
 
 
-def test_check_runtime_packages_returns_report(monkeypatch):
+@pytest.mark.asyncio
+async def test_check_runtime_packages_returns_report(monkeypatch):
     monkeypatch.setattr(
         "src.lib.packages.health.build_package_health_report",
         lambda: {
@@ -46,7 +47,7 @@ def test_check_runtime_packages_returns_report(monkeypatch):
         },
     )
 
-    result = asyncio.run(admin_connections.check_runtime_packages())
+    result = await admin_connections.check_runtime_packages()
     assert result.status == "degraded"
     assert result.summary.loaded_count == 1
     assert result.summary.failed_count == 1
