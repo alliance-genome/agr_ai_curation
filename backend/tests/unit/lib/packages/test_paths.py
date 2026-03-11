@@ -112,3 +112,27 @@ def test_relative_runtime_override_rejects_parent_directory_traversal(monkeypatc
 
     with pytest.raises(ValueError, match="must not traverse parent directories"):
         paths.get_runtime_state_dir()
+
+
+@pytest.mark.parametrize(
+    "bad_package_id, expected_message",
+    (
+        ("../escape", "must not contain path separators"),
+        ("nested/package", "must not contain path separators"),
+        ("/absolute", "must not contain path separators"),
+        ("", "must not be empty"),
+    ),
+)
+def test_package_runner_paths_reject_unsafe_package_ids(
+    monkeypatch,
+    tmp_path,
+    bad_package_id,
+    expected_message,
+):
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+
+    with pytest.raises(ValueError, match=expected_message):
+        paths.get_package_runner_package_state_dir(bad_package_id)
+
+    with pytest.raises(ValueError, match=expected_message):
+        paths.get_runtime_package_dir(bad_package_id)

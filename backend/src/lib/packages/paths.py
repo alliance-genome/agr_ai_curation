@@ -50,6 +50,22 @@ def _normalize_path(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
+def _validate_package_id_path_component(package_id: str) -> str:
+    """Validate package IDs before using them as path components."""
+    if not package_id or not package_id.strip():
+        raise ValueError("package_id must not be empty")
+    if "/" in package_id or "\\" in package_id:
+        raise ValueError("package_id must not contain path separators")
+
+    candidate = Path(package_id)
+    if candidate.is_absolute():
+        raise ValueError("package_id must not be absolute")
+    if ".." in candidate.parts or "." in candidate.parts:
+        raise ValueError("package_id must not traverse directories")
+
+    return package_id
+
+
 def _resolve_optional_path(
     raw_value: str | None,
     *,
@@ -99,7 +115,8 @@ def get_runtime_packages_dir() -> Path:
 
 def get_runtime_package_dir(package_id: str) -> Path:
     """Return the runtime directory for a specific package ID."""
-    return _normalize_path(get_runtime_packages_dir() / package_id)
+    safe_package_id = _validate_package_id_path_component(package_id)
+    return _normalize_path(get_runtime_packages_dir() / safe_package_id)
 
 
 def get_runtime_state_dir() -> Path:
@@ -187,7 +204,8 @@ def get_package_runner_state_dir() -> Path:
 
 def get_package_runner_package_state_dir(package_id: str) -> Path:
     """Return the package-runner state directory for one package."""
-    return _normalize_path(get_package_runner_state_dir() / package_id)
+    safe_package_id = _validate_package_id_path_component(package_id)
+    return _normalize_path(get_package_runner_state_dir() / safe_package_id)
 
 
 def get_package_runner_venv_dir(package_id: str) -> Path:

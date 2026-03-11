@@ -162,6 +162,37 @@ def test_package_runner_returns_bad_runner_response(monkeypatch, tmp_path):
     assert result.error.details["stdout"] == "not-json"
 
 
+def test_package_runner_returns_timeout_failure(monkeypatch, tmp_path):
+    runner = _build_runner(monkeypatch, tmp_path)
+    original_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if (
+            isinstance(command, list)
+            and any(
+                isinstance(part, str)
+                and part.endswith("package_runner_entrypoint.py")
+                for part in command
+            )
+        ):
+            raise subprocess.TimeoutExpired(
+                cmd=command,
+                timeout=kwargs["timeout"],
+            )
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.execute_tool("echo_value", kwargs={"value": "hello"})
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "execution_failure"
+    assert "Timed out while executing package tool 'echo_value'" == result.error.message
+    assert result.error.details["timeout_seconds"] == 60.0
+
+
 def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
     package_dir = _stage_fixture_package(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
