@@ -33,8 +33,10 @@ COPY alembic.ini .
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 
-RUN chmod +x /app/backend/scripts/utilities/ensure_postgres_db_exists.sh && \
-    mkdir -p /app/pdf_storage /app/file_outputs
+RUN useradd --create-home --uid 1000 appuser && \
+    chmod +x /app/backend/scripts/utilities/ensure_postgres_db_exists.sh && \
+    mkdir -p /app/pdf_storage /app/file_outputs && \
+    chown -R appuser:appuser /app/backend /app/pdf_storage /app/file_outputs
 
 ENV PYTHONPATH=/app/backend:/app/backend/src
 ENV AGENTS_CONFIG_PATH=/app/backend/config/agents
@@ -43,6 +45,8 @@ ENV CONNECTIONS_CONFIG_PATH=/app/backend/config/connections.yaml
 ENV MODELS_CONFIG_PATH=/app/backend/config/models.yaml
 ENV PROVIDERS_CONFIG_PATH=/app/backend/config/providers.yaml
 ENV MAINTENANCE_MESSAGE_FILE=/app/backend/config/maintenance_message.txt
+
+USER appuser
 
 EXPOSE 8000
 
