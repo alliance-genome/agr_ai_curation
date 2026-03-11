@@ -40,6 +40,9 @@ DEFAULT_PROCESSED_JSON_DIRNAME = "processed_json"
 DEFAULT_FILE_OUTPUT_DIRNAME = "file_outputs"
 DEFAULT_IDENTIFIER_PREFIX_STATE_DIRNAME = "identifier_prefixes"
 DEFAULT_IDENTIFIER_PREFIX_FILENAME = "identifier_prefixes.json"
+DEFAULT_PACKAGE_RUNNER_STATE_DIRNAME = "package_runner"
+DEFAULT_PACKAGE_RUNNER_VENV_DIRNAME = "venv"
+DEFAULT_PACKAGE_RUNNER_METADATA_FILENAME = "environment.json"
 
 
 def _normalize_path(path: Path) -> Path:
@@ -174,6 +177,32 @@ def get_identifier_prefix_file_path() -> Path:
         os.getenv("IDENTIFIER_PREFIX_FILE_PATH"),
         parent=get_identifier_prefix_state_dir(),
         default_name=DEFAULT_IDENTIFIER_PREFIX_FILENAME,
+    )
+
+
+def get_package_runner_state_dir() -> Path:
+    """Return the runtime state directory reserved for package tool execution."""
+    return _normalize_path(get_runtime_state_dir() / DEFAULT_PACKAGE_RUNNER_STATE_DIRNAME)
+
+
+def get_package_runner_package_state_dir(package_id: str) -> Path:
+    """Return the package-runner state directory for one package."""
+    return _normalize_path(get_package_runner_state_dir() / package_id)
+
+
+def get_package_runner_venv_dir(package_id: str) -> Path:
+    """Return the isolated virtual environment directory for one package."""
+    return _normalize_path(
+        get_package_runner_package_state_dir(package_id)
+        / DEFAULT_PACKAGE_RUNNER_VENV_DIRNAME
+    )
+
+
+def get_package_runner_metadata_path(package_id: str) -> Path:
+    """Return the package-runner environment metadata file for one package."""
+    return _normalize_path(
+        get_package_runner_package_state_dir(package_id)
+        / DEFAULT_PACKAGE_RUNNER_METADATA_FILENAME
     )
 
 
