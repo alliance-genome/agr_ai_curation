@@ -317,41 +317,43 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
         catalog_service.validate_active_agent_output_schemas(db)
 
 
-def test_resolve_agr_curation_tool_without_tracker_returns_singleton(monkeypatch):
-    fake_tool = _FakeFunctionTool(name="agr_curation_query", on_invoke_tool=None)
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.agr_curation.agr_curation_query",
-        fake_tool,
-        raising=False,
-    )
-
-    resolved = catalog_service._resolve_agr_curation_tool(catalog_service.ToolExecutionContext())
-
-    assert resolved is fake_tool
-
-
 @pytest.mark.asyncio
-async def test_resolve_agr_curation_tool_with_tracker_wraps_invoke(monkeypatch):
+async def test_resolve_package_tool_executes_through_package_runner(monkeypatch):
     calls = []
 
     class _Tracker:
         def record_call(self, tool_name):
             calls.append(tool_name)
 
-    async def _original_invoke(_ctx, input_str):
-        return f"original:{input_str}"
-
     fake_tool = _FakeFunctionTool(
         name="agr_curation_query",
-        on_invoke_tool=_original_invoke,
+        on_invoke_tool=None,
     )
+    binding = SimpleNamespace(
+        tool_id="agr_curation_query",
+        required_context=(),
+    )
+    runner = SimpleNamespace(
+        execute_tool=lambda tool_id, **kwargs: SimpleNamespace(
+            ok=True,
+            result={
+                "tool_id": tool_id,
+                "kwargs": kwargs.get("kwargs"),
+                "context": kwargs.get("context"),
+            },
+            error=None,
+        )
+    )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
     monkeypatch.setattr(
-        "src.lib.openai_agents.tools.agr_curation.agr_curation_query",
-        fake_tool,
-        raising=False,
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda _binding, execution_context=None: fake_tool,
     )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_runner", lambda: runner)
 
-    resolved = catalog_service._resolve_agr_curation_tool(
+    resolved = catalog_service._resolve_package_tool(
+        "agr_curation_query",
         catalog_service.ToolExecutionContext(tool_tracker=_Tracker())
     )
 
@@ -359,4 +361,39 @@ async def test_resolve_agr_curation_tool_with_tracker_wraps_invoke(monkeypatch):
     result = await resolved.on_invoke_tool(None, '{"method":"search_genes"}')
 
     assert calls == ["agr_curation_query"]
-    assert result == 'original:{"method":"search_genes"}'
+    assert result == {
+        "tool_id": "agr_curation_query",
+        "kwargs": {"method": "search_genes"},
+        "context": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_package_tool_raises_for_runner_failure(monkeypatch):
+    fake_tool = _FakeFunctionTool(name="search_document", on_invoke_tool=None)
+    binding = SimpleNamespace(
+        tool_id="search_document",
+        required_context=("document_id", "user_id"),
+    )
+    runner = SimpleNamespace(
+        execute_tool=lambda tool_id, **kwargs: SimpleNamespace(
+            ok=False,
+            result=None,
+            error=SimpleNamespace(message=f"{tool_id} failed"),
+        )
+    )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda _binding, execution_context=None: fake_tool,
+    )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_runner", lambda: runner)
+
+    resolved = catalog_service._resolve_package_tool(
+        "search_document",
+        catalog_service.ToolExecutionContext(document_id="doc-1", user_id="user-1"),
+    )
+
+    with pytest.raises(RuntimeError, match="search_document failed"):
+        await resolved.on_invoke_tool(None, '{"query":"genes"}')
