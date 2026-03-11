@@ -42,6 +42,9 @@ _env_loaded_from = _load_env_file()
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_APP_VERSION = "1.0.0"
+DEFAULT_RUNTIME_PACKAGE_API_VERSION = "1.0.0"
+
 # Warn if .env not found in required location
 if not _env_loaded_from:
     print("[config] WARNING: No .env file found at ~/.agr_ai_curation/.env")
@@ -64,6 +67,19 @@ def get_weaviate_url() -> str:
 def get_openai_api_key() -> Optional[str]:
     """Get OpenAI API key from environment."""
     return os.getenv('OPENAI_API_KEY', None)
+
+
+def get_app_version() -> str:
+    """Get the backend runtime version advertised by this deployment."""
+    return os.getenv("APP_VERSION", DEFAULT_APP_VERSION)
+
+
+def get_runtime_package_api_version() -> str:
+    """Get the runtime package API version supported by this deployment."""
+    return os.getenv(
+        "AGR_RUNTIME_PACKAGE_API_VERSION",
+        DEFAULT_RUNTIME_PACKAGE_API_VERSION,
+    )
 
 
 def get_log_level() -> str:

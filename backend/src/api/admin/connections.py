@@ -102,6 +102,41 @@ class LLMProvidersHealthResponse(BaseModel):
     startup_report: Optional[Dict[str, Any]] = None
 
 
+class PackageHealthItem(BaseModel):
+    """Health status for one discovered runtime package."""
+
+    package_id: str
+    display_name: Optional[str] = None
+    version: Optional[str] = None
+    status: str  # "loaded" | "failed"
+    package_path: str
+    manifest_path: str
+    reason: Optional[str] = None
+
+
+class PackageHealthSummary(BaseModel):
+    """Summary counts for runtime package diagnostics."""
+
+    total_discovered: int
+    loaded_count: int
+    failed_count: int
+    validation_error_count: int
+
+
+class PackagesHealthResponse(BaseModel):
+    """Health/diagnostics report for runtime packages."""
+
+    status: str  # "healthy" | "degraded" | "unhealthy"
+    validated_at: str
+    packages_dir: str
+    runtime_version: str
+    supported_package_api_version: str
+    validation_errors: List[str]
+    summary: PackageHealthSummary
+    loaded_packages: List[PackageHealthItem]
+    failed_packages: List[PackageHealthItem]
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -260,4 +295,32 @@ async def check_llm_providers() -> LLMProvidersHealthResponse:
         models=[LLMModelHealthItem(**row) for row in report["models"]],
         summary=LLMProviderHealthSummary(**report["summary"]),
         startup_report=startup_report,
+    )
+
+
+@router.get(
+    "/packages",
+    response_model=PackagesHealthResponse,
+    summary="Check runtime package health",
+    description="""
+    Discovers installed runtime packages from the configured packages directory,
+    validates package manifests and compatibility, and reports which packages loaded
+    or failed with explicit reasons.
+    """,
+)
+async def check_runtime_packages() -> PackagesHealthResponse:
+    """Check runtime package discovery and compatibility status."""
+    from src.lib.packages.health import build_package_health_report
+
+    report = build_package_health_report()
+    return PackagesHealthResponse(
+        status=report["status"],
+        validated_at=report["validated_at"],
+        packages_dir=report["packages_dir"],
+        runtime_version=report["runtime_version"],
+        supported_package_api_version=report["supported_package_api_version"],
+        validation_errors=report["validation_errors"],
+        summary=PackageHealthSummary(**report["summary"]),
+        loaded_packages=[PackageHealthItem(**item) for item in report["loaded_packages"]],
+        failed_packages=[PackageHealthItem(**item) for item in report["failed_packages"]],
     )

@@ -16,7 +16,7 @@ os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capi
 from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
-from src.config import get_pdf_storage_path
+from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
 from src.lib.weaviate_client.settings import get_embedding_config
@@ -553,7 +553,7 @@ async def root():
     """Root endpoint."""
     return {
         "service": "AI Curation Platform API",
-        "version": "1.0.0",
+        "version": get_app_version(),
         "docs": "/docs",
         "health": "/health"
     }
