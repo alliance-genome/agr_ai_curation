@@ -60,6 +60,10 @@ def _resolve_optional_path(
     candidate = Path(raw_value)
     if candidate.is_absolute():
         return _normalize_path(candidate)
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"Relative runtime override '{raw_value}' must not traverse parent directories"
+        )
 
     return _normalize_path(parent / candidate)
 
@@ -123,7 +127,10 @@ def get_pdf_storage_dir() -> Path:
 
 
 def get_pdfx_json_storage_dir() -> Path:
-    """Return the directory for raw PDF extraction JSON outputs."""
+    """Return the directory for raw PDF extraction JSON outputs.
+
+    Relative overrides are resolved beneath the effective PDF storage directory.
+    """
     return _resolve_optional_path(
         os.getenv("PDFX_JSON_STORAGE_PATH"),
         parent=get_pdf_storage_dir(),
@@ -132,7 +139,10 @@ def get_pdfx_json_storage_dir() -> Path:
 
 
 def get_processed_json_storage_dir() -> Path:
-    """Return the directory for processed extraction JSON outputs."""
+    """Return the directory for processed extraction JSON outputs.
+
+    Relative overrides are resolved beneath the effective PDF storage directory.
+    """
     return _resolve_optional_path(
         os.getenv("PROCESSED_JSON_STORAGE_PATH"),
         parent=get_pdf_storage_dir(),

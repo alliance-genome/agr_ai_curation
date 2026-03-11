@@ -63,7 +63,8 @@ def _core_semver(value: str) -> tuple[int, int, int]:
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)", value)
     if match is None:
         raise ValueError(f"Invalid semantic version: {value}")
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = (int(part) for part in match.groups())
+    return (major, minor, patch)
 
 
 def _require_unique(values: list[str], field_name: str) -> list[str]:

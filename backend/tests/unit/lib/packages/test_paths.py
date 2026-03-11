@@ -84,3 +84,11 @@ def test_runtime_config_storage_helpers_delegate_to_package_paths(monkeypatch, t
     assert runtime_config.get_pdfx_json_storage_path() == runtime_root / "state" / "pdf_storage" / "pdfx_json"
     assert runtime_config.get_processed_json_storage_path() == runtime_root / "state" / "pdf_storage" / "processed_json"
     assert runtime_config.get_file_output_storage_path() == runtime_root / "state" / "file_outputs"
+
+
+def test_relative_runtime_override_rejects_parent_directory_traversal(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("AGR_RUNTIME_STATE_DIR", "../escape")
+
+    with pytest.raises(ValueError, match="must not traverse parent directories"):
+        paths.get_runtime_state_dir()
