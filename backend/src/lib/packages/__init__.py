@@ -1,5 +1,12 @@
 """Package runtime contract helpers for modular distribution."""
 
+from .discovery import (
+    DiscoveredPackage,
+    PackageDiscoveryFailure,
+    discover_package_manifests,
+    iter_runtime_package_dirs,
+)
+from .health import build_package_health_report
 from .manifest_loader import (
     PackageContractError,
     PackageManifestError,
@@ -34,19 +41,34 @@ from .paths import (
     get_runtime_state_dir,
     get_tool_bindings_path,
 )
+from .registry import (
+    LoadedPackage,
+    PackageFailure,
+    PackageRegistry,
+    PackageRegistryValidationError,
+    load_package_registry,
+)
 
 __all__ = [
+    "DiscoveredPackage",
     "ExportKind",
+    "LoadedPackage",
     "PackageContractError",
+    "PackageDiscoveryFailure",
     "PackageExport",
+    "PackageFailure",
     "PackageManifest",
     "PackageManifestError",
+    "PackageRegistry",
+    "PackageRegistryValidationError",
     "RuntimeOverrideSelection",
     "RuntimeOverrides",
     "RuntimeOverridesError",
     "ToolBinding",
     "ToolBindingsError",
     "ToolBindingsManifest",
+    "build_package_health_report",
+    "discover_package_manifests",
     "get_file_output_dir",
     "get_identifier_prefix_file_path",
     "get_identifier_prefix_state_dir",
@@ -61,7 +83,9 @@ __all__ = [
     "get_runtime_root",
     "get_runtime_state_dir",
     "get_tool_bindings_path",
+    "iter_runtime_package_dirs",
     "load_package_manifest",
+    "load_package_registry",
     "load_runtime_overrides",
     "load_tool_bindings",
 ]
