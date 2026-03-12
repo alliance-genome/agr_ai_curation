@@ -1,0 +1,59 @@
+FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN python -m venv "${VIRTUAL_ENV}" \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt
+
+
+FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
+
+ARG APP_USER=agr
+ARG APP_UID=10001
+ARG APP_GID=10001
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONPATH=/app/backend \
+    AGR_RUNTIME_ROOT=/runtime
+
+WORKDIR /app/backend
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && groupadd --gid "${APP_GID}" "${APP_USER}" \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" \
+        --create-home --home-dir "/home/${APP_USER}" --shell /usr/sbin/nologin "${APP_USER}" \
+    && mkdir -p /runtime/config /runtime/packages /runtime/state \
+    && chown -R "${APP_UID}:${APP_GID}" /app/backend /runtime "/home/${APP_USER}" \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /opt/venv /opt/venv
+COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
+COPY --chown=${APP_UID}:${APP_GID} main.py ./
+COPY --chown=${APP_UID}:${APP_GID} alembic/ ./alembic/
+COPY --chown=${APP_UID}:${APP_GID} alembic.ini ./
+
+EXPOSE 8000
+
+USER ${APP_UID}:${APP_GID}
+
+# No CMD is set here: runtime_entrypoint computes the default production
+# server command, and operators can still append explicit args when needed.
+ENTRYPOINT ["python", "-m", "src.lib.runtime_entrypoint"]
