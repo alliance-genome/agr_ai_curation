@@ -39,10 +39,46 @@ def test_find_project_root_skips_backend_src_lib_false_positive(monkeypatch, tmp
     assert package_default_sources._find_project_root() == repo_root
     assert package_default_sources.get_default_packages_dir() == repo_root / "packages"
 
-    resolved_override, explicitly_configured = package_default_sources._resolve_runtime_override_path(
+    resolved_override, explicitly_configured = package_default_sources.resolve_runtime_config_path(
         None,
         env_var="TOOL_POLICY_DEFAULTS_CONFIG_PATH",
         filename="tool_policy_defaults.yaml",
     )
     assert resolved_override == config_dir / "tool_policy_defaults.yaml"
     assert explicitly_configured is False
+
+
+def test_resolve_runtime_config_path_prefers_runtime_file_when_present(monkeypatch, tmp_path: Path):
+    runtime_config_dir = tmp_path / "runtime" / "config"
+    runtime_config_dir.mkdir(parents=True)
+    runtime_groups_path = runtime_config_dir / "groups.yaml"
+    runtime_groups_path.write_text("groups: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        package_default_sources,
+        "get_runtime_config_dir",
+        lambda: runtime_config_dir,
+    )
+
+    resolved_path, explicitly_configured = package_default_sources.resolve_runtime_config_path(
+        None,
+        env_var="GROUPS_CONFIG_PATH",
+        filename="groups.yaml",
+    )
+
+    assert resolved_path == runtime_groups_path
+    assert explicitly_configured is False
+
+
+def test_resolve_runtime_config_path_reports_explicit_env_override(monkeypatch, tmp_path: Path):
+    explicit_path = tmp_path / "custom" / "connections.yaml"
+    monkeypatch.setenv("CONNECTIONS_CONFIG_PATH", str(explicit_path))
+
+    resolved_path, explicitly_configured = package_default_sources.resolve_runtime_config_path(
+        None,
+        env_var="CONNECTIONS_CONFIG_PATH",
+        filename="connections.yaml",
+    )
+
+    assert resolved_path == explicit_path
+    assert explicitly_configured is True

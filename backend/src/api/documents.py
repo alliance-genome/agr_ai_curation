@@ -412,10 +412,10 @@ def validate_user_file_path(
         - FR-014: Prevent path traversal attacks
 
     Example:
-        >>> storage = Path("/app/pdf_storage")
+        >>> storage = Path("/runtime/state/pdf_storage")
         >>> user_path = storage / "00u1abc2" / "doc.pdf"
         >>> validate_user_file_path(user_path, storage, "00u1abc2")
-        Path("/app/pdf_storage/00u1abc2/doc.pdf")
+        Path("/runtime/state/pdf_storage/00u1abc2/doc.pdf")
     """
     try:
         # Resolve to absolute path (eliminates ../, symlinks, etc.)

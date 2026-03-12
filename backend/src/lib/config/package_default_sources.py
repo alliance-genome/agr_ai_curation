@@ -70,7 +70,7 @@ def resolve_packages_dir(packages_dir: Path | None) -> Path:
     return (packages_dir or get_default_packages_dir()).expanduser().resolve(strict=False)
 
 
-def _resolve_runtime_override_path(
+def resolve_runtime_config_path(
     explicit_path: Path | None,
     *,
     env_var: str,
@@ -161,7 +161,7 @@ def load_optional_runtime_yaml_source(
     filename: str,
 ) -> YamlConfigSource | None:
     """Load the runtime override YAML file when present."""
-    resolved_path, explicitly_configured = _resolve_runtime_override_path(
+    resolved_path, explicitly_configured = resolve_runtime_config_path(
         explicit_path,
         env_var=env_var,
         filename=filename,

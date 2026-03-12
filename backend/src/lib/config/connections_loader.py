@@ -1,7 +1,8 @@
 """
 Connections Loader for Config-Driven Architecture.
 
-This module loads external service connection definitions from config/connections.yaml.
+This module loads external service connection definitions from runtime config or
+config/connections.yaml.
 It provides health check capabilities and connection status tracking.
 
 Usage:
@@ -26,46 +27,28 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 import yaml
+from src.lib.config.package_default_sources import resolve_runtime_config_path
 
 logger = logging.getLogger(__name__)
 
 
-def _find_project_root() -> Optional[Path]:
-    """Find project root by looking for pyproject.toml or docker-compose.yml.
-
-    Returns:
-        Path to project root directory, or None if not found
-    """
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
-    return None
-
-
 def _get_default_connections_path() -> Path:
-    """Get the default connections.yaml path, trying multiple strategies.
+    """Get the default connections.yaml path, preferring runtime config.
 
     Order of precedence:
     1. CONNECTIONS_CONFIG_PATH environment variable
-    2. Project root detection (pyproject.toml or docker-compose.yml)
-    3. Relative path from this module (fallback for Docker)
+    2. Runtime config directory (`AGR_RUNTIME_CONFIG_DIR` or `/runtime/config`)
+    3. Project root fallback for repository-backed development
 
     Returns:
         Path to connections.yaml file
     """
-    # Strategy 1: Environment variable
-    env_path = os.environ.get("CONNECTIONS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-
-    # Strategy 2: Project root detection
-    project_root = _find_project_root()
-    if project_root:
-        return project_root / "config" / "connections.yaml"
-
-    # Strategy 3: Relative path fallback (for Docker where backend is at /app/backend)
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "connections.yaml"
+    resolved_path, _ = resolve_runtime_config_path(
+        explicit_path=None,
+        env_var="CONNECTIONS_CONFIG_PATH",
+        filename="connections.yaml",
+    )
+    return resolved_path
 
 
 def _substitute_env_vars(value: str) -> str:
@@ -338,7 +321,7 @@ def load_connections(
             return _connection_registry
 
         if connections_path is None:
-            connections_path = DEFAULT_CONNECTIONS_PATH
+            connections_path = _get_default_connections_path()
 
         if not connections_path.exists():
             raise FileNotFoundError(f"Connections configuration not found: {connections_path}")
@@ -509,8 +492,6 @@ async def check_service_health(service_id: str) -> bool:
     Side effects:
         Updates the connection's is_healthy and last_error fields
     """
-    import httpx
-
     if not _initialized:
         load_connections()
 
