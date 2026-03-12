@@ -1,8 +1,8 @@
 """
 Agent Definition Loader for Config-Driven Architecture.
 
-This module discovers and loads agent definitions from YAML files in the
-config/agents/ directory. Each agent folder contains:
+This module discovers and loads agent definitions from installed runtime
+packages. Each exported agent bundle contains:
 - agent.yaml: Agent metadata and configuration
 - prompt.yaml: Base prompt template
 - schema.py: Pydantic output schema (optional)
@@ -27,53 +27,9 @@ from typing import Dict, List, Optional, Any
 
 import yaml
 
+from .agent_sources import resolve_agent_config_sources
+
 logger = logging.getLogger(__name__)
-
-
-def _find_project_root() -> Optional[Path]:
-    """Find project root by looking for pyproject.toml or docker-compose.yml.
-
-    This is more robust than counting parent directories, which breaks if
-    the module is moved.
-
-    Returns:
-        Path to project root directory, or None if not found
-    """
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
-    return None
-
-
-def _get_default_agents_path() -> Path:
-    """Get the default agents path, trying multiple strategies.
-
-    Order of precedence:
-    1. AGENTS_CONFIG_PATH environment variable
-    2. Project root detection (pyproject.toml or docker-compose.yml)
-    3. Relative path from this module (fallback for Docker)
-
-    Returns:
-        Path to agents directory
-    """
-    # Strategy 1: Environment variable
-    env_path = os.environ.get("AGENTS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-
-    # Strategy 2: Project root detection
-    project_root = _find_project_root()
-    if project_root:
-        return project_root / "config" / "agents"
-
-    # Strategy 3: Relative path fallback (for Docker where backend is at /app/backend)
-    # backend/src/lib/config/agent_loader.py -> /app/backend -> /app/config/agents
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "agents"
-
-
-# Default path for agent configurations (can be overridden)
-DEFAULT_AGENTS_PATH = _get_default_agents_path()
 
 # Thread safety lock for initialization
 _init_lock = threading.Lock()
@@ -243,7 +199,7 @@ def load_agent_definitions(
     initialization is complete.
 
     Args:
-        agents_path: Path to agents directory (default: config/agents/)
+        agents_path: Optional search path. When omitted, scan installed packages.
         force_reload: Force reload even if already initialized
 
     Returns:
@@ -260,50 +216,53 @@ def load_agent_definitions(
         if _initialized and not force_reload:
             return _agent_registry
 
-        if agents_path is None:
-            agents_path = DEFAULT_AGENTS_PATH
-
-        if not agents_path.exists():
-            raise FileNotFoundError(f"Agents directory not found: {agents_path}")
-
-        logger.info('Loading agent definitions from: %s', agents_path)
+        logger.info(
+            'Loading agent definitions from: %s',
+            agents_path or "default runtime package search path",
+        )
 
         _agent_registry = {}
         _agents_by_folder = {}
 
-        # Scan for agent folders
-        for folder in sorted(agents_path.iterdir()):
-            # Skip non-directories and underscore-prefixed folders
-            if not folder.is_dir() or folder.name.startswith("_"):
-                continue
+        for source in resolve_agent_config_sources(agents_path):
+            agent_yaml = source.agent_yaml
+            if source.package_id and (agent_yaml is None or not agent_yaml.exists()):
+                raise FileNotFoundError(
+                    f"Package '{source.package_id}' agent bundle '{source.folder_name}' "
+                    f"is missing agent.yaml at {agent_yaml}"
+                )
 
-            agent_yaml = folder / "agent.yaml"
-            if not agent_yaml.exists():
-                logger.debug('Skipping %s: no agent.yaml found', folder.name)
+            if agent_yaml is None or not agent_yaml.exists():
+                logger.debug('Skipping %s: no agent.yaml found', source.folder_name)
                 continue
 
             try:
-                with open(agent_yaml, "r") as f:
+                with open(agent_yaml, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
 
                 if not data:
-                    logger.warning('Empty agent.yaml in %s', folder.name)
+                    logger.warning('Empty agent.yaml in %s', source.folder_name)
                     continue
 
-                agent = AgentDefinition.from_yaml(folder.name, data)
+                agent = AgentDefinition.from_yaml(source.folder_name, data)
                 _agent_registry[agent.agent_id] = agent
-                _agents_by_folder[folder.name] = agent
+                _agents_by_folder[source.folder_name] = agent
 
                 logger.info(
                     f"Loaded agent: {agent.agent_id} "
-                    f"(folder={folder.name}, tool={agent.tool_name})"
+                    f"(folder={source.folder_name}, tool={agent.tool_name})"
                 )
 
             except yaml.YAMLError as e:
                 logger.error('Failed to parse %s: %s', agent_yaml, e)
                 raise
             except Exception as e:
-                logger.error('Failed to load agent from %s: %s', folder.name, e)
+                logger.error(
+                    'Failed to load agent from %s%s: %s',
+                    source.folder_name,
+                    f" in package {source.package_id}" if source.package_id else "",
+                    e,
+                )
                 raise
 
         _initialized = True

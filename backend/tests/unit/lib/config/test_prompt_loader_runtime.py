@@ -89,6 +89,8 @@ def test_upsert_prompt_creates_version_one_when_missing():
 
 
 def test_load_group_rules_infers_group_and_skips_examples(tmp_path):
+    from src.lib.config.agent_sources import resolve_agent_config_sources
+
     agent_folder = tmp_path / "gene"
     rules_dir = agent_folder / "group_rules"
     rules_dir.mkdir(parents=True)
@@ -108,7 +110,8 @@ def test_load_group_rules_infers_group_and_skips_examples(tmp_path):
     monkeypatch = pytest.MonkeyPatch()
     try:
         monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
-        count = prompt_loader._load_group_rules(agent_folder, "gene", db)
+        source = resolve_agent_config_sources(tmp_path)[0]
+        count = prompt_loader._load_group_rules(source, "gene", db)
     finally:
         monkeypatch.undo()
 
@@ -181,6 +184,7 @@ def test_load_prompts_skips_when_another_worker_loaded(tmp_path, monkeypatch):
 def test_load_prompts_loader_path_counts_and_commits(tmp_path, monkeypatch):
     agents_path = tmp_path / "agents"
     (agents_path / "gene").mkdir(parents=True)
+    (agents_path / "gene" / "agent.yaml").write_text("agent_id: gene\n")
     (agents_path / "_ignored").mkdir(parents=True)
     (agents_path / "not_a_dir.txt").write_text("x")
     db = MagicMock()
@@ -188,9 +192,8 @@ def test_load_prompts_loader_path_counts_and_commits(tmp_path, monkeypatch):
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
     monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: calls.__setitem__("released", calls["released"] + 1))
-    monkeypatch.setattr(prompt_loader, "_find_project_root", lambda: tmp_path)
-    monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda folder, _db, _root=None: folder.name if folder.name == "gene" else None)
-    monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda _folder, _agent_name, _db, _root=None: 2)
+    monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda source, _db: source.folder_name if source.folder_name == "gene" else None)
+    monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda _source, _agent_name, _db: 2)
 
     result = prompt_loader.load_prompts(agents_path=agents_path, db=db)
 
@@ -203,13 +206,13 @@ def test_load_prompts_loader_path_counts_and_commits(tmp_path, monkeypatch):
 def test_load_prompts_force_reload_even_if_initialized(tmp_path, monkeypatch):
     agents_path = tmp_path / "agents"
     (agents_path / "gene").mkdir(parents=True)
+    (agents_path / "gene" / "agent.yaml").write_text("agent_id: gene\n")
     prompt_loader._initialized = True
     db = MagicMock()
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
     monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
-    monkeypatch.setattr(prompt_loader, "_find_project_root", lambda: tmp_path)
-    monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda _f, _db, _r=None: "gene")
+    monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda _source, _db: "gene")
     monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda *_args, **_kwargs: 0)
 
     result = prompt_loader.load_prompts(agents_path=agents_path, db=db, force_reload=True)

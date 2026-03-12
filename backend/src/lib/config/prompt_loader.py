@@ -5,8 +5,8 @@ This module loads prompts from YAML files into the database at startup.
 YAML files are the source of truth; the database is a runtime cache.
 
 Flow:
-1. Scan config/agents/*/prompt.yaml for base prompts
-2. Scan config/agents/*/group_rules/*.yaml for group-specific rules
+1. Scan installed package agent exports for base prompts
+2. Scan installed package agent exports for group-specific rules
 3. Upsert into prompt_templates table (YAML overwrites DB)
 4. cache.py then loads from database as usual
 
@@ -25,7 +25,6 @@ Multi-worker safety:
 
 import hashlib
 import logging
-import os
 import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -36,48 +35,21 @@ from sqlalchemy.orm import Session
 
 from src.models.sql.prompts import PromptTemplate
 
+from .agent_sources import (
+    AgentConfigSource,
+    _get_default_agent_search_path,
+    resolve_agent_config_sources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Advisory lock ID for prompt loading (arbitrary unique number)
 PROMPT_LOADER_LOCK_ID = 948572631
 
 
-def _find_project_root() -> Optional[Path]:
-    """Find project root by looking for pyproject.toml or docker-compose.yml.
-
-    Returns:
-        Path to project root directory, or None if not found
-    """
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
-    return None
-
-
 def _get_default_agents_path() -> Path:
-    """Get the default agents path, trying multiple strategies.
-
-    Order of precedence:
-    1. AGENTS_CONFIG_PATH environment variable
-    2. Project root detection (pyproject.toml or docker-compose.yml)
-    3. Relative path from this module (fallback for Docker)
-
-    Returns:
-        Path to agents directory
-    """
-    # Strategy 1: Environment variable
-    env_path = os.environ.get("AGENTS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-
-    # Strategy 2: Project root detection
-    project_root = _find_project_root()
-    if project_root:
-        return project_root / "config" / "agents"
-
-    # Strategy 3: Relative path fallback (for Docker where backend is at /app/backend)
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "agents"
+    """Return the default package-aware search path for prompt loading."""
+    return _get_default_agent_search_path()
 
 
 # Thread safety lock for initialization (process-local)
@@ -190,15 +162,12 @@ def _upsert_prompt(
     return (True, new_version)
 
 
-def _load_base_prompt(
-    agent_folder: Path, db: Session, project_root: Optional[Path] = None
-) -> Optional[str]:
+def _load_base_prompt(source: AgentConfigSource, db: Session) -> Optional[str]:
     """Load a single prompt.yaml file into the database.
 
     Args:
-        agent_folder: Path to agent folder (e.g., config/agents/gene/)
+        source: Resolved agent config source
         db: Database session
-        project_root: Pre-computed project root for source_file paths
 
     Returns:
         Agent name if loaded successfully, None otherwise
@@ -208,18 +177,18 @@ def _load_base_prompt(
         except for explicit canonical-id migrations (currently `pdf` ->
         `pdf_extraction`) where prompt.yaml `agent_id` is authoritative.
     """
-    prompt_yaml = agent_folder / "prompt.yaml"
+    prompt_yaml = source.prompt_yaml
 
-    if not prompt_yaml.exists():
-        logger.debug('No prompt.yaml in %s', agent_folder.name)
+    if prompt_yaml is None or not prompt_yaml.exists():
+        logger.debug('No prompt.yaml in %s', source.folder_name)
         return None
 
     try:
-        with open(prompt_yaml, "r") as f:
+        with open(prompt_yaml, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         if not data:
-            logger.warning('Empty prompt.yaml in %s', agent_folder.name)
+            logger.warning('Empty prompt.yaml in %s', source.folder_name)
             return None
 
         # Extract fields
@@ -230,7 +199,7 @@ def _load_base_prompt(
             return None
 
         # Default to folder name for legacy compatibility.
-        agent_name = agent_folder.name
+        agent_name = source.folder_name
 
         # Validate/consume agent_id if present.
         yaml_agent_id = data.get("agent_id")
@@ -240,19 +209,10 @@ def _load_base_prompt(
                 agent_name = yaml_agent_id
 
             logger.warning(
-                f"agent_id mismatch in {agent_folder.name}/prompt.yaml: "
+                f"agent_id mismatch in {source.folder_name}/prompt.yaml: "
                 f"agent_id='{yaml_agent_id}' but folder name is '{agent_name}'. "
                 f"Using '{agent_name}' as canonical prompt agent_name."
             )
-
-        # Calculate relative path for source_file
-        try:
-            if project_root:
-                source_file = str(prompt_yaml.relative_to(project_root))
-            else:
-                source_file = str(prompt_yaml)
-        except ValueError:
-            source_file = str(prompt_yaml)
 
         # Upsert into database
         _upsert_prompt(
@@ -261,7 +221,7 @@ def _load_base_prompt(
             prompt_type="system",
             content=content,
             group_id=None,
-            source_file=source_file,
+            source_file=source.source_file_display(prompt_yaml),
         )
 
         return agent_name
@@ -270,41 +230,33 @@ def _load_base_prompt(
         logger.error('Failed to parse %s: %s', prompt_yaml, e)
         raise
     except Exception as e:
-        logger.error('Failed to load prompt from %s: %s', agent_folder.name, e)
+        logger.error('Failed to load prompt from %s: %s', source.folder_name, e)
         raise
 
 
 def _load_group_rules(
-    agent_folder: Path,
+    source: AgentConfigSource,
     agent_name: str,
     db: Session,
-    project_root: Optional[Path] = None,
 ) -> int:
     """Load all group_rules/*.yaml for an agent.
 
     Args:
-        agent_folder: Path to agent folder
+        source: Resolved agent config source
         agent_name: Agent name (e.g., "gene", "go_annotations")
         db: Database session
-        project_root: Pre-computed project root for source_file paths
 
     Returns:
         Number of group rules loaded
     """
-    group_rules_dir = agent_folder / "group_rules"
-
-    if not group_rules_dir.exists():
+    if not source.group_rule_files:
         return 0
 
     count = 0
 
-    for rule_file in sorted(group_rules_dir.glob("*.yaml")):
-        # Skip example files
-        if rule_file.name.startswith("_") or rule_file.name == "example.yaml":
-            continue
-
+    for rule_file in source.group_rule_files:
         try:
-            with open(rule_file, "r") as f:
+            with open(rule_file, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
             if not data:
@@ -324,15 +276,6 @@ def _load_group_rules(
                 logger.warning('Missing content in %s', rule_file)
                 continue
 
-            # Calculate relative path for source_file
-            try:
-                if project_root:
-                    source_file = str(rule_file.relative_to(project_root))
-                else:
-                    source_file = str(rule_file)
-            except ValueError:
-                source_file = str(rule_file)
-
             # Upsert into database
             _upsert_prompt(
                 db=db,
@@ -340,7 +283,7 @@ def _load_group_rules(
                 prompt_type="group_rules",
                 content=content,
                 group_id=group_id,
-                source_file=source_file,
+                source_file=source.source_file_display(rule_file),
             )
 
             count += 1
@@ -423,9 +366,9 @@ def load_prompts(
     """
     Load all prompts from YAML files into the database.
 
-    This function scans the agents directory and loads:
-    - config/agents/*/prompt.yaml -> base prompts (prompt_type="system", group_id=NULL)
-    - config/agents/*/group_rules/*.yaml -> group rules (prompt_type="group_rules")
+    This function scans resolved agent sources and loads:
+    - package-owned or explicit `prompt.yaml` files -> base prompts
+    - package-owned or explicit `group_rules/*.yaml` files -> group rules
 
     The database is treated as a cache - YAML files are the source of truth.
     Content is compared by hash; unchanged prompts don't create new versions.
@@ -439,7 +382,7 @@ def load_prompts(
         Uses process-local lock for thread safety within a single process.
 
     Args:
-        agents_path: Path to agents directory (default: config/agents/)
+        agents_path: Optional search path. When omitted, scan installed packages.
         db: Database session (required)
         force_reload: Force reload even if already initialized
 
@@ -464,12 +407,7 @@ def load_prompts(
             logger.debug("Prompt loader already initialized, skipping")
             return {"base_prompts": 0, "group_rules": 0, "skipped": True}
 
-        # Resolve agents_path lazily (allows env var changes after import)
-        if agents_path is None:
-            agents_path = _get_default_agents_path()
-
-        if not agents_path.exists():
-            raise FileNotFoundError(f"Agents directory not found: {agents_path}")
+        effective_agents_path = agents_path or _get_default_agents_path()
 
         # Multi-worker safety: acquire advisory lock
         # This may block if another worker is loading (ensures cache consistency)
@@ -489,30 +427,18 @@ def load_prompts(
             # - Changed prompts: old version deactivated, new version created
             # - New prompts: version 1 created
             # This maintains YAML as the source of truth on every startup.
-            logger.info('Loading prompts from YAML: %s', agents_path)
-
-            # Compute project root once for all source_file paths
-            project_root = _find_project_root()
+            logger.info('Loading prompts from YAML: %s', effective_agents_path)
 
             base_prompt_count = 0
             group_rules_count = 0
 
-            # Scan for agent folders
-            for folder in sorted(agents_path.iterdir()):
-                # Skip non-directories and underscore-prefixed folders
-                if not folder.is_dir() or folder.name.startswith("_"):
-                    continue
-
-                # Load base prompt (using folder name as agent_name)
-                agent_name = _load_base_prompt(folder, db, project_root)
+            for source in resolve_agent_config_sources(agents_path):
+                agent_name = _load_base_prompt(source, db)
 
                 if agent_name:
                     base_prompt_count += 1
 
-                    # Load group rules for this agent
-                    rules_count = _load_group_rules(
-                        folder, agent_name, db, project_root
-                    )
+                    rules_count = _load_group_rules(source, agent_name, db)
                     group_rules_count += rules_count
 
             # Commit all changes

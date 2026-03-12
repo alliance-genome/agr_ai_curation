@@ -1,8 +1,9 @@
 """
 Schema Discovery for Config-Driven Architecture.
 
-This module discovers and registers Pydantic schemas from agent folders.
-Each agent folder may contain a schema.py file with envelope classes.
+This module discovers and registers Pydantic schemas from resolved agent
+configuration sources. Each agent bundle may contain a schema.py file with
+envelope classes.
 
 Envelope classes are identified by:
 - Class name ending in "Envelope" (e.g., GeneValidationEnvelope)
@@ -27,13 +28,9 @@ from typing import Dict, List, Optional, Type, Any
 
 from pydantic import BaseModel
 
-from .agent_loader import _get_default_agents_path
+from .agent_sources import resolve_agent_config_sources
 
 logger = logging.getLogger(__name__)
-
-
-# Default path for agent configurations (uses shared path detection)
-DEFAULT_AGENTS_PATH = _get_default_agents_path()
 
 # Thread safety lock for initialization
 _init_lock = threading.Lock()
@@ -74,13 +71,18 @@ def _is_envelope_class(cls: Any) -> bool:
     return False
 
 
-def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[BaseModel]]:
+def _load_schema_module(
+    schema_path: Path,
+    folder_name: str,
+    package_id: str | None = None,
+) -> Dict[str, Type[BaseModel]]:
     """
     Dynamically load a schema.py file and extract envelope classes.
 
     Args:
         schema_path: Path to the schema.py file
         folder_name: Name of the agent folder (for module naming)
+        package_id: Owning package ID when loading from package exports
 
     Returns:
         Dictionary of class_name -> Pydantic model class
@@ -88,7 +90,12 @@ def _load_schema_module(schema_path: Path, folder_name: str) -> Dict[str, Type[B
     global _registered_modules
 
     # Create a unique module name to avoid conflicts
-    module_name = f"agent_schemas.{folder_name}"
+    module_suffix = folder_name.replace("-", "_").replace(".", "_")
+    if package_id:
+        package_suffix = package_id.replace("-", "_").replace(".", "_")
+        module_name = f"agent_schemas.{package_suffix}.{module_suffix}"
+    else:
+        module_name = f"agent_schemas.{module_suffix}"
 
     # Load the module
     spec = importlib.util.spec_from_file_location(module_name, schema_path)
@@ -144,7 +151,7 @@ def discover_agent_schemas(
     initialization is complete.
 
     Args:
-        agents_path: Path to agents directory (default: config/agents/)
+        agents_path: Optional search path. When omitted, scan installed packages.
         force_reload: Force reload even if already initialized
 
     Returns:
@@ -160,50 +167,48 @@ def discover_agent_schemas(
         if _initialized and not force_reload:
             return _schema_registry
 
-        if agents_path is None:
-            agents_path = DEFAULT_AGENTS_PATH
-
-        if not agents_path.exists():
-            raise FileNotFoundError(f"Agents directory not found: {agents_path}")
-
         logger.info('Discovering agent schemas from: %s', agents_path)
 
         _schema_registry = {}
         _schema_by_agent = {}
 
-        # Scan for agent folders
-        for folder in sorted(agents_path.iterdir()):
-            # Skip non-directories and underscore-prefixed folders
-            if not folder.is_dir() or folder.name.startswith("_"):
-                continue
-
-            schema_py = folder / "schema.py"
-            if not schema_py.exists():
-                logger.debug('No schema.py in %s', folder.name)
+        for source in resolve_agent_config_sources(agents_path):
+            schema_py = source.schema_py
+            if schema_py is None or not schema_py.exists():
+                logger.debug('No schema.py in %s', source.folder_name)
                 continue
 
             try:
-                envelope_classes = _load_schema_module(schema_py, folder.name)
+                envelope_classes = _load_schema_module(
+                    schema_py,
+                    source.folder_name,
+                    source.package_id,
+                )
 
                 for class_name, cls in envelope_classes.items():
                     if class_name in _schema_registry:
                         logger.warning(
                             f"Duplicate schema class name: {class_name} "
-                            f"(already registered, skipping from {folder.name})"
+                            f"(already registered, skipping from {source.folder_name})"
                         )
                         continue
 
                     _schema_registry[class_name] = cls
-                    logger.info('Registered schema: %s from %s/schema.py', class_name, folder.name)
+                    logger.info('Registered schema: %s from %s/schema.py', class_name, source.folder_name)
 
                 # Also map by agent folder for convenience
                 # Use the first envelope class found as the "primary" schema
                 if envelope_classes:
                     primary_class = list(envelope_classes.values())[0]
-                    _schema_by_agent[folder.name] = primary_class
+                    _schema_by_agent[source.folder_name] = primary_class
 
             except Exception as e:
-                logger.error('Failed to load schemas from %s: %s', folder.name, e)
+                logger.error(
+                    'Failed to load schemas from %s%s: %s',
+                    source.folder_name,
+                    f" in package {source.package_id}" if source.package_id else "",
+                    e,
+                )
                 raise
 
         _initialized = True
