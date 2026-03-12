@@ -32,6 +32,50 @@ def test_load_package_manifest_parses_representative_fixture():
     assert manifest.exports[0].path == "agents/supervisor"
 
 
+def test_load_package_manifest_expands_agent_bundles_shorthand(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: agr.core
+display_name: AGR Core Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default bindings
+agent_bundles:
+  - name: gene
+    has_schema: true
+    group_rules: [fb, wb]
+  - name: chat_output
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_package_manifest(manifest_path)
+
+    actual_exports = {
+        (export.kind, export.name, export.path)
+        for export in manifest.exports
+    }
+    assert actual_exports == {
+        (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
+        (ExportKind.AGENT, "gene", "agents/gene"),
+        (ExportKind.PROMPT, "gene.system", "agents/gene/prompt.yaml"),
+        (ExportKind.SCHEMA, "gene.schema", "agents/gene/schema.py"),
+        (ExportKind.GROUP_RULE, "gene.FB", "agents/gene/group_rules/fb.yaml"),
+        (ExportKind.GROUP_RULE, "gene.WB", "agents/gene/group_rules/wb.yaml"),
+        (ExportKind.AGENT, "chat_output", "agents/chat_output"),
+        (ExportKind.PROMPT, "chat_output.system", "agents/chat_output/prompt.yaml"),
+    }
+
+
 def test_load_tool_bindings_parses_representative_fixture():
     bindings = load_tool_bindings(FIXTURES_DIR / "valid_bindings.yaml")
 
