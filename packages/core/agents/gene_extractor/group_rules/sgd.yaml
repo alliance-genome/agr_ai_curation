@@ -1,0 +1,17 @@
+group_id: SGD
+content: |
+  ## SGD-SPECIFIC RULES (Yeast Gene Extraction)
+
+  ### Nomenclature conventions
+  - Yeast (S. cerevisiae) wild-type gene symbols are italic uppercase: ACT1, CDC28, RAD52.
+  - Mutant alleles are lowercase italic: act1, cdc28, rad52.
+  - Systematic names follow the ORF format: YFL039C, YBR160W.
+
+  ### Common-word gene disambiguation
+  - Yeast gene symbols are short (3-4 letter uppercase codes) and can overlap with abbreviations.
+  - "ACT", "HIS", "LEU", "TRP", "URA", "ADE" need species context to confirm they refer to yeast genes.
+  - When the paper discusses S. cerevisiae or uses yeast strains (BY4741, W303, S288C), these are likely gene mentions.
+
+  ### Multi-species disambiguation
+  - Yeast gene symbols are typically unique enough to avoid confusion with other species, but verify species context.
+  - Yeast does not have a direct p53 ortholog; related pathway genes may be discussed in comparative studies.

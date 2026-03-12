@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: MGI
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the MGI group.
+# =============================================================================
+
+content: '
+
+  ## MGI-SPECIFIC RULES (Mus musculus)
+
+
+  ## MGI Gene Search Strategy (Mus musculus)
+
+
+  ### General Guidelines
+
+
+  - Mouse gene symbols use initial capital letter (e.g., Trp53, Bmal1)
+
+  - Papers often use protein names or common names instead of official symbols
+
+  - Search the exact name from the paper - synonym matching will find it
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add mouse gene-specific search strategies here.
+
+
+
+  ### Interpreting MGI Results:
+
+  ### Interpreting MGI Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add mouse gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: MGI

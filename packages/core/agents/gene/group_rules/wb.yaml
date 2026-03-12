@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: WB
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the WB group.
+# =============================================================================
+
+content: '
+
+  ## WB-SPECIFIC RULES (Caenorhabditis elegans)
+
+
+  ## WormBase Gene Search Strategy (Caenorhabditis elegans)
+
+
+  ### General Guidelines
+
+
+  - C. elegans gene names follow pattern: 3- to 4-letter prefix + hyphen + number (e.g., unc-4, lin-12)
+
+  - Gene symbols are lowercase and italicized
+
+  - Search using the gene name as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add worm gene-specific search strategies here.
+
+
+
+  ### Interpreting WB Results:
+
+  ### Interpreting WormBase Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add worm gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: WB

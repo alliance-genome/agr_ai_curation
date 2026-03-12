@@ -6,6 +6,7 @@ import pytest
 
 from . import find_repo_root
 from src.lib.packages.health import build_package_health_report
+from src.lib.packages.models import ExportKind
 from src.lib.packages.registry import (
     PackageRegistryValidationError,
     load_package_registry,
@@ -157,6 +158,11 @@ def test_repo_core_package_is_discoverable_and_compatible():
     assert core_package.package_path == packages_dir / "core"
     assert core_package.manifest.python_package_root == "python/src/agr_ai_curation_core"
     assert core_package.manifest.requirements_file == "requirements/runtime.txt"
-    assert [export.kind.value for export in core_package.manifest.exports] == [
-        "tool_binding"
-    ]
+    export_kinds = {export.kind for export in core_package.manifest.exports}
+    assert export_kinds == {
+        ExportKind.AGENT,
+        ExportKind.PROMPT,
+        ExportKind.GROUP_RULE,
+        ExportKind.SCHEMA,
+        ExportKind.TOOL_BINDING,
+    }

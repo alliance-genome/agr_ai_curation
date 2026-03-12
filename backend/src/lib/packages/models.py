@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import PurePosixPath
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -128,6 +129,36 @@ class PackageExport(BaseModel):
         return _validate_relative_package_path(value, "path")
 
 
+class AgentBundleSpec(BaseModel):
+    """Shorthand description for one agent export bundle in a package manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    agents_dir: str = Field(default="agents", min_length=1)
+    has_schema: bool = False
+    group_rules: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "agent_bundles.name")
+
+    @field_validator("agents_dir")
+    @classmethod
+    def _validate_agents_dir(cls, value: str) -> str:
+        return _validate_relative_package_path(value, "agent_bundles.agents_dir")
+
+    @field_validator("group_rules")
+    @classmethod
+    def _validate_group_rules(cls, value: list[str]) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, "agent_bundles.group_rules entry")
+            for item in value
+        ]
+        return _require_unique(validated, "agent_bundles.group_rules")
+
+
 class PackageManifest(BaseModel):
     """Schema for a runtime package's ``package.yaml`` contract."""
 
@@ -142,6 +173,63 @@ class PackageManifest(BaseModel):
     python_package_root: str = Field(min_length=1)
     requirements_file: str = Field(min_length=1)
     exports: list[PackageExport] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_agent_bundles(cls, data: Any) -> Any:
+        """Expand ``agent_bundles`` shorthand into flat ``exports`` entries."""
+        if not isinstance(data, dict):
+            return data
+
+        bundle_payloads = data.pop("agent_bundles", None)
+        if not bundle_payloads:
+            return data
+
+        expanded_exports: list[dict[str, str]] = []
+        for raw_bundle in bundle_payloads:
+            bundle = AgentBundleSpec.model_validate(raw_bundle)
+            agent_root = f"{bundle.agents_dir}/{bundle.name}"
+            expanded_exports.extend(
+                [
+                    {
+                        "kind": ExportKind.AGENT.value,
+                        "name": bundle.name,
+                        "path": agent_root,
+                        "description": f"Built-in {bundle.name} agent definition bundle",
+                    },
+                    {
+                        "kind": ExportKind.PROMPT.value,
+                        "name": f"{bundle.name}.system",
+                        "path": f"{agent_root}/prompt.yaml",
+                        "description": f"Base system prompt for the {bundle.name} agent",
+                    },
+                ]
+            )
+
+            if bundle.has_schema:
+                expanded_exports.append(
+                    {
+                        "kind": ExportKind.SCHEMA.value,
+                        "name": f"{bundle.name}.schema",
+                        "path": f"{agent_root}/schema.py",
+                        "description": f"Package-owned schema file for the {bundle.name} agent",
+                    }
+                )
+
+            for rule_name in bundle.group_rules:
+                rule_label = rule_name.upper()
+                expanded_exports.append(
+                    {
+                        "kind": ExportKind.GROUP_RULE.value,
+                        "name": f"{bundle.name}.{rule_label}",
+                        "path": f"{agent_root}/group_rules/{rule_name}.yaml",
+                        "description": f"Group-specific rules for {bundle.name} ({rule_label})",
+                    }
+                )
+
+        data = dict(data)
+        data["exports"] = list(data.get("exports", [])) + expanded_exports
+        return data
 
     @field_validator("package_id")
     @classmethod

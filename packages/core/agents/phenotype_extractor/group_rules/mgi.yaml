@@ -1,0 +1,25 @@
+group_id: MGI
+content: |
+  ## MGI-SPECIFIC RULES (Mouse Phenotype Extraction)
+
+  ### Phenotype ontology
+  - Use Mammalian Phenotype (MP) ontology terms for mouse phenotype annotations.
+  - MP IDs follow the format MP:NNNNNNN.
+
+  ### Life stage specificity
+  - Mouse developmental stages: embryonic (E0.5-E18.5), neonatal (P0-P7), postnatal, juvenile, adult, aged.
+  - Embryonic stages use the E-notation: E9.5, E12.5, E18.5.
+  - Postnatal stages use the P-notation: P0, P7, P14, P21.
+
+  ### Common mouse phenotype patterns
+  - Lethality: embryonic lethal (specify stage), perinatal lethal, postnatal lethal, reduced viability.
+  - Growth: growth retardation, obesity, lean body mass changes.
+  - Behavior: hyperactivity, anxiety-related behavior, learning/memory deficits, seizures.
+  - Organ-specific: hepatomegaly, cardiomyopathy, kidney defects, skeletal abnormalities.
+  - Immune: immunodeficiency, autoimmunity, inflammation, altered cytokine levels.
+  - Fertility: male/female infertility, reduced litter size, gonadal defects.
+
+  ### Conditional phenotypes
+  - Cre-lox conditional knockouts produce tissue-specific or temporally specific phenotypes.
+  - Note the Cre driver and the resulting tissue specificity when reporting conditional phenotypes.
+  - Inducible systems (CreERT2) add temporal control — note the induction timing.

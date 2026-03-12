@@ -1,0 +1,26 @@
+group_id: HGNC
+content: |
+  ## HGNC-SPECIFIC RULES (Human/Clinical Allele Extraction)
+
+  ### HGVS notation
+  - Coding DNA variants: c.76A>T, c.1234delG, c.567_568insAA, c.123+1G>A (splice site).
+  - Protein variants: p.Arg25Trp (3-letter), p.R25W (1-letter), p.Gly12Val.
+  - Genomic variants: g.12345A>G, g.12345_12346del.
+  - RNA variants: r.76a>u (lowercase).
+
+  ### Common HGVS notation errors in papers
+  - Missing "c." or "p." prefix — infer from context (nucleotide change vs amino acid change).
+  - Mixed notation: authors may use single-letter amino acid codes inconsistently.
+  - Incorrect numbering: verify when possible, but capture as written.
+  - Non-standard separators or formatting in tables.
+
+  ### Clinical variant conventions
+  - dbSNP identifiers: rs#### format — these are variant identifiers, not allele names.
+  - ClinVar accessions: VCV###### or RCV######.
+  - COSMIC identifiers for somatic mutations: COSM####.
+  - Capture all identifier formats as written for curator resolution.
+
+  ### Strain/cell line disambiguation
+  - Human studies use cell lines (HeLa, HEK293, U2OS) — these are NOT alleles.
+  - Patient identifiers or cohort descriptors are NOT alleles.
+  - Cell line names belong in experimental context, not in alleles[].
