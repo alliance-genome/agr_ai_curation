@@ -1,0 +1,23 @@
+group_id: SGD
+content: |
+  ## SGD-SPECIFIC RULES (Yeast Phenotype Extraction)
+
+  ### Phenotype ontology
+  - Use Ascomycete Phenotype Ontology (APO) terms for yeast phenotype annotations.
+  - APO IDs follow the format APO:NNNNNNN.
+
+  ### Common yeast phenotype patterns
+  - Growth: growth defect, temperature sensitivity (ts), cold sensitivity, slow growth, no growth.
+  - Morphology: abnormal cell morphology, elongated cells, enlarged cells, budding defects.
+  - Cell cycle: cell cycle arrest (specify stage: G1, S, G2/M), mitotic defects.
+  - Sporulation: sporulation deficiency, reduced sporulation efficiency.
+  - Stress response: sensitivity to DNA damage agents (HU, MMS, UV), oxidative stress sensitivity.
+  - Drug resistance/sensitivity: rapamycin sensitivity, caffeine sensitivity, cycloheximide resistance.
+  - Viability: inviable (lethal), synthetic lethality, conditional lethality.
+
+  ### Yeast-specific phenotype conventions
+  - Yeast phenotypes are often measured as growth on selective media.
+  - "Fails to grow on galactose" = carbon source utilization phenotype.
+  - "Sensitive to 4-NQO" = DNA damage sensitivity phenotype.
+  - Spot assay results (serial dilution growth) are a common phenotype readout.
+  - Petite colony phenotype indicates mitochondrial defects.

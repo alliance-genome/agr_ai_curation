@@ -7,6 +7,430 @@ max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_core
 requirements_file: requirements/runtime.txt
 exports:
+  - kind: agent
+    name: allele
+    path: agents/allele
+    description: Built-in allele agent definition bundle
+  - kind: prompt
+    name: allele.system
+    path: agents/allele/prompt.yaml
+    description: Base system prompt for the allele agent
+  - kind: schema
+    name: allele.schema
+    path: agents/allele/schema.py
+    description: Package-owned schema file for the allele agent
+  - kind: group_rule
+    name: allele.FB
+    path: agents/allele/group_rules/fb.yaml
+    description: Group-specific rules for allele (FB)
+  - kind: group_rule
+    name: allele.HGNC
+    path: agents/allele/group_rules/hgnc.yaml
+    description: Group-specific rules for allele (HGNC)
+  - kind: group_rule
+    name: allele.MGI
+    path: agents/allele/group_rules/mgi.yaml
+    description: Group-specific rules for allele (MGI)
+  - kind: group_rule
+    name: allele.RGD
+    path: agents/allele/group_rules/rgd.yaml
+    description: Group-specific rules for allele (RGD)
+  - kind: group_rule
+    name: allele.SGD
+    path: agents/allele/group_rules/sgd.yaml
+    description: Group-specific rules for allele (SGD)
+  - kind: group_rule
+    name: allele.WB
+    path: agents/allele/group_rules/wb.yaml
+    description: Group-specific rules for allele (WB)
+  - kind: group_rule
+    name: allele.ZFIN
+    path: agents/allele/group_rules/zfin.yaml
+    description: Group-specific rules for allele (ZFIN)
+  - kind: agent
+    name: allele_extractor
+    path: agents/allele_extractor
+    description: Built-in allele_extractor agent definition bundle
+  - kind: prompt
+    name: allele_extractor.system
+    path: agents/allele_extractor/prompt.yaml
+    description: Base system prompt for the allele_extractor agent
+  - kind: schema
+    name: allele_extractor.schema
+    path: agents/allele_extractor/schema.py
+    description: Package-owned schema file for the allele_extractor agent
+  - kind: group_rule
+    name: allele_extractor.FB
+    path: agents/allele_extractor/group_rules/fb.yaml
+    description: Group-specific rules for allele_extractor (FB)
+  - kind: group_rule
+    name: allele_extractor.HGNC
+    path: agents/allele_extractor/group_rules/hgnc.yaml
+    description: Group-specific rules for allele_extractor (HGNC)
+  - kind: group_rule
+    name: allele_extractor.MGI
+    path: agents/allele_extractor/group_rules/mgi.yaml
+    description: Group-specific rules for allele_extractor (MGI)
+  - kind: group_rule
+    name: allele_extractor.RGD
+    path: agents/allele_extractor/group_rules/rgd.yaml
+    description: Group-specific rules for allele_extractor (RGD)
+  - kind: group_rule
+    name: allele_extractor.SGD
+    path: agents/allele_extractor/group_rules/sgd.yaml
+    description: Group-specific rules for allele_extractor (SGD)
+  - kind: group_rule
+    name: allele_extractor.WB
+    path: agents/allele_extractor/group_rules/wb.yaml
+    description: Group-specific rules for allele_extractor (WB)
+  - kind: group_rule
+    name: allele_extractor.ZFIN
+    path: agents/allele_extractor/group_rules/zfin.yaml
+    description: Group-specific rules for allele_extractor (ZFIN)
+  - kind: agent
+    name: chat_output
+    path: agents/chat_output
+    description: Built-in chat_output agent definition bundle
+  - kind: prompt
+    name: chat_output.system
+    path: agents/chat_output/prompt.yaml
+    description: Base system prompt for the chat_output agent
+  - kind: agent
+    name: chemical
+    path: agents/chemical
+    description: Built-in chemical agent definition bundle
+  - kind: prompt
+    name: chemical.system
+    path: agents/chemical/prompt.yaml
+    description: Base system prompt for the chemical agent
+  - kind: schema
+    name: chemical.schema
+    path: agents/chemical/schema.py
+    description: Package-owned schema file for the chemical agent
+  - kind: agent
+    name: chemical_extractor
+    path: agents/chemical_extractor
+    description: Built-in chemical_extractor agent definition bundle
+  - kind: prompt
+    name: chemical_extractor.system
+    path: agents/chemical_extractor/prompt.yaml
+    description: Base system prompt for the chemical_extractor agent
+  - kind: schema
+    name: chemical_extractor.schema
+    path: agents/chemical_extractor/schema.py
+    description: Package-owned schema file for the chemical_extractor agent
+  - kind: agent
+    name: csv_formatter
+    path: agents/csv_formatter
+    description: Built-in csv_formatter agent definition bundle
+  - kind: prompt
+    name: csv_formatter.system
+    path: agents/csv_formatter/prompt.yaml
+    description: Base system prompt for the csv_formatter agent
+  - kind: agent
+    name: disease
+    path: agents/disease
+    description: Built-in disease agent definition bundle
+  - kind: prompt
+    name: disease.system
+    path: agents/disease/prompt.yaml
+    description: Base system prompt for the disease agent
+  - kind: schema
+    name: disease.schema
+    path: agents/disease/schema.py
+    description: Package-owned schema file for the disease agent
+  - kind: agent
+    name: disease_extractor
+    path: agents/disease_extractor
+    description: Built-in disease_extractor agent definition bundle
+  - kind: prompt
+    name: disease_extractor.system
+    path: agents/disease_extractor/prompt.yaml
+    description: Base system prompt for the disease_extractor agent
+  - kind: schema
+    name: disease_extractor.schema
+    path: agents/disease_extractor/schema.py
+    description: Package-owned schema file for the disease_extractor agent
+  - kind: group_rule
+    name: disease_extractor.FB
+    path: agents/disease_extractor/group_rules/fb.yaml
+    description: Group-specific rules for disease_extractor (FB)
+  - kind: group_rule
+    name: disease_extractor.HGNC
+    path: agents/disease_extractor/group_rules/hgnc.yaml
+    description: Group-specific rules for disease_extractor (HGNC)
+  - kind: group_rule
+    name: disease_extractor.MGI
+    path: agents/disease_extractor/group_rules/mgi.yaml
+    description: Group-specific rules for disease_extractor (MGI)
+  - kind: group_rule
+    name: disease_extractor.RGD
+    path: agents/disease_extractor/group_rules/rgd.yaml
+    description: Group-specific rules for disease_extractor (RGD)
+  - kind: group_rule
+    name: disease_extractor.SGD
+    path: agents/disease_extractor/group_rules/sgd.yaml
+    description: Group-specific rules for disease_extractor (SGD)
+  - kind: group_rule
+    name: disease_extractor.WB
+    path: agents/disease_extractor/group_rules/wb.yaml
+    description: Group-specific rules for disease_extractor (WB)
+  - kind: group_rule
+    name: disease_extractor.ZFIN
+    path: agents/disease_extractor/group_rules/zfin.yaml
+    description: Group-specific rules for disease_extractor (ZFIN)
+  - kind: agent
+    name: gene
+    path: agents/gene
+    description: Built-in gene agent definition bundle
+  - kind: prompt
+    name: gene.system
+    path: agents/gene/prompt.yaml
+    description: Base system prompt for the gene agent
+  - kind: schema
+    name: gene.schema
+    path: agents/gene/schema.py
+    description: Package-owned schema file for the gene agent
+  - kind: group_rule
+    name: gene.FB
+    path: agents/gene/group_rules/fb.yaml
+    description: Group-specific rules for gene (FB)
+  - kind: group_rule
+    name: gene.HGNC
+    path: agents/gene/group_rules/hgnc.yaml
+    description: Group-specific rules for gene (HGNC)
+  - kind: group_rule
+    name: gene.MGI
+    path: agents/gene/group_rules/mgi.yaml
+    description: Group-specific rules for gene (MGI)
+  - kind: group_rule
+    name: gene.RGD
+    path: agents/gene/group_rules/rgd.yaml
+    description: Group-specific rules for gene (RGD)
+  - kind: group_rule
+    name: gene.SGD
+    path: agents/gene/group_rules/sgd.yaml
+    description: Group-specific rules for gene (SGD)
+  - kind: group_rule
+    name: gene.WB
+    path: agents/gene/group_rules/wb.yaml
+    description: Group-specific rules for gene (WB)
+  - kind: group_rule
+    name: gene.ZFIN
+    path: agents/gene/group_rules/zfin.yaml
+    description: Group-specific rules for gene (ZFIN)
+  - kind: agent
+    name: gene_expression
+    path: agents/gene_expression
+    description: Built-in gene_expression agent definition bundle
+  - kind: prompt
+    name: gene_expression.system
+    path: agents/gene_expression/prompt.yaml
+    description: Base system prompt for the gene_expression agent
+  - kind: schema
+    name: gene_expression.schema
+    path: agents/gene_expression/schema.py
+    description: Package-owned schema file for the gene_expression agent
+  - kind: group_rule
+    name: gene_expression.WB
+    path: agents/gene_expression/group_rules/wb.yaml
+    description: Group-specific rules for gene_expression (WB)
+  - kind: agent
+    name: gene_extractor
+    path: agents/gene_extractor
+    description: Built-in gene_extractor agent definition bundle
+  - kind: prompt
+    name: gene_extractor.system
+    path: agents/gene_extractor/prompt.yaml
+    description: Base system prompt for the gene_extractor agent
+  - kind: schema
+    name: gene_extractor.schema
+    path: agents/gene_extractor/schema.py
+    description: Package-owned schema file for the gene_extractor agent
+  - kind: group_rule
+    name: gene_extractor.FB
+    path: agents/gene_extractor/group_rules/fb.yaml
+    description: Group-specific rules for gene_extractor (FB)
+  - kind: group_rule
+    name: gene_extractor.HGNC
+    path: agents/gene_extractor/group_rules/hgnc.yaml
+    description: Group-specific rules for gene_extractor (HGNC)
+  - kind: group_rule
+    name: gene_extractor.MGI
+    path: agents/gene_extractor/group_rules/mgi.yaml
+    description: Group-specific rules for gene_extractor (MGI)
+  - kind: group_rule
+    name: gene_extractor.RGD
+    path: agents/gene_extractor/group_rules/rgd.yaml
+    description: Group-specific rules for gene_extractor (RGD)
+  - kind: group_rule
+    name: gene_extractor.SGD
+    path: agents/gene_extractor/group_rules/sgd.yaml
+    description: Group-specific rules for gene_extractor (SGD)
+  - kind: group_rule
+    name: gene_extractor.WB
+    path: agents/gene_extractor/group_rules/wb.yaml
+    description: Group-specific rules for gene_extractor (WB)
+  - kind: group_rule
+    name: gene_extractor.ZFIN
+    path: agents/gene_extractor/group_rules/zfin.yaml
+    description: Group-specific rules for gene_extractor (ZFIN)
+  - kind: agent
+    name: gene_ontology
+    path: agents/gene_ontology
+    description: Built-in gene_ontology agent definition bundle
+  - kind: prompt
+    name: gene_ontology.system
+    path: agents/gene_ontology/prompt.yaml
+    description: Base system prompt for the gene_ontology agent
+  - kind: schema
+    name: gene_ontology.schema
+    path: agents/gene_ontology/schema.py
+    description: Package-owned schema file for the gene_ontology agent
+  - kind: agent
+    name: go_annotations
+    path: agents/go_annotations
+    description: Built-in go_annotations agent definition bundle
+  - kind: prompt
+    name: go_annotations.system
+    path: agents/go_annotations/prompt.yaml
+    description: Base system prompt for the go_annotations agent
+  - kind: schema
+    name: go_annotations.schema
+    path: agents/go_annotations/schema.py
+    description: Package-owned schema file for the go_annotations agent
+  - kind: agent
+    name: json_formatter
+    path: agents/json_formatter
+    description: Built-in json_formatter agent definition bundle
+  - kind: prompt
+    name: json_formatter.system
+    path: agents/json_formatter/prompt.yaml
+    description: Base system prompt for the json_formatter agent
+  - kind: agent
+    name: ontology_mapping
+    path: agents/ontology_mapping
+    description: Built-in ontology_mapping agent definition bundle
+  - kind: prompt
+    name: ontology_mapping.system
+    path: agents/ontology_mapping/prompt.yaml
+    description: Base system prompt for the ontology_mapping agent
+  - kind: schema
+    name: ontology_mapping.schema
+    path: agents/ontology_mapping/schema.py
+    description: Package-owned schema file for the ontology_mapping agent
+  - kind: agent
+    name: orthologs
+    path: agents/orthologs
+    description: Built-in orthologs agent definition bundle
+  - kind: prompt
+    name: orthologs.system
+    path: agents/orthologs/prompt.yaml
+    description: Base system prompt for the orthologs agent
+  - kind: schema
+    name: orthologs.schema
+    path: agents/orthologs/schema.py
+    description: Package-owned schema file for the orthologs agent
+  - kind: agent
+    name: pdf
+    path: agents/pdf
+    description: Built-in pdf agent definition bundle
+  - kind: prompt
+    name: pdf.system
+    path: agents/pdf/prompt.yaml
+    description: Base system prompt for the pdf agent
+  - kind: group_rule
+    name: pdf.FB
+    path: agents/pdf/group_rules/fb.yaml
+    description: Group-specific rules for pdf (FB)
+  - kind: group_rule
+    name: pdf.HGNC
+    path: agents/pdf/group_rules/hgnc.yaml
+    description: Group-specific rules for pdf (HGNC)
+  - kind: group_rule
+    name: pdf.MGI
+    path: agents/pdf/group_rules/mgi.yaml
+    description: Group-specific rules for pdf (MGI)
+  - kind: group_rule
+    name: pdf.RGD
+    path: agents/pdf/group_rules/rgd.yaml
+    description: Group-specific rules for pdf (RGD)
+  - kind: group_rule
+    name: pdf.SGD
+    path: agents/pdf/group_rules/sgd.yaml
+    description: Group-specific rules for pdf (SGD)
+  - kind: group_rule
+    name: pdf.WB
+    path: agents/pdf/group_rules/wb.yaml
+    description: Group-specific rules for pdf (WB)
+  - kind: group_rule
+    name: pdf.ZFIN
+    path: agents/pdf/group_rules/zfin.yaml
+    description: Group-specific rules for pdf (ZFIN)
+  - kind: agent
+    name: phenotype_extractor
+    path: agents/phenotype_extractor
+    description: Built-in phenotype_extractor agent definition bundle
+  - kind: prompt
+    name: phenotype_extractor.system
+    path: agents/phenotype_extractor/prompt.yaml
+    description: Base system prompt for the phenotype_extractor agent
+  - kind: schema
+    name: phenotype_extractor.schema
+    path: agents/phenotype_extractor/schema.py
+    description: Package-owned schema file for the phenotype_extractor agent
+  - kind: group_rule
+    name: phenotype_extractor.FB
+    path: agents/phenotype_extractor/group_rules/fb.yaml
+    description: Group-specific rules for phenotype_extractor (FB)
+  - kind: group_rule
+    name: phenotype_extractor.HGNC
+    path: agents/phenotype_extractor/group_rules/hgnc.yaml
+    description: Group-specific rules for phenotype_extractor (HGNC)
+  - kind: group_rule
+    name: phenotype_extractor.MGI
+    path: agents/phenotype_extractor/group_rules/mgi.yaml
+    description: Group-specific rules for phenotype_extractor (MGI)
+  - kind: group_rule
+    name: phenotype_extractor.RGD
+    path: agents/phenotype_extractor/group_rules/rgd.yaml
+    description: Group-specific rules for phenotype_extractor (RGD)
+  - kind: group_rule
+    name: phenotype_extractor.SGD
+    path: agents/phenotype_extractor/group_rules/sgd.yaml
+    description: Group-specific rules for phenotype_extractor (SGD)
+  - kind: group_rule
+    name: phenotype_extractor.WB
+    path: agents/phenotype_extractor/group_rules/wb.yaml
+    description: Group-specific rules for phenotype_extractor (WB)
+  - kind: group_rule
+    name: phenotype_extractor.ZFIN
+    path: agents/phenotype_extractor/group_rules/zfin.yaml
+    description: Group-specific rules for phenotype_extractor (ZFIN)
+  - kind: agent
+    name: supervisor
+    path: agents/supervisor
+    description: Built-in supervisor agent definition bundle
+  - kind: prompt
+    name: supervisor.system
+    path: agents/supervisor/prompt.yaml
+    description: Base system prompt for the supervisor agent
+  - kind: group_rule
+    name: supervisor.MGI
+    path: agents/supervisor/group_rules/mgi.yaml
+    description: Group-specific rules for supervisor (MGI)
+  - kind: group_rule
+    name: supervisor.RGD
+    path: agents/supervisor/group_rules/rgd.yaml
+    description: Group-specific rules for supervisor (RGD)
+  - kind: agent
+    name: tsv_formatter
+    path: agents/tsv_formatter
+    description: Built-in tsv_formatter agent definition bundle
+  - kind: prompt
+    name: tsv_formatter.system
+    path: agents/tsv_formatter/prompt.yaml
+    description: Base system prompt for the tsv_formatter agent
   - kind: tool_binding
     name: default
     path: tools/bindings.yaml

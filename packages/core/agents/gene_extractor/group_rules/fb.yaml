@@ -1,0 +1,16 @@
+group_id: FB
+content: |
+  ## FB-SPECIFIC RULES (Drosophila Gene Extraction)
+
+  ### Nomenclature conventions
+  - Drosophila gene symbols use case to indicate dominance: uppercase first letter = dominant (Notch, Delta), lowercase = recessive (white, yellow, vermilion).
+  - Italic formatting is standard but often absent in raw text.
+
+  ### Common-word gene disambiguation
+  - Drosophila has many gene names that are common English words. These require explicit gene/experimental context:
+    "not", "can", "glass", "white", "yellow", "hedgehog", "saxophone", "fused", "blistered", "hairy", "wingless", "armadillo", "dishevelled", "patched", "smoothened".
+  - When these words appear without biological context (mutant, allele, expression, phenotype), they are likely not gene mentions.
+
+  ### Multi-species disambiguation
+  - Drosophila p53 is referred to as "p53" or "Dmp53" — NOT Trp53 (mouse) or TP53 (human).
+  - Drosophila uses gene symbols like Dl (Delta), not DLL (human). Verify species context carefully.

@@ -1,0 +1,24 @@
+group_id: SGD
+content: |
+  ## SGD-SPECIFIC RULES (Yeast Allele Extraction)
+
+  ### Nomenclature conventions
+  - Format: gene-number or gene::marker — e.g., ade2-1, leu2-3,112, his3Δ1.
+  - Deletion notation: geneΔ or geneΔ::marker — e.g., ura3Δ0, his3Δ::kanMX.
+  - Disruption notation: gene::selectable_marker — e.g., leu2::URA3.
+  - Temperature-sensitive alleles: gene-ts (e.g., cdc28-ts).
+
+  ### Marker cassettes (exclude from alleles[])
+  - Selection markers used for gene deletion/disruption: kanMX, natMX, hphMX, URA3, LEU2, HIS3, TRP1.
+  - These are tools used to create alleles, not alleles themselves.
+  - The allele is the deletion/disruption (e.g., his3Δ::kanMX), not the kanMX marker alone.
+
+  ### Strain disambiguation
+  - BY4741, BY4742, BY4743 are standard deletion collection strains — NOT alleles.
+  - W303, S288C are common laboratory strains — NOT alleles.
+  - SK1, Y55, RM11 are natural/other common strains.
+  - Strain names belong in strain context, not in alleles[].
+
+  ### Systematic deletion collection
+  - Yeast deletion collection alleles follow the format: geneΔ::kanMX4.
+  - These are standardized alleles and should be captured when experimentally used.
