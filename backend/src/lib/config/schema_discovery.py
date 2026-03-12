@@ -110,6 +110,8 @@ def _load_schema_module(
     _registered_modules.append(module_name)  # Track for cleanup
 
     try:
+        original_dont_write_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
         spec.loader.exec_module(module)
     except Exception as e:
         logger.error('Failed to execute module %s: %s', schema_path, e)
@@ -117,6 +119,8 @@ def _load_schema_module(
         sys.modules.pop(module_name, None)
         _registered_modules.remove(module_name)
         raise
+    finally:
+        sys.dont_write_bytecode = original_dont_write_bytecode
 
     # Find all envelope classes DEFINED in the module (not imported)
     envelope_classes: Dict[str, Type[BaseModel]] = {}

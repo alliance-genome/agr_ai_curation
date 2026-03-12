@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.lib.config import agent_loader, prompt_loader, schema_discovery
+from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.packages.models import PackageManifest
 
 from ..packages import find_repo_root
@@ -133,6 +133,20 @@ def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yam
 
     with pytest.raises(FileNotFoundError, match="Package 'demo.core' agent bundle 'gene' is missing agent.yaml"):
         agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+
+def test_find_project_root_prefers_repo_root_over_backend_pytest_ini(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    module_path = repo_root / "backend" / "src" / "lib" / "config" / "agent_sources.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("", encoding="utf-8")
+    (repo_root / "backend" / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (repo_root / "packages").mkdir()
+    (repo_root / "config" / "agents").mkdir(parents=True)
+
+    monkeypatch.setattr(agent_sources, "__file__", str(module_path))
+
+    assert agent_sources._find_project_root() == repo_root
 
 
 def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, monkeypatch):

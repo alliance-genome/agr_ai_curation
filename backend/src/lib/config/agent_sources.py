@@ -5,18 +5,23 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-
 from src.lib.packages import ExportKind, LoadedPackage, load_package_registry
 from src.lib.packages.paths import get_runtime_packages_dir
 
 
-def _find_project_root() -> Optional[Path]:
+def _find_project_root() -> Path | None:
     """Find the repository root by looking for common project markers."""
     current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
+    if current.is_file():
+        current = current.parent
+
+    for candidate in (current, *current.parents):
+        if (candidate / "docker-compose.test.yml").exists():
+            return candidate
+        if (candidate / "backend").is_dir() and (candidate / "packages").is_dir():
+            return candidate
+        if (candidate / "packages").is_dir() and (candidate / "config" / "agents").is_dir():
+            return candidate
     return None
 
 

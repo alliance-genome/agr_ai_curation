@@ -20,6 +20,16 @@ def _iter_shipped_agent_dirs(root: Path) -> tuple[Path, ...]:
     )
 
 
+def _iter_source_files(root: Path) -> set[Path]:
+    return {
+        path.relative_to(root)
+        for path in root.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    }
+
+
 def test_core_package_mirrors_shipped_agent_files():
     shipped_agents = _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR)
 
@@ -35,16 +45,8 @@ def test_core_package_mirrors_shipped_agent_files():
 
     for config_agent_dir in shipped_agents:
         core_agent_dir = CORE_AGENTS_DIR / config_agent_dir.name
-        expected_files = {
-            path.relative_to(config_agent_dir)
-            for path in config_agent_dir.rglob("*")
-            if path.is_file()
-        }
-        actual_files = {
-            path.relative_to(core_agent_dir)
-            for path in core_agent_dir.rglob("*")
-            if path.is_file()
-        }
+        expected_files = _iter_source_files(config_agent_dir)
+        actual_files = _iter_source_files(core_agent_dir)
 
         assert actual_files == expected_files
 
