@@ -102,6 +102,11 @@ def _looks_like_agent_directory(path: Path) -> bool:
 
 
 def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigSource, ...]:
+    """Resolve agent-owned config assets exported by one runtime package.
+
+    Prompt, schema, and group-rule exports are treated as adjunct assets of an
+    AGENT export, not standalone load targets, so orphan exports fail fast.
+    """
     agent_exports = {
         export.name: export
         for export in package.manifest.exports

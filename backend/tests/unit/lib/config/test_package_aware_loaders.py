@@ -1,9 +1,11 @@
 """Package-aware loader coverage for shipped and fixture packages."""
 
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.packages.models import PackageManifest
@@ -27,37 +29,12 @@ def _reset_loader_caches():
 
 def _write_package_manifest(package_dir: Path, payload: dict) -> None:
     package_dir.mkdir(parents=True, exist_ok=True)
-    manifest_payload = {
-        key: (
-            [dict(item) for item in value]
-            if key == "agent_bundles"
-            else value
-        )
-        for key, value in payload.items()
-    }
+    manifest_payload = deepcopy(payload)
     PackageManifest.model_validate(manifest_payload)
-
-    lines = [
-        f"package_id: {payload['package_id']}",
-        f"display_name: {payload['display_name']}",
-        f"version: {payload['version']}",
-        f"package_api_version: {payload['package_api_version']}",
-        f"min_runtime_version: {payload['min_runtime_version']}",
-        f"max_runtime_version: {payload['max_runtime_version']}",
-        f"python_package_root: {payload['python_package_root']}",
-        f"requirements_file: {payload['requirements_file']}",
-        "agent_bundles:",
-    ]
-    for bundle in payload["agent_bundles"]:
-        lines.append(f"  - name: {bundle['name']}")
-        if bundle.get("has_schema"):
-            lines.append("    has_schema: true")
-        group_rules = bundle.get("group_rules", [])
-        if group_rules:
-            rendered = ", ".join(group_rules)
-            lines.append(f"    group_rules: [{rendered}]")
-
-    (package_dir / "package.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (package_dir / "package.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
     (package_dir / "requirements").mkdir(exist_ok=True)
     (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
 
@@ -133,6 +110,44 @@ def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yam
 
     with pytest.raises(FileNotFoundError, match="Package 'demo.core' agent bundle 'gene' is missing agent.yaml"):
         agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+
+def test_resolve_agent_sources_rejects_package_prompt_exports_without_agent_bundle(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "demo_core"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "demo.core",
+            "display_name": "Demo Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/demo_core",
+            "requirements_file": "requirements/runtime.txt",
+            "exports": [
+                {
+                    "kind": "prompt",
+                    "name": "gene.system",
+                    "path": "agents/gene/prompt.yaml",
+                    "description": "Base prompt without an owning agent export",
+                }
+            ],
+        },
+    )
+    prompt_file = package_dir / "agents" / "gene" / "prompt.yaml"
+    prompt_file.parent.mkdir(parents=True)
+    prompt_file.write_text(
+        "agent_id: gene_validation\ncontent: Demo prompt\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Package 'demo.core' exports prompt/schema/group rules for unknown agent bundle\\(s\\): gene",
+    ):
+        agent_sources.resolve_agent_config_sources(packages_dir)
 
 
 def test_find_project_root_prefers_repo_root_over_backend_pytest_ini(monkeypatch, tmp_path):
