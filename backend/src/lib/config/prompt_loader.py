@@ -105,7 +105,7 @@ def _upsert_prompt(
     query = db.query(PromptTemplate).filter(
         PromptTemplate.agent_name == agent_name,
         PromptTemplate.prompt_type == prompt_type,
-        PromptTemplate.is_active == True,
+        PromptTemplate.is_active,
     )
 
     if group_id is not None:
