@@ -1801,6 +1801,7 @@ class TestPromptLoader:
         that matches AGENT_REGISTRY keys.
         """
         from unittest.mock import MagicMock, patch
+        from src.lib.config.agent_sources import resolve_agent_config_sources
         from src.lib.config.prompt_loader import _load_base_prompt
 
         # Create test agent folder with multi-word name
@@ -1816,9 +1817,10 @@ content: |
 """)
 
         mock_db = MagicMock()
+        source = resolve_agent_config_sources(tmp_path)[0]
 
         with patch("src.lib.config.prompt_loader._upsert_prompt") as mock_upsert:
-            agent_name = _load_base_prompt(agent_folder, mock_db)
+            agent_name = _load_base_prompt(source, mock_db)
 
             # agent_name should be folder name, NOT extracted from agent_id
             assert agent_name == "go_annotations"
@@ -1834,6 +1836,7 @@ content: |
         Examples: gene_ontology, gene_expression, csv_formatter
         """
         from unittest.mock import MagicMock, patch
+        from src.lib.config.agent_sources import resolve_agent_config_sources
         from src.lib.config.prompt_loader import _load_base_prompt
 
         # Test several multi-word folder names
@@ -1855,9 +1858,13 @@ content: Test content for {folder_name}
 """)
 
             mock_db = MagicMock()
+            source = next(
+                item for item in resolve_agent_config_sources(tmp_path)
+                if item.folder_name == folder_name
+            )
 
             with patch("src.lib.config.prompt_loader._upsert_prompt"):
-                agent_name = _load_base_prompt(agent_folder, mock_db)
+                agent_name = _load_base_prompt(source, mock_db)
                 assert agent_name == expected_agent_name, f"Failed for {folder_name}"
 
     def test_real_agent_folder_names(self):
