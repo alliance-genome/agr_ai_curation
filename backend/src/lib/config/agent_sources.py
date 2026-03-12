@@ -42,6 +42,18 @@ def get_default_agent_search_path() -> Path:
     return runtime_packages_dir
 
 
+def _resolve_search_path(search_path: Path | None) -> tuple[Path, bool]:
+    """Resolve the configured search path and whether it is the implicit default."""
+    if search_path is not None:
+        return search_path.expanduser().resolve(strict=False), False
+
+    env_path = os.environ.get("AGENTS_CONFIG_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve(strict=False), False
+
+    return get_default_agent_search_path().expanduser().resolve(strict=False), True
+
+
 @dataclass(frozen=True)
 class AgentConfigSource:
     """Resolved filesystem assets for one agent configuration bundle."""
@@ -221,8 +233,7 @@ def resolve_agent_config_sources(
     search_path: Path | None = None,
 ) -> tuple[AgentConfigSource, ...]:
     """Resolve agent config bundles from a packages root, one package, or a legacy agents dir."""
-    used_default_search_path = search_path is None
-    resolved_path = (search_path or get_default_agent_search_path()).expanduser().resolve(strict=False)
+    resolved_path, used_default_search_path = _resolve_search_path(search_path)
     if not resolved_path.exists():
         raise FileNotFoundError(f"Agent source path not found: {resolved_path}")
 

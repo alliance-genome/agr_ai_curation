@@ -168,3 +168,65 @@ def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, m
 
     with pytest.raises(FileNotFoundError, match=match):
         prompt_loader.load_prompts(db=db, force_reload=True)
+
+
+def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatch):
+    agents_dir = tmp_path / "legacy-agents"
+    gene_dir = agents_dir / "gene"
+    group_rules_dir = gene_dir / "group_rules"
+    group_rules_dir.mkdir(parents=True)
+
+    (gene_dir / "agent.yaml").write_text(
+        "\n".join(
+            [
+                "agent_id: gene_validation",
+                "name: Gene Validation Agent",
+                "output_schema: GeneValidationEnvelope",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (gene_dir / "prompt.yaml").write_text(
+        "agent_id: gene_validation\ncontent: Legacy gene prompt\n",
+        encoding="utf-8",
+    )
+    (group_rules_dir / "fb.yaml").write_text(
+        "group_id: FB\ncontent: Legacy FlyBase rules\n",
+        encoding="utf-8",
+    )
+    (gene_dir / "schema.py").write_text(
+        "\n".join(
+            [
+                "from pydantic import BaseModel",
+                "",
+                "class GeneValidationEnvelope(BaseModel):",
+                "    gene_id: str",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    db = MagicMock()
+    captured_calls = []
+
+    monkeypatch.setenv("AGENTS_CONFIG_PATH", str(agents_dir))
+    monkeypatch.delenv("AGR_RUNTIME_PACKAGES_DIR", raising=False)
+    monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
+    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
+
+    def _capture_upsert(**kwargs):
+        captured_calls.append(kwargs)
+        return (True, 1)
+
+    monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    prompt_result = prompt_loader.load_prompts(db=db, force_reload=True)
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+
+    assert "gene_validation" in agents
+    assert prompt_result == {"base_prompts": 1, "group_rules": 1}
+    assert "GeneValidationEnvelope" in schemas
+    assert any(call["source_file"].endswith("legacy-agents/gene/prompt.yaml") for call in captured_calls)
