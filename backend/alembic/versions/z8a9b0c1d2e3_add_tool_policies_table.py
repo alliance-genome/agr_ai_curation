@@ -6,13 +6,13 @@ Create Date: 2026-02-23
 """
 
 import json
-from pathlib import Path
 from typing import Any, Dict
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
-import yaml
+
+from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 
 
 # revision identifiers, used by Alembic.
@@ -23,18 +23,19 @@ depends_on = None
 
 
 def _load_default_tool_policies() -> Dict[str, Dict[str, Any]]:
-    """Load seed tool policy defaults from config/tool_policy_defaults.yaml."""
-    config_path = Path(__file__).resolve().parents[3] / "config" / "tool_policy_defaults.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Tool policy defaults file not found: {config_path}")
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        payload = yaml.safe_load(f) or {}
-
-    policies = payload.get("tool_policies", {})
-    if not isinstance(policies, dict):
-        raise ValueError("config/tool_policy_defaults.yaml must define a 'tool_policies' mapping")
-    return policies
+    """Load seed tool policy defaults from package exports plus runtime overrides."""
+    return {
+        tool_key: {
+            "display_name": policy.display_name,
+            "description": policy.description,
+            "category": policy.category,
+            "curator_visible": policy.curator_visible,
+            "allow_attach": policy.allow_attach,
+            "allow_execute": policy.allow_execute,
+            "config": policy.config,
+        }
+        for tool_key, policy in load_tool_policy_defaults().items()
+    }
 
 
 def upgrade() -> None:

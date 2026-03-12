@@ -8,8 +8,15 @@ from src.lib.packages.models import ExportKind
 
 REPO_ROOT = find_repo_root(Path(__file__))
 CONFIG_AGENTS_DIR = REPO_ROOT / "config" / "agents"
+CONFIG_DIR = REPO_ROOT / "config"
 CORE_PACKAGE_DIR = REPO_ROOT / "packages" / "core"
 CORE_AGENTS_DIR = CORE_PACKAGE_DIR / "agents"
+CORE_CONFIG_DIR = CORE_PACKAGE_DIR / "config"
+RUNTIME_CONFIG_FILES = (
+    "models.yaml",
+    "providers.yaml",
+    "tool_policy_defaults.yaml",
+)
 
 
 def _iter_shipped_agent_dirs(root: Path) -> tuple[Path, ...]:
@@ -63,6 +70,13 @@ def test_core_package_manifest_exports_all_shipped_agent_assets():
 
     expected_exports = {
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
+        (ExportKind.MODEL, "default_models", "config/models.yaml"),
+        (ExportKind.PROVIDER, "default_providers", "config/providers.yaml"),
+        (
+            ExportKind.TOOL_POLICY_DEFAULTS,
+            "default_tool_policies",
+            "config/tool_policy_defaults.yaml",
+        ),
     }
     for agent_dir in _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR):
         agent_name = agent_dir.name
@@ -94,3 +108,14 @@ def test_core_package_manifest_exports_all_shipped_agent_assets():
     }
 
     assert actual_exports == expected_exports
+
+
+def test_core_package_mirrors_shipped_runtime_config_files():
+    for filename in RUNTIME_CONFIG_FILES:
+        config_path = CONFIG_DIR / filename
+        core_path = CORE_CONFIG_DIR / filename
+
+        assert core_path.exists()
+        assert core_path.read_text(encoding="utf-8") == config_path.read_text(
+            encoding="utf-8"
+        )

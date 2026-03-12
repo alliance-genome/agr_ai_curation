@@ -1,44 +1,19 @@
-"""
-Model catalog loader for Agent Workshop.
-
-Loads curator-selectable model definitions from config/models.yaml.
-"""
+"""Model catalog loader with package-default and runtime-override merging."""
 
 import logging
-import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-import yaml
+from src.lib.packages import ExportKind
+
+from .package_default_sources import (
+    load_optional_runtime_yaml_source,
+    load_package_yaml_sources,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _find_project_root() -> Optional[Path]:
-    """Find project root by looking for pyproject.toml or docker-compose.yml."""
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
-    return None
-
-
-def _get_default_models_path() -> Path:
-    """Resolve models.yaml location with env override support."""
-    env_path = os.environ.get("MODELS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-
-    project_root = _find_project_root()
-    if project_root:
-        return project_root / "config" / "models.yaml"
-
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "models.yaml"
-
-
-DEFAULT_MODELS_PATH = _get_default_models_path()
 _init_lock = threading.Lock()
 
 
@@ -60,29 +35,40 @@ class ModelDefinition:
     reasoning_descriptions: Dict[str, str] = field(default_factory=dict)
     recommended_for: List[str] = field(default_factory=list)
     avoid_for: List[str] = field(default_factory=list)
+    source_label: Optional[str] = None
 
     @classmethod
-    def from_yaml(cls, data: Dict[str, Any]) -> "ModelDefinition":
+    def from_yaml(
+        cls,
+        data: Dict[str, Any],
+        *,
+        source_label: str,
+    ) -> "ModelDefinition":
         model_id = str(data.get("model_id", "")).strip()
         if not model_id:
-            raise ValueError("models.yaml entry missing required field 'model_id'")
+            raise ValueError(
+                f"Model entry in {source_label} is missing required field 'model_id'"
+            )
 
         name = str(data.get("name", model_id)).strip() or model_id
         provider = str(data.get("provider", "openai")).strip() or "openai"
         reasoning_options = _parse_string_list(
             data.get("reasoning_options"),
             field_name=f"{model_id}.reasoning_options",
+            source_label=source_label,
             normalize_lower=True,
         )
         default_reasoning = str(data.get("default_reasoning", "")).strip().lower() or None
         if default_reasoning and reasoning_options and default_reasoning not in reasoning_options:
             raise ValueError(
-                f"models.yaml entry '{model_id}' has default_reasoning='{default_reasoning}' "
+                f"Model entry '{model_id}' in {source_label} has "
+                f"default_reasoning='{default_reasoning}' "
                 f"which is not in reasoning_options"
             )
         reasoning_descriptions = _parse_string_map(
             data.get("reasoning_descriptions"),
             field_name=f"{model_id}.reasoning_descriptions",
+            source_label=source_label,
             normalize_key_lower=True,
         )
 
@@ -102,11 +88,14 @@ class ModelDefinition:
             recommended_for=_parse_string_list(
                 data.get("recommended_for"),
                 field_name=f"{model_id}.recommended_for",
+                source_label=source_label,
             ),
             avoid_for=_parse_string_list(
                 data.get("avoid_for"),
                 field_name=f"{model_id}.avoid_for",
+                source_label=source_label,
             ),
+            source_label=source_label,
         )
 
 
@@ -114,13 +103,16 @@ def _parse_string_list(
     raw: Any,
     *,
     field_name: str,
+    source_label: str,
     normalize_lower: bool = False,
 ) -> List[str]:
     """Parse optional YAML list fields into cleaned string lists."""
     if raw is None:
         return []
     if not isinstance(raw, list):
-        raise ValueError(f"models.yaml field '{field_name}' must be a list")
+        raise ValueError(
+            f"Model entry in {source_label} field '{field_name}' must be a list"
+        )
 
     values: List[str] = []
     for item in raw:
@@ -137,13 +129,16 @@ def _parse_string_map(
     raw: Any,
     *,
     field_name: str,
+    source_label: str,
     normalize_key_lower: bool = False,
 ) -> Dict[str, str]:
     """Parse optional YAML map fields into cleaned string maps."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ValueError(f"models.yaml field '{field_name}' must be a mapping")
+        raise ValueError(
+            f"Model entry in {source_label} field '{field_name}' must be a mapping"
+        )
 
     values: Dict[str, str] = {}
     for key, value in raw.items():
@@ -163,34 +158,51 @@ _initialized = False
 
 def load_models(
     models_path: Optional[Path] = None,
+    *,
+    packages_dir: Optional[Path] = None,
     force_reload: bool = False,
 ) -> Dict[str, ModelDefinition]:
-    """Load models catalog from YAML."""
+    """Load models catalog from package defaults plus runtime overrides."""
     global _model_registry, _initialized
 
     with _init_lock:
         if _initialized and not force_reload:
             return _model_registry
 
-        if models_path is None:
-            models_path = DEFAULT_MODELS_PATH
+        sources = list(
+            load_package_yaml_sources(
+                export_kind=ExportKind.MODEL,
+                packages_dir=packages_dir,
+            )
+        )
+        runtime_source = load_optional_runtime_yaml_source(
+            explicit_path=models_path,
+            env_var="MODELS_CONFIG_PATH",
+            filename="models.yaml",
+        )
+        if runtime_source is not None:
+            sources.append(runtime_source)
 
-        if not models_path.exists():
-            raise FileNotFoundError(f"Models configuration not found: {models_path}")
-
-        with open(models_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-
-        entries = data.get("models", [])
-        if not isinstance(entries, list):
-            raise ValueError("models.yaml must define a top-level 'models' list")
+        if not sources:
+            raise FileNotFoundError(
+                "No model defaults were found in runtime packages or runtime override config"
+            )
 
         registry: Dict[str, ModelDefinition] = {}
-        for raw in entries:
-            if not isinstance(raw, dict):
-                raise ValueError("Each models.yaml entry must be a mapping")
-            model = ModelDefinition.from_yaml(raw)
-            registry[model.model_id] = model
+        for source in sources:
+            entries = source.payload.get("models")
+            if not isinstance(entries, list):
+                raise ValueError(
+                    f"{source.describe()} must define a top-level 'models' list"
+                )
+
+            for raw in entries:
+                if not isinstance(raw, dict):
+                    raise ValueError(
+                        f"Each model entry in {source.describe()} must be a mapping"
+                    )
+                model = ModelDefinition.from_yaml(raw, source_label=source.describe())
+                registry[model.model_id] = model
 
         _model_registry = registry
         _initialized = True

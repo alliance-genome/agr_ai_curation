@@ -11,6 +11,18 @@ exports:
     name: default
     path: tools/bindings.yaml
     description: Default AGR built-in tool bindings
+  - kind: model
+    name: default_models
+    path: config/models.yaml
+    description: Default AGR model catalog
+  - kind: provider
+    name: default_providers
+    path: config/providers.yaml
+    description: Default AGR provider catalog
+  - kind: tool_policy_defaults
+    name: default_tool_policies
+    path: config/tool_policy_defaults.yaml
+    description: Default AGR tool policy defaults
 agent_bundles:
   - name: allele
     has_schema: true

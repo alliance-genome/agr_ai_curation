@@ -28,6 +28,13 @@ def get_provider_validation_strict_mode() -> bool:
     return _parse_bool_env("LLM_PROVIDER_STRICT_MODE", True)
 
 
+def _format_source_suffix(item: Any) -> str:
+    source_label = str(getattr(item, "source_label", "") or "").strip()
+    if not source_label:
+        return ""
+    return f" from {source_label}"
+
+
 def build_provider_runtime_report(
     *,
     strict_mode: Optional[bool] = None,
@@ -102,7 +109,8 @@ def build_provider_runtime_report(
                 visible_model_ids_by_provider[provider_id].append(model.model_id)
         else:
             errors.append(
-                f"Model '{model.model_id}' references unknown provider '{provider_id}'"
+                f"Model '{model.model_id}'{_format_source_suffix(model)} references "
+                f"unknown provider '{provider_id}'"
             )
 
     missing_key_provider_count = 0
@@ -121,7 +129,8 @@ def build_provider_runtime_report(
             readiness = "missing_api_key"
             missing_key_provider_count += 1
             message = (
-                f"Provider '{provider.provider_id}' is required by runtime "
+                f"Provider '{provider.provider_id}'{_format_source_suffix(provider)} "
+                f"is required by runtime "
                 f"but env var '{provider.api_key_env}' is not set"
             )
             if strict:
@@ -136,7 +145,8 @@ def build_provider_runtime_report(
 
         if provider.default_for_runner and not mapped_models:
             warnings.append(
-                f"Default runner provider '{provider.provider_id}' has no mapped models in models.yaml"
+                f"Default runner provider '{provider.provider_id}'"
+                f"{_format_source_suffix(provider)} has no mapped models in models.yaml"
             )
 
         providers_payload.append(
