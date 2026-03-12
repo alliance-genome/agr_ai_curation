@@ -88,6 +88,11 @@ from .providers_loader import (
     reset_cache as reset_providers_cache,
 )
 
+from .tool_policy_defaults_loader import (
+    ToolPolicyDefault,
+    load_tool_policy_defaults,
+)
+
 from .provider_validation import (
     get_provider_validation_strict_mode,
     build_provider_runtime_report,
@@ -163,6 +168,9 @@ __all__ = [
     "list_provider_definitions",
     "is_providers_initialized",
     "reset_providers_cache",
+    # Tool policy defaults loader
+    "ToolPolicyDefault",
+    "load_tool_policy_defaults",
     # Provider validation
     "get_provider_validation_strict_mode",
     "build_provider_runtime_report",

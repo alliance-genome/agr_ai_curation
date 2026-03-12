@@ -1,0 +1,40 @@
+# =============================================================================
+# LLM PROVIDER CONFIGURATION
+# =============================================================================
+# Defines runtime LLM provider adapters used by agent execution.
+# Each provider maps to a driver (openai_native or litellm) and references
+# environment variables for API keys and base URLs.
+#
+# Exactly one provider must set default_for_runner: true.
+# API key values are NEVER stored here — only env var names.
+#
+# Used by: providers_loader.py, config.py (agent model resolution)
+# =============================================================================
+
+providers:
+  openai:
+    driver: openai_native
+    api_key_env: OPENAI_API_KEY
+    base_url_env: OPENAI_BASE_URL
+    api_mode: responses
+    default_for_runner: true
+    supports:
+      parallel_tool_calls: true
+
+  gemini:
+    driver: litellm
+    api_key_env: GEMINI_API_KEY
+    litellm_prefix: gemini
+    api_mode: chat_completions
+    supports:
+      parallel_tool_calls: true
+
+  groq:
+    driver: litellm
+    api_key_env: GROQ_API_KEY
+    base_url_env: GROQ_BASE_URL
+    default_base_url: https://api.groq.com/openai/v1
+    litellm_prefix: groq
+    drop_params: true
+    supports:
+      parallel_tool_calls: true

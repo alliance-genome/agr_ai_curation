@@ -91,6 +91,7 @@ class ExportKind(str, Enum):
     TOOL_BINDING = "tool_binding"
     MODEL = "model"
     PROVIDER = "provider"
+    TOOL_POLICY_DEFAULTS = "tool_policy_defaults"
     CONNECTION = "connection"
     IDENTIFIER_PREFIXES = "identifier_prefixes"
 

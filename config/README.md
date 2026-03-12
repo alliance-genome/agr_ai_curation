@@ -1,6 +1,6 @@
 # Configuration Directory
 
-This directory contains all configuration files for the AI Curation system. The configuration follows a YAML-as-source-of-truth pattern where YAML files define the system behavior, and the database serves as a runtime cache.
+This directory contains deployment-owned configuration files for the AI Curation system. The configuration follows a YAML-as-source-of-truth pattern where installed runtime packages can supply shipped defaults, and the YAML files in this directory act as the deployment override layer merged on top at runtime. The database serves as a runtime cache.
 
 ## Directory Structure
 
@@ -10,6 +10,8 @@ config/
 ├── groups.yaml                  # Group/organization mappings (from .example)
 ├── connections.yaml             # External service connections (from .example)
 ├── providers.yaml               # LLM runtime provider definitions
+├── models.yaml                  # LLM model catalog overrides
+├── tool_policy_defaults.yaml    # Tool policy default overrides
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
 └── agents/                      # Agent definitions
@@ -93,7 +95,7 @@ Supports environment variable substitution using `${VAR}` or `${VAR:-default}` s
 
 ### providers.yaml
 
-Defines LLM runtime providers used by agent execution.
+Defines deployment override entries for LLM runtime providers used by agent execution.
 
 ```yaml
 providers:
@@ -117,13 +119,15 @@ providers:
 ```
 
 Notes:
+- Installed packages may export provider defaults first; this file is merged afterward and wins on key collisions.
+- Override entries replace the full provider definition for the same provider key.
 - Exactly one provider must set `default_for_runner: true`.
 - `driver: litellm` providers must include `litellm_prefix`.
 - API key values are never stored in YAML, only env var names.
 
 ### models.yaml
 
-Defines model catalog entries and maps each model to a provider key in `providers.yaml`.
+Defines deployment override entries for the model catalog and maps each model to a provider key in `providers.yaml`.
 
 ```yaml
 models:
@@ -140,8 +144,30 @@ models:
 ```
 
 Notes:
+- Installed packages may export model defaults first; this file is merged afterward and wins on `model_id` collisions.
+- Override entries replace the full model definition for the same `model_id`.
 - Unknown provider references are startup validation errors.
 - `curator_visible: false` keeps runtime compatibility models hidden from Agent Workshop.
+
+### tool_policy_defaults.yaml
+
+Defines deployment override entries for default tool visibility and execution policies.
+
+```yaml
+tool_policies:
+  search_document:
+    display_name: Search Document
+    description: Semantic search over the active document.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+```
+
+Notes:
+- Installed packages may export tool policy defaults first; this file is merged afterward and wins on `tool_key` collisions.
+- Override entries replace the full tool policy definition for the same `tool_key`.
 
 ### agents/
 
