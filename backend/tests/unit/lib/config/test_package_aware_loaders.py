@@ -165,6 +165,33 @@ def test_find_project_root_prefers_repo_root_over_backend_pytest_ini(monkeypatch
     assert agent_sources._find_project_root() == repo_root
 
 
+def test_get_default_agent_search_path_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+
+    assert agent_sources.get_default_agent_search_path() == Path("/tmp/custom-agents")
+
+
+def test_fallback_packages_dir_ignores_env_override(monkeypatch, tmp_path):
+    runtime_packages_dir = tmp_path / "runtime-packages"
+    fallback_project_root = tmp_path / "repo"
+    expected_packages_dir = fallback_project_root / "packages"
+
+    monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: runtime_packages_dir)
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: fallback_project_root)
+
+    assert agent_sources._get_fallback_packages_dir() == expected_packages_dir
+
+
+def test_resolve_search_path_marks_env_override_as_non_default(monkeypatch):
+    monkeypatch.setenv("AGENTS_CONFIG_PATH", "/tmp/custom-agents")
+
+    resolved_path, used_default_search_path = agent_sources._resolve_search_path(None)
+
+    assert resolved_path == Path("/tmp/custom-agents")
+    assert used_default_search_path is False
+
+
 def test_discover_agent_schemas_logs_resolved_default_path(monkeypatch, caplog, tmp_path):
     packages_dir = tmp_path / "runtime-packages"
 

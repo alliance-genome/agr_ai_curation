@@ -25,12 +25,16 @@ def _find_project_root() -> Path | None:
     return None
 
 
-def get_default_agent_search_path() -> Path:
-    """Return the default package search root for shipped system agents."""
+def _get_env_agent_search_path() -> Path | None:
+    """Return the explicit legacy override path when configured."""
     env_path = os.environ.get("AGENTS_CONFIG_PATH")
     if env_path:
         return Path(env_path)
+    return None
 
+
+def _get_fallback_packages_dir() -> Path:
+    """Return the package-search fallback when no explicit override is set."""
     runtime_packages_dir = get_runtime_packages_dir()
     if runtime_packages_dir.exists():
         return runtime_packages_dir
@@ -42,16 +46,25 @@ def get_default_agent_search_path() -> Path:
     return runtime_packages_dir
 
 
+def get_default_agent_search_path() -> Path:
+    """Return the effective default search path, honoring AGENTS_CONFIG_PATH."""
+    env_path = _get_env_agent_search_path()
+    if env_path is not None:
+        return env_path
+
+    return _get_fallback_packages_dir()
+
+
 def _resolve_search_path(search_path: Path | None) -> tuple[Path, bool]:
     """Resolve the configured search path and whether it is the implicit default."""
     if search_path is not None:
         return search_path.expanduser().resolve(strict=False), False
 
-    env_path = os.environ.get("AGENTS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path).expanduser().resolve(strict=False), False
+    env_path = _get_env_agent_search_path()
+    if env_path is not None:
+        return env_path.expanduser().resolve(strict=False), False
 
-    return get_default_agent_search_path().expanduser().resolve(strict=False), True
+    return _get_fallback_packages_dir().expanduser().resolve(strict=False), True
 
 
 @dataclass(frozen=True)
