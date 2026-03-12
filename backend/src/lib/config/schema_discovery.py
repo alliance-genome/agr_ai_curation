@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Type, Any
 
 from pydantic import BaseModel
 
-from .agent_sources import resolve_agent_config_sources
+from .agent_sources import get_default_agent_search_path, resolve_agent_config_sources
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,12 @@ def discover_agent_schemas(
         if _initialized and not force_reload:
             return _schema_registry
 
-        logger.info('Discovering agent schemas from: %s', agents_path)
+        resolved_agents_path = (
+            agents_path.expanduser().resolve(strict=False)
+            if agents_path is not None
+            else get_default_agent_search_path().expanduser().resolve(strict=False)
+        )
+        logger.info('Discovering agent schemas from: %s', resolved_agents_path)
 
         _schema_registry = {}
         _schema_by_agent = {}

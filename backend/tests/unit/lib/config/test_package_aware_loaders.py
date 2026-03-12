@@ -1,6 +1,7 @@
 """Package-aware loader coverage for shipped and fixture packages."""
 
 from copy import deepcopy
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -162,6 +163,26 @@ def test_find_project_root_prefers_repo_root_over_backend_pytest_ini(monkeypatch
     monkeypatch.setattr(agent_sources, "__file__", str(module_path))
 
     assert agent_sources._find_project_root() == repo_root
+
+
+def test_discover_agent_schemas_logs_resolved_default_path(monkeypatch, caplog, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
+
+    monkeypatch.setattr(
+        schema_discovery,
+        "get_default_agent_search_path",
+        lambda: packages_dir,
+    )
+    monkeypatch.setattr(
+        schema_discovery,
+        "resolve_agent_config_sources",
+        lambda _agents_path=None: (),
+    )
+
+    with caplog.at_level(logging.INFO):
+        schema_discovery.discover_agent_schemas(force_reload=True)
+
+    assert f"Discovering agent schemas from: {packages_dir}" in caplog.text
 
 
 def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, monkeypatch):

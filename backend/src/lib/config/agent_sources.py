@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from src.lib.packages import ExportKind, LoadedPackage, load_package_registry
+from src.lib.packages import ExportKind, LoadedPackage, PackageExport, load_package_registry
 from src.lib.packages.paths import get_runtime_packages_dir
 
 
@@ -122,7 +122,7 @@ def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigS
         for export in package.manifest.exports
         if export.kind == ExportKind.SCHEMA and export.name.endswith(".schema")
     }
-    group_rule_exports: dict[str, list] = {}
+    group_rule_exports: dict[str, list[PackageExport]] = {}
     for export in package.manifest.exports:
         if export.kind != ExportKind.GROUP_RULE:
             continue
