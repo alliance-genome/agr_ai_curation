@@ -237,6 +237,8 @@ services:
       - ./backend/schemas:/app/backend/schemas:ro
       - ./backend/tests:/app/backend/tests:ro  # Mount tests for running routing consistency checks
       - ./backend/alembic:/app/backend/alembic:ro  # Mount migrations for alembic upgrade
+      - ./packages:/runtime/packages:ro
+      - ./config:/runtime/config:ro
       - ./pdf_storage:/app/pdf_storage
       - ./file_outputs:/app/file_outputs
       - ./backend/config:/app/backend/config
