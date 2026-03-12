@@ -131,6 +131,8 @@ config/
 ### Config Paths (optional)
 - `MODELS_CONFIG_PATH` - Override path to `models.yaml` (default: auto-detected)
 - `PROVIDERS_CONFIG_PATH` - Override path to `providers.yaml` (default: auto-detected)
+- `GROUPS_CONFIG_PATH` - Override path to `groups.yaml` (default: `/runtime/config/groups.yaml`, fallback: repo `config/groups.yaml`)
+- `CONNECTIONS_CONFIG_PATH` - Override path to `connections.yaml` (default: `/runtime/config/connections.yaml`, fallback: repo `config/connections.yaml`)
 
 ### Optional
 - `LANGFUSE_PUBLIC_KEY` - Langfuse public key for tracing
@@ -138,7 +140,10 @@ config/
 - `WEAVIATE_HOST` - Weaviate host (default: `weaviate`)
 - `WEAVIATE_PORT` - Weaviate port (default: `8080`)
 - `WEAVIATE_SCHEME` - Weaviate scheme (default: `http`)
-- `PDF_STORAGE_PATH` - Path for PDF storage (default: `/app/pdf_storage`)
+- `AGR_RUNTIME_ROOT` - Root for modular runtime config/packages/state (default: `/runtime`)
+- `PDF_STORAGE_PATH` - Path for PDF storage (default: `/runtime/state/pdf_storage`)
+- `FILE_OUTPUT_STORAGE_PATH` - Path for generated file outputs (default: `/runtime/state/file_outputs`)
+- `IDENTIFIER_PREFIX_FILE_PATH` - Identifier prefix cache file (default: `/runtime/state/identifier_prefixes/identifier_prefixes.json`)
 - `UNSTRUCTURED_API_URL` - Unstructured API URL for PDF processing
 - `UNSTRUCTURED_API_KEY` - Unstructured API key
 - `TOOL_POLICY_CACHE_TTL_SECONDS` - Tool policy cache lifetime (default: `30`)

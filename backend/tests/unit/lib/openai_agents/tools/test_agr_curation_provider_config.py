@@ -1,8 +1,26 @@
 """Unit tests for AGR curation provider mapping guard behavior."""
 
 import importlib
+import json
+from pathlib import Path
 
+import pytest
+
+from src.lib import identifier_validation
 from src.lib.openai_agents.tools import agr_curation
+
+
+@pytest.fixture(autouse=True)
+def _seed_runtime_identifier_prefixes(monkeypatch, tmp_path: Path):
+    identifier_validation.load_prefixes.cache_clear()
+    prefix_file = (
+        tmp_path / "runtime" / "state" / "identifier_prefixes" / "identifier_prefixes.json"
+    )
+    prefix_file.parent.mkdir(parents=True, exist_ok=True)
+    prefix_file.write_text(json.dumps({"prefixes": ["FB", "WB"]}), encoding="utf-8")
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    yield
+    identifier_validation.load_prefixes.cache_clear()
 
 
 def test_non_provider_method_does_not_require_mapping(monkeypatch):

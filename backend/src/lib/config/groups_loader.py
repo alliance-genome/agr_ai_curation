@@ -1,7 +1,7 @@
 """
 Group Definition Loader for Config-Driven Architecture.
 
-This module loads group definitions from config/groups.yaml.
+This module loads group definitions from runtime config or config/groups.yaml.
 
 Groups enable:
 - Mapping identity provider groups to internal group IDs
@@ -24,43 +24,32 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from src.lib.config.package_default_sources import resolve_runtime_config_path
 
 logger = logging.getLogger(__name__)
-
-def _find_project_root() -> Optional[Path]:
-    """Find project root by looking for pyproject.toml or docker-compose.yml."""
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "pyproject.toml").exists() or (parent / "docker-compose.yml").exists():
-            return parent
-    return None
 
 
 def _get_default_groups_path() -> Path:
     """
-    Get the default groups.yaml path, trying multiple strategies.
+    Get the default groups.yaml path, preferring runtime config.
 
     Order of precedence:
     1. GROUPS_CONFIG_PATH environment variable
-    2. Project root detection (pyproject.toml or docker-compose.yml)
-    3. Relative path from this module (fallback for Docker)
+    2. Runtime config directory (`AGR_RUNTIME_CONFIG_DIR` or `/runtime/config`)
+    3. Project root fallback for repository-backed development
     """
-    env_path = os.environ.get("GROUPS_CONFIG_PATH")
-    if env_path:
-        return Path(env_path)
-
-    project_root = _find_project_root()
-    if project_root:
-        return project_root / "config" / "groups.yaml"
-
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "groups.yaml"
+    resolved_path, _ = resolve_runtime_config_path(
+        explicit_path=None,
+        env_var="GROUPS_CONFIG_PATH",
+        filename="groups.yaml",
+    )
+    return resolved_path
 
 
 DEFAULT_GROUPS_PATH = _get_default_groups_path()
@@ -146,7 +135,7 @@ def load_groups(
             return _group_registry
 
         if groups_path is None:
-            groups_path = DEFAULT_GROUPS_PATH
+            groups_path = _get_default_groups_path()
 
         if not groups_path.exists():
             raise FileNotFoundError(f"Groups configuration not found: {groups_path}")

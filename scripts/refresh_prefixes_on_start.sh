@@ -8,7 +8,10 @@ set -euo pipefail
 echo '[prefix-refresh] Starting prefix refresh script'
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${BASE_DIR}/scripts/extract_identifier_prefixes.py"
-OUTFILE="${BASE_DIR}/backend/config/identifier_prefixes.json"
+RUNTIME_ROOT="${AGR_RUNTIME_ROOT:-/runtime}"
+RUNTIME_STATE_DIR="${AGR_RUNTIME_STATE_DIR:-${RUNTIME_ROOT}/state}"
+IDENTIFIER_PREFIX_STATE_DIR="${IDENTIFIER_PREFIX_STATE_DIR:-${RUNTIME_STATE_DIR}/identifier_prefixes}"
+OUTFILE="${IDENTIFIER_PREFIX_FILE_PATH:-${IDENTIFIER_PREFIX_STATE_DIR}/identifier_prefixes.json}"
 log() {
   echo "[prefix-refresh] $*"
 }

@@ -249,6 +249,9 @@ Extracts valid identifier prefixes from curation-database SQL queries. Used to p
 docker compose exec backend python scripts/extract_identifier_prefixes.py
 ```
 
+Default output:
+- `/runtime/state/identifier_prefixes/identifier_prefixes.json`
+
 ## Testing
 
 ### testing/run-tests.sh

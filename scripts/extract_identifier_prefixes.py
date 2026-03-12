@@ -11,14 +11,14 @@ Example usage:
     # Using DATABASE_URL env var (psql URI)
     DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database> \
       ./scripts/extract_identifier_prefixes.py \
-      --outfile backend/config/identifier_prefixes.json \
+      --outfile /runtime/state/identifier_prefixes/identifier_prefixes.json \
       --query \"SELECT DISTINCT split_part(identifier, ':', 1) AS prefix FROM identifiers WHERE identifier LIKE '%:%';\"
 
     # Using AWS secret (must contain a \"DATABASE_URL\" field or a full URI)
     ./scripts/extract_identifier_prefixes.py \
       --secret-name my/curation/db/secret \
       --aws-region us-east-1 \
-      --outfile backend/config/identifier_prefixes.json \
+      --outfile /runtime/state/identifier_prefixes/identifier_prefixes.json \
       --query \"SELECT DISTINCT split_part(identifier, ':', 1) AS prefix FROM identifiers WHERE identifier LIKE '%:%';\"
 
 Notes:
@@ -34,6 +34,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Set, Optional
 
 import psycopg2
@@ -43,6 +44,14 @@ try:
     import boto3  # type: ignore
 except ImportError:
     boto3 = None
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = REPO_ROOT / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from src.lib.packages.paths import get_identifier_prefix_file_path
 
 
 def load_db_url_from_secret(secret_name: str, region: str) -> str:
@@ -92,7 +101,11 @@ def main() -> int:
     parser.add_argument("--database-url", help="Postgres connection string (overrides env DATABASE_URL)")
     parser.add_argument("--secret-name", help="AWS Secrets Manager secret name containing DB creds/URL")
     parser.add_argument("--aws-region", default=os.getenv("AWS_REGION", "us-east-1"), help="AWS region for secrets")
-    parser.add_argument("--outfile", default="backend/config/identifier_prefixes.json", help="Output JSON file")
+    parser.add_argument(
+        "--outfile",
+        default=str(get_identifier_prefix_file_path()),
+        help="Output JSON file",
+    )
     parser.add_argument(
         "--query",
         action="append",
