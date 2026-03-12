@@ -188,6 +188,8 @@ def maybe_bootstrap_database() -> None:
 
     host = (parsed.hostname or "").strip()
     local_hosts = {"postgres", "localhost", "127.0.0.1"}
+    # Docker Compose project-scoped Postgres containers are typically named
+    # <project>-postgres-1, for example "all57-postgres-1".
     is_local_host = host in local_hosts or host.endswith("-postgres-1")
     if not is_local_host:
         logger.info(
@@ -250,9 +252,7 @@ def _redact_database_url(database_url: str) -> str:
     parsed = urlparse(database_url)
     if not parsed.password:
         return database_url
-    netloc = parsed.netloc.replace(parsed.password, "***", 1)
-    if parsed.username:
-        netloc = netloc.replace(parsed.username, "***", 1)
+    netloc = parsed.netloc.replace(f":{parsed.password}@", ":***@", 1)
     return parsed._replace(netloc=netloc).geturl()
 
 

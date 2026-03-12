@@ -193,6 +193,20 @@ def test_build_default_server_command_uses_production_defaults(monkeypatch):
     assert "--reload" not in command
 
 
+def test_redact_database_url_keeps_username_and_redacts_password():
+    scheme = "postgresql"
+    username = "readonly"
+    password = "example-password"
+    host = "db.example.invalid"
+    port = "5432"
+    database = "curation"
+
+    database_url = f"{scheme}://{username}:{password}@{host}:{port}/{database}"
+    expected = f"{scheme}://{username}:***@{host}:{port}/{database}"
+
+    assert runtime_entrypoint._redact_database_url(database_url) == expected
+
+
 def _loaded_package(
     package_id: str,
     package_path: Path,

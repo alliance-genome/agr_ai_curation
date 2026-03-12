@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chown -R "${APP_UID}:${APP_GID}" /app/backend /runtime "/home/${APP_USER}" \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /opt/venv /opt/venv
 COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
 COPY --chown=${APP_UID}:${APP_GID} main.py ./
 COPY --chown=${APP_UID}:${APP_GID} alembic/ ./alembic/
@@ -54,4 +54,6 @@ EXPOSE 8000
 
 USER ${APP_UID}:${APP_GID}
 
+# No CMD is set here: runtime_entrypoint computes the default production
+# server command, and operators can still append explicit args when needed.
 ENTRYPOINT ["python", "-m", "src.lib.runtime_entrypoint"]
