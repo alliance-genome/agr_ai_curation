@@ -22,6 +22,10 @@ RUN python -m venv "${VIRTUAL_ENV}" \
 
 FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
 
+ARG APP_USER=agr
+ARG APP_UID=10001
+ARG APP_GID=10001
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
@@ -33,14 +37,21 @@ WORKDIR /app/backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    && groupadd --gid "${APP_GID}" "${APP_USER}" \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" \
+        --create-home --home-dir "/home/${APP_USER}" --shell /usr/sbin/nologin "${APP_USER}" \
+    && mkdir -p /runtime/config /runtime/packages /runtime/state \
+    && chown -R "${APP_UID}:${APP_GID}" /app/backend /runtime "/home/${APP_USER}" \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
-COPY src/ ./src/
-COPY main.py ./
-COPY alembic/ ./alembic/
-COPY alembic.ini ./
+COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
+COPY --chown=${APP_UID}:${APP_GID} main.py ./
+COPY --chown=${APP_UID}:${APP_GID} alembic/ ./alembic/
+COPY --chown=${APP_UID}:${APP_GID} alembic.ini ./
 
 EXPOSE 8000
+
+USER ${APP_UID}:${APP_GID}
 
 ENTRYPOINT ["python", "-m", "src.lib.runtime_entrypoint"]

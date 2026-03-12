@@ -142,6 +142,37 @@ def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_
     }
 
 
+def test_write_json_atomically_uses_replace_in_target_directory(monkeypatch, tmp_path: Path):
+    destination = tmp_path / "state" / "identifier_prefixes.json"
+    destination.parent.mkdir(parents=True)
+    destination.write_text('{"prefixes":["OLD"]}\n', encoding="utf-8")
+
+    replace_calls: list[tuple[Path, Path]] = []
+    original_replace = runtime_entrypoint.os.replace
+
+    def recording_replace(source: Path | str, target: Path | str) -> None:
+        source_path = Path(source)
+        target_path = Path(target)
+        replace_calls.append((source_path, target_path))
+        assert source_path.parent == destination.parent
+        assert source_path.exists()
+        original_replace(source_path, target_path)
+
+    monkeypatch.setattr(runtime_entrypoint.os, "replace", recording_replace)
+
+    runtime_entrypoint._write_json_atomically(
+        destination,
+        {"prefixes": ["FB", "WB"]},
+    )
+
+    assert len(replace_calls) == 1
+    assert replace_calls[0][1] == destination
+    assert json.loads(destination.read_text(encoding="utf-8")) == {
+        "prefixes": ["FB", "WB"]
+    }
+    assert list(destination.parent.glob(".*.tmp")) == []
+
+
 def test_build_default_server_command_uses_production_defaults(monkeypatch):
     monkeypatch.setenv("BACKEND_HOST", "127.0.0.1")
     monkeypatch.setenv("BACKEND_PORT", "9000")

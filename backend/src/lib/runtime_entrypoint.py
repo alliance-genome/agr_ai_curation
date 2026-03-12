@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import unquote, urlparse
@@ -286,9 +287,30 @@ def refresh_identifier_prefixes() -> bool:
         return False
 
     payload = {"prefixes": sorted(prefixes)}
-    prefix_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomically(prefix_file, payload)
     logger.info("Identifier prefix refresh complete with %s prefix(es).", len(prefixes))
     return True
+
+
+def _write_json_atomically(path: Path, payload: dict[str, object]) -> None:
+    """Persist JSON via an atomic replace so concurrent readers never see partial content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temp_path_str = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temp_path = Path(temp_path_str)
+
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def build_default_server_command() -> list[str]:
