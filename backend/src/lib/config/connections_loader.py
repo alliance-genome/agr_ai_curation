@@ -492,8 +492,6 @@ async def check_service_health(service_id: str) -> bool:
     Side effects:
         Updates the connection's is_healthy and last_error fields
     """
-    import httpx
-
     if not _initialized:
         load_connections()
 
