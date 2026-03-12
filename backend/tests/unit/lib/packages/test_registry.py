@@ -165,4 +165,7 @@ def test_repo_core_package_is_discoverable_and_compatible():
         ExportKind.GROUP_RULE,
         ExportKind.SCHEMA,
         ExportKind.TOOL_BINDING,
+        ExportKind.MODEL,
+        ExportKind.PROVIDER,
+        ExportKind.TOOL_POLICY_DEFAULTS,
     }
