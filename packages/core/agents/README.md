@@ -1,5 +1,10 @@
 # Agents Directory
 
+This directory is the tracked core-package copy of the shipped AGR agent
+catalog. For temporary compatibility, the current runtime loader still reads
+`config/agents/`; keep the two locations aligned until the later package-aware
+loader migration lands.
+
 This directory contains agent definitions that are loaded at runtime. Each agent is a self-contained folder with YAML configuration and Python schema.
 
 ## Directory Structure
