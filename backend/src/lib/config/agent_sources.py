@@ -25,7 +25,7 @@ def _find_project_root() -> Path | None:
     return None
 
 
-def _get_default_agent_search_path() -> Path:
+def get_default_agent_search_path() -> Path:
     """Return the default package search root for shipped system agents."""
     env_path = os.environ.get("AGENTS_CONFIG_PATH")
     if env_path:
@@ -222,7 +222,7 @@ def resolve_agent_config_sources(
 ) -> tuple[AgentConfigSource, ...]:
     """Resolve agent config bundles from a packages root, one package, or a legacy agents dir."""
     used_default_search_path = search_path is None
-    resolved_path = (search_path or _get_default_agent_search_path()).expanduser().resolve(strict=False)
+    resolved_path = (search_path or get_default_agent_search_path()).expanduser().resolve(strict=False)
     if not resolved_path.exists():
         raise FileNotFoundError(f"Agent source path not found: {resolved_path}")
 

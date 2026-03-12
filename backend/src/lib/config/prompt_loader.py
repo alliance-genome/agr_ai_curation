@@ -37,7 +37,7 @@ from src.models.sql.prompts import PromptTemplate
 
 from .agent_sources import (
     AgentConfigSource,
-    _get_default_agent_search_path,
+    get_default_agent_search_path,
     resolve_agent_config_sources,
 )
 
@@ -49,7 +49,17 @@ PROMPT_LOADER_LOCK_ID = 948572631
 
 def _get_default_agents_path() -> Path:
     """Return the default package-aware search path for prompt loading."""
-    return _get_default_agent_search_path()
+    return get_default_agent_search_path()
+
+
+def _resolve_prompt_sources(
+    agents_path: Optional[Path],
+) -> tuple[Path, tuple[AgentConfigSource, ...]]:
+    """Return the effective prompt search path plus resolved agent sources."""
+    if agents_path is None:
+        return _get_default_agents_path(), resolve_agent_config_sources()
+
+    return agents_path, resolve_agent_config_sources(agents_path)
 
 
 # Thread safety lock for initialization (process-local)
@@ -407,7 +417,7 @@ def load_prompts(
             logger.debug("Prompt loader already initialized, skipping")
             return {"base_prompts": 0, "group_rules": 0, "skipped": True}
 
-        effective_agents_path = agents_path or _get_default_agents_path()
+        effective_agents_path, sources = _resolve_prompt_sources(agents_path)
 
         # Multi-worker safety: acquire advisory lock
         # This may block if another worker is loading (ensures cache consistency)
@@ -432,7 +442,7 @@ def load_prompts(
             base_prompt_count = 0
             group_rules_count = 0
 
-            for source in resolve_agent_config_sources(agents_path):
+            for source in sources:
                 agent_name = _load_base_prompt(source, db)
 
                 if agent_name:

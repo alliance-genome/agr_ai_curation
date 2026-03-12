@@ -217,3 +217,38 @@ def test_load_prompts_force_reload_even_if_initialized(tmp_path, monkeypatch):
 
     result = prompt_loader.load_prompts(agents_path=agents_path, db=db, force_reload=True)
     assert result == {"base_prompts": 1, "group_rules": 0}
+
+
+def test_resolve_prompt_sources_preserves_default_lookup_semantics(monkeypatch):
+    resolved_path = Path("/tmp/runtime-packages")
+    captured = {}
+
+    monkeypatch.setattr(prompt_loader, "_get_default_agents_path", lambda: resolved_path)
+
+    def _resolve_sources(path=None):
+        captured["path"] = path
+        return ()
+
+    monkeypatch.setattr(prompt_loader, "resolve_agent_config_sources", _resolve_sources)
+
+    effective_path, sources = prompt_loader._resolve_prompt_sources(None)
+
+    assert effective_path == resolved_path
+    assert sources == ()
+    assert captured["path"] is None
+
+
+def test_load_prompts_uses_resolved_sources(monkeypatch):
+    db = MagicMock()
+    sources = (MagicMock(folder_name="gene"),)
+
+    monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
+    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
+    monkeypatch.setattr(prompt_loader, "_resolve_prompt_sources", lambda _agents_path: (Path("/tmp/runtime-packages"), sources))
+    monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda source, _db: source.folder_name)
+    monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda *_args, **_kwargs: 0)
+
+    result = prompt_loader.load_prompts(db=db, force_reload=True)
+
+    assert result == {"base_prompts": 1, "group_rules": 0}
+    assert db.commit.called
