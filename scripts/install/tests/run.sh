@@ -9,5 +9,6 @@ bash "${script_dir}/test_preflight.sh"
 bash "${script_dir}/test_core_auth_group_stages.sh"
 bash "${script_dir}/test_pdfx_stage.sh"
 bash "${script_dir}/test_start_verify_stage.sh"
+bash "${script_dir}/test_repo_migration.sh"
 
 echo "All installer checks passed"
