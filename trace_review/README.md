@@ -98,7 +98,8 @@ trace_review/
 │   │   │   ├── cache_manager.py
 │   │   │   └── trace_extractor.py
 │   │   └── main.py             # FastAPI app
-│   ├── Dockerfile
+│   ├── Dockerfile              # Local development image
+│   ├── Dockerfile.prod         # Published standalone image
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -183,12 +184,17 @@ docker compose up
 ### Build for Production
 
 ```bash
-# Build both services
-docker compose build
+# Build the published backend image
+docker build -f backend/Dockerfile.prod -t trace-review-backend:prod backend
 
-# Run in production mode
+# Run the local standalone stack
 docker compose up -d
 ```
+
+The main repository's standalone Compose stack pulls the published backend image
+from `public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`. The
+separate `trace_review/docker-compose.yml` file remains the source-build path
+for local development and troubleshooting.
 
 ## Cache Behavior
 
@@ -227,6 +233,7 @@ docker compose up -d
 
 ### Frontend can't connect to backend
 - Verify backend is running: `curl http://localhost:8001`
+- Verify health endpoint: `curl http://localhost:8001/health`
 - Check browser console for CORS errors
 - Ensure ports 3001 and 8001 are not in use
 - For local dev: Ensure backend is on `http://localhost:8001`

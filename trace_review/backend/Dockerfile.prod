@@ -1,0 +1,50 @@
+FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN python -m venv "${VIRTUAL_ENV}" \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt
+
+
+FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
+
+ARG APP_USER=agr
+ARG APP_UID=10001
+ARG APP_GID=10001
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && groupadd --gid "${APP_GID}" "${APP_USER}" \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" \
+        --create-home --home-dir "/home/${APP_USER}" --shell /usr/sbin/nologin "${APP_USER}" \
+    && chown -R "${APP_UID}:${APP_GID}" /app "/home/${APP_USER}" \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder --chown=${APP_UID}:${APP_GID} /opt/venv /opt/venv
+COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
+
+EXPOSE 8001
+
+USER ${APP_UID}:${APP_GID}
+
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]

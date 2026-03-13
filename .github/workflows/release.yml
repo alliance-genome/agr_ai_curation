@@ -17,6 +17,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.new_version.outputs.new_version }}
     permissions:
       contents: write
 
@@ -127,3 +129,54 @@ jobs:
           echo "git checkout v${{ steps.new_version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
           echo "docker compose build --build-arg VITE_APP_VERSION=${{ steps.new_version.outputs.new_version }} --build-arg VITE_GIT_SHA=\$(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  publish-trace-review-backend-image:
+    name: Publish trace_review_backend image
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout tagged release
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v${{ needs.release.outputs.new_version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push trace_review_backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./trace_review/backend
+          file: ./trace_review/backend/Dockerfile.prod
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend:v${{ needs.release.outputs.new_version }}
+            public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish summary
+        run: |
+          echo "## Trace review backend image" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Repository: \`public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tags: \`v${{ needs.release.outputs.new_version }}\`, \`latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Dockerfile: \`trace_review/backend/Dockerfile.prod\`" >> $GITHUB_STEP_SUMMARY

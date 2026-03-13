@@ -48,7 +48,7 @@ set -euo pipefail
 
 state_dir="${INSTALL_TEST_STATE_DIR:?}"
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "up" && "${3:-}" == "-d" ]]; then
+if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; then
   if [[ "$PWD" == *"pdfx-service"* ]]; then
     touch "${state_dir}/pdfx_up"
   else
@@ -58,7 +58,7 @@ if [[ "${1:-}" == "compose" && "${2:-}" == "up" && "${3:-}" == "-d" ]]; then
 fi
 
 if [[ "${1:-}" == "compose" && "${2:-}" == "config" && "${3:-}" == "--services" ]]; then
-  printf '%s\n' backend frontend langfuse postgres
+  printf '%s\n' backend frontend langfuse postgres trace_review_backend
   exit 0
 fi
 
@@ -83,7 +83,7 @@ set -euo pipefail
 
 url="${@: -1}"
 case "$url" in
-  http://localhost:3002|http://localhost:8000/health|http://localhost:3000/api/public/health|http://localhost:8501/api/v1/health)
+  http://localhost:3002|http://localhost:8000/health|http://localhost:3000/api/public/health|http://localhost:8001/health|http://localhost:8501/api/v1/health)
     exit 0
     ;;
 esac
@@ -168,7 +168,7 @@ test_start_verify_with_pdfx_enabled() {
   env_file="${temp_home}/.agr_ai_curation/.env"
   pdfx_state="${temp_home}/.agr_ai_curation/.install_pdfx.env"
   clone_path="${temp_home}/pdfx-service"
-  mkdir -p "$clone_path"
+  mkdir -p "${clone_path}/deploy"
 
   cat >"$pdfx_state" <<EOF
 INSTALL_PDFX_CLONE_PATH=${clone_path}
@@ -192,13 +192,15 @@ EOF
     exit 1
   }
 
-  assert_contains 'Stage 6: Start and verify services' "$output_path"
+  assert_contains 'Stage 6: Start & Verify' "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains '8501' "$output_path"
   assert_contains 'Application: http://localhost:3002' "$output_path"
   assert_contains 'API Docs: http://localhost:8000/docs' "$output_path"
   assert_contains 'Langfuse: http://localhost:3000' "$output_path"
   assert_contains 'Health: http://localhost:8000/health' "$output_path"
+  assert_contains 'trace_review_backend' "$output_path"
+  assert_contains '8001' "$output_path"
   assert_contains 'Auth mode: oidc' "$output_path"
   assert_contains 'deploy_alliance.sh is Alliance-internal only.' "$output_path"
 }

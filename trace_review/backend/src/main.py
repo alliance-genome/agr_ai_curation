@@ -16,6 +16,26 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+def _allowed_origins() -> list[str]:
+    origins = {"http://localhost:3000", "http://localhost:3001"}
+    frontend_url = os.getenv("FRONTEND_URL")
+    if frontend_url:
+        origins.add(frontend_url.rstrip("/"))
+    return sorted(origins)
+
+
+def _health_payload(app: FastAPI) -> dict:
+    cache_manager = app.state.cache_manager
+    return {
+        "status": "ok",
+        "message": "Trace Review API is running",
+        "cache_stats": {
+            "size": len(cache_manager.cache),
+            "ttl_hours": cache_manager.ttl_hours
+        }
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup application resources"""
@@ -42,7 +62,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001", "http://localhost:3000"],
+    allow_origins=_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,15 +75,13 @@ create_request_context_middleware(app)
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    cache_manager = app.state.cache_manager
-    return {
-        "status": "ok",
-        "message": "Trace Review API is running",
-        "cache_stats": {
-            "size": len(cache_manager.cache),
-            "ttl_hours": cache_manager.ttl_hours
-        }
-    }
+    return _health_payload(app)
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return _health_payload(app)
 
 
 @app.get("/health/langfuse")

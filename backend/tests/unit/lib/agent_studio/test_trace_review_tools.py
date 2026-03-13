@@ -50,7 +50,7 @@ def test_env_helpers(monkeypatch):
     monkeypatch.delenv("TRACE_REVIEW_SOURCE", raising=False)
     monkeypatch.delenv("TRACE_REVIEW_URL", raising=False)
     assert tools.get_trace_source() == "local"
-    assert tools.get_trace_review_url() == "http://172.17.0.1:8001"
+    assert tools.get_trace_review_url() == "http://trace_review_backend:8001"
 
     monkeypatch.setenv("TRACE_REVIEW_SOURCE", "prod")
     monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:9000")
