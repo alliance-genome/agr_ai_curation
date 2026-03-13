@@ -9,6 +9,16 @@ source "${repo_root}/scripts/install/lib/common.sh"
 install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 env_template_path="${repo_root}/scripts/install/lib/templates/env.standalone"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
+image_tag_override="${INSTALL_IMAGE_TAG:-}"
+
+declare -a deployment_config_filenames=(
+  "groups.yaml"
+  "connections.yaml"
+  "providers.yaml"
+  "models.yaml"
+  "tool_policy_defaults.yaml"
+  "maintenance_message.txt"
+)
 
 prompt_optional_value() {
   local prompt_text="$1"
@@ -27,12 +37,48 @@ generate_prefixed_langfuse_key() {
   printf '%s%s\n' "$prefix" "$(generate_hex_secret 16)"
 }
 
+seed_runtime_layout() {
+  local runtime_config_dir="$1"
+  local runtime_packages_dir="$2"
+  local runtime_state_dir="$3"
+  local pdf_storage_dir="$4"
+  local file_outputs_dir="$5"
+  local weaviate_data_dir="$6"
+  local core_package_source_dir="$7"
+  local core_package_target_dir="$8"
+  local config_source_dir="$9"
+
+  require_directory_exists "$core_package_source_dir"
+  require_directory_exists "$config_source_dir"
+
+  mkdir -p \
+    "$runtime_config_dir" \
+    "$runtime_packages_dir" \
+    "$runtime_state_dir" \
+    "$pdf_storage_dir" \
+    "$file_outputs_dir" \
+    "$weaviate_data_dir"
+
+  local filename=""
+  for filename in "${deployment_config_filenames[@]}"; do
+    require_file_exists "${config_source_dir}/${filename}"
+    cp "${config_source_dir}/${filename}" "${runtime_config_dir}/${filename}"
+  done
+
+  require_non_empty "core_package_target_dir" "$core_package_target_dir"
+  rm -rf "$core_package_target_dir"
+  cp -a "$core_package_source_dir" "$core_package_target_dir"
+}
+
 print_stage_intro() {
+  local runtime_root_dir="$1"
+  local data_root_dir="$2"
+
   echo
   log_info "=== Stage 2: Core Configuration ==="
   echo
   echo "  This stage creates the main environment file that holds API keys,"
-  echo "  database passwords, and encryption secrets."
+  echo "  database passwords, encryption secrets, and the installed runtime layout."
   echo
   echo "  What you'll be asked:"
   echo
@@ -45,6 +91,11 @@ print_stage_intro() {
   echo "  is generated automatically. You don't need to prepare anything for those."
   echo
   echo "  Config location: ${install_home_dir}/.env"
+  echo "  Runtime directory: ${runtime_root_dir}"
+  echo "  Data directory: ${data_root_dir}"
+  if [[ -n "$image_tag_override" ]]; then
+    echo "  Image tag override: ${image_tag_override}"
+  fi
   echo
 }
 
@@ -52,7 +103,41 @@ main() {
   require_file_exists "$env_template_path"
   require_command "openssl"
 
+  local runtime_root_dir
+  local runtime_config_dir
+  local runtime_packages_dir
+  local runtime_state_dir
+  local data_root_dir
+  local pdf_storage_dir
+  local file_outputs_dir
+  local weaviate_data_dir
+  local core_package_source_dir
+  local core_package_target_dir
+  local config_source_dir
+
+  runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
+  runtime_config_dir="$(install_runtime_config_dir "$install_home_dir")"
+  runtime_packages_dir="$(install_runtime_packages_dir "$install_home_dir")"
+  runtime_state_dir="$(install_runtime_state_dir "$install_home_dir")"
+  data_root_dir="$(install_data_root_dir "$install_home_dir")"
+  pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
+  file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
+  weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
+  core_package_source_dir="${repo_root}/packages/core"
+  core_package_target_dir="${runtime_packages_dir}/core"
+  config_source_dir="${repo_root}/config"
+
   mkdir -p "$install_home_dir"
+  seed_runtime_layout \
+    "$runtime_config_dir" \
+    "$runtime_packages_dir" \
+    "$runtime_state_dir" \
+    "$pdf_storage_dir" \
+    "$file_outputs_dir" \
+    "$weaviate_data_dir" \
+    "$core_package_source_dir" \
+    "$core_package_target_dir" \
+    "$config_source_dir"
 
   if [[ -f "$env_output_path" ]]; then
     backup_file_with_timestamp "$env_output_path"
@@ -61,7 +146,7 @@ main() {
   cp "$env_template_path" "$env_output_path"
   chmod 600 "$env_output_path"
 
-  print_stage_intro
+  print_stage_intro "$runtime_root_dir" "$data_root_dir"
 
   local openai_api_key
   local groq_api_key
@@ -133,9 +218,23 @@ main() {
   upsert_env_var "$env_output_path" "DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_curation'
   upsert_env_var "$env_output_path" "LANGFUSE_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
   upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
+  upsert_env_var "$env_output_path" "AGR_RUNTIME_CONFIG_HOST_DIR" "$runtime_config_dir"
+  upsert_env_var "$env_output_path" "AGR_RUNTIME_PACKAGES_HOST_DIR" "$runtime_packages_dir"
+  upsert_env_var "$env_output_path" "AGR_RUNTIME_STATE_HOST_DIR" "$runtime_state_dir"
+  upsert_env_var "$env_output_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"
+  upsert_env_var "$env_output_path" "FILE_OUTPUT_STORAGE_HOST_DIR" "$file_outputs_dir"
+  upsert_env_var "$env_output_path" "WEAVIATE_DATA_HOST_DIR" "$weaviate_data_dir"
+
+  if [[ -n "$image_tag_override" ]]; then
+    upsert_env_var "$env_output_path" "BACKEND_IMAGE_TAG" "$image_tag_override"
+    upsert_env_var "$env_output_path" "FRONTEND_IMAGE_TAG" "$image_tag_override"
+    upsert_env_var "$env_output_path" "TRACE_REVIEW_BACKEND_IMAGE_TAG" "$image_tag_override"
+  fi
 
   chmod 600 "$env_output_path"
   log_success "Generated core config at ${env_output_path}"
+  log_success "Seeded runtime config into ${runtime_config_dir}"
+  log_success "Seeded bundled core package into ${core_package_target_dir}"
 }
 
 main "$@"

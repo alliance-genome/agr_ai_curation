@@ -126,6 +126,12 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
     start_verify_script = START_VERIFY_PATH.read_text(encoding="utf-8")
 
     for key in (
+        "AGR_RUNTIME_CONFIG_HOST_DIR=",
+        "AGR_RUNTIME_PACKAGES_HOST_DIR=",
+        "AGR_RUNTIME_STATE_HOST_DIR=",
+        "PDF_STORAGE_HOST_DIR=",
+        "FILE_OUTPUT_STORAGE_HOST_DIR=",
+        "WEAVIATE_DATA_HOST_DIR=",
         "BACKEND_IMAGE=",
         "BACKEND_IMAGE_TAG=",
         "FRONTEND_IMAGE=",

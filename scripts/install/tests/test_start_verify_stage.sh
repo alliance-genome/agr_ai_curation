@@ -18,6 +18,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local needle="$1"
+  local file_path="$2"
+  if grep -q "$needle" "$file_path"; then
+    echo "Did not expect to find '$needle' in $file_path" >&2
+    cat "$file_path" >&2
+    exit 1
+  fi
+}
+
 assert_not_exists() {
   local file_path="$1"
   if [[ -e "$file_path" ]]; then
@@ -53,7 +63,7 @@ if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; th
     touch "${state_dir}/pdfx_up"
   else
     touch "${state_dir}/main_up"
-    if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+    if [[ " $* " == *"docker-compose.production.yml"* ]]; then
       touch "${state_dir}/main_compose_is_production"
     fi
   fi
@@ -61,7 +71,7 @@ if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; th
 fi
 
 if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --services "* ]]; then
-  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+  if [[ " $* " == *"docker-compose.production.yml"* ]]; then
     touch "${state_dir}/main_compose_is_production"
   fi
   printf '%s\n' backend frontend langfuse postgres trace_review_backend
@@ -70,7 +80,7 @@ fi
 
 if [[ " $* " == *" compose "* && " $* " == *" ps "* && " $* " == *" -q "* ]]; then
   service="${*: -1}"
-  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+  if [[ " $* " == *"docker-compose.production.yml"* ]]; then
     touch "${state_dir}/main_compose_is_production"
   fi
   printf 'cid-%s\n' "$service"
@@ -207,12 +217,18 @@ EOF
   }
 
   assert_contains 'Stage 6: Start & Verify' "$output_path"
+  assert_contains 'Compose file:' "$output_path"
+  assert_contains "${repo_root}/docker-compose.production.yml" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/packages" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/state" "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains '8501' "$output_path"
   assert_contains 'Application: http://localhost:3002' "$output_path"
   assert_contains 'API Docs: http://localhost:8000/docs' "$output_path"
   assert_contains 'Langfuse: http://localhost:3000' "$output_path"
   assert_contains 'Health: http://localhost:8000/health' "$output_path"
+  assert_contains 'Restart command: docker compose --env-file' "$output_path"
   assert_contains 'trace_review_backend' "$output_path"
   assert_contains '8001' "$output_path"
   assert_contains 'Auth mode: oidc' "$output_path"
@@ -248,6 +264,7 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   }
   assert_not_exists "${state_dir}/pdfx_up"
 
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains 'Skipped' "$output_path"
   assert_contains 'Auth mode: dev' "$output_path"
@@ -280,8 +297,47 @@ EOF
   assert_contains 'Re-run Stage 5 without skipping PDF extraction setup to regenerate it.' "$output_path"
 }
 
+test_start_verify_fails_with_runtime_layout_guidance() {
+  local temp_home
+  local stub_dir
+  local state_dir
+  local output_path
+  local env_file
+  temp_home="$(mktemp -d)"
+  stub_dir="$(mktemp -d)"
+  state_dir="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
+
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_auth_setup "$temp_home" $'1\n'
+  make_stub_tools "$stub_dir"
+
+  env_file="${temp_home}/.agr_ai_curation/.env"
+  python3 - "$env_file" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+updated = []
+for line in env_path.read_text().splitlines():
+    if line.startswith("AGR_RUNTIME_PACKAGES_HOST_DIR="):
+        updated.append("AGR_RUNTIME_PACKAGES_HOST_DIR=")
+    else:
+        updated.append(line)
+env_path.write_text("\n".join(updated) + "\n")
+PY
+
+  run_start_verify_expect_fail "$temp_home" "$stub_dir" "$state_dir" "$output_path"
+
+  assert_contains 'AGR_RUNTIME_PACKAGES_HOST_DIR must not be empty.' "$output_path"
+  assert_contains 'Re-run Stage 2: Core Configuration to regenerate the installed runtime layout.' "$output_path"
+  assert_not_contains 'Required directory not found:' "$output_path"
+}
+
 test_start_verify_with_pdfx_enabled
 test_start_verify_marks_pdfx_skipped_when_not_configured
 test_start_verify_fails_with_clear_pdfx_state_guidance
+test_start_verify_fails_with_runtime_layout_guidance
 
 echo "start/verify installer stage checks passed"

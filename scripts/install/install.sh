@@ -13,6 +13,7 @@ skip_group_setup=0
 skip_pdfx_setup=0
 skip_start_verify=0
 from_stage=0
+image_tag=""
 
 print_usage() {
   cat <<USAGE
@@ -20,6 +21,7 @@ Usage: scripts/install/install.sh [options]
 
 Options:
   --from-stage N       Start from stage N (1-6), skipping all earlier stages
+  --image-tag TAG      Override backend/frontend/trace-review image tags in Stage 2
   --skip-preflight     Skip Stage 1 (01_preflight.sh)
   --skip-core-config   Skip Stage 2 (02_core_config.sh)
   --skip-auth-setup    Skip Stage 3 (03_auth_setup.sh)
@@ -30,6 +32,7 @@ Options:
 
 Examples:
   scripts/install/install.sh                  # Run all stages
+  scripts/install/install.sh --image-tag v0.3.0  # Pin all published app images to one tag
   scripts/install/install.sh --from-stage 5   # Re-run from PDF extraction onward
   scripts/install/install.sh --from-stage 6   # Just start & verify
 USAGE
@@ -90,6 +93,15 @@ parse_args() {
         fi
         from_stage="$1"
         ;;
+      --image-tag)
+        shift
+        if [[ -z "${1:-}" ]]; then
+          log_error "--image-tag requires a non-empty tag value"
+          print_usage
+          exit 1
+        fi
+        image_tag="$1"
+        ;;
       -h|--help)
         print_usage
         exit 0
@@ -148,6 +160,10 @@ BANNER
   printf "    - Optional: Anthropic, Gemini, or Groq API keys for additional models\n"
   printf "    - ~8 GiB RAM recommended, ~10 GiB free disk minimum\n"
   printf "\n"
+  if [[ -n "$image_tag" ]]; then
+    printf "${yellow}  Published image tag override: %s${reset}\n" "$image_tag"
+    printf "\n"
+  fi
   if (( from_stage > 1 )); then
     local red='\033[1;31m'
     if ! supports_color; then red=""; fi
@@ -178,6 +194,9 @@ apply_from_stage() {
 
 main() {
   parse_args "$@"
+  if [[ -n "$image_tag" ]]; then
+    export INSTALL_IMAGE_TAG="$image_tag"
+  fi
   if (( from_stage > 0 )); then
     apply_from_stage
   fi

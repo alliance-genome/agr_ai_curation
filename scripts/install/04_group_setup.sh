@@ -9,7 +9,7 @@ source "${repo_root}/scripts/install/lib/common.sh"
 install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 auth_state_path="${INSTALL_AUTH_STATE_PATH:-${install_home_dir}/.install_auth.env}"
 groups_template_path="${repo_root}/scripts/install/lib/templates/groups.standalone.yaml"
-groups_output_path="${INSTALL_GROUPS_OUTPUT_PATH:-${repo_root}/config/groups.yaml}"
+groups_output_path="${INSTALL_GROUPS_OUTPUT_PATH:-$(install_runtime_config_dir "$install_home_dir")/groups.yaml}"
 
 trim() {
   local value="$1"
@@ -203,6 +203,8 @@ main() {
   echo "      identity provider group names. Use this for non-Alliance organizations."
   echo "      Species and taxon are optional -- if omitted, the group still works"
   echo "      but organism-scoped queries (gene/allele lookup by taxon) won't apply."
+  echo
+  echo "  Output file: ${groups_output_path}"
   echo
 
   mkdir -p "$(dirname "$groups_output_path")"

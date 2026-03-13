@@ -13,7 +13,7 @@ docker_cmd="${INSTALL_DOCKER_CMD:-docker}"
 curl_cmd="${INSTALL_CURL_CMD:-curl}"
 timeout_seconds="${INSTALL_START_VERIFY_TIMEOUT_SECONDS:-300}"
 poll_interval_seconds="${INSTALL_START_VERIFY_POLL_INTERVAL_SECONDS:-5}"
-main_compose_file="${INSTALL_MAIN_COMPOSE_FILE:-docker-compose.production.yml}"
+main_compose_file="${INSTALL_MAIN_COMPOSE_FILE:-${repo_root}/docker-compose.production.yml}"
 
 declare -a main_services=()
 declare -A service_statuses=()
@@ -23,6 +23,12 @@ load_main_env() {
   # shellcheck disable=SC1090
   source "$env_output_path"
   set +a
+}
+
+normalize_main_compose_file() {
+  if [[ "$main_compose_file" != /* ]]; then
+    main_compose_file="${repo_root}/${main_compose_file}"
+  fi
 }
 
 run_compose() {
@@ -36,7 +42,7 @@ run_compose() {
 }
 
 run_main_compose() {
-  run_compose "$repo_root" --env-file "$env_output_path" -f "$main_compose_file" "$@"
+  run_compose "$install_home_dir" --env-file "$env_output_path" -f "$main_compose_file" "$@"
 }
 
 load_main_services() {
@@ -215,6 +221,46 @@ pdfx_port_label() {
   printf '%s\n' "-"
 }
 
+require_runtime_var() {
+  local key="$1"
+  local value="$2"
+
+  require_non_empty "$key" "$value" || {
+    log_error "Re-run Stage 2: Core Configuration to regenerate the installed runtime layout."
+    return 1
+  }
+}
+
+validate_runtime_layout() {
+  require_file_exists "$main_compose_file"
+
+  require_runtime_var "AGR_RUNTIME_CONFIG_HOST_DIR" "${AGR_RUNTIME_CONFIG_HOST_DIR:-}" || return 1
+  require_runtime_var "AGR_RUNTIME_PACKAGES_HOST_DIR" "${AGR_RUNTIME_PACKAGES_HOST_DIR:-}" || return 1
+  require_runtime_var "AGR_RUNTIME_STATE_HOST_DIR" "${AGR_RUNTIME_STATE_HOST_DIR:-}" || return 1
+  require_runtime_var "PDF_STORAGE_HOST_DIR" "${PDF_STORAGE_HOST_DIR:-}" || return 1
+  require_runtime_var "FILE_OUTPUT_STORAGE_HOST_DIR" "${FILE_OUTPUT_STORAGE_HOST_DIR:-}" || return 1
+  require_runtime_var "WEAVIATE_DATA_HOST_DIR" "${WEAVIATE_DATA_HOST_DIR:-}" || return 1
+
+  require_directory_exists "${AGR_RUNTIME_CONFIG_HOST_DIR}"
+  require_directory_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}"
+  require_directory_exists "${AGR_RUNTIME_STATE_HOST_DIR}"
+  require_directory_exists "${PDF_STORAGE_HOST_DIR}"
+  require_directory_exists "${FILE_OUTPUT_STORAGE_HOST_DIR}"
+  require_directory_exists "${WEAVIATE_DATA_HOST_DIR}"
+  require_file_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}/core/package.yaml"
+}
+
+print_runtime_layout() {
+  echo "  Compose file: ${main_compose_file}"
+  echo "  Runtime config: ${AGR_RUNTIME_CONFIG_HOST_DIR}"
+  echo "  Runtime packages: ${AGR_RUNTIME_PACKAGES_HOST_DIR}"
+  echo "  Runtime state: ${AGR_RUNTIME_STATE_HOST_DIR}"
+  echo "  PDF storage: ${PDF_STORAGE_HOST_DIR}"
+  echo "  File outputs: ${FILE_OUTPUT_STORAGE_HOST_DIR}"
+  echo "  Weaviate data: ${WEAVIATE_DATA_HOST_DIR}"
+  echo
+}
+
 print_status_table() {
   local service=""
 
@@ -243,6 +289,10 @@ print_summary() {
   echo "API Docs: $(backend_docs_url)"
   echo "Langfuse: $(langfuse_url)"
   echo "Health: $(backend_health_url)"
+  echo "Compose file: ${main_compose_file}"
+  echo "Runtime config: ${AGR_RUNTIME_CONFIG_HOST_DIR}"
+  echo "Runtime packages: ${AGR_RUNTIME_PACKAGES_HOST_DIR}"
+  echo "Runtime state: ${AGR_RUNTIME_STATE_HOST_DIR}"
   echo
   echo "Auth mode: ${auth_mode}"
   if [[ "$auth_mode" == "dev" ]]; then
@@ -250,6 +300,7 @@ print_summary() {
   else
     echo "Next steps: open the application URL and complete your configured OIDC sign-in flow."
   fi
+  echo "Restart command: docker compose --env-file ${env_output_path} -f ${main_compose_file} up -d"
   echo "Alliance note: deploy_alliance.sh is Alliance-internal only."
 }
 
@@ -290,20 +341,23 @@ main() {
   require_file_exists "$env_output_path"
   require_command "$docker_cmd"
   require_command "$curl_cmd"
+  normalize_main_compose_file
 
   echo
   log_info "=== Stage 6: Start & Verify ==="
   echo
-  echo "  Launching the standalone production stack with docker compose and verifying it's healthy."
+  echo "  Launching the standalone production stack from published images and verifying it's healthy."
   echo
   echo "  This will:"
   echo "    - Pull published Docker images (first run can take 5-15 minutes on a fresh machine)"
+  echo "    - Use the extracted bundle compose file plus the installed runtime/data directories under ${install_home_dir}"
   echo "    - Start the database, vector store, backend, frontend, diagnostics, and observability stack"
   echo "    - Run database migrations automatically"
   echo "    - Poll health endpoints until everything reports OK (up to 5 min timeout)"
   echo
   echo "  If the PDF extraction service was configured in Stage 5, it will be"
   echo "  started first in its own Docker Compose stack."
+  echo "  No application images are built from source in this stage."
   echo
   local yellow='\033[1;33m'
   local reset='\033[0m'
@@ -317,6 +371,8 @@ main() {
   echo
 
   load_main_env
+  validate_runtime_layout
+  print_runtime_layout
   start_pdfx_stack_if_configured
   start_main_stack
   load_main_services
