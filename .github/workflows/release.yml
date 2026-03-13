@@ -165,6 +165,8 @@ jobs:
           context: ./trace_review/backend
           file: ./trace_review/backend/Dockerfile.prod
           push: true
+          # Keep attestations off until we verify the public ECR image path end-to-end
+          # for downstream standalone pulls; follow-up hardening can re-enable them.
           provenance: false
           sbom: false
           tags: |

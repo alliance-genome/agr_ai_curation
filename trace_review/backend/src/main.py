@@ -7,6 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .logging_config import configure_logging, create_request_context_middleware
 from .services.cache_manager import CacheManager
@@ -24,8 +25,15 @@ def _allowed_origins() -> list[str]:
     return sorted(origins)
 
 
-def _health_payload(app: FastAPI) -> dict:
-    cache_manager = app.state.cache_manager
+def _health_payload(app: FastAPI) -> tuple[dict, int]:
+    cache_manager = getattr(app.state, "cache_manager", None)
+    if cache_manager is None:
+        return {
+            "status": "starting",
+            "message": "Trace Review API is still initializing",
+            "cache_stats": None,
+        }, 503
+
     return {
         "status": "ok",
         "message": "Trace Review API is running",
@@ -33,7 +41,12 @@ def _health_payload(app: FastAPI) -> dict:
             "size": len(cache_manager.cache),
             "ttl_hours": cache_manager.ttl_hours
         }
-    }
+    }, 200
+
+
+def _health_response(app: FastAPI) -> JSONResponse:
+    payload, status_code = _health_payload(app)
+    return JSONResponse(content=payload, status_code=status_code)
 
 
 @asynccontextmanager
@@ -75,13 +88,13 @@ create_request_context_middleware(app)
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    return _health_payload(app)
+    return _health_response(app)
 
 
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return _health_payload(app)
+    return _health_response(app)
 
 
 @app.get("/health/langfuse")
