@@ -1,0 +1,402 @@
+name: Publish Runtime Images
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Resolve publish lane
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_bundle_name: ${{ steps.prepare.outputs.artifact_bundle_name }}
+      artifact_label: ${{ steps.prepare.outputs.artifact_label }}
+      final_artifact_name: ${{ steps.prepare.outputs.final_artifact_name }}
+      manifest_name: ${{ steps.prepare.outputs.manifest_name }}
+      publish_lane: ${{ steps.prepare.outputs.publish_lane }}
+      ref_name: ${{ steps.prepare.outputs.ref_name }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      short_sha: ${{ steps.prepare.outputs.short_sha }}
+      should_publish: ${{ steps.prepare.outputs.should_publish }}
+    steps:
+      - name: Resolve publish lane
+        id: prepare
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          short_sha="${GIT_SHA::7}"
+
+          publish_lane="skip"
+          should_publish="false"
+          artifact_label="skip-${short_sha}"
+          manifest_name=""
+          release_tag=""
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            publish_lane="pr"
+            artifact_label="pr-${short_sha}"
+          elif [[ "${REF_TYPE}" == "tag" && "${REF_NAME}" == v* ]]; then
+            publish_lane="release"
+            should_publish="true"
+            artifact_label="${REF_NAME}"
+            manifest_name="release-manifest-${REF_NAME}.json"
+            release_tag="${REF_NAME}"
+          elif [[ "${REF_TYPE}" == "branch" && "${REF_NAME}" == "main" ]]; then
+            publish_lane="main"
+            should_publish="true"
+            artifact_label="main-sha-${short_sha}"
+            manifest_name="publish-manifest-main-sha-${short_sha}.json"
+          fi
+
+          {
+            echo "artifact_bundle_name=published-runtime-assets-${artifact_label}"
+            echo "artifact_label=${artifact_label}"
+            echo "final_artifact_name=published-runtime-bundle-${artifact_label}"
+            echo "manifest_name=${manifest_name}"
+            echo "publish_lane=${publish_lane}"
+            echo "ref_name=${REF_NAME}"
+            echo "release_tag=${release_tag}"
+            echo "short_sha=${short_sha}"
+            echo "should_publish=${should_publish}"
+          } >> "${GITHUB_OUTPUT}"
+
+  pr-noop:
+    name: Publish noop (PR)
+    needs: prepare
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize no-op behavior
+        run: |
+          echo "## Publish runtime images" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Pull requests are explicit no-op lanes for public publishing." >> "${GITHUB_STEP_SUMMARY}"
+          echo "No runtime images, bundled core artifacts, or release manifests were pushed." >> "${GITHUB_STEP_SUMMARY}"
+
+  publish-images:
+    name: Publish ${{ matrix.display_name }} image
+    needs: prepare
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact_id: backend
+            build_args: ""
+            context: backend
+            display_name: backend
+            dockerfile: backend/Dockerfile.prod
+            manifest_key: backend
+            repository: public.ecr.aws/v4p5b7m9/agr-ai-curation-backend
+          - artifact_id: frontend
+            build_args: |
+              VITE_DEV_MODE=false
+              VITE_GIT_SHA=${{ needs.prepare.outputs.short_sha }}
+            context: frontend
+            display_name: frontend
+            dockerfile: frontend/Dockerfile
+            manifest_key: frontend
+            repository: public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend
+          - artifact_id: trace-review-backend
+            build_args: ""
+            context: trace_review/backend
+            display_name: trace-review-backend
+            dockerfile: trace_review/backend/Dockerfile.prod
+            manifest_key: trace_review_backend
+            repository: public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend
+    env:
+      AWS_PUBLISH_ROLE_ARN: ${{ vars.AWS_PUBLIC_ECR_PUBLISH_ROLE_ARN != '' && vars.AWS_PUBLIC_ECR_PUBLISH_ROLE_ARN || secrets.AWS_PUBLIC_ECR_PUBLISH_ROLE_ARN }}
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate publish role configuration
+        shell: bash
+        run: |
+          if [[ -z "${AWS_PUBLISH_ROLE_ARN}" ]]; then
+            echo "Set repository variable or secret AWS_PUBLIC_ECR_PUBLISH_ROLE_ARN before enabling publish-images.yml." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: publish-images-${{ github.run_id }}-${{ matrix.artifact_id }}
+          role-to-assume: ${{ env.AWS_PUBLISH_ROLE_ARN }}
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image tags
+        id: tags
+        shell: bash
+        env:
+          PUBLISH_LANE: ${{ needs.prepare.outputs.publish_lane }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          REPOSITORY: ${{ matrix.repository }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          if [[ "${PUBLISH_LANE}" == "release" ]]; then
+            image_tags=("${REPOSITORY}:${RELEASE_TAG}")
+            tag_names=("${RELEASE_TAG}")
+          else
+            image_tags=("${REPOSITORY}:latest" "${REPOSITORY}:sha-${SHORT_SHA}")
+            tag_names=("latest" "sha-${SHORT_SHA}")
+          fi
+
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${image_tags[@]}"
+            echo "EOF"
+            echo "tag_names<<EOF"
+            printf '%s\n' "${tag_names[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          sbom: false
+          tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Write image metadata
+        shell: bash
+        env:
+          BUILD_CONTEXT: ${{ matrix.context }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DISPLAY_NAME: ${{ matrix.display_name }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE_ID: ${{ matrix.manifest_key }}
+          REPOSITORY: ${{ matrix.repository }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+          TAG_NAMES: ${{ steps.tags.outputs.tag_names }}
+        run: |
+          mkdir -p image-metadata
+          tags_json="$(printf '%s\n' "${TAG_NAMES}" | sed '/^$/d' | jq -R . | jq -s .)"
+          published_refs_json="$(printf '%s\n' "${TAG_NAMES}" | sed '/^$/d' | sed "s#^#${REPOSITORY}:#" | jq -R . | jq -s .)"
+
+          jq -n \
+            --arg build_context "${BUILD_CONTEXT}" \
+            --arg digest "${DIGEST}" \
+            --arg digest_ref "${REPOSITORY}@${DIGEST}" \
+            --arg display_name "${DISPLAY_NAME}" \
+            --arg dockerfile "${DOCKERFILE}" \
+            --arg image_id "${IMAGE_ID}" \
+            --arg repository "${REPOSITORY}" \
+            --arg short_sha "${SHORT_SHA}" \
+            --argjson published_refs "${published_refs_json}" \
+            --argjson tags "${tags_json}" \
+            '{
+              build_context: $build_context,
+              digest: $digest,
+              digest_ref: $digest_ref,
+              display_name: $display_name,
+              dockerfile: $dockerfile,
+              image_id: $image_id,
+              published_refs: $published_refs,
+              repository: $repository,
+              short_sha: $short_sha,
+              tags: $tags
+            }' > "image-metadata/${IMAGE_ID}.json"
+
+      - name: Upload image metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-image-metadata-${{ matrix.artifact_id }}
+          path: image-metadata/${{ matrix.manifest_key }}.json
+
+  package-core:
+    name: Package bundled core artifact
+    needs: prepare
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build bundled core artifact and pinned env template
+        shell: bash
+        run: |
+          mkdir -p dist/runtime-assets
+          bash scripts/release/prepare_publish_artifacts.sh \
+            --lane "${{ needs.prepare.outputs.publish_lane }}" \
+            --output-dir "dist/runtime-assets" \
+            --ref-name "${{ needs.prepare.outputs.ref_name }}" \
+            --short-sha "${{ needs.prepare.outputs.short_sha }}"
+
+      - name: Upload bundled runtime assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact_bundle_name }}
+          path: dist/runtime-assets/*
+
+  assemble-manifest:
+    name: Assemble publish manifest
+    needs:
+      - package-core
+      - prepare
+      - publish-images
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download image metadata
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist/image-metadata
+          pattern: published-image-metadata-*
+
+      - name: Download bundled runtime assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/runtime-assets
+          name: ${{ needs.prepare.outputs.artifact_bundle_name }}
+
+      - name: Generate machine-readable manifest
+        shell: bash
+        env:
+          GIT_SHA: ${{ github.sha }}
+          MANIFEST_NAME: ${{ needs.prepare.outputs.manifest_name }}
+          PUBLISH_LANE: ${{ needs.prepare.outputs.publish_lane }}
+          REF_NAME: ${{ needs.prepare.outputs.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          core_metadata_path="$(echo dist/runtime-assets/publish-artifacts-metadata-*.json)"
+          images_json="$(jq -s '
+            map({
+              (.image_id): {
+                build_context: .build_context,
+                digest: .digest,
+                digest_ref: .digest_ref,
+                display_name: .display_name,
+                dockerfile: .dockerfile,
+                published_refs: .published_refs,
+                repository: .repository,
+                tags: .tags
+              }
+            }) | add
+          ' dist/image-metadata/*.json)"
+
+          jq -n \
+            --arg git_sha "${GIT_SHA}" \
+            --arg lane "${PUBLISH_LANE}" \
+            --arg ref_name "${REF_NAME}" \
+            --arg release_tag "${RELEASE_TAG}" \
+            --arg short_sha "${SHORT_SHA}" \
+            --argjson images "${images_json}" \
+            --slurpfile publish_assets "${core_metadata_path}" \
+            '{
+              schema_version: 1,
+              git_sha: $git_sha,
+              images: $images,
+              lane: $lane,
+              published_image_tag: $publish_assets[0].image_tag,
+              ref_name: $ref_name,
+              release_tag: (if $release_tag == "" then null else $release_tag end),
+              short_sha: $short_sha,
+              core_artifact: $publish_assets[0].core_artifact,
+              standalone_env_template: $publish_assets[0].standalone_env
+            }' > "dist/runtime-assets/${MANIFEST_NAME}"
+
+      - name: Upload consolidated publish bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.final_artifact_name }}
+          path: dist/runtime-assets/*
+
+      - name: Attach tagged-release assets
+        if: needs.prepare.outputs.publish_lane == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_NAME: ${{ needs.prepare.outputs.manifest_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          files=(
+            "dist/runtime-assets/core-${RELEASE_TAG}.tar.gz"
+            "dist/runtime-assets/env.standalone-${RELEASE_TAG}"
+            "dist/runtime-assets/${MANIFEST_NAME}"
+          )
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${files[@]}" \
+              --title "${RELEASE_TAG}" \
+              --notes "Release assets published automatically by publish-images.yml."
+          fi
+
+      - name: Publish summary
+        shell: bash
+        env:
+          MANIFEST_NAME: ${{ needs.prepare.outputs.manifest_name }}
+          PUBLISH_LANE: ${{ needs.prepare.outputs.publish_lane }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          core_metadata_path="$(echo dist/runtime-assets/publish-artifacts-metadata-*.json)"
+          core_name="$(jq -r '.core_artifact.name' "${core_metadata_path}")"
+          core_sha="$(jq -r '.core_artifact.sha256' "${core_metadata_path}")"
+          env_name="$(jq -r '.standalone_env.name' "${core_metadata_path}")"
+          pinned_tag="$(jq -r '.image_tag' "${core_metadata_path}")"
+
+          echo "## Published runtime assets" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Lane: \`${PUBLISH_LANE}\`" >> "${GITHUB_STEP_SUMMARY}"
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            echo "- Release tag: \`${RELEASE_TAG}\`" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          echo "- Exact installer tag: \`${pinned_tag}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Bundled core artifact: \`${core_name}\` (\`${core_sha}\`)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Pinned standalone env template: \`${env_name}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Machine-readable manifest: \`${MANIFEST_NAME}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### Published image refs" >> "${GITHUB_STEP_SUMMARY}"
+          while IFS= read -r metadata_file; do
+            display_name="$(jq -r '.display_name' "${metadata_file}")"
+            digest_ref="$(jq -r '.digest_ref' "${metadata_file}")"
+            while IFS= read -r published_ref; do
+              echo "- \`${display_name}\`: \`${published_ref}\` and \`${digest_ref}\`" >> "${GITHUB_STEP_SUMMARY}"
+            done < <(jq -r '.published_refs[]' "${metadata_file}")
+          done < <(find dist/image-metadata -type f -name '*.json' | sort)
