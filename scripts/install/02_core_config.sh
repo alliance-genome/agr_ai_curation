@@ -11,14 +11,7 @@ env_template_path="${repo_root}/scripts/install/lib/templates/env.standalone"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
 image_tag_override="${INSTALL_IMAGE_TAG:-}"
 
-declare -a deployment_config_filenames=(
-  "groups.yaml"
-  "connections.yaml"
-  "providers.yaml"
-  "models.yaml"
-  "tool_policy_defaults.yaml"
-  "maintenance_message.txt"
-)
+mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
 
 prompt_optional_value() {
   local prompt_text="$1"

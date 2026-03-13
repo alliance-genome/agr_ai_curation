@@ -39,6 +39,33 @@ The standalone installer now seeds the extracted bundle into an installed runtim
 
 `scripts/install/install.sh --image-tag <tag>` can be used to pin the published backend/frontend/trace-review images to a specific release tag during installation.
 
+## Migrating an existing repo-based install
+
+Use `scripts/install/migrate_repo_install.sh` before switching a repo-coupled deployment to `docker-compose.production.yml`.
+
+Examples:
+
+```bash
+# Preview the migration without writing files
+scripts/install/migrate_repo_install.sh --dry-run
+
+# Copy repo-local config/data into ~/.agr_ai_curation and patch ~/.agr_ai_curation/.env
+scripts/install/migrate_repo_install.sh --apply
+```
+
+What the helper does:
+
+- Copies repo-local deployment config into `~/.agr_ai_curation/runtime/config`
+- Copies `packages/core` and any additional package-backed content into `~/.agr_ai_curation/runtime/packages`
+- Copies repo-local mutable data into `~/.agr_ai_curation/data/*`
+- Patches `~/.agr_ai_curation/.env` with the standalone host-directory variables when a repo `.env` already exists
+
+Custom local code handling:
+
+- If repo-local custom agents, modified shipped `packages/core` content, repo-local custom tool sources, or extra non-package code directories are detected, the helper preserves them under `~/.agr_ai_curation/migration/legacy_local`
+- In that case `--apply` exits with `MIGRATION_STATUS=manual_review_required` and a non-zero status so the upgrade cannot look clean by accident
+- Review the preserved scaffold and package/binding templates before mounting any legacy local code into `runtime/packages`
+
 ## Trace review diagnostics service
 
 `trace_review_backend` is part of the supported standalone diagnostics story and starts in the main Compose stack by default.

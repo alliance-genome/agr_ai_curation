@@ -192,6 +192,17 @@ install_runtime_root_dir() {
   printf '%s/runtime\n' "$install_home_dir"
 }
 
+install_deployment_config_filenames() {
+  cat <<'EOF'
+groups.yaml
+connections.yaml
+providers.yaml
+models.yaml
+tool_policy_defaults.yaml
+maintenance_message.txt
+EOF
+}
+
 install_runtime_config_dir() {
   local install_home_dir="$1"
   printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"
