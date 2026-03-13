@@ -98,18 +98,18 @@ set -euo pipefail
 
 state_dir="${INSTALL_TEST_STATE_DIR:?}"
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "up" && "${3:-}" == "-d" ]]; then
+if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; then
   touch "${state_dir}/main_up"
   exit 0
 fi
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "config" && "${3:-}" == "--services" ]]; then
+if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --services "* ]]; then
   printf '%s\n' backend frontend
   exit 0
 fi
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "ps" && "${3:-}" == "-q" ]]; then
-  service="${4:-}"
+if [[ " $* " == *" compose "* && " $* " == *" ps "* && " $* " == *" -q "* ]]; then
+  service="${*: -1}"
   printf 'cid-%s\n' "$service"
   exit 0
 fi
@@ -147,6 +147,12 @@ test_core_config_generates_env_and_backups() {
   trap 'rm -rf "$temp_home"' RETURN
 
   local env_file="${temp_home}/.agr_ai_curation/.env"
+  local runtime_config_dir="${temp_home}/.agr_ai_curation/runtime/config"
+  local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
+  local runtime_state_dir="${temp_home}/.agr_ai_curation/runtime/state"
+  local pdf_storage_dir="${temp_home}/.agr_ai_curation/data/pdf_storage"
+  local file_outputs_dir="${temp_home}/.agr_ai_curation/data/file_outputs"
+  local weaviate_data_dir="${temp_home}/.agr_ai_curation/data/weaviate"
 
   run_core_config "$temp_home" $'sk-openai-first\n\n\n\n'
 
@@ -174,6 +180,50 @@ test_core_config_generates_env_and_backups() {
   assert_contains '^LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LLM_PROVIDER_STRICT_MODE=false$' "$env_file"
   assert_contains '^LANGFUSE_LOCAL_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres$' "$env_file"
+  assert_contains "^AGR_RUNTIME_CONFIG_HOST_DIR=${runtime_config_dir}$" "$env_file"
+  assert_contains "^AGR_RUNTIME_PACKAGES_HOST_DIR=${runtime_packages_dir}$" "$env_file"
+  assert_contains "^AGR_RUNTIME_STATE_HOST_DIR=${runtime_state_dir}$" "$env_file"
+  assert_contains "^PDF_STORAGE_HOST_DIR=${pdf_storage_dir}$" "$env_file"
+  assert_contains "^FILE_OUTPUT_STORAGE_HOST_DIR=${file_outputs_dir}$" "$env_file"
+  assert_contains "^WEAVIATE_DATA_HOST_DIR=${weaviate_data_dir}$" "$env_file"
+
+  [[ -d "$runtime_config_dir" ]] || {
+    echo "Expected runtime config dir at ${runtime_config_dir}" >&2
+    exit 1
+  }
+  [[ -d "$runtime_packages_dir" ]] || {
+    echo "Expected runtime packages dir at ${runtime_packages_dir}" >&2
+    exit 1
+  }
+  [[ -d "$runtime_state_dir" ]] || {
+    echo "Expected runtime state dir at ${runtime_state_dir}" >&2
+    exit 1
+  }
+  [[ -d "$pdf_storage_dir" ]] || {
+    echo "Expected PDF storage dir at ${pdf_storage_dir}" >&2
+    exit 1
+  }
+  [[ -d "$file_outputs_dir" ]] || {
+    echo "Expected file outputs dir at ${file_outputs_dir}" >&2
+    exit 1
+  }
+  [[ -d "$weaviate_data_dir" ]] || {
+    echo "Expected Weaviate data dir at ${weaviate_data_dir}" >&2
+    exit 1
+  }
+  [[ -f "${runtime_config_dir}/connections.yaml" ]] || {
+    echo "Expected seeded runtime config file at ${runtime_config_dir}/connections.yaml" >&2
+    exit 1
+  }
+  [[ -f "${runtime_config_dir}/providers.yaml" ]] || {
+    echo "Expected seeded runtime config file at ${runtime_config_dir}/providers.yaml" >&2
+    exit 1
+  }
+  [[ -f "${runtime_packages_dir}/core/package.yaml" ]] || {
+    echo "Expected seeded core package manifest at ${runtime_packages_dir}/core/package.yaml" >&2
+    exit 1
+  }
+  cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
 
   local init_public_key
   local public_key
@@ -225,6 +275,24 @@ test_auth_setup_dev_and_oidc() {
   assert_contains '^OIDC_GROUP_CLAIM=realm_access.roles$' "$env_oidc"
   assert_contains '^INSTALL_AUTH_TYPE=oidc$' "$state_oidc"
   assert_contains '^INSTALL_GROUP_CLAIM=realm_access.roles$' "$state_oidc"
+}
+
+test_group_setup_defaults_to_runtime_config_path() {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$temp_home"' RETURN
+
+  local default_groups_path="${temp_home}/.agr_ai_curation/runtime/config/groups.yaml"
+
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_auth_setup "$temp_home" $'1\n'
+  HOME="$temp_home" bash "$group_setup_script" <<< $'2\nFB\n'
+
+  [[ -f "$default_groups_path" ]] || {
+    echo "Expected default runtime groups file at ${default_groups_path}" >&2
+    exit 1
+  }
+  assert_contains '^  FB:$' "$default_groups_path"
 }
 
 test_group_setup_modes_and_backup() {
@@ -328,11 +396,13 @@ test_orchestrator_skip_flags() {
   INSTALL_START_VERIFY_POLL_INTERVAL_SECONDS="1" \
   INSTALL_TEST_STATE_DIR="$state_dir" \
   bash "$orchestrator_script" \
+    --image-tag release-20260313 \
     --skip-preflight \
     --skip-group-setup \
     --skip-pdfx-setup >"$output_path" <<< $'sk-orchestrator\n\n\n\n1\n'
 
-  [[ -f "${temp_home}/.agr_ai_curation/.env" ]] || {
+  local env_file="${temp_home}/.agr_ai_curation/.env"
+  [[ -f "$env_file" ]] || {
     echo "Orchestrator did not create env file" >&2
     exit 1
   }
@@ -348,11 +418,19 @@ test_orchestrator_skip_flags() {
     exit 1
   }
 
+  assert_contains '^BACKEND_IMAGE_TAG=release-20260313$' "$env_file"
+  assert_contains '^FRONTEND_IMAGE_TAG=release-20260313$' "$env_file"
+  assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=release-20260313$' "$env_file"
+  [[ -f "${temp_home}/.agr_ai_curation/runtime/packages/core/package.yaml" ]] || {
+    echo "Expected orchestrator to seed the bundled core package" >&2
+    exit 1
+  }
   assert_contains 'Completed Stage 6 - Start and verify services' "$output_path"
 }
 
 test_core_config_generates_env_and_backups
 test_auth_setup_dev_and_oidc
+test_group_setup_defaults_to_runtime_config_path
 test_group_setup_modes_and_backup
 test_group_setup_mode_one_handles_slash_group_claim
 test_group_setup_rejects_invalid_custom_group_id

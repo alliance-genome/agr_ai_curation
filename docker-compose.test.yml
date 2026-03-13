@@ -136,6 +136,8 @@ services:
       - ./alliance_agents:/app/alliance_agents
       - ./config:/app/config
       - ./packages:/app/packages:ro
+      - ./config:/workspace/config:ro
+      - ./packages:/workspace/packages:ro
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
     environment:

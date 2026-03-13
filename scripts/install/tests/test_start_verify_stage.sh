@@ -53,7 +53,7 @@ if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; th
     touch "${state_dir}/pdfx_up"
   else
     touch "${state_dir}/main_up"
-    if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+    if [[ " $* " == *"docker-compose.production.yml"* ]]; then
       touch "${state_dir}/main_compose_is_production"
     fi
   fi
@@ -61,7 +61,7 @@ if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; th
 fi
 
 if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --services "* ]]; then
-  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+  if [[ " $* " == *"docker-compose.production.yml"* ]]; then
     touch "${state_dir}/main_compose_is_production"
   fi
   printf '%s\n' backend frontend langfuse postgres trace_review_backend
@@ -70,7 +70,7 @@ fi
 
 if [[ " $* " == *" compose "* && " $* " == *" ps "* && " $* " == *" -q "* ]]; then
   service="${*: -1}"
-  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+  if [[ " $* " == *"docker-compose.production.yml"* ]]; then
     touch "${state_dir}/main_compose_is_production"
   fi
   printf 'cid-%s\n' "$service"
@@ -207,12 +207,18 @@ EOF
   }
 
   assert_contains 'Stage 6: Start & Verify' "$output_path"
+  assert_contains 'Compose file:' "$output_path"
+  assert_contains "${repo_root}/docker-compose.production.yml" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/packages" "$output_path"
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/state" "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains '8501' "$output_path"
   assert_contains 'Application: http://localhost:3002' "$output_path"
   assert_contains 'API Docs: http://localhost:8000/docs' "$output_path"
   assert_contains 'Langfuse: http://localhost:3000' "$output_path"
   assert_contains 'Health: http://localhost:8000/health' "$output_path"
+  assert_contains 'Restart command: docker compose --env-file' "$output_path"
   assert_contains 'trace_review_backend' "$output_path"
   assert_contains '8001' "$output_path"
   assert_contains 'Auth mode: oidc' "$output_path"
@@ -248,6 +254,7 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   }
   assert_not_exists "${state_dir}/pdfx_up"
 
+  assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"
   assert_contains 'pdf_extraction' "$output_path"
   assert_contains 'Skipped' "$output_path"
   assert_contains 'Auth mode: dev' "$output_path"

@@ -99,6 +99,16 @@ require_file_exists() {
   return 0
 }
 
+require_directory_exists() {
+  local dir_path="$1"
+
+  if [[ ! -d "$dir_path" ]]; then
+    log_error "Required directory not found: $dir_path"
+    return 1
+  fi
+  return 0
+}
+
 require_command() {
   local command_name="$1"
 
@@ -175,6 +185,46 @@ remove_env_var() {
   ' "$env_file" >"$tmp_file"
 
   mv "$tmp_file" "$env_file"
+}
+
+install_runtime_root_dir() {
+  local install_home_dir="$1"
+  printf '%s/runtime\n' "$install_home_dir"
+}
+
+install_runtime_config_dir() {
+  local install_home_dir="$1"
+  printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"
+}
+
+install_runtime_packages_dir() {
+  local install_home_dir="$1"
+  printf '%s/packages\n' "$(install_runtime_root_dir "$install_home_dir")"
+}
+
+install_runtime_state_dir() {
+  local install_home_dir="$1"
+  printf '%s/state\n' "$(install_runtime_root_dir "$install_home_dir")"
+}
+
+install_data_root_dir() {
+  local install_home_dir="$1"
+  printf '%s/data\n' "$install_home_dir"
+}
+
+install_pdf_storage_dir() {
+  local install_home_dir="$1"
+  printf '%s/pdf_storage\n' "$(install_data_root_dir "$install_home_dir")"
+}
+
+install_file_outputs_dir() {
+  local install_home_dir="$1"
+  printf '%s/file_outputs\n' "$(install_data_root_dir "$install_home_dir")"
+}
+
+install_weaviate_data_dir() {
+  local install_home_dir="$1"
+  printf '%s/weaviate\n' "$(install_data_root_dir "$install_home_dir")"
 }
 
 has_port_probe_command() {

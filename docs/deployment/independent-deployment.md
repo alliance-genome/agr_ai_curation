@@ -27,6 +27,18 @@ Use `docker-compose.production.yml` for standalone deployments.
   - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config`
   - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d`
 
+## Installed runtime layout
+
+The standalone installer now seeds the extracted bundle into an installed runtime/data layout under `~/.agr_ai_curation/`.
+
+- Runtime config: `~/.agr_ai_curation/runtime/config`
+- Runtime packages: `~/.agr_ai_curation/runtime/packages`
+- Shipped core package: `~/.agr_ai_curation/runtime/packages/core`
+- Runtime state: `~/.agr_ai_curation/runtime/state`
+- Data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
+
+`scripts/install/install.sh --image-tag <tag>` can be used to pin the published backend/frontend/trace-review images to a specific release tag during installation.
+
 ## Trace review diagnostics service
 
 `trace_review_backend` is part of the supported standalone diagnostics story and starts in the main Compose stack by default.
