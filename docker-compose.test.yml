@@ -136,6 +136,8 @@ services:
       - ./alliance_agents:/app/alliance_agents
       - ./config:/app/config
       - ./packages:/app/packages:ro
+      - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./scripts/install:/workspace/scripts/install:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}

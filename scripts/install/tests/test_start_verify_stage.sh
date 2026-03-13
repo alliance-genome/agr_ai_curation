@@ -53,17 +53,26 @@ if [[ " $* " == *" compose "* && " $* " == *" up "* && " $* " == *" -d "* ]]; th
     touch "${state_dir}/pdfx_up"
   else
     touch "${state_dir}/main_up"
+    if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+      touch "${state_dir}/main_compose_is_production"
+    fi
   fi
   exit 0
 fi
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "config" && "${3:-}" == "--services" ]]; then
+if [[ " $* " == *" compose "* && " $* " == *" config "* && " $* " == *" --services "* ]]; then
+  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+    touch "${state_dir}/main_compose_is_production"
+  fi
   printf '%s\n' backend frontend langfuse postgres trace_review_backend
   exit 0
 fi
 
-if [[ "${1:-}" == "compose" && "${2:-}" == "ps" && "${3:-}" == "-q" ]]; then
-  service="${4:-}"
+if [[ " $* " == *" compose "* && " $* " == *" ps "* && " $* " == *" -q "* ]]; then
+  service="${*: -1}"
+  if [[ " $* " == *" -f docker-compose.production.yml "* ]]; then
+    touch "${state_dir}/main_compose_is_production"
+  fi
   printf 'cid-%s\n' "$service"
   exit 0
 fi
@@ -186,6 +195,11 @@ EOF
     cat "$output_path" >&2
     exit 1
   }
+  [[ -f "${state_dir}/main_compose_is_production" ]] || {
+    echo "Expected Stage 6 to use docker-compose.production.yml" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
   [[ -f "${state_dir}/pdfx_up" ]] || {
     echo "Expected PDFX stack startup to be recorded" >&2
     cat "$output_path" >&2
@@ -224,6 +238,11 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
 
   [[ -f "${state_dir}/main_up" ]] || {
     echo "Expected main stack startup to be recorded" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
+  [[ -f "${state_dir}/main_compose_is_production" ]] || {
+    echo "Expected Stage 6 to use docker-compose.production.yml" >&2
     cat "$output_path" >&2
     exit 1
   }

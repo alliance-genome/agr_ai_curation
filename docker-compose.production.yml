@@ -1,0 +1,421 @@
+# Standalone production compose file for the modular runtime layout.
+#
+# This stack runs from published images and explicit runtime/data mounts.
+# It does not build backend/frontend locally and does not require repo source
+# mounts for the application services.
+#
+# Usage:
+#   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config
+#   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d
+
+x-langfuse-depends-on: &langfuse-depends-on
+  postgres:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  clickhouse:
+    condition: service_healthy
+
+x-langfuse-worker-env: &langfuse-worker-env
+  NEXTAUTH_URL: "http://localhost:${LANGFUSE_HOST_PORT:-3000}"
+  DATABASE_URL: "${LANGFUSE_LOCAL_DATABASE_URL:?set in standalone env}"
+  SALT: "${LANGFUSE_LOCAL_SALT:-${SALT:?set in standalone env}}"
+  ENCRYPTION_KEY: "${LANGFUSE_LOCAL_ENCRYPTION_KEY:-${ENCRYPTION_KEY:?set in standalone env}}"
+  TELEMETRY_ENABLED: "${TELEMETRY_ENABLED:-true}"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}"
+  CLICKHOUSE_MIGRATION_URL: "${CLICKHOUSE_MIGRATION_URL:-clickhouse://clickhouse:9000}"
+  CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+  CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
+  CLICKHOUSE_PASSWORD:
+  CLICKHOUSE_CLUSTER_ENABLED: "${CLICKHOUSE_CLUSTER_ENABLED:-false}"
+  LANGFUSE_USE_AZURE_BLOB: "${LANGFUSE_USE_AZURE_BLOB:-false}"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}"
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: "${LANGFUSE_S3_EVENT_UPLOAD_REGION:-auto}"
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}"
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "${LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT:-http://minio:9000}"
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "${LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: "${LANGFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}"
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "${LANGFUSE_S3_MEDIA_UPLOAD_BUCKET:-langfuse}"
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: "${LANGFUSE_S3_MEDIA_UPLOAD_REGION:-auto}"
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: "${LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID:-minio}"
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY:
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: "${LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT:-http://minio:9000}"
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "${LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE:-true}"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "${LANGFUSE_S3_MEDIA_UPLOAD_PREFIX:-media/}"
+  LANGFUSE_S3_BATCH_EXPORT_ENABLED: "${LANGFUSE_S3_BATCH_EXPORT_ENABLED:-false}"
+  LANGFUSE_S3_BATCH_EXPORT_BUCKET: "${LANGFUSE_S3_BATCH_EXPORT_BUCKET:-langfuse}"
+  LANGFUSE_S3_BATCH_EXPORT_PREFIX: "${LANGFUSE_S3_BATCH_EXPORT_PREFIX:-exports/}"
+  LANGFUSE_S3_BATCH_EXPORT_REGION: "${LANGFUSE_S3_BATCH_EXPORT_REGION:-auto}"
+  LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: "${LANGFUSE_S3_BATCH_EXPORT_ENDPOINT:-http://minio:9000}"
+  LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: "${LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT:-http://localhost:9090}"
+  LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: "${LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID:-minio}"
+  LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY:
+  LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}"
+  LANGFUSE_INGESTION_QUEUE_DELAY_MS: "${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}"
+  LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: "${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}"
+  REDIS_HOST: "${REDIS_HOST:-redis}"
+  REDIS_PORT: "${REDIS_PORT:-6379}"
+  REDIS_AUTH:
+  REDIS_TLS_ENABLED: "${REDIS_TLS_ENABLED:-false}"
+
+services:
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: always
+    depends_on: *langfuse-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment: *langfuse-worker-env
+
+  langfuse:
+    image: docker.io/langfuse/langfuse:3
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - "${LANGFUSE_HOST_PORT:-3000}:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: "${LANGFUSE_LOCAL_NEXTAUTH_SECRET:-${NEXTAUTH_SECRET:?set in standalone env}}"
+      LANGFUSE_INIT_ORG_ID: "${LANGFUSE_INIT_ORG_ID:-local-org}"
+      LANGFUSE_INIT_ORG_NAME: "${LANGFUSE_INIT_ORG_NAME:-Local AGR}"
+      LANGFUSE_INIT_PROJECT_ID: "${LANGFUSE_INIT_PROJECT_ID:-local-project}"
+      LANGFUSE_INIT_PROJECT_NAME: "${LANGFUSE_INIT_PROJECT_NAME:-Local AGR Langfuse}"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?set in standalone env}"
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: "${LANGFUSE_INIT_PROJECT_SECRET_KEY:?set in standalone env}"
+      LANGFUSE_INIT_USER_EMAIL: "${LANGFUSE_INIT_USER_EMAIL:-admin@example.com}"
+      LANGFUSE_INIT_USER_NAME: "${LANGFUSE_INIT_USER_NAME:-Admin}"
+      LANGFUSE_INIT_USER_PASSWORD:
+
+  frontend:
+    image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-smoke-20260310-final}"
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: web
+      log_component: nextjs
+    ports:
+      - "${FRONTEND_HOST_PORT:-3002}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-smoke-20260310-final}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: api
+      log_component: openai-agents
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      AGR_RUNTIME_ROOT: /runtime
+      DEV_MODE: "${DEV_MODE:-false}"
+      RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
+      RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
+      PDF_EXTRACTION_SERVICE_URL: "${PDF_EXTRACTION_SERVICE_URL:-}"
+      PDF_EXTRACTION_TIMEOUT: "${PDF_EXTRACTION_TIMEOUT:-300}"
+      PDF_EXTRACTION_POLL_INTERVAL_SECONDS: "${PDF_EXTRACTION_POLL_INTERVAL_SECONDS:-2}"
+      PDF_EXTRACTION_METHODS: "${PDF_EXTRACTION_METHODS:-grobid,marker}"
+      PDF_EXTRACTION_MERGE: "${PDF_EXTRACTION_MERGE:-true}"
+      PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD: "${PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD:-}"
+      PDF_EXTRACTION_AUTH_MODE: "${PDF_EXTRACTION_AUTH_MODE:-none}"
+      PDF_EXTRACTION_BEARER_TOKEN: "${PDF_EXTRACTION_BEARER_TOKEN:-}"
+      PDF_EXTRACTION_COGNITO_TOKEN_URL: "${PDF_EXTRACTION_COGNITO_TOKEN_URL:-}"
+      PDF_EXTRACTION_COGNITO_CLIENT_ID: "${PDF_EXTRACTION_COGNITO_CLIENT_ID:-}"
+      PDF_EXTRACTION_COGNITO_CLIENT_SECRET: "${PDF_EXTRACTION_COGNITO_CLIENT_SECRET:-}"
+      PDF_EXTRACTION_COGNITO_SCOPE: "${PDF_EXTRACTION_COGNITO_SCOPE:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_OPUS_MODEL: "${ANTHROPIC_OPUS_MODEL:-claude-opus-4-6}"
+      LANGFUSE_HOST: "http://langfuse:3000"
+      LANGFUSE_PUBLIC_URL: "${LANGFUSE_PUBLIC_URL:-}"
+      LANGFUSE_PUBLIC_KEY: "${LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY:-}}"
+      LANGFUSE_SECRET_KEY: "${LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_SECRET_KEY:-}}"
+      WEAVIATE_HOST: "${WEAVIATE_HOST:-weaviate}"
+      WEAVIATE_PORT: "${WEAVIATE_PORT:-8080}"
+      WEAVIATE_SCHEME: "${WEAVIATE_SCHEME:-http}"
+      WEAVIATE_GRPC_HOST: "${WEAVIATE_GRPC_HOST:-weaviate}"
+      WEAVIATE_GRPC_PORT: "${WEAVIATE_GRPC_PORT:-50051}"
+      WEAVIATE_GRPC_SECURE: "${WEAVIATE_GRPC_SECURE:-false}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-text-embedding-3-small}"
+      EMBEDDING_TOKEN_PREFLIGHT_ENABLED: "${EMBEDDING_TOKEN_PREFLIGHT_ENABLED:-true}"
+      EMBEDDING_MODEL_TOKEN_LIMIT: "${EMBEDDING_MODEL_TOKEN_LIMIT:-8191}"
+      EMBEDDING_TOKEN_SAFETY_MARGIN: "${EMBEDDING_TOKEN_SAFETY_MARGIN:-500}"
+      CONTENT_PREVIEW_CHARS: "${CONTENT_PREVIEW_CHARS:-1600}"
+      WEAVIATE_BATCH_REQUESTS_PER_MINUTE: "${WEAVIATE_BATCH_REQUESTS_PER_MINUTE:-5000}"
+      TRACE_REVIEW_URL: "${TRACE_REVIEW_URL:-http://trace_review_backend:8001}"
+      PDF_STORAGE_PATH: /runtime/state/pdf_storage
+      FILE_OUTPUT_STORAGE_PATH: /runtime/state/file_outputs
+      UNSTRUCTURED_API_URL: "${UNSTRUCTURED_API_URL:-}"
+      UNSTRUCTURED_API_KEY: "${UNSTRUCTURED_API_KEY:-}"
+      DEBUG: "${DEBUG:-false}"
+      POSTHOG_DISABLED: "true"
+      ANONYMIZED_TELEMETRY: "False"
+      DATABASE_URL: "${DATABASE_URL:?set in standalone env}"
+      HEALTH_CHECK_STRICT_MODE: "${HEALTH_CHECK_STRICT_MODE:-true}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
+      CURATION_DB_URL: "${CURATION_DB_URL:-}"
+      LITERATURE_DB_URL: "${LITERATURE_DB_URL:-}"
+      CURATION_DB_CREDENTIALS_SOURCE: "${CURATION_DB_CREDENTIALS_SOURCE:-}"
+      CURATION_DB_AWS_SECRET_ID: "${CURATION_DB_AWS_SECRET_ID:-}"
+      CHAT_HISTORY_ENABLED: "${CHAT_HISTORY_ENABLED:-true}"
+      CHAT_MAX_HISTORY_EXCHANGES: "${CHAT_MAX_HISTORY_EXCHANGES:-20}"
+      CHAT_HISTORY_IN_ROUTING: "${CHAT_HISTORY_IN_ROUTING:-true}"
+      CHAT_HISTORY_IN_RESPONSE: "${CHAT_HISTORY_IN_RESPONSE:-true}"
+      CHAT_MAX_SESSIONS_IN_MEMORY: "${CHAT_MAX_SESSIONS_IN_MEMORY:-100}"
+      SNS_TOPIC_ARN: "${SNS_TOPIC_ARN:-}"
+      SNS_REGION: "${SNS_REGION:-us-east-1}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      FEEDBACK_USE_SNS: "${FEEDBACK_USE_SNS:-false}"
+      TOOL_FAILURE_ALERTS_ENABLED: "${TOOL_FAILURE_ALERTS_ENABLED:-false}"
+      AUTH_PROVIDER: "${AUTH_PROVIDER:-oidc}"
+      COGNITO_REGION: "${COGNITO_REGION:-us-east-1}"
+      COGNITO_USER_POOL_ID: "${COGNITO_USER_POOL_ID:-}"
+      COGNITO_CLIENT_ID: "${COGNITO_CLIENT_ID:-}"
+      COGNITO_CLIENT_SECRET: "${COGNITO_CLIENT_SECRET:-}"
+      COGNITO_DOMAIN: "${COGNITO_DOMAIN:-https://auth.alliancegenome.org}"
+      COGNITO_REDIRECT_URI: "http://localhost:${FRONTEND_HOST_PORT:-3002}/auth/callback"
+      OIDC_ISSUER_URL: "${OIDC_ISSUER_URL:-}"
+      OIDC_CLIENT_ID: "${OIDC_CLIENT_ID:-}"
+      OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-}"
+      OIDC_REDIRECT_URI: "${OIDC_REDIRECT_URI:-}"
+      OIDC_SCOPES: "${OIDC_SCOPES:-openid profile email}"
+      OIDC_GROUP_CLAIM: "${OIDC_GROUP_CLAIM:-}"
+      OIDC_LOGOUT_URL: "${OIDC_LOGOUT_URL:-}"
+      OIDC_LOGOUT_REDIRECT_PARAM: "${OIDC_LOGOUT_REDIRECT_PARAM:-post_logout_redirect_uri}"
+      SESSION_TIMEOUT_HOURS: "${SESSION_TIMEOUT_HOURS:-24}"
+      SECURE_COOKIES: "${SECURE_COOKIES:-false}"
+      TESTING_API_KEY: "${TESTING_API_KEY:-}"
+      TESTING_API_KEY_USER: "${TESTING_API_KEY_USER:-testuser}"
+      TESTING_API_KEY_EMAIL: "${TESTING_API_KEY_EMAIL:-testuser@example.org}"
+      TESTING_API_KEY_GROUPS: "${TESTING_API_KEY_GROUPS:-developers}"
+      TESTING_API_KEY_MODS: "${TESTING_API_KEY_MODS:-}"
+      REDIS_URL: "${REDIS_URL:-redis://:${REDIS_AUTH:?set in standalone env}@redis:6379/0}"
+    volumes:
+      - type: bind
+        source: "${AGR_RUNTIME_CONFIG_HOST_DIR:-./config}"
+        target: /runtime/config
+        read_only: true
+      - type: bind
+        source: "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}"
+        target: /runtime/packages
+        read_only: true
+      - type: bind
+        source: "${AGR_RUNTIME_STATE_HOST_DIR:-./runtime_state}"
+        target: /runtime/state
+      - type: bind
+        source: "${PDF_STORAGE_HOST_DIR:-./pdf_storage}"
+        target: /runtime/state/pdf_storage
+      - type: bind
+        source: "${FILE_OUTPUT_STORAGE_HOST_DIR:-./file_outputs}"
+        target: /runtime/state/file_outputs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  trace_review_backend:
+    image: "${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: api
+      log_component: trace-review
+    ports:
+      - "${TRACE_REVIEW_BACKEND_HOST_PORT:-8001}:8001"
+    environment:
+      COGNITO_REGION: "${TRACE_REVIEW_COGNITO_REGION:-${COGNITO_REGION:-us-east-1}}"
+      COGNITO_USER_POOL_ID: "${TRACE_REVIEW_COGNITO_USER_POOL_ID:-${COGNITO_USER_POOL_ID:-}}"
+      COGNITO_CLIENT_ID: "${TRACE_REVIEW_COGNITO_CLIENT_ID:-${COGNITO_CLIENT_ID:-}}"
+      COGNITO_CLIENT_SECRET: "${TRACE_REVIEW_COGNITO_CLIENT_SECRET:-${COGNITO_CLIENT_SECRET:-}}"
+      COGNITO_DOMAIN: "${TRACE_REVIEW_COGNITO_DOMAIN:-${COGNITO_DOMAIN:-}}"
+      COGNITO_REDIRECT_URI: "${TRACE_REVIEW_COGNITO_REDIRECT_URI:-${COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}}"
+      DEV_MODE: "${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}"
+      SECURE_COOKIES: "${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}"
+      LANGFUSE_HOST: "${TRACE_REVIEW_LANGFUSE_HOST:-http://langfuse:3000}"
+      LANGFUSE_PUBLIC_KEY: "${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY:-}}"
+      LANGFUSE_SECRET_KEY: "${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-${LANGFUSE_SECRET_KEY:-}}"
+      LANGFUSE_LOCAL_HOST: "${TRACE_REVIEW_LANGFUSE_LOCAL_HOST:-http://langfuse:3000}"
+      LANGFUSE_LOCAL_PUBLIC_KEY: "${TRACE_REVIEW_LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_LOCAL_PUBLIC_KEY:-}}"
+      LANGFUSE_LOCAL_SECRET_KEY: "${TRACE_REVIEW_LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_LOCAL_SECRET_KEY:-}}"
+      BACKEND_HOST: "${TRACE_REVIEW_BACKEND_HOST:-0.0.0.0}"
+      BACKEND_PORT: "${TRACE_REVIEW_BACKEND_PORT:-8001}"
+      FRONTEND_URL: "${TRACE_REVIEW_FRONTEND_URL:-http://localhost:3001}"
+      CACHE_TTL_HOURS: "${TRACE_REVIEW_CACHE_TTL_HOURS:-1}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  weaviate:
+    image: semitechnologies/weaviate@sha256:5f0dc1fe066685558e22f324fbe9fadbc18730ce155ff47c27f891e62c652d2a
+    restart: always
+    depends_on:
+      reranker-transformers:
+        condition: service_healthy
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: database
+      log_component: weaviate
+    ports:
+      - "${WEAVIATE_HTTP_HOST_PORT:-8080}:8080"
+      - "${WEAVIATE_GRPC_HOST_PORT:-50051}:50051"
+    environment:
+      QUERY_DEFAULTS_LIMIT: "${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "${WEAVIATE_ANONYMOUS_ACCESS:-true}"
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: text2vec-openai
+      ENABLE_MODULES: "text2vec-openai,reranker-transformers"
+      OPENAI_APIKEY: "${OPENAI_API_KEY:-}"
+      RERANKER_INFERENCE_API: http://reranker-transformers:8080
+      CLUSTER_HOSTNAME: weaviate
+      LOG_LEVEL: debug
+      GRPC_HOST: weaviate
+      GRPC_PORT: "50051"
+      GRPC_SECURE: "false"
+    volumes:
+      - type: bind
+        source: "${WEAVIATE_DATA_HOST_DIR:-./weaviate_data}"
+        target: /var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  reranker-transformers:
+    image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
+    restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: ml
+      log_component: reranker
+    environment:
+      ENABLE_CUDA: "0"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  redis:
+    image: docker.io/redis:7-alpine
+    restart: always
+    command: >
+      --requirepass ${REDIS_AUTH:?set in standalone env}
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: cache
+      log_component: redis
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:?set in standalone env}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: "${CLICKHOUSE_DB:-default}"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
+      CLICKHOUSE_PASSWORD:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "${CLICKHOUSE_HTTP_HOST_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minio}"
+      MINIO_ROOT_PASSWORD:
+    ports:
+      - "${MINIO_API_HOST_PORT:-9090}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9091}:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  postgres:
+    image: docker.io/postgres:16
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD:
+      POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+    driver: local
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local

@@ -44,6 +44,10 @@ required_env_keys=(
   HEALTH_CHECK_STRICT_MODE
   LANGFUSE_DATABASE_URL
   LANGFUSE_LOCAL_DATABASE_URL
+  BACKEND_IMAGE
+  BACKEND_IMAGE_TAG
+  FRONTEND_IMAGE
+  FRONTEND_IMAGE_TAG
   TRACE_REVIEW_BACKEND_IMAGE
   TRACE_REVIEW_BACKEND_IMAGE_TAG
   TRACE_REVIEW_URL
@@ -77,10 +81,15 @@ grep -q '^LLM_PROVIDER_STRICT_MODE=false$' "$env_template"
 grep -q '^RUN_DB_BOOTSTRAP_ON_START=true$' "$env_template"
 grep -q '^RUN_DB_MIGRATIONS_ON_START=true$' "$env_template"
 grep -q '^HEALTH_CHECK_STRICT_MODE=true$' "$env_template"
+grep -q '^BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-backend$' "$env_template"
+grep -q '^BACKEND_IMAGE_TAG=smoke-20260310-final$' "$env_template"
+grep -q '^FRONTEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend$' "$env_template"
+grep -q '^FRONTEND_IMAGE_TAG=smoke-20260310-final$' "$env_template"
 grep -q '^TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend$' "$env_template"
 grep -q '^TRACE_REVIEW_URL=http://trace_review_backend:8001$' "$env_template"
 grep -q '^TRACE_REVIEW_LANGFUSE_HOST=http://langfuse:3000$' "$env_template"
 grep -q '^TRACE_REVIEW_LANGFUSE_LOCAL_HOST=http://langfuse:3000$' "$env_template"
+grep -q '^TRACE_REVIEW_BACKEND_HOST=0.0.0.0$' "$env_template"
 
 grep -q '__AUTH_TYPE__' "$groups_template"
 grep -q '__GROUP_CLAIM__' "$groups_template"
