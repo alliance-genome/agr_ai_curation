@@ -18,6 +18,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local needle="$1"
+  local file_path="$2"
+  if grep -q "$needle" "$file_path"; then
+    echo "Did not expect to find '$needle' in $file_path" >&2
+    cat "$file_path" >&2
+    exit 1
+  fi
+}
+
 assert_not_exists() {
   local file_path="$1"
   if [[ -e "$file_path" ]]; then
@@ -322,6 +332,7 @@ PY
 
   assert_contains 'AGR_RUNTIME_PACKAGES_HOST_DIR must not be empty.' "$output_path"
   assert_contains 'Re-run Stage 2: Core Configuration to regenerate the installed runtime layout.' "$output_path"
+  assert_not_contains 'Required directory not found:' "$output_path"
 }
 
 test_start_verify_with_pdfx_enabled

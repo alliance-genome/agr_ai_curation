@@ -234,12 +234,12 @@ require_runtime_var() {
 validate_runtime_layout() {
   require_file_exists "$main_compose_file"
 
-  require_runtime_var "AGR_RUNTIME_CONFIG_HOST_DIR" "${AGR_RUNTIME_CONFIG_HOST_DIR:-}"
-  require_runtime_var "AGR_RUNTIME_PACKAGES_HOST_DIR" "${AGR_RUNTIME_PACKAGES_HOST_DIR:-}"
-  require_runtime_var "AGR_RUNTIME_STATE_HOST_DIR" "${AGR_RUNTIME_STATE_HOST_DIR:-}"
-  require_runtime_var "PDF_STORAGE_HOST_DIR" "${PDF_STORAGE_HOST_DIR:-}"
-  require_runtime_var "FILE_OUTPUT_STORAGE_HOST_DIR" "${FILE_OUTPUT_STORAGE_HOST_DIR:-}"
-  require_runtime_var "WEAVIATE_DATA_HOST_DIR" "${WEAVIATE_DATA_HOST_DIR:-}"
+  require_runtime_var "AGR_RUNTIME_CONFIG_HOST_DIR" "${AGR_RUNTIME_CONFIG_HOST_DIR:-}" || return 1
+  require_runtime_var "AGR_RUNTIME_PACKAGES_HOST_DIR" "${AGR_RUNTIME_PACKAGES_HOST_DIR:-}" || return 1
+  require_runtime_var "AGR_RUNTIME_STATE_HOST_DIR" "${AGR_RUNTIME_STATE_HOST_DIR:-}" || return 1
+  require_runtime_var "PDF_STORAGE_HOST_DIR" "${PDF_STORAGE_HOST_DIR:-}" || return 1
+  require_runtime_var "FILE_OUTPUT_STORAGE_HOST_DIR" "${FILE_OUTPUT_STORAGE_HOST_DIR:-}" || return 1
+  require_runtime_var "WEAVIATE_DATA_HOST_DIR" "${WEAVIATE_DATA_HOST_DIR:-}" || return 1
 
   require_directory_exists "${AGR_RUNTIME_CONFIG_HOST_DIR}"
   require_directory_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}"
