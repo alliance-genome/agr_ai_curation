@@ -6,7 +6,10 @@ helper_repo_root="$(cd "${script_dir}/../.." && pwd)"
 # shellcheck source=scripts/install/lib/common.sh
 source "${helper_repo_root}/scripts/install/lib/common.sh"
 
-mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
+deployment_config_filenames=()
+while IFS= read -r filename; do
+  deployment_config_filenames+=("$filename")
+done < <(install_deployment_config_filenames)
 
 readonly EXIT_MANUAL_REVIEW_REQUIRED=3
 
@@ -449,7 +452,6 @@ copy_runtime_state() {
     return 0
   fi
 
-  temp_dir="$(mktemp -d)"
   while IFS= read -r -d '' child_path; do
     local child_name
     child_name="$(basename "$child_path")"
@@ -458,12 +460,14 @@ copy_runtime_state() {
         continue
         ;;
     esac
+    if [[ -z "$temp_dir" ]]; then
+      temp_dir="$(mktemp -d)"
+    fi
     has_state_children=1
     cp -a "$child_path" "${temp_dir}/${child_name}"
   done < <(find "$source_state_dir" -mindepth 1 -maxdepth 1 -print0)
 
   if [[ "$has_state_children" -eq 0 ]]; then
-    rm -rf "$temp_dir"
     if [[ "$apply_mode" -eq 1 ]]; then
       mkdir -p "$runtime_state_dir"
     fi
@@ -599,8 +603,8 @@ agent_group_rule_names() {
   fi
 
   find "$group_rules_dir" -maxdepth 1 -type f -name '*.yaml' \
-    ! -name 'example.yaml' ! -name '_*.yaml' -printf '%f\n' \
-    | sed 's/\.yaml$//' | sort
+    ! -name 'example.yaml' ! -name '_*.yaml' -exec basename {} .yaml \; \
+    | sort
 }
 
 write_legacy_local_readme() {
@@ -712,7 +716,12 @@ EOF
           printf '    has_schema: true\n'
         fi
 
-        mapfile -t group_rules < <(agent_group_rule_names "$agent_dir")
+        local group_rules=()
+        local group_rule=""
+        while IFS= read -r group_rule; do
+          [[ -n "$group_rule" ]] || continue
+          group_rules+=("$group_rule")
+        done < <(agent_group_rule_names "$agent_dir")
         if [[ "${#group_rules[@]}" -gt 0 ]]; then
           printf '    group_rules: [%s]\n' "$(join_by ", " "${group_rules[@]}")"
         fi

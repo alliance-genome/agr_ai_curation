@@ -432,6 +432,21 @@ EOF
 system_prompt: |
   You are a custom local agent.
 EOF
+  mkdir -p "${source_repo}/config/agents/custom_local/group_rules"
+  cat >"${source_repo}/config/agents/custom_local/group_rules/priority.yaml" <<'EOF'
+group: FB
+priority: high
+EOF
+  cat >"${source_repo}/config/agents/custom_local/group_rules/zeta.yaml" <<'EOF'
+group: WB
+priority: low
+EOF
+  cat >"${source_repo}/config/agents/custom_local/group_rules/example.yaml" <<'EOF'
+group: example
+EOF
+  cat >"${source_repo}/config/agents/custom_local/group_rules/_hidden.yaml" <<'EOF'
+group: hidden
+EOF
 
   mkdir -p "${source_repo}/backend/tools/custom"
   cat >"${source_repo}/backend/tools/custom/my_tool.py" <<'EOF'
@@ -480,6 +495,9 @@ EOF
   assert_file_exists "${install_home}/migration/legacy_local/packages/local_notes/README.txt"
   assert_contains 'legacy_local' "${install_home}/migration/legacy_local/README.md"
   assert_contains 'custom_local' "${install_home}/migration/legacy_local/package.yaml.template"
+  assert_contains 'group_rules: [priority, zeta]' "${install_home}/migration/legacy_local/package.yaml.template"
+  assert_not_contains 'example' "${install_home}/migration/legacy_local/package.yaml.template"
+  assert_not_contains '_hidden' "${install_home}/migration/legacy_local/package.yaml.template"
 
   rm -rf "${temp_root}"
   trap - RETURN
