@@ -287,8 +287,46 @@ EOF
   assert_contains 'Re-run Stage 5 without skipping PDF extraction setup to regenerate it.' "$output_path"
 }
 
+test_start_verify_fails_with_runtime_layout_guidance() {
+  local temp_home
+  local stub_dir
+  local state_dir
+  local output_path
+  local env_file
+  temp_home="$(mktemp -d)"
+  stub_dir="$(mktemp -d)"
+  state_dir="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
+
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_auth_setup "$temp_home" $'1\n'
+  make_stub_tools "$stub_dir"
+
+  env_file="${temp_home}/.agr_ai_curation/.env"
+  python3 - "$env_file" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+updated = []
+for line in env_path.read_text().splitlines():
+    if line.startswith("AGR_RUNTIME_PACKAGES_HOST_DIR="):
+        updated.append("AGR_RUNTIME_PACKAGES_HOST_DIR=")
+    else:
+        updated.append(line)
+env_path.write_text("\n".join(updated) + "\n")
+PY
+
+  run_start_verify_expect_fail "$temp_home" "$stub_dir" "$state_dir" "$output_path"
+
+  assert_contains 'AGR_RUNTIME_PACKAGES_HOST_DIR must not be empty.' "$output_path"
+  assert_contains 'Re-run Stage 2: Core Configuration to regenerate the installed runtime layout.' "$output_path"
+}
+
 test_start_verify_with_pdfx_enabled
 test_start_verify_marks_pdfx_skipped_when_not_configured
 test_start_verify_fails_with_clear_pdfx_state_guidance
+test_start_verify_fails_with_runtime_layout_guidance
 
 echo "start/verify installer stage checks passed"

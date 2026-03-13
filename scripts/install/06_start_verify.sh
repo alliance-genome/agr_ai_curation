@@ -225,7 +225,10 @@ require_runtime_var() {
   local key="$1"
   local value="$2"
 
-  require_non_empty "$key" "$value"
+  require_non_empty "$key" "$value" || {
+    log_error "Re-run Stage 2: Core Configuration to regenerate the installed runtime layout."
+    return 1
+  }
 }
 
 validate_runtime_layout() {

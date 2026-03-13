@@ -65,6 +65,7 @@ seed_runtime_layout() {
     cp "${config_source_dir}/${filename}" "${runtime_config_dir}/${filename}"
   done
 
+  require_non_empty "core_package_target_dir" "$core_package_target_dir"
   rm -rf "$core_package_target_dir"
   cp -a "$core_package_source_dir" "$core_package_target_dir"
 }
