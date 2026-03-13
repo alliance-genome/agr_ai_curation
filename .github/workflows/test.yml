@@ -54,6 +54,11 @@ jobs:
           mkdir -p backend/htmlcov
           docker run --rm \
             -v "${{ github.workspace }}/backend:/app/backend" \
+            -v "${{ github.workspace }}/alliance_agents:/app/alliance_agents" \
+            -v "${{ github.workspace }}/config:/app/config" \
+            -v "${{ github.workspace }}/packages:/app/packages:ro" \
+            -v "${{ github.workspace }}/docker-compose.production.yml:/workspace/docker-compose.production.yml:ro" \
+            -v "${{ github.workspace }}/scripts/install:/workspace/scripts/install:ro" \
             -e PYTHONUNBUFFERED=1 \
             -e OPENAI_API_KEY=test-key-for-unit-tests \
             -e LANGFUSE_PUBLIC_KEY=test-key \

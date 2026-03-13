@@ -13,6 +13,7 @@ docker_cmd="${INSTALL_DOCKER_CMD:-docker}"
 curl_cmd="${INSTALL_CURL_CMD:-curl}"
 timeout_seconds="${INSTALL_START_VERIFY_TIMEOUT_SECONDS:-300}"
 poll_interval_seconds="${INSTALL_START_VERIFY_POLL_INTERVAL_SECONDS:-5}"
+main_compose_file="${INSTALL_MAIN_COMPOSE_FILE:-docker-compose.production.yml}"
 
 declare -a main_services=()
 declare -A service_statuses=()
@@ -34,8 +35,12 @@ run_compose() {
   )
 }
 
+run_main_compose() {
+  run_compose "$repo_root" --env-file "$env_output_path" -f "$main_compose_file" "$@"
+}
+
 load_main_services() {
-  mapfile -t main_services < <(run_compose "$repo_root" config --services)
+  mapfile -t main_services < <(run_main_compose config --services)
 }
 
 frontend_url() {
@@ -89,7 +94,7 @@ container_health_state() {
   local container_id=""
   local container_ids=()
 
-  mapfile -t container_ids < <(run_compose "$repo_root" ps -q "$service" 2>/dev/null || true)
+  mapfile -t container_ids < <(run_main_compose ps -q "$service" 2>/dev/null || true)
   container_id="${container_ids[0]:-}"
   if [[ -z "$container_id" ]]; then
     printf '%s\n' "missing"
@@ -278,7 +283,7 @@ start_pdfx_stack_if_configured() {
 
 start_main_stack() {
   log_info "Starting main stack"
-  RUN_DB_BOOTSTRAP_ON_START=true RUN_DB_MIGRATIONS_ON_START=true run_compose "$repo_root" --env-file "$env_output_path" up -d
+  RUN_DB_BOOTSTRAP_ON_START=true RUN_DB_MIGRATIONS_ON_START=true run_main_compose up -d
 }
 
 main() {
@@ -289,11 +294,11 @@ main() {
   echo
   log_info "=== Stage 6: Start & Verify ==="
   echo
-  echo "  Launching all services with docker compose and verifying they're healthy."
+  echo "  Launching the standalone production stack with docker compose and verifying it's healthy."
   echo
   echo "  This will:"
-  echo "    - Pull Docker images (first run can take 5-15 minutes on a fresh machine)"
-  echo "    - Start the database, vector store, backend, frontend, and observability stack"
+  echo "    - Pull published Docker images (first run can take 5-15 minutes on a fresh machine)"
+  echo "    - Start the database, vector store, backend, frontend, diagnostics, and observability stack"
   echo "    - Run database migrations automatically"
   echo "    - Poll health endpoints until everything reports OK (up to 5 min timeout)"
   echo
@@ -304,7 +309,7 @@ main() {
   local reset='\033[0m'
   if ! supports_color; then yellow="" reset=""; fi
   printf "  ${yellow}This is the slowest stage -- first run can take 10-20 minutes${reset}\n"
-  printf "  ${yellow}while Docker pulls and builds all the images. Grab a coffee!${reset}\n"
+  printf "  ${yellow}while Docker pulls the published images. Grab a coffee!${reset}\n"
   printf "\n"
   printf "  ${yellow}NOTE: You will see docker WARN messages, curl errors, and 404s${reset}\n"
   printf "  ${yellow}during startup -- this is normal while services are initializing.${reset}\n"

@@ -8,11 +8,24 @@ This guide covers standalone deployment of `agr_ai_curation` outside Alliance pr
 
 ## Published images
 
-The standalone stack now expects `trace_review_backend` to run from a published image instead of a local source build.
+The standalone stack now expects `backend`, `frontend`, and `trace_review_backend` to run from published images instead of local source builds.
 
+- Canonical backend image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-backend`
+- Canonical frontend image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend`
 - Canonical trace review image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
+- The authoritative standalone env template currently pins `BACKEND_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` to `smoke-20260310-final`, which was the latest verified public tag on March 13, 2026
 - Standalone env defaults pin the repository with `TRACE_REVIEW_BACKEND_IMAGE` and `TRACE_REVIEW_BACKEND_IMAGE_TAG`
 - The GitHub release workflow publishes `trace_review_backend` from `trace_review/backend/Dockerfile.prod` and tags each release as both `v<version>` and `latest`
+
+## Compose file
+
+Use `docker-compose.production.yml` for standalone deployments.
+
+- `docker-compose.production.yml` is the published-image path with modular runtime/data mounts
+- `docker-compose.prod.yml` remains the GELF logging override for the source-build stack and is unchanged by this deployment path
+- Validation commands:
+  - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config`
+  - `docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d`
 
 ## Trace review diagnostics service
 
@@ -29,6 +42,10 @@ The authoritative standalone template is `scripts/install/lib/templates/env.stan
 
 Key values:
 
+- `BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-backend`
+- `BACKEND_IMAGE_TAG=smoke-20260310-final`
+- `FRONTEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend`
+- `FRONTEND_IMAGE_TAG=smoke-20260310-final`
 - `TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
 - `TRACE_REVIEW_BACKEND_IMAGE_TAG=latest`
 - `TRACE_REVIEW_URL=http://trace_review_backend:8001`
