@@ -128,15 +128,15 @@ up-logging: ## Start logging services only (Loki, Promtail)
 # =============================================================================
 
 .PHONY: trace-review
-trace-review: check-env check-trace-review-env ## Start trace_review services
-	@echo "$(GREEN)Starting trace_review services...$(NC)"
+trace-review: check-env check-trace-review-env ## Start published trace_review backend in the main stack
+	@echo "$(GREEN)Starting published trace_review backend...$(NC)"
 	@set -a && . "$(ENV_FILE)" && [ -f "$(TRACE_REVIEW_ENV_FILE)" ] && . "$(TRACE_REVIEW_ENV_FILE)" && set +a && \
 		docker compose up -d trace_review_backend
 	@echo "$(GREEN)trace_review backend running on http://localhost:8001$(NC)"
 
 .PHONY: trace-review-standalone
-trace-review-standalone: check-trace-review-env ## Start trace_review independently (its own docker-compose)
-	@echo "$(GREEN)Starting trace_review standalone...$(NC)"
+trace-review-standalone: check-trace-review-env ## Start source-built trace_review stack independently
+	@echo "$(GREEN)Starting source-built trace_review standalone stack...$(NC)"
 	@set -a && . "$(TRACE_REVIEW_ENV_FILE)" && set +a && \
 		docker compose -f trace_review/docker-compose.yml up
 

@@ -170,6 +170,7 @@ services:
       - EMBEDDING_TOKEN_SAFETY_MARGIN=${EMBEDDING_TOKEN_SAFETY_MARGIN:-500}
       - CONTENT_PREVIEW_CHARS=${CONTENT_PREVIEW_CHARS:-1600}
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=${WEAVIATE_BATCH_REQUESTS_PER_MINUTE:-5000}
+      - TRACE_REVIEW_URL=${TRACE_REVIEW_URL:-http://trace_review_backend:8001}
       - PDF_STORAGE_PATH=${PDF_STORAGE_PATH:-/app/pdf_storage}
       - FILE_OUTPUT_STORAGE_PATH=${FILE_OUTPUT_STORAGE_PATH:-/app/file_outputs}
       - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-}
@@ -278,10 +279,7 @@ services:
 
   # TraceReview Backend API for trace analysis (Agent Studio feature)
   trace_review_backend:
-    build:
-      context: ./trace_review/backend
-      dockerfile: Dockerfile
-    network_mode: host  # Use host network to access VPN (Alliance internal Langfuse)
+    image: ${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:-latest}
     # Environment loaded from shell (via Makefile) or optional local .env
     env_file:
       - path: ./trace_review/backend/.env
@@ -301,12 +299,12 @@ services:
       # Development Mode
       - DEV_MODE=${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}
       - SECURE_COOKIES=${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}
-      # Langfuse default must be localhost because trace_review_backend runs with network_mode: host
-      - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-${LANGFUSE_HOST:-http://localhost:3000}}
+      # Standalone/default deployments use the bundled langfuse service.
+      - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-http://langfuse:3000}
       - LANGFUSE_PUBLIC_KEY=${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY}}
       - LANGFUSE_SECRET_KEY=${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-${LANGFUSE_SECRET_KEY}}
-      # Local Langfuse alternative
-      - LANGFUSE_LOCAL_HOST=${TRACE_REVIEW_LANGFUSE_LOCAL_HOST:-${LANGFUSE_LOCAL_HOST:-http://localhost:3000}}
+      # Alternate local source for callers that request source="local".
+      - LANGFUSE_LOCAL_HOST=${TRACE_REVIEW_LANGFUSE_LOCAL_HOST:-http://langfuse:3000}
       - LANGFUSE_LOCAL_PUBLIC_KEY=${TRACE_REVIEW_LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_LOCAL_PUBLIC_KEY}}
       - LANGFUSE_LOCAL_SECRET_KEY=${TRACE_REVIEW_LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_LOCAL_SECRET_KEY}}
       # Server config
@@ -319,10 +317,12 @@ services:
       log_env: dev
       log_tier: api
       log_component: trace-review
-    # Note: Port 8001 is accessed via host network (localhost:8001)
-    # No explicit ports mapping needed due to network_mode: host
+    ports:
+      - "${TRACE_REVIEW_BACKEND_HOST_PORT:-8001}:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/')\" || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

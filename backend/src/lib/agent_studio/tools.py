@@ -34,11 +34,11 @@ def get_trace_source() -> str:
 def get_trace_review_url() -> str:
     """Get the TraceReview service base URL.
 
-    Uses TRACE_REVIEW_URL env var. Defaults to http://172.17.0.1:8001 for
-    Docker bridge network (backend container reaching host-networked trace_review).
-    For local development outside Docker, set TRACE_REVIEW_URL=http://localhost:8001.
+    Uses TRACE_REVIEW_URL env var. Defaults to the trace_review_backend service
+    on the shared Compose network. For local development outside Docker, set
+    TRACE_REVIEW_URL=http://localhost:8001.
     """
-    return os.getenv("TRACE_REVIEW_URL", "http://172.17.0.1:8001")
+    return os.getenv("TRACE_REVIEW_URL", "http://trace_review_backend:8001")
 
 
 # ============================================================================
