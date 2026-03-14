@@ -118,24 +118,32 @@ write_metadata() {
   local core_sha256="$2"
   local env_sha256="$3"
 
-  cat > "${metadata_path}" <<EOF
-{
-  "lane": "${lane}",
-  "ref_name": "${ref_name}",
-  "short_sha": "${short_sha}",
-  "image_tag": "${resolved_image_tag}",
-  "source_date_epoch": ${source_date_epoch},
-  "core_artifact": {
-    "name": "${core_artifact_name}",
-    "sha256": "${core_sha256}"
-  },
-  "standalone_env": {
-    "name": "${standalone_env_name}",
-    "sha256": "${env_sha256}",
-    "image_tag": "${resolved_image_tag}"
-  }
-}
-EOF
+  jq -n \
+    --arg lane "${lane}" \
+    --arg ref_name "${ref_name}" \
+    --arg short_sha "${short_sha}" \
+    --arg image_tag "${resolved_image_tag}" \
+    --argjson source_date_epoch "${source_date_epoch}" \
+    --arg core_name "${core_artifact_name}" \
+    --arg core_sha256 "${core_sha256}" \
+    --arg env_name "${standalone_env_name}" \
+    --arg env_sha256 "${env_sha256}" \
+    '{
+      lane: $lane,
+      ref_name: $ref_name,
+      short_sha: $short_sha,
+      image_tag: $image_tag,
+      source_date_epoch: $source_date_epoch,
+      core_artifact: {
+        name: $core_name,
+        sha256: $core_sha256
+      },
+      standalone_env: {
+        name: $env_name,
+        sha256: $env_sha256,
+        image_tag: $image_tag
+      }
+    }' > "${metadata_path}"
 }
 
 cleanup() {
@@ -162,6 +170,11 @@ main() {
 
   if [[ ! -f "${env_template_path}" ]]; then
     echo "Missing env template: ${env_template_path}" >&2
+    exit 1
+  fi
+
+  if ! git -C "${repo_root}" cat-file -e HEAD:packages/core/package.yaml 2>/dev/null; then
+    echo "Missing packages/core/package.yaml in HEAD; cannot build bundled core artifact" >&2
     exit 1
   fi
 

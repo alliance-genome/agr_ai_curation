@@ -35,6 +35,24 @@ assert_equals() {
   fi
 }
 
+assert_command_fails_with() {
+  local pattern="$1"
+  shift
+
+  local temp_output
+  temp_output="$(mktemp)"
+
+  if "$@" >"${temp_output}" 2>&1; then
+    echo "Expected command to fail: $*" >&2
+    cat "${temp_output}" >&2
+    rm -f "${temp_output}"
+    exit 1
+  fi
+
+  assert_contains "$pattern" "${temp_output}"
+  rm -f "${temp_output}"
+}
+
 test_release_lane_outputs_reproducible_assets() {
   local temp_dir
   temp_dir="$(mktemp -d)"
@@ -102,7 +120,39 @@ test_main_lane_outputs_sha_pinned_assets() {
   assert_contains '"image_tag": "sha-abc1234"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
 }
 
+test_rejects_missing_required_flags() {
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+
+  assert_command_fails_with 'Missing required value for --lane' \
+    bash "$helper_script" \
+    --output-dir "${temp_dir}/missing-lane" \
+    --ref-name main
+
+  assert_command_fails_with 'Missing required value for --output-dir' \
+    bash "$helper_script" \
+    --lane main \
+    --ref-name main \
+    --short-sha abc1234
+}
+
+test_rejects_unsupported_lane() {
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+
+  assert_command_fails_with 'Unsupported lane: preview' \
+    bash "$helper_script" \
+    --lane preview \
+    --output-dir "${temp_dir}/unsupported-lane" \
+    --ref-name main \
+    --short-sha abc1234
+}
+
 test_release_lane_outputs_reproducible_assets
 test_main_lane_outputs_sha_pinned_assets
+test_rejects_missing_required_flags
+test_rejects_unsupported_lane
 
 echo "prepare_publish_artifacts.sh checks passed"

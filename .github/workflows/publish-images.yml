@@ -189,6 +189,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
+          # Public ECR does not support OCI attestation manifests yet.
           provenance: false
           push: true
           sbom: false
@@ -303,7 +304,15 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
         run: |
-          core_metadata_path="$(echo dist/runtime-assets/publish-artifacts-metadata-*.json)"
+          mapfile -t core_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
+          if [[ "${#core_metadata_files[@]}" -ne 1 ]]; then
+            echo "Expected exactly 1 publish-artifacts metadata file, found ${#core_metadata_files[@]}." >&2
+            if [[ "${#core_metadata_files[@]}" -gt 0 ]]; then
+              printf 'Found: %s\n' "${core_metadata_files[@]}" >&2
+            fi
+            exit 1
+          fi
+          core_metadata_path="${core_metadata_files[0]}"
           images_json="$(jq -s '
             map({
               (.image_id): {
@@ -375,7 +384,15 @@ jobs:
           PUBLISH_LANE: ${{ needs.prepare.outputs.publish_lane }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          core_metadata_path="$(echo dist/runtime-assets/publish-artifacts-metadata-*.json)"
+          mapfile -t core_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
+          if [[ "${#core_metadata_files[@]}" -ne 1 ]]; then
+            echo "Expected exactly 1 publish-artifacts metadata file, found ${#core_metadata_files[@]}." >&2
+            if [[ "${#core_metadata_files[@]}" -gt 0 ]]; then
+              printf 'Found: %s\n' "${core_metadata_files[@]}" >&2
+            fi
+            exit 1
+          fi
+          core_metadata_path="${core_metadata_files[0]}"
           core_name="$(jq -r '.core_artifact.name' "${core_metadata_path}")"
           core_sha="$(jq -r '.core_artifact.sha256' "${core_metadata_path}")"
           env_name="$(jq -r '.standalone_env.name' "${core_metadata_path}")"
