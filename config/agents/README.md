@@ -1,68 +1,83 @@
 # Agents Directory
 
-This directory contains agent definitions that are loaded at runtime. Each agent is a self-contained folder with YAML configuration and Python schema.
+This repo directory is the source-development mirror of the shipped core agent
+catalog. Public or organization-specific customization for a standard install
+should happen through runtime packages under
+`~/.agr_ai_curation/runtime/packages/` plus deployment overrides under
+`~/.agr_ai_curation/runtime/config/`, not by editing this checkout in place.
 
-## Directory Structure
+See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
+for the installed runtime layout. If you are maintaining the shipped core
+package in this repository, keep `config/agents/` aligned with
+`packages/core/agents/`.
 
-```
-agents/
-├── README.md           # This file
-├── _examples/          # Template agents (NOT loaded - underscore prefix)
-│   └── basic_agent/    # Copy this to create new agents
-├── supervisor/         # Core supervisor agent (ships with base)
-├── gene/               # Gene validation agent
-├── allele/             # Allele validation agent
-├── disease/            # Disease validation agent
-└── [your_agent]/       # Your custom agents
-```
+## Package-first authoring layout
 
-## Agent Folder Structure
+Each installed package can export one or more agent bundles:
 
-Each agent is a self-contained folder:
-
-```
-my_agent/
-├── agent.yaml        # Agent definition + supervisor routing
-├── prompt.yaml       # Base prompt instructions
-├── schema.py         # Pydantic output schema
-└── group_rules/      # Organization-specific rules (optional)
-    ├── fb.yaml       # FlyBase rules
-    ├── wb.yaml       # WormBase rules
-    └── ...
+```text
+~/.agr_ai_curation/runtime/packages/org_custom/
+├── package.yaml
+├── requirements/runtime.txt
+└── agents/
+    └── my_agent/
+        ├── agent.yaml
+        ├── prompt.yaml
+        ├── schema.py
+        └── group_rules/
+            └── fb.yaml
 ```
 
-## Quick Start: Adding a New Agent
-
-### Step 1: Copy the Template
-
-```bash
-cp -r _examples/basic_agent my_agent
-```
-
-### Step 2: Update agent.yaml
+The package manifest can use `agent_bundles` shorthand to export those files:
 
 ```yaml
-agent_id: my_agent                    # Must match folder name
-name: "My Agent"                      # Display name
-description: "Validates something"    # Brief description
+package_id: org.custom
+display_name: Org Custom Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/org_custom
+requirements_file: requirements/runtime.txt
+agent_bundles:
+  - name: my_agent
+    has_schema: true
+    group_rules: [fb]
+```
+
+## Quick Start: Add a Package-owned Agent
+
+### Step 1: Create or choose a runtime package
+
+Use a package directory under `~/.agr_ai_curation/runtime/packages/`. Keep the
+package contents self-contained so the agent can move with the package.
+
+### Step 2: Add the agent bundle
+
+`agents/my_agent/agent.yaml`:
+
+```yaml
+agent_id: my_agent
+name: "My Agent"
+description: "Validates something"
 
 supervisor_routing:
-  description: "Use when [specific triggers]"  # Supervisor routing hint
+  description: "Use when [specific triggers]"
 
 tools:
-  - agr_curation_query               # Available tools
+  - agr_curation_query
 
-output_schema: MyAgentEnvelope       # Class name from schema.py
+output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-4o}"  # Supports env vars
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-4o}"
   temperature: 0.1
   reasoning: "medium"
 
-group_rules_enabled: true            # Load group_rules/*.yaml
+group_rules_enabled: true
 ```
 
-### Step 3: Update prompt.yaml
+`agents/my_agent/prompt.yaml`:
 
 ```yaml
 agent_id: my_agent
@@ -82,149 +97,134 @@ content: |
   3. Return structured results
 ```
 
-### Step 4: Update schema.py
+`agents/my_agent/schema.py`:
 
 ```python
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List
+
 
 class MyResult(BaseModel):
-    """Single result item."""
     id: str = Field(description="Unique identifier")
     name: str = Field(description="Display name")
     valid: bool = Field(description="Validation status")
 
+
 class MyAgentEnvelope(BaseModel):
-    """Container for results - referenced in agent.yaml."""
     results: List[MyResult] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 ```
 
-### Step 5: Add Group Rules (Optional)
-
-If your agent needs organization-specific behavior:
-
-```bash
-mkdir -p my_agent/group_rules
-```
-
-Create `my_agent/group_rules/fb.yaml`:
+Optional group rule file at `agents/my_agent/group_rules/fb.yaml`:
 
 ```yaml
 group_id: FB
-
-rules: |
-  ## FlyBase-Specific Rules
-  - Use FB: prefix for identifiers
-  - Check for CG numbers
+content: |
+  ## FlyBase-specific Rules
+  - Use FB: prefix for identifiers.
+  - Check for CG numbers.
 ```
 
-### Step 6: Restart
+### Step 3: Install and reload
+
+Copy the completed package directory into
+`~/.agr_ai_curation/runtime/packages/` and restart the backend:
 
 ```bash
-docker compose restart backend
+docker compose --env-file ~/.agr_ai_curation/.env \
+  -f docker-compose.production.yml restart backend
 ```
 
-## File Reference
+## Repo-local use in this checkout
 
-### agent.yaml Fields
+Use the repo paths in this directory only when you are:
+
+- maintaining the shipped core package from source,
+- updating templates under `_examples/`, or
+- testing loader/runtime changes from a repository checkout.
+
+Do not treat `config/agents/` as the public customization path for standalone
+installs.
+
+## File reference
+
+### agent.yaml fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `agent_id` | Yes | Unique ID (must match folder name) |
+| `agent_id` | Yes | Unique ID for the runtime agent |
 | `name` | Yes | Human-readable display name |
 | `description` | Yes | Brief description of agent purpose |
-| `supervisor_routing.description` | Yes | Tells supervisor when to route to this agent |
-| `tools` | Yes | List of tool names agent can use |
-| `output_schema` | Yes | Pydantic class name from schema.py |
-| `model_config.model` | No | LLM model (default: gpt-4o) |
-| `model_config.temperature` | No | Response randomness 0.0-1.0 (default: 0.1) |
-| `model_config.reasoning` | No | Thinking effort: disabled/low/medium/high |
-| `group_rules_enabled` | No | Load group_rules/*.yaml (default: false) |
+| `supervisor_routing.description` | Yes | Tells the supervisor when to route to this agent |
+| `tools` | Yes | Tool IDs from the merged runtime tool registry |
+| `output_schema` | Yes | Pydantic class name from `schema.py` |
+| `model_config.model` | No | LLM model (default: `gpt-4o`) |
+| `model_config.temperature` | No | Response randomness 0.0-1.0 (default: `0.1`) |
+| `model_config.reasoning` | No | Thinking effort: `disabled` / `low` / `medium` / `high` |
+| `group_rules_enabled` | No | Load `group_rules/*.yaml` (default: `false`) |
 
-### prompt.yaml Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `agent_id` | Yes | Must match agent.yaml |
-| `content` | Yes | The actual prompt text (YAML multiline `\|`) |
-
-### schema.py Requirements
-
-- Must define the envelope class referenced in `output_schema`
-- Use `Field(default_factory=list)` for list fields (never required)
-- Add `Field(description=...)` for all fields (helps LLM)
-- Keep schemas flat - avoid deep nesting
-
-### group_rules/*.yaml Fields
+### prompt.yaml fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `group_id` | Yes | Must match filename and groups.yaml mapping |
-| `rules` | Yes | Rules to inject into prompt (YAML multiline `\|`) |
+| `agent_id` | Yes | Must match `agent.yaml` |
+| `content` | Yes | Base prompt content |
 
-## Loading Behavior
+### schema.py requirements
 
-- **Loaded**: All folders without underscore prefix
-- **Skipped**: `_examples/`, `_templates/`, `_deprecated/`, etc.
-- **Timing**: Agents load at backend startup
-- **Caching**: Loaded once, use `force_reload=True` to refresh
+- Define the envelope class referenced by `output_schema`.
+- Use `Field(default_factory=list)` for envelope list fields.
+- Add `Field(description=...)` for all schema fields.
+- Keep schemas flat enough for reliable structured output.
 
-## Environment Variables
+### group_rules/*.yaml fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `group_id` | Yes | Must match the filename and a key in `groups.yaml` |
+| `content` | Yes | Rules injected into the prompt at runtime |
+
+Migration note: older repo-based installs may still have `rules:` in
+`group_rules/*.yaml`. Rename that key to `content:` before packaging or
+migrating the agent bundle. The modular loader expects `content:` and skips the
+file when that field is missing.
+
+## Loading and override behavior
+
+- Agent bundles are discovered from loaded runtime packages.
+- Bundle names must be unique across packages. Duplicate bundle names are
+  startup errors; agent bundles do not have an automatic override winner.
+- Tools referenced by `agent.yaml` must exist in the merged runtime tool
+  registry, usually via package `tools/bindings.yaml` exports.
+- Provider, model, and tool-policy defaults can be overridden by runtime config
+  files under `~/.agr_ai_curation/runtime/config/`, but agent bundle collisions
+  must be resolved by renaming or removing the conflicting package content.
+
+## Environment variables
 
 Model configuration supports environment variable substitution:
 
 ```yaml
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-4o}"      # Use env var or default
-  temperature: ${AGENT_GENE_TEMP:-0.1}       # Works for numbers too
+  model: "${AGENT_GENE_MODEL:-gpt-4o}"
+  temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
 
-Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`
-
-## Tools Reference
-
-Tools are defined in `backend/tools/`. They are auto-discovered from `core/` and `custom/` directories.
-
-| Tool | Description |
-|------|-------------|
-| `agr_curation_query` | Query Alliance curation database |
-| `alliance_api_call` | Call Alliance REST API |
-| `weaviate_search` | Search documents in vector database |
-| `search_document` | Search within a specific document |
-| `read_section` | Read a document section |
-
-To add a custom tool:
-1. Create Python file in `backend/tools/custom/`
-2. Use `@function_tool` decorator
-3. Restart backend
-4. Reference by name in agent.yaml
-
-See `backend/tools/README.md` for details.
-
-## Validation
-
-The loader validates:
-
-- YAML syntax and required fields
-- Schema class exists and is importable
-- Tools referenced exist in tool registry
-- Group rule files match configured groups
-
-Errors are logged with specific file and line information.
+Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| Agent not loading | Check folder name doesn't start with `_` |
-| Schema not found | Verify `output_schema` matches class name exactly |
-| Tool not available | Check tool file exists in `backend/tools/custom/` with `@function_tool` decorator |
-| Group rules not applied | Verify `group_rules_enabled: true` in agent.yaml |
-| Prompt not updating | Restart backend or use `force_reload=True` |
+| Agent not loading | Check the package manifest exports the bundle and the directory contains `agent.yaml` |
+| Duplicate agent bundle | Two packages export the same agent bundle name; rename or remove one of them |
+| Schema not found | Verify `output_schema` matches the class name exactly |
+| Tool not available | Verify the tool ID exists in a loaded package `tools/bindings.yaml` export |
+| Group rules not applied | Verify `group_rules_enabled: true`, the rule file uses `group_id` + `content`, and any legacy `rules:` key was renamed to `content:` |
 
-## See Also
+## See also
 
-- [CONFIG_DRIVEN_ARCHITECTURE.md](../../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) - Full architecture guide
+- [backend/tools/README.md](../../backend/tools/README.md) - Package-first tool authoring
+- [CONFIG_DRIVEN_ARCHITECTURE.md](../../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) - Repository architecture reference
 - [_examples/README.md](./_examples/README.md) - Template documentation
 - [groups.yaml.example](../groups.yaml.example) - Group configuration template

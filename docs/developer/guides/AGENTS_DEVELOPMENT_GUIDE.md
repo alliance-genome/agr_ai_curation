@@ -3,6 +3,14 @@
 Comprehensive reference for the AGR AI Curation multi-agent architecture. Covers the full lifecycle from agent definition through runtime execution, including the unified database model, dynamic supervisor discovery, tool bindings, prompt management, and observability.
 
 > **Last Updated:** February 2026 (Unified agents table, dynamic supervisor discovery, YAML + DB architecture)
+>
+> **Scope**: This guide is for repository contributors and core-package
+> maintainers. Standard installs should extend agents, tools, and defaults
+> through runtime packages in `~/.agr_ai_curation/runtime/packages/` and
+> runtime config overrides in `~/.agr_ai_curation/runtime/config/`, not by
+> editing repo `config/` or `backend/src/` directly. For the public runtime
+> contract, see
+> [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
 
@@ -50,7 +58,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 
 ### Key Components
 
-1. **YAML Config Layer** (`config/agents/*/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions. Read at startup by `registry_builder.py` for UI metadata and by Alembic migrations for database seeding.
+1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `config/agents/*/` is the source-development mirror for the shipped `core` package. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
 
 2. **Unified Agents Table** (`agents` in Postgres) -- Single table for both system agents (seeded from YAML) and custom agents (created via UI). Contains all runtime fields: instructions, model settings, tool IDs, output schema key, group rules config, supervisor routing, and visibility.
 
@@ -64,37 +72,39 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 
 7. **Config Loaders** (`backend/src/lib/config/`) -- Thread-safe loaders for agents, schemas, groups, connections, models, and providers. All support `force_reload` for cache invalidation.
 
-8. **Tool Bindings** (`TOOL_BINDINGS` in `catalog_service.py`) -- Declarative mapping from tool IDs to runtime resolver functions. Each binding declares its required execution context (document_id, database_url, etc.).
+8. **Package tool bindings** (`tools/bindings.yaml`, normalized into `TOOL_BINDINGS` in `catalog_service.py`) -- Declarative mapping from tool IDs to runtime resolver functions. Each binding declares its required execution context and callable import path.
 
 ### Data Flow
 
-```
-config/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI metadata)
-                     └──→ Alembic migration ──→ agents table (runtime authority)
-                                                      │
-                                                      ▼
-                                              get_agent_by_id()
-                                                      │
-                                      ┌───────────────┼───────────────┐
-                                      ▼               ▼               ▼
-                              resolve_tools()   build_runtime    resolve_output
-                              (TOOL_BINDINGS)   _instructions()   _schema()
-                                      │               │               │
-                                      ▼               ▼               ▼
-                                  Agent(tools=..., instructions=..., output_type=...)
+```text
+runtime/packages/*/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI metadata)
+                                 └──→ Alembic migration ──→ agents table (runtime authority)
+config/agents/*.yaml (repo mirror for shipped core) ──────┘
+                                                                  │
+                                                                  ▼
+                                                          get_agent_by_id()
+                                                                  │
+                                                  ┌───────────────┼───────────────┐
+                                                  ▼               ▼               ▼
+                                          resolve_tools()   build_runtime    resolve_output
+                                          (package-backed   _instructions()   _schema()
+                                           TOOL_BINDINGS)
+                                                  │               │               │
+                                                  ▼               ▼               ▼
+                                      Agent(tools=..., instructions=..., output_type=...)
 ```
 
 ---
 
 ## Critical Patterns (Read First)
 
-1. **Database is runtime authority** -- The `agents` table is what `get_agent_by_id()` reads at runtime. YAML files are only read during migrations and for UI metadata. Editing a YAML file alone will not change agent behavior until the database row is updated.
+1. **Database is runtime authority** -- The `agents` table is what `get_agent_by_id()` reads at runtime. Package-owned YAML files are read during migrations and for UI metadata. Editing YAML alone will not change agent behavior until the database row is updated.
 
 2. **No hardcoded agent files** -- Individual Python agent files (`gene_agent.py`, `disease_agent.py`, etc.) have been removed. All agents are built generically by `_create_db_agent()` in `catalog_service.py` from database rows.
 
 3. **Dynamic supervisor discovery** -- The supervisor queries the `agents` table for `visibility='system'` + `supervisor_enabled=true` records and creates streaming tools dynamically. No imports or explicit wiring needed.
 
-4. **Tool bindings are declarative** -- Tools are resolved via `TOOL_BINDINGS` in `catalog_service.py`. Each entry declares a resolver function and required execution context. The `resolve_tools()` function materializes tool instances at runtime.
+4. **Tool bindings are declarative** -- Packages export tools through `tools/bindings.yaml`; `catalog_service.py` normalizes those exports into `TOOL_BINDINGS`. The `resolve_tools()` function materializes tool instances at runtime.
 
 5. **Prompt cache for group rules** -- Base prompts come from the `agents.instructions` column. Group rules come from the `prompt_templates` table via the prompt cache. `_inject_group_rules_with_overrides()` merges them at runtime.
 
@@ -110,15 +120,16 @@ config/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI 
 
 ## Agent Lifecycle
 
-### System Agents (YAML-defined)
+### System Agents (package-defined)
 
-1. Developer creates `config/agents/my_agent/agent.yaml` and `prompt.yaml`
-2. An Alembic migration reads the YAML and inserts a row into `agents` with `visibility='system'`
-3. At backend startup, `registry_builder.py` reads the YAML to build `AGENT_REGISTRY` for UI metadata
-4. The prompt cache loads active prompts from `prompt_templates` for group rule injection
-5. When the supervisor is created, it queries the `agents` table and builds streaming tools for each enabled agent
-6. When a user query matches the agent's routing description, the supervisor calls the streaming tool
-7. `get_agent_by_id()` builds a fresh `Agent` instance from the DB row with resolved tools, injected group rules, and output schema
+1. A package author creates `agents/my_agent/agent.yaml`, `prompt.yaml`, and optional `group_rules/` inside a runtime package.
+2. If the shipped `core` package is being maintained from this repository, the same bundle is mirrored under `config/agents/my_agent/` for source-development workflows.
+3. An Alembic migration reads the package-backed YAML and inserts a row into `agents` with `visibility='system'`.
+4. At backend startup, `registry_builder.py` reads the bundle to build `AGENT_REGISTRY` for UI metadata.
+5. The prompt cache loads active prompts from `prompt_templates` for group rule injection.
+6. When the supervisor is created, it queries the `agents` table and builds streaming tools for each enabled agent.
+7. When a user query matches the agent's routing description, the supervisor calls the streaming tool.
+8. `get_agent_by_id()` builds a fresh `Agent` instance from the DB row with resolved tools, injected group rules, and output schema.
 
 ### Custom Agents (UI-created)
 
@@ -144,7 +155,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 | `model_temperature` | Float | Temperature setting |
 | `model_reasoning` | String(20) | Reasoning effort level |
 | `tool_ids` | JSONB | List of tool IDs (e.g., `["agr_curation_query"]`) |
-| `output_schema_key` | String(100) | Pydantic class name from `models.py` |
+| `output_schema_key` | String(100) | Pydantic class name resolved from the agent bundle schema module |
 | `group_rules_enabled` | Boolean | Whether to inject group-specific rules |
 | `group_rules_component` | String(100) | Prompt cache key for group rule lookup |
 | `mod_prompt_overrides` | JSONB | Per-group prompt overrides (custom agents) |
@@ -159,7 +170,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 
 ### Visibility Rules
 
-- **system**: Visible to all users. Created from YAML via migration.
+- **system**: Visible to all users. Created from package-backed YAML via migration.
 - **private**: Visible only to the owner (`user_id`). Created via Agent Studio.
 - **project**: Visible to all members of the associated project. Created via Agent Studio.
 
@@ -169,12 +180,18 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 
 ### agent.yaml Reference
 
-See the `config/agents/_examples/basic_agent/agent.yaml` template for all fields. Key sections:
+Use `<agent_root>` below to mean either:
+
+- `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` for a standalone install, or
+- `config/agents/<agent>/` when maintaining the shipped `core` package from this repository.
+
+See the runtime bundle contract in `config/agents/README.md` or the repo mirror
+template at `config/agents/_examples/basic_agent/agent.yaml` for all fields. Key sections:
 
 - **Basic info**: `agent_id`, `name`, `description`, `category`, `subcategory`
 - **Supervisor routing**: `supervisor_routing.enabled`, `.description`, `.batchable`, `.batching_entity`
-- **Tools**: List of tool IDs that map to `TOOL_BINDINGS`
-- **Output schema**: Class name from `backend/src/lib/openai_agents/models.py`
+- **Tools**: List of tool IDs that map to the merged package-backed runtime tool registry
+- **Output schema**: Class name from `<agent_root>/schema.py`
 - **Model config**: `model`, `temperature`, `reasoning` (supports `${ENV_VAR:-default}` syntax)
 - **Frontend**: `icon`, `show_in_palette`
 - **Group rules**: `group_rules_enabled`
@@ -191,10 +208,10 @@ The prompt content is seeded into the `prompt_templates` table by the Alembic mi
 
 ### Group Rules
 
-Group rules are YAML files under `config/agents/my_agent/group_rules/`. Each file has:
+Group rules are YAML files under `<agent_root>/group_rules/`. Each file has:
 
 ```yaml
-group_id: FB          # Must match config/groups.yaml
+group_id: FB          # Must match the active groups config key
 content: |
   [Organization-specific instructions]
 ```
@@ -207,7 +224,12 @@ These are seeded into `prompt_templates` with `prompt_type='group_rules'` and in
 
 ### Available Tools
 
-Tools are Python functions decorated with `@function_tool` in `backend/src/lib/openai_agents/tools/`. Each tool that agents can reference must have a `TOOL_BINDINGS` entry in `catalog_service.py`.
+Public and organization-specific tools are implemented inside runtime packages.
+Each package exports its tool IDs through `tools/bindings.yaml`, and the
+backend merges those exports into the runtime tool registry exposed through
+`TOOL_BINDINGS` in `catalog_service.py`. For the shipped `core` package in this
+repository, the corresponding sources live under
+`packages/core/python/src/agr_ai_curation_core/tools/`.
 
 | Tool ID | Category | Description |
 |---------|----------|-------------|
@@ -226,35 +248,37 @@ Tools are Python functions decorated with `@function_tool` in `backend/src/lib/o
 
 ### Tool Bindings
 
-Each tool has a binding in `TOOL_BINDINGS` that declares:
+Each package binding declaration in `tools/bindings.yaml` declares:
 
-- **`binding`**: `"static"` (no context needed) or `"context_factory"` (needs runtime context)
+- **`binding_kind`**: `static` (no context needed) or `context_factory` (needs runtime context)
 - **`required_context`**: List of execution context fields needed (e.g., `["document_id", "user_id"]`)
-- **`resolver`**: Function that returns the tool instance
+- **`callable` / `callable_factory`**: Python import path used to build the tool instance
 
-```python
-TOOL_BINDINGS = {
-    "agr_curation_query": {
-        "binding": "static",
-        "required_context": [],
-        "resolver": _resolve_agr_curation_tool,
-    },
-    "search_document": {
-        "binding": "context_factory",
-        "required_context": ["document_id", "user_id"],
-        "resolver": _resolve_search_document_tool,
-    },
-}
+```yaml
+package_id: agr.core
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: agr_curation_query
+    binding_kind: static
+    callable: agr_ai_curation_core.tools.agr_curation:agr_curation_query
+    required_context: []
+  - tool_id: search_document
+    binding_kind: context_factory
+    callable_factory: agr_ai_curation_core.tools.documents:create_search_document_tool
+    required_context: [document_id, user_id]
 ```
+
+At runtime, `catalog_service.py` materializes the merged package exports into
+`TOOL_BINDINGS` and `TOOL_REGISTRY` for resolution and UI metadata.
 
 ### Adding a New Tool Binding
 
 When adding a new tool that agents reference:
 
-1. Create the tool in `backend/src/lib/openai_agents/tools/` (see [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md))
-2. Add a resolver function in `catalog_service.py`
-3. Add the binding to `TOOL_BINDINGS`
-4. Optionally add to `TOOL_REGISTRY` for UI documentation
+1. For a standalone install or custom org package, create the tool module inside the package's `python/src/.../tools/` tree and declare it in that package's `tools/bindings.yaml`.
+2. For shipped core-package maintenance, update `packages/core/python/src/agr_ai_curation_core/tools/` and `packages/core/tools/bindings.yaml`, keeping the repo mirror docs aligned.
+3. Only edit `catalog_service.py` or the package runtime modules when the runtime needs new binding semantics, validation, or resolver behavior.
+4. See [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) for the package-authoring walkthrough.
 
 ### Tool Resolution at Runtime
 
@@ -262,7 +286,7 @@ When `get_agent_by_id()` builds an agent, it calls `resolve_tools()` which:
 
 1. Reads the `tool_ids` JSONB array from the agent's DB row
 2. Canonicalizes method-level aliases back to parent tool IDs
-3. Looks up each tool in `TOOL_BINDINGS`
+3. Looks up each tool in the merged `TOOL_BINDINGS` built from package exports
 4. Validates that required execution context is present
 5. Calls the resolver function to get the tool instance
 
@@ -272,7 +296,7 @@ When `get_agent_by_id()` builds an agent, it calls `resolve_tools()` which:
 
 ### Prompt Sources
 
-- **System agent instructions**: Stored in `agents.instructions` column, seeded from `prompt.yaml` during migration
+- **System agent instructions**: Stored in `agents.instructions` column, seeded from package-owned `prompt.yaml` during migration
 - **Group rules**: Stored in `prompt_templates` table with `prompt_type='group_rules'`, accessed via the prompt cache
 - **Custom agent instructions**: Written directly to `agents.instructions` by the Agent Studio UI
 
@@ -374,7 +398,10 @@ AGENT_PDF_MODEL=gpt-5.4
 
 ## Output Schemas
 
-All output schemas live in `backend/src/lib/openai_agents/models.py`. The `output_schema_key` in the `agents` table maps to a class name in this module.
+For package-authored agents, output schemas live in the bundle's `schema.py`.
+The shipped `core` package keeps its schema modules in repo-controlled source,
+and `output_schema_key` maps to the exported class name that runtime schema
+discovery resolves.
 
 ### Rules
 
@@ -383,7 +410,7 @@ All output schemas live in `backend/src/lib/openai_agents/models.py`. The `outpu
 - Keep names snake_case; prefer flat structures
 - The catalog service calls `_resolve_output_schema()` to look up the class by name
 
-### Current Schemas
+### Current core schemas
 
 | Schema | Used By |
 |--------|---------|
@@ -446,8 +473,8 @@ Environment variables are passed through for every `AGENT_*` value, so you usual
 ### Static Checks
 
 ```bash
-# Validate YAML syntax
-python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"
+# Validate YAML syntax for a package-owned agent bundle
+python3 -c "import yaml; yaml.safe_load(open('<agent_root>/agent.yaml'))"
 
 # Run unit tests
 docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
@@ -508,7 +535,8 @@ docker compose exec postgres psql -U postgres ai_curation -c \
 
 ### Tools
 
-See the `TOOL_REGISTRY` and `TOOL_BINDINGS` in `catalog_service.py` for the complete list. Key tools:
+See `packages/core/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
+`TOOL_BINDINGS` in `catalog_service.py` for the complete list. Key tools:
 
 - `agr_curation_query` -- Multi-method AGR database access
 - `search_document`, `read_section`, `read_subsection` -- Weaviate PDF search
@@ -525,8 +553,8 @@ See the `TOOL_REGISTRY` and `TOOL_BINDINGS` in `catalog_service.py` for the comp
 | Agent not in supervisor | `supervisor_enabled=true` in DB? `is_active=true`? `visibility='system'`? |
 | Agent not in Flow Builder palette | `show_in_palette=true` in DB? Agent in `AGENT_REGISTRY`? |
 | "Unknown agent_id" error | Agent row missing from `agents` table. Run migration or insert manually. |
-| "Unknown tool binding" error | Tool not in `TOOL_BINDINGS`. Add resolver + binding entry in `catalog_service.py`. |
-| Schema not found | `output_schema_key` doesn't match a class in `models.py`. Check exact spelling. |
+| "Unknown tool binding" error | Tool not exported correctly from a package `tools/bindings.yaml`, or the merged runtime registry rejected the binding. |
+| Schema not found | `output_schema_key` doesn't match a class in the agent bundle `schema.py` (or the shipped core schema module). Check exact spelling. |
 | Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh`. For `agents.instructions`, restart backend. |
 | Group rules not injected | `group_rules_enabled=true`? `group_rules_component` set? Active group rule prompt in `prompt_templates`? |
 | Tool errors at runtime | Check `TOOL_BINDINGS.required_context` -- missing `document_id` or `database_url`? |
@@ -547,7 +575,8 @@ See the `TOOL_REGISTRY` and `TOOL_BINDINGS` in `catalog_service.py` for the comp
 - `backend/src/models/sql/agent.py` -- Unified agent SQL model
 - `backend/src/lib/openai_agents/agents/supervisor_agent.py` -- Dynamic supervisor with tool discovery
 - `backend/src/lib/config/` -- All configuration loaders
+- `packages/core/` -- Shipped core package source, manifests, and bindings
 - `config/models.yaml` -- Model catalog
-- `config/agents/` -- Agent YAML definitions
+- `config/agents/` -- Repo mirror of shipped core agent bundles
 - Langfuse docs: https://langfuse.com/docs
 - OpenAI Agents SDK: https://github.com/openai/openai-agents-python

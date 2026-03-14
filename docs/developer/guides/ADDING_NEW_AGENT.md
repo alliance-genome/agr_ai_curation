@@ -4,43 +4,68 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 
 > **Time**: 15-30 minutes for YAML-only agents, 5 minutes via Agent Studio UI
 > **Prerequisites**: Docker running, backend accessible
+>
+> **Scope**: Public or organization-specific customization for a standard
+> install should be packaged under `~/.agr_ai_curation/runtime/packages/`.
+> The repo-local `config/agents/` paths in this guide are for source checkout
+> work and shipped core-package maintenance. For the public runtime contract,
+> see [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
 
 ## Overview
 
+Choose the path that matches your goal:
+
+1. **Runtime package authoring** -- For standalone installs and org-specific customization, add the agent bundle under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`, update that package's manifest, and install the package.
+2. **Source checkout maintenance** -- For shipped core-package work in this repository, use the repo-local `config/agents/` mirror and keep `packages/core/agents/` aligned.
+3. **Agent Studio UI** -- For personal or project-scoped agents, use the browser and skip file edits entirely.
+
 Agents are defined through two complementary paths:
 
-1. **YAML config files** (system agents) -- Folders under `config/agents/` define agent metadata, prompts, and group rules. An Alembic migration seeds them into the unified `agents` database table at startup.
+1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/` is the source-development mirror for the shipped `core` package while `packages/core/agents/` is the package-owned source tree.
 2. **Agent Studio UI** (custom agents) -- Curators create personal or project-scoped agents through the browser. These are stored directly in the `agents` table with `visibility='private'` or `visibility='project'`.
 
 Both paths produce rows in the same `agents` table. At runtime, the supervisor discovers all active, supervisor-enabled agents from the database and creates streaming tool wrappers for them dynamically. **No Python agent files are needed.**
 
-```
-config/agents/my_agent/        # YAML source of truth
-  agent.yaml                   # Agent definition and metadata
-  prompt.yaml                  # Base instructions
-  group_rules/                 # Optional: org-specific behavior
-    fb.yaml
-    wb.yaml
+```text
+~/.agr_ai_curation/runtime/packages/org-custom/
+  package.yaml
+  agents/
+    my_agent/
+      agent.yaml               # Agent definition and metadata
+      prompt.yaml              # Base instructions
+      schema.py                # Output schema
+      group_rules/             # Optional: org-specific behavior
+        fb.yaml
+        wb.yaml
 ```
 
 ---
 
-## Path A: Add a System Agent via YAML
+## Path A: Add a System Agent via a Package Bundle
 
-System agents ship with the product and are visible to all users. They are seeded into the database from YAML during migrations.
+This is the primary path for standalone installs and reusable organization
+packages. If you are maintaining the shipped `core` package from a source
+checkout, use the same bundle structure and keep the repo mirror aligned rather
+than teaching installed users to edit `config/agents/` directly.
 
-### Step 1: Copy the Template
+System agents ship with the product and are visible to all users. In the modular
+runtime, the public authoring unit is a package-owned agent bundle.
+
+### Step 1: Create or choose a package
 
 ```bash
-cd config/agents
-cp -r _examples/basic_agent my_agent
+mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent
 ```
+
+If you are maintaining the shipped `core` package from this repository, keep
+the repo mirror in `config/agents/my_agent/` aligned with the package-owned
+bundle in `packages/core/agents/my_agent/`.
 
 ### Step 2: Define Your Agent (agent.yaml)
 
-Edit `my_agent/agent.yaml`:
+Create `agents/my_agent/agent.yaml` inside your package:
 
 ```yaml
 # Must match folder name
@@ -67,11 +92,11 @@ supervisor_routing:
     When looking up multiple items, combine them into a single request.
     Example: "Look up these items: foo, bar, baz"
 
-# Tools this agent can use (must exist in TOOL_BINDINGS in catalog_service.py)
+# Tools this agent can use (must exist in the merged runtime tool registry)
 tools:
   - agr_curation_query
 
-# Output schema class name (from backend/src/lib/openai_agents/models.py)
+# Output schema class name (from agents/my_agent/schema.py)
 output_schema: MyAgentEnvelope
 
 # LLM settings (supports environment variables)
@@ -106,7 +131,7 @@ group_rules_enabled: false
 
 ### Step 3: Write the Prompt (prompt.yaml)
 
-Edit `my_agent/prompt.yaml`:
+Create `agents/my_agent/prompt.yaml`:
 
 ```yaml
 agent_id: my_agent
@@ -169,7 +194,8 @@ content: |
 
 ### Step 4: Define the Output Schema
 
-Output schemas live in `backend/src/lib/openai_agents/models.py` (the shared models module):
+For package-authored agents, output schemas usually live next to the bundle in
+`agents/my_agent/schema.py`:
 
 ```python
 class MyResult(BaseModel):
@@ -204,7 +230,9 @@ class MyAgentEnvelope(BaseModel):
     )
 ```
 
-The `output_schema` value in `agent.yaml` must match the class name exactly. The catalog service resolves it from the shared models module at runtime.
+The `output_schema` value in `agent.yaml` must match the class name exactly.
+Runtime schema discovery resolves it from the installed bundle (or from the
+shipped core-package source when you are working in a source checkout).
 
 #### Schema Rules
 
@@ -219,13 +247,14 @@ The `output_schema` value in `agent.yaml` must match the class name exactly. The
 
 ### Step 5: Add Group Rules (Optional)
 
-If different organizations need different behavior, create `my_agent/group_rules/`:
+If different organizations need different behavior, create
+`agents/my_agent/group_rules/`:
 
 ```bash
-mkdir -p my_agent/group_rules
+mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent/group_rules
 ```
 
-Create `my_agent/group_rules/fb.yaml` for FlyBase:
+Create `agents/my_agent/group_rules/fb.yaml` for FlyBase:
 
 ```yaml
 group_id: FB
@@ -241,42 +270,38 @@ content: |
 
 Create similar files for other groups (`wb.yaml`, `mgi.yaml`, etc.).
 
-**Important**: The `group_id` must match a key in `config/groups.yaml`. Set `group_rules_enabled: true` in your `agent.yaml` to activate rule injection.
+**Important**: The `group_id` must match a key in the active groups
+configuration (`~/.agr_ai_curation/runtime/config/groups.yaml` for a standalone
+install). Set `group_rules_enabled: true` in your `agent.yaml` to activate rule
+injection.
 
 ---
 
-### Step 6: Seed into the Database
+### Step 6: Export the bundle and reload the runtime
 
-System agents are seeded via Alembic migration. The existing seed migration (`v4w5x6y7z8a9_seed_unified_agents.py`) reads `config/agents/*/agent.yaml` and `prompt.yaml` at migration time and inserts rows into the `agents` table with `visibility='system'`.
+Declare the bundle in your package manifest so the runtime can discover it:
 
-For a **new** agent added after the initial migration, you have two options:
-
-**Option A: Create a new Alembic migration** (recommended for production):
-
-```bash
-docker compose exec backend alembic revision --autogenerate -m "seed_my_agent"
+```yaml
+agent_bundles:
+  - name: my_agent
+    has_schema: true
+    group_rules: [fb]
 ```
 
-Then add seed logic similar to the existing seed migration.
-
-**Option B: Manual database insert** (quick iteration during development):
-
-```bash
-docker compose exec backend python - <<'PY'
-from src.models.sql.database import SessionLocal
-from src.models.sql.agent import Agent
-
-db = SessionLocal()
-# Read your YAML and insert -- or just restart with a fresh DB
-db.close()
-PY
-```
-
-After seeding, restart the backend to pick up the new agent:
+Then install or update the package under `~/.agr_ai_curation/runtime/packages/`
+and restart the backend:
 
 ```bash
-docker compose restart backend
+docker compose --env-file ~/.agr_ai_curation/.env \
+  -f docker-compose.production.yml restart backend
 ```
+
+Repo-maintainer note:
+
+- Keep `packages/core/agents/my_agent/` and `config/agents/my_agent/` aligned.
+- If the shipped core catalog changes require migration-time seed adjustments,
+  update the relevant Alembic/bootstrap flow in the repository rather than
+  telling installed users to edit repo-local YAML directly.
 
 ---
 
@@ -285,14 +310,15 @@ docker compose restart backend
 #### Check YAML Syntax
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"
-python3 -c "import yaml; yaml.safe_load(open('config/agents/my_agent/prompt.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('$HOME/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent/agent.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('$HOME/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent/prompt.yaml'))"
 ```
 
 #### Restart Backend
 
 ```bash
-docker compose restart backend
+docker compose --env-file ~/.agr_ai_curation/.env \
+  -f docker-compose.production.yml restart backend
 ```
 
 #### Test in Chat
@@ -315,7 +341,7 @@ Based on testing:
 
 1. **Routing issues** -- Improve `supervisor_routing.description` in `agent.yaml`
 2. **Wrong output format** -- Check schema matches what LLM returns
-3. **Missing tools** -- Add tools to the `tools` list (must have a `TOOL_BINDINGS` entry)
+3. **Missing tools** -- Add tools to the `tools` list and verify the tool ID is exported from a package `tools/bindings.yaml`
 4. **Group-specific issues** -- Add/update group rules
 
 After modifying prompts in the database, refresh the prompt cache:
@@ -353,11 +379,12 @@ The agent is immediately available. No restart needed. Custom agents with `super
 
 Understanding the discovery flow helps with debugging:
 
-1. **Startup**: `registry_builder.py` reads all `config/agents/*/agent.yaml` files and builds `AGENT_REGISTRY` (metadata for the catalog UI)
-2. **Migration**: The seed migration reads the same YAML files and inserts rows into the `agents` table with `visibility='system'`
-3. **Supervisor creation**: `supervisor_agent.py` queries the `agents` table for rows where `visibility='system'` AND `supervisor_enabled=true` AND `is_active=true`
-4. **Tool wrapping**: For each discovered agent, `get_agent_by_id()` builds a runtime `Agent` instance from the database row (instructions, model, tools, schema) and wraps it as a streaming tool
-5. **Prompt injection**: Group rules and document context are injected into instructions at build time based on the agent's configuration
+1. **Package discovery**: `load_agent_definitions()` resolves agent bundles from the runtime packages root (or an explicit legacy override path).
+2. **Registry build**: `registry_builder.py` reads those bundle files and builds `AGENT_REGISTRY` metadata for the catalog UI.
+3. **Prompt + schema loading**: prompt/schema/group-rule loaders read `prompt.yaml`, `schema.py`, and `group_rules/*.yaml` from the same bundle.
+4. **Supervisor creation**: `supervisor_agent.py` queries the `agents` table for rows where `visibility='system'` AND `supervisor_enabled=true` AND `is_active=true`.
+5. **Tool wrapping**: For each discovered agent, `get_agent_by_id()` builds a runtime `Agent` instance from the database row (instructions, model, tools, schema) and wraps it as a streaming tool.
+6. **Prompt injection**: Group rules and document context are injected into instructions at build time based on the agent's configuration.
 
 Key source files:
 
@@ -375,10 +402,11 @@ Key source files:
 
 The gene agent demonstrates the full pattern. See these files:
 
-- `config/agents/gene/agent.yaml` -- Agent definition with batching, group rules, and model config
-- `config/agents/gene/prompt.yaml` -- Detailed prompt with search strategies and output format
-- `config/agents/gene/group_rules/fb.yaml` -- FlyBase-specific rules
-- `config/agents/gene/group_rules/wb.yaml` -- WormBase-specific rules
+- `packages/core/agents/gene/agent.yaml` -- Package-owned agent definition with batching, group rules, and model config
+- `packages/core/agents/gene/prompt.yaml` -- Detailed prompt with search strategies and output format
+- `packages/core/agents/gene/group_rules/fb.yaml` -- FlyBase-specific rules
+- `packages/core/agents/gene/group_rules/wb.yaml` -- WormBase-specific rules
+- `config/agents/gene/` -- Repo mirror used when maintaining the shipped core package from source
 
 ---
 
@@ -388,9 +416,9 @@ The gene agent demonstrates the full pattern. See these files:
 |---------|----------|
 | Agent not appearing in UI | Check that the agent exists in the `agents` table with `is_active=true`. Run `docker compose exec postgres psql -U postgres ai_curation -c "SELECT agent_key, is_active, visibility FROM agents;"` |
 | Supervisor not routing to agent | Verify `supervisor_enabled=true` and `supervisor_description` is clear in the DB row. Check logs: `docker compose logs backend \| grep ask_my_agent` |
-| "Unknown agent_id" error | Agent not in the `agents` table. Run the seed migration or insert manually |
-| Schema not found | Verify `output_schema_key` matches a class name in `backend/src/lib/openai_agents/models.py` |
-| Tools not resolving | Tool must have a `TOOL_BINDINGS` entry in `catalog_service.py`. Check error: "Unknown tool binding" |
+| "Unknown agent_id" error | The bundle was not loaded into the runtime. Verify the package manifest exports the agent, confirm it is installed under `runtime/packages/`, then restart the backend. |
+| Schema not found | Verify `output_schema_key` matches a class name in the installed bundle's `schema.py` (or the shipped core schema module when developing from source) |
+| Tools not resolving | Verify the tool ID is exported from a package `tools/bindings.yaml` and survived merged-registry validation |
 | Group rules not injected | Check `group_rules_enabled=true` and `group_rules_component` points to a valid prompt cache key |
 | Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh` |
 

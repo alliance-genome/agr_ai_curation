@@ -1,6 +1,24 @@
 # Configuration Directory
 
-This directory contains deployment-owned configuration files for the AI Curation system. The configuration follows a YAML-as-source-of-truth pattern where installed runtime packages can supply shipped defaults, and the YAML files in this directory act as the deployment override layer merged on top at runtime. The database serves as a runtime cache.
+This directory contains the deployment override files that seed the modular AGR
+AI Curation runtime. In a standard standalone install, these files are
+materialized under `~/.agr_ai_curation/runtime/config/`, while package-owned
+agents and tool bindings load from `~/.agr_ai_curation/runtime/packages/`.
+
+Public customization path:
+
+- Edit runtime config under `~/.agr_ai_curation/runtime/config/`.
+- Add custom agents and tools through a package under
+  `~/.agr_ai_curation/runtime/packages/<your-package>/`.
+- Do not rely on repo-local `config/agents/` or `backend/src/...` edits as the
+  customization path for an installed deployment.
+
+Repository-development note:
+
+- The repo-local `config/` tree is still the source tree for the shipped `core`
+  package and installer-seeded defaults.
+- `config/agents/` remains useful when maintaining the built-in catalog from a
+  source checkout.
 
 ## Directory Structure
 
@@ -12,16 +30,35 @@ config/
 ├── providers.yaml               # LLM runtime provider definitions
 ├── models.yaml                  # LLM model catalog overrides
 ├── tool_policy_defaults.yaml    # Tool policy default overrides
+├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
-└── agents/                      # Agent definitions
+└── agents/                      # Repo-local mirror of shipped core agent bundles
     ├── README.md               # Agent configuration guide
     ├── _examples/              # Template agents (not loaded)
     │   └── basic_agent/        # Example agent structure
-    └── [your_agent]/           # Your custom agents
+    └── [your_agent]/           # Source-development agent bundles
 ```
 
 ## Quick Start
+
+### Standalone install
+
+The installer seeds the runtime config for you. After
+`scripts/install/install.sh` completes, edit the installed files directly:
+
+1. Review `~/.agr_ai_curation/runtime/config/groups.yaml`.
+2. Review `~/.agr_ai_curation/runtime/config/connections.yaml`.
+3. If needed, override packaged provider/model/tool policy defaults in:
+   - `~/.agr_ai_curation/runtime/config/providers.yaml`
+   - `~/.agr_ai_curation/runtime/config/models.yaml`
+   - `~/.agr_ai_curation/runtime/config/tool_policy_defaults.yaml`
+4. If you add custom packages with conflicting tool bindings, create
+   `~/.agr_ai_curation/runtime/config/overrides.yaml`.
+
+### Source development
+
+For repo-local development of the shipped defaults:
 
 1. **Copy example files:**
    ```bash
@@ -38,9 +75,8 @@ config/
    - Configure external API endpoints
    - Define health check parameters
 
-4. **Create or copy agents** to `config/agents/`:
-   - Copy from `_examples/` as a starting point
-   - Or copy from `alliance_agents/` for Alliance-specific agents
+4. **Edit repo-local agent bundles** in `config/agents/` only when you are
+   developing the built-in `core` package from source.
 
 ## Configuration Files
 
@@ -74,7 +110,10 @@ Note:
 - `AUTH_PROVIDER` (environment variable) selects the active auth backend.
 - `identity_provider.*` in `groups.yaml` controls group-claim extraction metadata and should align with your token claims.
 
-The internal group ID key (for example, `FB`) is used to match group-specific rules in agent configurations (`config/agents/[agent]/group_rules/[group_id].yaml`).
+The internal group ID key (for example, `FB`) is used to match group-specific
+rules in agent bundles, whether they live in a runtime package
+(`runtime/packages/<package>/agents/<agent>/group_rules/[group_id].yaml`) or in
+the repo-local `config/agents/` source tree.
 
 ### connections.yaml
 
@@ -169,16 +208,29 @@ Notes:
 - Installed packages may export tool policy defaults first; this file is merged afterward and wins on `tool_key` collisions.
 - Override entries replace the full tool policy definition for the same `tool_key`.
 
+### maintenance_message.txt
+
+Optional plain-text banner content for maintenance mode.
+
+Notes:
+- The frontend banner and maintenance page read the first non-comment line from this file.
+- Leave the file empty (or keep only comments) to disable the maintenance message.
+- `scripts/maintenance_mode.sh` checks this file before enabling the maintenance page.
+
 ### agents/
 
-Contains agent definitions. Each agent is a self-contained folder with:
+This repo-local directory mirrors the shipped `core` package agent bundles for
+source development. Public standalone installs load agents from
+`runtime/packages/*/agents`, not from `runtime/config/agents`.
+
+Each agent bundle is a self-contained folder with:
 
 - `agent.yaml` - Agent metadata, tools, and model configuration
 - `prompt.yaml` - The agent's system prompt
 - `schema.py` - Pydantic output schema
 - `group_rules/` - Optional group-specific behavior rules
 
-See `config/agents/README.md` for detailed documentation.
+See `config/agents/README.md` for the package-owned agent bundle contract.
 
 ## Environment Variables
 
@@ -198,23 +250,25 @@ Configuration files support environment variable substitution:
 
 At system startup:
 
-1. `connections.yaml` is loaded to establish service connections
-2. `groups.yaml` is loaded for authentication mapping
-3. Agent folders in `config/agents/` are discovered and loaded
-4. Group rules are associated with agents based on `group_id` matching
+1. `connections.yaml` is loaded to establish service connections.
+2. `groups.yaml` is loaded for authentication mapping.
+3. Package-backed provider/model/tool policy defaults load from
+   `runtime/packages/*`.
+4. The runtime override files in `runtime/config/` are merged on top.
+5. Agent bundles are discovered from `runtime/packages/*/agents`.
+6. Group rules are associated with agents based on `group_id` matching.
 
-## For Alliance Genome Deployments
+## Override Behavior
 
-Alliance-specific configuration is maintained separately:
+- Providers, models, and tool policies merge in deterministic package order; the
+  runtime files in `runtime/config/` win last on key collisions.
+- Agent bundle names must be unique across loaded packages; duplicate names are
+  startup errors.
+- Tool binding collisions require an explicit selection in
+  `runtime/config/overrides.yaml`.
 
-- `alliance_agents/` - Alliance agent definitions
-- `alliance_config/` - Alliance group and connection configs
-- `alliance_tools/` - Alliance-specific tools
-
-During deployment, these are copied to the appropriate locations:
-- `alliance_agents/*` → `config/agents/`
-- `alliance_config/*` → `config/`
-- `alliance_tools/*` → `backend/tools/custom/`
+See [docs/deployment/modular-packages.md](../docs/deployment/modular-packages.md)
+for the full runtime layout, package model, and upgrade workflow.
 
 ## Validation
 
@@ -229,8 +283,8 @@ Errors are logged with specific file and line information for easy debugging.
 
 ## Org Onboarding: Add a Custom LLM Provider (No Code Changes)
 
-1. Add provider config in `config/providers.yaml`.
-2. Add model entries in `config/models.yaml` that reference that provider key.
+1. Add provider config in `~/.agr_ai_curation/runtime/config/providers.yaml`.
+2. Add model entries in `~/.agr_ai_curation/runtime/config/models.yaml` that reference that provider key.
 3. Set required secrets/env vars (for example `ORG_CUSTOM_API_KEY`).
 4. Restart backend.
 5. Verify diagnostics:

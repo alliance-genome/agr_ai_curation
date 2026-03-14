@@ -3,6 +3,14 @@
 This guide explains the config-driven architecture for AGR AI Curation, where **YAML is the source of truth** and the database serves as a runtime cache populated at startup.
 
 > **Last Updated:** February 24, 2026 (Added LLM provider/model config system, unified agents table, tool policies)
+>
+> **Scope**: This guide describes the repository source layout used by core
+> package and runtime maintainers. Standard installs load package-owned agents,
+> tools, and defaults from `~/.agr_ai_curation/runtime/packages/` plus
+> deployment overrides under `~/.agr_ai_curation/runtime/config/`. Public/custom
+> deployments should not edit repo `config/` or `backend/src/` paths directly.
+> For the public runtime contract, see
+> [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
 
@@ -48,61 +56,63 @@ The config-driven architecture separates the **base product** (reusable by any o
 
 ## Directory Structure
 
+Two layouts matter in the modular system: the installed runtime under
+`~/.agr_ai_curation/`, and the repository source tree used to build and maintain
+the shipped `core` package.
+
+```text
+~/.agr_ai_curation/
+├── .env
+├── runtime/
+│   ├── config/                          # Deployment override YAML
+│   │   ├── connections.yaml
+│   │   ├── groups.yaml
+│   │   ├── maintenance_message.txt
+│   │   ├── models.yaml
+│   │   ├── overrides.yaml              # Optional package/tool selections
+│   │   ├── providers.yaml
+│   │   └── tool_policy_defaults.yaml
+│   ├── packages/
+│   │   ├── core/                        # Shipped AGR package
+│   │   │   ├── package.yaml
+│   │   │   ├── agents/
+│   │   │   ├── config/
+│   │   │   ├── python/src/...
+│   │   │   ├── requirements/
+│   │   │   └── tools/bindings.yaml
+│   │   └── org-custom/                  # Your package(s)
+│   └── state/
+│       └── package_runner/              # Per-package virtualenvs and runtime state
+└── data/                                # Mutable deployment data
 ```
+
+```text
 agr_ai_curation/
-├── config/                              # Runtime configuration (source of truth)
-│   ├── README.md                        # Configuration overview
-│   ├── models.yaml                      # LLM model catalog (curator-selectable)
-│   ├── providers.yaml                   # LLM provider definitions
-│   ├── tool_policy_defaults.yaml        # Default tool visibility policies
-│   ├── groups.yaml                      # Group/Cognito mapping (copy from .example)
-│   ├── groups.yaml.example              # Template for groups
-│   ├── connections.yaml                 # External service connections (copy from .example)
-│   ├── connections.yaml.example         # Template for connections
-│   └── agents/                          # Agent definitions (loaded at runtime)
-│       ├── README.md                    # Agent configuration guide
-│       ├── _examples/                   # Template agents (not loaded)
-│       │   └── basic_agent/             # Example agent structure
-│       ├── supervisor/                  # Core supervisor agent
-│       ├── gene/                        # Gene validation agent
-│       ├── disease/                     # Disease validation agent
-│       └── [your_agent]/                # Your custom agents
-│
-├── alliance_agents/                     # Alliance-specific agents (development source)
-│   ├── README.md                        # Alliance agents documentation
-│   ├── gene/                            # Gene agent source
-│   ├── allele/                          # Allele agent source
-│   └── ...                              # Other Alliance agents
-│
+├── config/                              # Repo mirror of shipped core defaults
+│   ├── models.yaml
+│   ├── providers.yaml
+│   ├── tool_policy_defaults.yaml
+│   ├── groups.yaml.example
+│   ├── connections.yaml.example
+│   └── agents/                          # Source-development mirror of core agent bundles
+│       ├── README.md
+│       ├── _examples/
+│       └── ...
+├── packages/
+│   └── core/
+│       ├── package.yaml
+│       ├── agents/
+│       ├── config/
+│       ├── python/src/agr_ai_curation_core/tools/
+│       ├── requirements/
+│       └── tools/bindings.yaml
 ├── backend/
-│   ├── src/lib/config/                  # Configuration loaders
-│   │   ├── __init__.py                  # Public API exports
-│   │   ├── agent_loader.py              # Loads agent.yaml files
-│   │   ├── models_loader.py             # Loads config/models.yaml
-│   │   ├── providers_loader.py          # Loads config/providers.yaml
-│   │   ├── provider_validation.py       # Cross-validates providers + models
-│   │   ├── schema_discovery.py          # Discovers schema.py files
-│   │   ├── groups_loader.py             # Loads groups.yaml
-│   │   └── connections_loader.py        # Loads connections.yaml
-│   │
-│   ├── src/lib/agent_studio/            # Agent Workshop services
-│   │   ├── agent_service.py             # Unified agent CRUD + visibility
-│   │   ├── catalog_service.py           # Prompt catalog builder
-│   │   ├── registry_builder.py          # YAML-to-registry bridge
-│   │   ├── tool_policy_service.py       # Tool library policy cache
-│   │   └── tool_idea_service.py         # Tool idea request workflow
-│   │
-│   ├── src/models/sql/                  # Database models
-│   │   ├── agent.py                     # Agent, Project, ProjectMember tables
-│   │   ├── tool_policy.py              # ToolPolicy table
-│   │   └── tool_idea_request.py        # ToolIdeaRequest table
-│   │
-│   └── tools/                           # Tool implementations
-│       ├── core/                        # Base tools (ship with product)
-│       └── custom/                      # Organization-specific tools
-│
+│   ├── src/lib/config/                  # Runtime config/package loaders
+│   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
+│   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
+│   └── src/models/sql/                  # Database models
 └── scripts/
-    └── deploy_alliance.sh               # Syncs alliance_agents/ to config/agents/
+    └── deploy_alliance.sh               # Repo-local core-package sync helper
 ```
 
 ---
@@ -111,10 +121,10 @@ agr_ai_curation/
 
 ### Agent Folder Structure
 
-Each agent is a self-contained folder:
+Each package-owned agent is a self-contained folder:
 
-```
-my_agent/
+```text
+agents/my_agent/
 ├── agent.yaml        # Agent definition and metadata
 ├── prompt.yaml       # Base prompt instructions
 ├── schema.py         # Pydantic output schema
@@ -124,20 +134,27 @@ my_agent/
     └── ...
 ```
 
+For standalone installs, that folder lives under
+`~/.agr_ai_curation/runtime/packages/<package>/agents/`. In this repository,
+`config/agents/` is the source-development mirror for the shipped `core`
+package.
+
 ### Loading Order
 
 At system startup:
 
-1. `connections.yaml` is loaded to establish service connections
-2. `groups.yaml` is loaded for authentication mapping
-3. `providers.yaml` is loaded to define available LLM backends
-4. `models.yaml` is loaded to define curator-selectable models
-5. Provider runtime contracts are validated (cross-checks providers, models, and API keys)
-6. Agent folders in `config/agents/` are discovered and loaded
-7. Group rules are associated with agents based on group_id matching
-8. Schemas are dynamically imported from `schema.py` files
-9. System agents are seeded into the unified `agents` database table
-10. Tool policies are loaded from the `tool_policies` table
+1. Package manifests are discovered from `runtime/packages/`.
+2. `connections.yaml` and `groups.yaml` are loaded from `runtime/config/`.
+3. Package-backed provider/model/tool policy defaults are loaded from
+   `runtime/packages/*/config/`.
+4. The deployment override files in `runtime/config/` are merged on top.
+5. Package-owned agent bundles are discovered from `runtime/packages/*/agents/`.
+6. Group rules are associated with agents based on `group_id` matching.
+7. Schemas are dynamically imported from each bundle's `schema.py`.
+8. Provider runtime contracts are validated (cross-checks providers, models,
+   and API keys).
+9. System agents are seeded into the unified `agents` database table.
+10. Tool policies are loaded from the `tool_policies` table.
 
 ### Thread Safety
 
@@ -178,7 +195,7 @@ description: "Validates gene symbols and IDs against the Alliance database"
 supervisor_routing:
   description: "Use for validating genes, looking up gene symbols, or finding gene information"
 
-# Tools this agent can use (must exist in backend/tools/)
+# Tools this agent can use (must exist in the merged runtime tool registry)
 tools:
   - agr_curation_query
   - alliance_api_call
@@ -253,10 +270,10 @@ class GeneValidationEnvelope(BaseModel):
 Organization-specific behavior:
 
 ```yaml
-# group_rules/fb.yaml
+# agents/gene/group_rules/fb.yaml
 group_id: FB
 
-rules: |
+content: |
   ## FlyBase-Specific Rules
 
   When validating genes for FlyBase:
@@ -528,15 +545,22 @@ Migrations run automatically on container startup via `alembic upgrade head`.
 
 ## Adding a New Agent
 
-### Step 1: Copy the Template
+Choose the path that matches your goal:
+
+- **Standalone install or org customization** -- Create the bundle inside a
+  package under `~/.agr_ai_curation/runtime/packages/<package>/agents/`.
+- **Shipped core package maintenance** -- Update the repo mirror under
+  `config/agents/` and keep `packages/core/agents/` aligned before shipping.
+
+### Step 1: Create or choose a package
 
 ```bash
-cp -r config/agents/_examples/basic_agent config/agents/my_agent
+mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent
 ```
 
 ### Step 2: Update agent.yaml
 
-Edit `config/agents/my_agent/agent.yaml`:
+Create `agents/my_agent/agent.yaml` inside the package:
 
 ```yaml
 agent_id: my_agent
@@ -560,9 +584,9 @@ model_config:
 group_rules_enabled: false
 ```
 
-### Step 3: Update prompt.yaml
+### Step 3: Update prompt.yaml and schema.py
 
-Edit `config/agents/my_agent/prompt.yaml`:
+Create `agents/my_agent/prompt.yaml`:
 
 ```yaml
 agent_id: my_agent
@@ -580,9 +604,7 @@ content: |
   [Step-by-step instructions]
 ```
 
-### Step 4: Update schema.py
-
-Edit `config/agents/my_agent/schema.py`:
+Create `agents/my_agent/schema.py`:
 
 ```python
 from pydantic import BaseModel, Field
@@ -600,50 +622,70 @@ class MyAgentEnvelope(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 ```
 
-### Step 5: Add Group Rules (Optional)
+### Step 4: Add Group Rules (Optional)
 
 If your agent needs organization-specific behavior:
 
 ```bash
-mkdir -p config/agents/my_agent/group_rules
+mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent/group_rules
 ```
 
-Create `config/agents/my_agent/group_rules/fb.yaml`:
+Create `agents/my_agent/group_rules/fb.yaml`:
 
 ```yaml
 group_id: FB
-
-rules: |
+content: |
   ## FlyBase-Specific Behavior
 
   When processing FlyBase data:
   - [Specific instructions]
 ```
 
-### Step 6: Restart and Test
+### Step 5: Export and install the package
+
+Ensure the package manifest exports the bundle. The shorthand form is the
+easiest option:
+
+```yaml
+agent_bundles:
+  - name: my_agent
+    has_schema: true
+    group_rules: [fb]
+```
+
+If you are maintaining the shipped core package from this repository, keep the
+same bundle aligned in `packages/core/agents/my_agent/` and the repo mirror
+under `config/agents/my_agent/`.
+
+### Step 6: Restart and test
 
 ```bash
-# Restart backend to pick up changes
-docker compose restart backend
-
-# Or rebuild if needed
-make rebuild-backend
+# Restart the standalone backend to pick up package changes
+docker compose --env-file ~/.agr_ai_curation/.env \
+  -f docker-compose.production.yml restart backend
 ```
 
 ---
 
 ## Adding a New Tool
 
-Tools are Python functions that agents can call. They live in `backend/tools/`.
+Tools are Python functions that agents can call. In the modular runtime, public
+and organization-specific tools live in a package's Python source tree and are
+exported through `tools/bindings.yaml`.
 
-### Step 1: Choose Location
+### Step 1: Choose a package layout
 
-- `backend/tools/core/` - Generic tools that ship with the base product
-- `backend/tools/custom/` - Organization-specific tools
+```text
+~/.agr_ai_curation/runtime/packages/org-custom/
+├── package.yaml
+├── requirements/runtime.txt
+├── python/src/org_custom/tools/
+└── tools/bindings.yaml
+```
 
 ### Step 2: Create the Tool
 
-Create `backend/tools/custom/my_tool.py`:
+Create `python/src/org_custom/tools/my_tool.py`:
 
 ```python
 """My custom tool for [purpose]."""
@@ -687,22 +729,24 @@ def my_custom_tool(
         }
 ```
 
-### Step 3: Export the Tool
+### Step 3: Export the tool binding
 
-Add to `backend/tools/custom/__init__.py`:
+Declare the tool in `tools/bindings.yaml`:
 
-```python
-from .my_tool import my_custom_tool
-
-__all__ = [
-    "my_custom_tool",
-    # ... other tools
-]
+```yaml
+package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: my_custom_tool
+    binding_kind: static
+    callable: org_custom.tools.my_tool:my_custom_tool
+    required_context: []
+    description: Search for [something] in [data source]
 ```
 
 ### Step 4: Reference in Agent
 
-Add to your agent's `agent.yaml`:
+Add the tool ID to a package-owned agent bundle:
 
 ```yaml
 tools:
@@ -716,6 +760,17 @@ tools:
 - Handle errors gracefully (return error dict, don't raise)
 - Add clear docstrings (used by LLM for tool selection)
 - Keep functions focused on one task
+
+### Repo-maintainer note
+
+If you are updating the shipped core package from this repository:
+
+- put the tool implementation in
+  `packages/core/python/src/agr_ai_curation_core/tools/`,
+- export it from `packages/core/tools/bindings.yaml`, and
+- only edit `backend/src/lib/agent_studio/catalog_service.py` or the package
+  runtime modules when you need new resolver behavior rather than a normal
+  package-declared tool.
 
 ---
 
@@ -762,13 +817,13 @@ admin_groups:
 
 ### Using Groups in Agents
 
-Create `group_rules/{group_id}.yaml` in your agent folder:
+Create `group_rules/{group_id}.yaml` in the package-owned agent folder:
 
 ```yaml
-# config/agents/gene/group_rules/fb.yaml
+# agents/gene/group_rules/fb.yaml
 group_id: FB
 
-rules: |
+content: |
   ## FlyBase-Specific Rules
 
   For FlyBase genes:
@@ -857,9 +912,15 @@ health_check:
 
 ## Deployment
 
+For standalone installs, deliver custom behavior by copying a versioned package
+into `~/.agr_ai_curation/runtime/packages/` and restarting the stack. The
+commands below are repo-maintainer helpers for syncing shipped Alliance content
+inside a source checkout.
+
 ### Alliance Deployment
 
-Alliance agents are developed in `alliance_agents/` and deployed to `config/agents/`:
+In the repo-maintainer workflow, Alliance agents are developed in
+`alliance_agents/` and synced into the repo mirror at `config/agents/`:
 
 ```bash
 # Preview changes (dry run)
@@ -1011,9 +1072,9 @@ print(json.dumps(report, indent=2))
 | Symptom | Check |
 |---------|-------|
 | Agent missing from supervisor | Folder name starts with `_`? Those are skipped. |
-| YAML parse error | Run `python -c "import yaml; yaml.safe_load(open('config/agents/my_agent/agent.yaml'))"` |
+| YAML parse error | Run `python -c "import yaml; yaml.safe_load(open('<agent_root>/agent.yaml'))"` where `<agent_root>` is your package bundle directory. |
 | Schema not found | Check `output_schema` matches class name in `schema.py` |
-| Tools not found | Verify tool file exists in `backend/tools/custom/` with `@function_tool` decorator |
+| Tools not found | Verify the package exports the tool ID in `tools/bindings.yaml` and the callable import path is valid. |
 
 ### Group Rules Not Applied
 
@@ -1064,4 +1125,3 @@ print(json.dumps(report, indent=2))
 - [config/README.md](../../../config/README.md) - Configuration directory overview
 - [config/agents/README.md](../../../config/agents/README.md) - Agent configuration details
 - [alliance_agents/README.md](../../../alliance_agents/README.md) - Alliance-specific agents
-- [CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md](../../../CONFIG_DRIVEN_ARCHITECTURE_DESIGN.md) - Architecture design document
