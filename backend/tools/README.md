@@ -1,55 +1,96 @@
 # Tools Directory
 
-This directory contains tool implementations that agents can use.
+This repo directory is no longer the public customization path for standalone
+installs. Public or organization-specific tools should be packaged under
+`~/.agr_ai_curation/runtime/packages/<package>/` and declared through that
+package's `tools/bindings.yaml`.
 
-## Directory Structure
+See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
+for the installed runtime layout and
+[config/agents/README.md](../../config/agents/README.md) for how agents consume
+those tool IDs.
 
+## Package-first layout
+
+```text
+~/.agr_ai_curation/runtime/packages/org_custom/
+├── package.yaml
+├── requirements/runtime.txt
+├── python/
+│   └── src/
+│       └── org_custom/
+│           └── tools/
+│               └── my_tool.py
+└── tools/
+    └── bindings.yaml
 ```
-tools/
-├── core/              # Generic utilities (ships with base)
-├── custom/            # Organization-specific tools (add yours here)
-├── _examples/         # Template tools (not loaded)
-└── alliance_tools/    # Alliance-specific (copied during deployment)
+
+Minimal binding declaration:
+
+```yaml
+package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: my_tool
+    binding_kind: static
+    callable: org_custom.tools.my_tool:my_tool
+    required_context: []
+    description: Query our internal service for data
+    source_file: python/src/org_custom/tools/my_tool.py
 ```
 
-## Loading Behavior
+## Add a package-owned tool
 
-At startup, the system:
-1. Scans `core/` and `custom/` directories
-2. Imports all Python files
-3. Registers functions decorated with `@function_tool`
-4. Agents reference tools by name in their `agent.yaml`
+1. Create a Python module inside your package's `python/src/.../tools/`
+   directory.
+2. Implement the callable with `@function_tool`.
+3. Declare the exported tool ID in `tools/bindings.yaml`.
+4. Install or copy the package directory into
+   `~/.agr_ai_curation/runtime/packages/`.
+5. Reference the tool ID from a package-owned agent bundle.
 
-**Note:** Directories starting with `_` are not loaded.
-
-## Adding a Custom Tool
-
-1. Create a Python file in `custom/` (e.g., `my_api_tool.py`)
-2. Implement your tool function with the `@function_tool` decorator
-3. Restart the application
-4. Reference the tool by name in your agent's `agent.yaml`
-
-See `_examples/` for template implementations.
-
-## Tool Implementation Pattern
+Example implementation:
 
 ```python
 from agents import function_tool
 
+
 @function_tool(
-    name_override="my_tool_name",
-    description_override="What this tool does"
+    name_override="my_tool",
+    description_override="Query our internal service for data",
 )
-async def my_tool(param1: str, param2: int = 10) -> dict:
-    """
-    Tool docstring with Args and Returns sections.
-    """
-    # Implementation here
-    # Handle your own data transformation
-    # Return clean, structured data
-    return {"result": "..."}
+async def my_tool(query: str, limit: int = 10) -> dict:
+    """Return clean, structured data for agent consumption."""
+    return {"results": [], "total": 0}
 ```
 
-## Key Principle
+## Loading and override behavior
 
-Tools handle their own data transformation and return clean, structured data. Agents should not need to post-process tool outputs.
+At runtime, the backend:
+
+1. Discovers packages from `runtime/packages/`.
+2. Loads each package's `tools/bindings.yaml`.
+3. Builds a merged tool registry keyed by `tool_id`.
+4. Creates an isolated virtual environment per package under
+   `runtime/state/package_runner/<package_id>/venv` when package tools execute.
+
+Important rules:
+
+- Unique tool IDs load normally.
+- Conflicting tool IDs do not get an implicit winner; operators must pick one in
+  `runtime/config/overrides.yaml`.
+- Whole packages can also be disabled in `runtime/config/overrides.yaml`.
+
+## Repo-local use in this checkout
+
+Use repository paths only when you are maintaining the shipped core package or
+working on runtime internals from source. For that work:
+
+- keep core tool callables in `packages/core/python/src/agr_ai_curation_core/tools/`,
+- keep core bindings in `packages/core/tools/bindings.yaml`, and
+- treat `backend/tools/` as reference material rather than the public contract.
+
+## Key principle
+
+Tools should handle their own data transformation and return clean, structured
+data so agents do not need to post-process raw service responses.

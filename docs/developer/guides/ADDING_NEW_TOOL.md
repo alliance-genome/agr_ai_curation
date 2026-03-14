@@ -4,30 +4,55 @@ Step-by-step guide to adding a new tool that agents can use to interact with ext
 
 > **Time**: 15-30 minutes
 > **Prerequisites**: Python knowledge, understanding of the data source you're connecting
+>
+> **Scope**: Public or organization-specific customization for a standard
+> install should add tool code and bindings to a runtime package under
+> `~/.agr_ai_curation/runtime/packages/`. Repo-local `packages/core/...` and
+> `backend/src/...` references in this guide are for shipped core-package or
+> runtime-internals maintenance only. For the public runtime contract, see
+> [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
 
 ## Overview
 
-Tools are Python functions decorated with `@function_tool` that agents call to interact with databases, APIs, and files. They live in `backend/src/lib/openai_agents/tools/`.
+Choose the path that matches your goal:
 
-For an agent to use a tool, the tool must have a **tool binding** registered in `TOOL_BINDINGS` (in `catalog_service.py`). This binding declares how to resolve the tool at runtime and what execution context it needs.
+1. **Runtime package authoring** -- Add a Python module under your package's
+   `python/src/.../tools/` tree and declare the exported tool ID in that
+   package's `tools/bindings.yaml`.
+2. **Source checkout maintenance** -- Update `packages/core/...` when you are
+   changing the shipped core package, and only touch repo-local `backend/src/...`
+   code when you are changing runtime behavior rather than normal package
+   content.
 
+Tools are Python functions decorated with `@function_tool` that agents call to
+interact with databases, APIs, and files.
+
+For an agent to use a tool, the package must export a **tool binding** in
+`tools/bindings.yaml`. `catalog_service.py` normalizes those package exports
+into the merged `TOOL_BINDINGS` runtime registry.
+
+```text
+~/.agr_ai_curation/runtime/packages/org-custom/
+  package.yaml
+  requirements/runtime.txt
+  python/src/org_custom/tools/
+    my_tool.py
+  tools/
+    bindings.yaml
 ```
-backend/src/lib/openai_agents/tools/
-  agr_curation.py        # AGR database access
-  weaviate_search.py     # Document search
-  rest_api.py            # REST API wrappers
-  sql_query.py           # SQL query tool
-  file_output_tools.py   # CSV/TSV/JSON output
-  __init__.py            # Exports
-```
+
+If you are maintaining the shipped `core` package from this repository, the
+equivalent sources live under `packages/core/python/src/agr_ai_curation_core/tools/`
+and `packages/core/tools/bindings.yaml`.
 
 ---
 
 ## Step 1: Create the Tool File
 
-Create `backend/src/lib/openai_agents/tools/my_tool.py`:
+Create the tool module inside your package's `python/src/.../tools/` tree. For
+example, create `python/src/org_custom/tools/my_tool.py`:
 
 ```python
 """
@@ -91,48 +116,52 @@ def my_custom_tool(
 
 ## Step 2: Register a Tool Binding
 
-Add a resolver function and binding entry in `backend/src/lib/agent_studio/catalog_service.py`.
+Declare the binding in your package's `tools/bindings.yaml`.
 
-### For static tools (no runtime context needed):
+### For static tools (no runtime context needed)
 
-```python
-def _resolve_my_custom_tool(_context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.my_tool import my_custom_tool
-    return my_custom_tool
-
-# Add to TOOL_BINDINGS dict:
-TOOL_BINDINGS["my_custom_tool"] = {
-    "binding": "static",
-    "required_context": [],
-    "resolver": _resolve_my_custom_tool,
-}
+```yaml
+package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: my_custom_tool
+    binding_kind: static
+    callable: org_custom.tools.my_tool:my_custom_tool
+    required_context: []
+    description: Search for [something] in [data source].
+    source_file: python/src/org_custom/tools/my_tool.py
 ```
 
-### For context-dependent tools (need document_id, database_url, etc.):
+### For context-dependent tools (need document_id, database_url, etc.)
 
-```python
-def _resolve_my_context_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.my_tool import create_my_tool
-    return create_my_tool(
-        database_url=context.database_url,
-    )
-
-TOOL_BINDINGS["my_context_tool"] = {
-    "binding": "context_factory",
-    "required_context": ["database_url"],
-    "resolver": _resolve_my_context_tool,
-}
+```yaml
+package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: my_context_tool
+    binding_kind: context_factory
+    callable_factory: org_custom.tools.my_tool:create_my_tool
+    required_context: [database_url]
+    description: Query a context-scoped data source.
 ```
 
-The `required_context` list tells the system what execution context fields must be present. If any are missing at runtime, a clear error is raised.
+The `required_context` list tells the system what execution context fields must
+be present. If any are missing at runtime, a clear error is raised.
+
+Repo-maintainer note:
+
+- Update `packages/core/tools/bindings.yaml` when you are changing the shipped
+  core package.
+- Only edit `catalog_service.py` or the package runtime internals when the
+  runtime needs new binding semantics, registry merging, or execution behavior.
 
 ---
 
 ## Step 3: Reference in Agent Configuration
 
-Add the tool to your agent's `tool_ids` list. This can be done in:
+Add the tool to your agent's `tools` list. This can be done in:
 
-**YAML (system agents)** -- `config/agents/my_agent/agent.yaml`:
+**Package-owned system agent** -- `~/.agr_ai_curation/runtime/packages/<package>/agents/my_agent/agent.yaml`:
 
 ```yaml
 tools:
@@ -140,7 +169,7 @@ tools:
   - agr_curation_query  # Other existing tools
 ```
 
-**Database (custom agents)** -- Update the `tool_ids` JSONB array:
+**Custom/UI-created agent** -- Update the `tool_ids` JSONB array:
 
 ```sql
 UPDATE agents SET tool_ids = '["my_custom_tool", "agr_curation_query"]'
@@ -151,43 +180,32 @@ WHERE agent_key = 'my_agent';
 
 ## Step 4: Add Tool Documentation (Optional)
 
-Add an entry to `TOOL_REGISTRY` in `catalog_service.py` for Agent Studio's Tool Inspector:
+Most Tool Inspector metadata is inferred automatically from your package
+binding plus the callable docstring. Add enough binding metadata for that
+experience to be useful:
 
-```python
-TOOL_REGISTRY["my_custom_tool"] = {
-    "name": "My Custom Tool",
-    "description": "Search for [something] in [data source].",
-    "category": "Database",
-    "source_file": "backend/src/lib/openai_agents/tools/my_tool.py",
-    "documentation": {
-        "summary": "Searches [data source] for [entities].",
-        "parameters": [
-            {
-                "name": "query",
-                "type": "string",
-                "required": True,
-                "description": "The search query.",
-            },
-            {
-                "name": "limit",
-                "type": "integer",
-                "required": False,
-                "description": "Maximum results (default: 10).",
-            },
-        ],
-    },
-    "methods": None,
-    "agent_methods": None,
-}
+```yaml
+tools:
+  - tool_id: my_custom_tool
+    binding_kind: static
+    callable: org_custom.tools.my_tool:my_custom_tool
+    required_context: []
+    description: Search for [something] in [data source].
+    source_file: python/src/org_custom/tools/my_tool.py
 ```
+
+Only add curated runtime metadata in `catalog_service.py` when you are
+maintaining the shipped core package and need to override the automatically
+derived metadata.
 
 ---
 
 ## Step 5: Restart and Verify
 
 ```bash
-# Restart backend to pick up new tool
-docker compose restart backend
+# Restart backend to pick up the updated package
+docker compose --env-file ~/.agr_ai_curation/.env \
+  -f docker-compose.production.yml restart backend
 
 # Verify tool binding is resolved (check logs for errors)
 docker compose logs backend | grep "my_custom_tool"
@@ -388,18 +406,15 @@ def create_my_scoped_tool(database_url: str):
     return my_scoped_query
 ```
 
-Then register the binding with `required_context`:
+Then export the factory from `tools/bindings.yaml` with `required_context`:
 
-```python
-def _resolve_my_scoped_tool(context: ToolExecutionContext) -> Any:
-    from src.lib.openai_agents.tools.my_tool import create_my_scoped_tool
-    return create_my_scoped_tool(context.database_url)
-
-TOOL_BINDINGS["my_scoped_query"] = {
-    "binding": "context_factory",
-    "required_context": ["database_url"],
-    "resolver": _resolve_my_scoped_tool,
-}
+```yaml
+tools:
+  - tool_id: my_scoped_query
+    binding_kind: context_factory
+    callable_factory: org_custom.tools.my_tool:create_my_scoped_tool
+    required_context: [database_url]
+    description: Query a scoped database connection.
 ```
 
 ---
@@ -446,7 +461,8 @@ def my_configured_tool(query: str) -> dict:
 
 ### Unit Test
 
-Create `backend/tests/unit/tools/test_my_tool.py`:
+Keep tests wherever your package or repository normally keeps them. For example,
+create a unit test beside your package code or in the repo's unit-test tree:
 
 ```python
 import pytest
@@ -454,7 +470,7 @@ from unittest.mock import patch
 
 
 def test_my_tool_success():
-    from src.lib.openai_agents.tools.my_tool import my_custom_tool
+    from org_custom.tools.my_tool import my_custom_tool
     # For function_tool decorated functions, call the underlying function
     result = my_custom_tool(query="test")
     assert result["status"] == "success"
@@ -462,7 +478,7 @@ def test_my_tool_success():
 
 
 def test_my_tool_empty_query():
-    from src.lib.openai_agents.tools.my_tool import my_custom_tool
+    from org_custom.tools.my_tool import my_custom_tool
     result = my_custom_tool(query="")
     assert result["status"] == "success"
     assert result["results"] == []
@@ -470,8 +486,8 @@ def test_my_tool_empty_query():
 
 ### Manual Test in Agent
 
-1. Add the tool to an agent's `tool_ids` in the database
-2. Start the backend: `docker compose up -d backend`
+1. Add the tool to a package-owned agent bundle or to a custom agent's `tool_ids`.
+2. Start or restart the backend so the updated package is loaded.
 3. Test via chat: "Search for [something] using the new tool"
 4. Check logs: `docker compose logs backend | grep my_custom_tool`
 
@@ -479,14 +495,13 @@ def test_my_tool_empty_query():
 
 ## Checklist
 
-- [ ] Tool function created in `backend/src/lib/openai_agents/tools/`
+- [ ] Tool function created in your package's `python/src/.../tools/`
 - [ ] `@function_tool` decorator applied
 - [ ] Clear docstring for LLM tool selection
 - [ ] Error handling returns dict (not raises)
-- [ ] Resolver function added in `catalog_service.py`
-- [ ] `TOOL_BINDINGS` entry added with correct `required_context`
-- [ ] Tool added to agent's `tools` list in `agent.yaml` or `tool_ids` in DB
-- [ ] `TOOL_REGISTRY` entry added (optional, for UI documentation)
+- [ ] `tools/bindings.yaml` export added with correct `binding_kind` and `required_context`
+- [ ] Tool added to a package-owned agent `tools` list in `agent.yaml` or to `tool_ids` in DB
+- [ ] Binding metadata includes a useful description and source file (optional but recommended)
 - [ ] Backend restarted and tool verified in logs
 - [ ] Unit test written
 
@@ -496,7 +511,7 @@ def test_my_tool_empty_query():
 
 | Problem | Solution |
 |---------|----------|
-| "Unknown tool binding" | Add entry to `TOOL_BINDINGS` in `catalog_service.py` |
+| "Unknown tool binding" | Verify the package exports the tool in `tools/bindings.yaml` and the merged runtime registry loaded it successfully |
 | Tool not called by LLM | Improve docstring with clear "when to use" guidance |
 | "requires execution context" error | Missing runtime context (document_id, database_url, etc.) -- check `required_context` in binding |
 | Wrong parameters passed | Check type hints match expectations |

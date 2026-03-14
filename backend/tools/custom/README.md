@@ -1,54 +1,30 @@
 # Custom Tools
 
-Add your organization-specific tools here.
+This folder is kept only for repository-local reference and legacy experiments.
+Standard installs should not add organization-specific tools here.
 
-## Adding a Tool
+For public or deployment-specific customization, create a runtime package under
+`~/.agr_ai_curation/runtime/packages/<package>/` with:
 
-1. Create a Python file (e.g., `my_tool.py`)
-2. Implement with the `@function_tool` decorator
-3. Restart the application
-4. Reference by name in your agent's `agent.yaml`
+- package-local Python code in `python/src/<package_name>/tools/`,
+- a `tools/bindings.yaml` export that declares each `tool_id`, and
+- package-owned agent bundles that reference those tool IDs.
 
-## Example
+Example layout:
 
-```python
-"""
-My custom API tool.
-
-Connects to our internal service for specialized lookups.
-"""
-
-from agents import function_tool
-
-@function_tool(
-    name_override="my_internal_api",
-    description_override="Query our internal service for data"
-)
-async def my_internal_api(query: str, limit: int = 10) -> dict:
-    """
-    Query the internal API.
-
-    Args:
-        query: Search query
-        limit: Maximum results
-
-    Returns:
-        Dict with results and metadata
-    """
-    # Your implementation here
-    # Handle authentication, API calls, data transformation
-    return {"results": [...], "total": 0}
+```text
+~/.agr_ai_curation/runtime/packages/org_custom/
+├── package.yaml
+├── requirements/runtime.txt
+├── python/src/org_custom/tools/my_internal_api.py
+└── tools/bindings.yaml
 ```
 
-## Best Practices
+If you are maintaining the shipped core package from this repository, update the
+package-owned sources in `packages/core/` instead of treating
+`backend/tools/custom/` as the supported public extension point.
 
-- Tools should handle their own data transformation
-- Return clean, structured data (no raw API responses)
-- Include good error handling
-- Document parameters and return values
-- Use async for I/O operations
+## See also
 
-## See Also
-
-- `../_examples/` for complete template implementations
-- `../core/` for reference implementations (read-only)
+- [../README.md](../README.md) - Package-first tool authoring
+- [../../../config/agents/README.md](../../../config/agents/README.md) - Package-owned agent bundles

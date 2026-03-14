@@ -6,6 +6,12 @@ Last updated: 2026-03-13
 
 This guide covers standalone deployment of `agr_ai_curation` outside Alliance production infrastructure.
 
+Related guide:
+
+- [Modular Packages and Upgrades](modular-packages.md) for the installed runtime
+  layout, package authoring contract, collision behavior, standard upgrades,
+  and repo-install migration.
+
 ## Published images
 
 The standalone stack now expects `backend`, `frontend`, and `trace_review_backend` to run from published images instead of local source builds.
@@ -29,16 +35,43 @@ Use `docker-compose.production.yml` for standalone deployments.
 
 ## Installed runtime layout
 
-The standalone installer now seeds the extracted bundle into an installed runtime/data layout under `~/.agr_ai_curation/`.
+The standalone installer seeds the modular runtime under
+`~/.agr_ai_curation/`.
 
+- Secrets + image tags: `~/.agr_ai_curation/.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
+- Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
 - Shipped core package: `~/.agr_ai_curation/runtime/packages/core`
 - Runtime state: `~/.agr_ai_curation/runtime/state`
-- Data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
+- Package-runner virtualenvs: `~/.agr_ai_curation/runtime/state/package_runner/<package_id>/venv`
+- Host data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
 
 `scripts/install/install.sh --image-tag <tag>` can be used to pin the published backend/frontend/trace-review images to a specific release tag during installation.
 For tagged releases, prefer the exact `vX.Y.Z` tag or image digests from the release manifest (or use the attached `env.standalone-vX.Y.Z` asset) instead of `latest`.
+
+## Upgrading a standard standalone install
+
+When the existing deployment already runs from `~/.agr_ai_curation/`:
+
+1. Pull the updated release checkout or unpack the updated release bundle.
+2. Back up `~/.agr_ai_curation/.env`, `~/.agr_ai_curation/runtime/config/`,
+   and any custom package directories under
+   `~/.agr_ai_curation/runtime/packages/`.
+3. Move any long-lived customizations out of
+   `~/.agr_ai_curation/runtime/packages/core/` before upgrading. Stage 2
+   refreshes the shipped `core` package and re-seeds the runtime config files.
+4. Re-run the installer from Stage 2:
+
+   ```bash
+   scripts/install/install.sh --from-stage 2 --image-tag vX.Y.Z
+   ```
+
+5. Reconcile any local `.env` or runtime-config changes from your backup after
+   the refresh completes.
+
+Use `--from-stage 6` only for restart/verification work. It does not refresh
+the packaged runtime content.
 
 ## Migrating an existing repo-based install
 
