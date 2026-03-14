@@ -13,9 +13,9 @@ The standalone stack now expects `backend`, `frontend`, and `trace_review_backen
 - Canonical backend image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-backend`
 - Canonical frontend image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend`
 - Canonical trace review image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
-- The authoritative standalone env template currently pins `BACKEND_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` to `smoke-20260310-final`, which was the latest verified public tag on March 13, 2026
-- Standalone env defaults pin the repository with `TRACE_REVIEW_BACKEND_IMAGE` and `TRACE_REVIEW_BACKEND_IMAGE_TAG`
-- The GitHub release workflow publishes `trace_review_backend` from `trace_review/backend/Dockerfile.prod` and tags each release as both `v<version>` and `latest`
+- `publish-images.yml` publishes backend/frontend/trace-review runtime images from `main` as `latest` plus `sha-<shortsha>` for dev and local-server validation
+- Pushed `vX.Y.Z` tags publish versioned backend/frontend/trace-review runtime images tagged `vX.Y.Z`
+- Tagged releases also attach `core-vX.Y.Z.tar.gz`, `env.standalone-vX.Y.Z`, and `release-manifest-vX.Y.Z.json` so installer/release consumers can pin exact image refs instead of a floating `latest` lane
 
 ## Compose file
 
@@ -38,6 +38,7 @@ The standalone installer now seeds the extracted bundle into an installed runtim
 - Data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
 
 `scripts/install/install.sh --image-tag <tag>` can be used to pin the published backend/frontend/trace-review images to a specific release tag during installation.
+For tagged releases, prefer the exact `vX.Y.Z` tag or image digests from the release manifest (or use the attached `env.standalone-vX.Y.Z` asset) instead of `latest`.
 
 ## Migrating an existing repo-based install
 
@@ -90,6 +91,9 @@ Key values:
 - `TRACE_REVIEW_URL=http://trace_review_backend:8001`
 - `TRACE_REVIEW_LANGFUSE_HOST=http://langfuse:3000`
 - `TRACE_REVIEW_LANGFUSE_LOCAL_HOST=http://langfuse:3000`
+
+The checked-in template remains the dev/default baseline.
+Tagged releases publish a pinned `env.standalone-vX.Y.Z` companion asset so standalone installs can consume exact versioned image tags without editing the template by hand.
 
 ## Authentication (OIDC)
 
