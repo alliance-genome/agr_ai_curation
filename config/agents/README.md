@@ -184,6 +184,11 @@ installs.
 | `group_id` | Yes | Must match the filename and a key in `groups.yaml` |
 | `content` | Yes | Rules injected into the prompt at runtime |
 
+Migration note: older repo-based installs may still have `rules:` in
+`group_rules/*.yaml`. Rename that key to `content:` before packaging or
+migrating the agent bundle. The modular loader expects `content:` and skips the
+file when that field is missing.
+
 ## Loading and override behavior
 
 - Agent bundles are discovered from loaded runtime packages.
@@ -215,7 +220,7 @@ Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 | Duplicate agent bundle | Two packages export the same agent bundle name; rename or remove one of them |
 | Schema not found | Verify `output_schema` matches the class name exactly |
 | Tool not available | Verify the tool ID exists in a loaded package `tools/bindings.yaml` export |
-| Group rules not applied | Verify `group_rules_enabled: true` and the rule file uses `group_id` + `content` |
+| Group rules not applied | Verify `group_rules_enabled: true`, the rule file uses `group_id` + `content`, and any legacy `rules:` key was renamed to `content:` |
 
 ## See also
 

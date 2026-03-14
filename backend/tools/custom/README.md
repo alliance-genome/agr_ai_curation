@@ -20,6 +20,23 @@ Example layout:
 └── tools/bindings.yaml
 ```
 
+Minimal tool example:
+
+```python
+from agents import function_tool
+
+
+@function_tool(
+    name_override="my_internal_api",
+    description_override="Query an internal API",
+)
+async def my_internal_api(query: str) -> dict:
+    return {"results": [], "total": 0}
+```
+
+Declare that callable in the same package's `tools/bindings.yaml`, or use
+[../README.md](../README.md) as the fuller package-first authoring guide.
+
 If you are maintaining the shipped core package from this repository, update the
 package-owned sources in `packages/core/` instead of treating
 `backend/tools/custom/` as the supported public extension point.

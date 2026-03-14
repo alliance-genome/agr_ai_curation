@@ -39,6 +39,10 @@ tools:
     source_file: python/src/org_custom/tools/my_tool.py
 ```
 
+`source_file` is optional provenance metadata. Include it when you want
+diagnostics or admin tooling to point back to the package-relative source path;
+omit it if you do not need that breadcrumb.
+
 ## Add a package-owned tool
 
 1. Create a Python module inside your package's `python/src/.../tools/`

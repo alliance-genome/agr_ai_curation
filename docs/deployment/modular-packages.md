@@ -192,9 +192,14 @@ selections:
     reason: Prefer org.custom for conflicting shared tools.
 ```
 
-Important: tool-binding selections are keyed by export name plus package ID, not
-by individual `tool_id`. Most packages use `name: default` for their
-`tools/bindings.yaml` export.
+Important: tool-binding selections do not target individual `tool_id` entries.
+Each selection names the exported binding bundle (`export_kind` + export
+`name`) and the winning `package_id`. Most packages use `name: default` for
+their `tools/bindings.yaml` export.
+
+If you need only some conflicting tools from a package to win, split them into
+separate tool-binding exports instead of keeping every tool in one `default`
+export.
 
 ## Install a custom tool package
 
@@ -252,10 +257,12 @@ Use this path when you already have a modular install under
    scripts/install/install.sh --from-stage 2 --image-tag vX.Y.Z
    ```
 
-5. The installer backs up the existing `.env`, recreates it from the standalone
-   template, and prompts for the required secrets again. Reconcile any local
-   changes you keep in `.env` or `runtime/config/` from your backup after the
-   refresh.
+5. Stage 2 is interactive today: it backs up the existing `.env`, recreates it
+   from `scripts/install/lib/templates/env.standalone`, and prompts again for
+   provider/API keys. If your deployment uses OIDC, Stage 3 also re-prompts
+   for issuer/client/secret values. Reconcile any local changes you keep in
+   `.env` or `runtime/config/` from your backup after the refresh, and treat
+   this as a manual checkpoint when automating upgrades.
 6. Let Stage 6 restart and verify the stack.
 
 Notes:
@@ -263,6 +270,9 @@ Notes:
 - `--from-stage 6` is a restart/verification shortcut only. It does not refresh
   `runtime/packages/core/` or the runtime config files, so it is not a full
   package upgrade.
+- There is no dedicated non-interactive Stage 2 flag today; if you automate
+  upgrades, plan around the manual `.env` reconciliation step instead of
+  assuming an unattended refresh.
 - Extra packages that are not `core` are left in place, but you should still
   keep them backed up or version-controlled.
 

@@ -67,8 +67,12 @@ When the existing deployment already runs from `~/.agr_ai_curation/`:
    scripts/install/install.sh --from-stage 2 --image-tag vX.Y.Z
    ```
 
-5. Reconcile any local `.env` or runtime-config changes from your backup after
-   the refresh completes.
+5. Stage 2 is interactive today: it backs up `~/.agr_ai_curation/.env`,
+   recreates it from `scripts/install/lib/templates/env.standalone`, and
+   prompts again for provider/API keys. If your deployment uses OIDC, Stage 3
+   also re-prompts for issuer/client/secret values. Reconcile any local `.env`
+   or runtime-config changes from your backup after the refresh completes, and
+   treat this as a manual checkpoint when automating upgrades.
 
 Use `--from-stage 6` only for restart/verification work. It does not refresh
 the packaged runtime content.

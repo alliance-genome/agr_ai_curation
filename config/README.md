@@ -208,6 +208,15 @@ Notes:
 - Installed packages may export tool policy defaults first; this file is merged afterward and wins on `tool_key` collisions.
 - Override entries replace the full tool policy definition for the same `tool_key`.
 
+### maintenance_message.txt
+
+Optional plain-text banner content for maintenance mode.
+
+Notes:
+- The frontend banner and maintenance page read the first non-comment line from this file.
+- Leave the file empty (or keep only comments) to disable the maintenance message.
+- `scripts/maintenance_mode.sh` checks this file before enabling the maintenance page.
+
 ### agents/
 
 This repo-local directory mirrors the shipped `core` package agent bundles for
