@@ -159,6 +159,38 @@ jobs:
           echo "Contract-core tests completed." >> $GITHUB_STEP_SUMMARY
           echo "Legacy/stale contract tests remain out-of-scope for this gate and are tracked in docs/developer/TEST_STRATEGY.md." >> $GITHUB_STEP_SUMMARY
 
+  installer-shell-regression-tests:
+    name: Installer Shell Regression Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run installer shell regression suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/installer-shell-tests
+          bash scripts/install/tests/run.sh | tee artifacts/installer-shell-tests/installer-shell-regression.log
+
+      - name: Upload installer shell regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-shell-regression-log
+          path: artifacts/installer-shell-tests/installer-shell-regression.log
+          if-no-files-found: error
+
+      - name: Installer shell summary
+        if: always()
+        run: |
+          echo "## Installer Shell Regression Suite" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Ran \`bash scripts/install/tests/run.sh\` on \`ubuntu-latest\`." >> $GITHUB_STEP_SUMMARY
+          echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "Artifact: \`installer-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
+
   backend-persistence-tests:
     name: Backend Persistence Tests
     runs-on: ubuntu-latest
