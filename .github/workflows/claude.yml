@@ -56,7 +56,13 @@ jobs:
             4. Docker and dependency changes
             5. Breaking changes or backward compatibility issues
 
+            If the repo contains a CLAUDE.md file, read it first for project context.
+            If the repo contains a REVIEW.md file, follow its review guidelines.
+
             Keep feedback concise, actionable, and directly tied to the diff.
+            If the changes look correct, say so briefly. Do NOT invent issues.
+            Do NOT pad reviews with trivial suggestions or stylistic preferences.
+            Focus on bugs that would break production.
 
             IMPORTANT: You MUST post your review as a GitHub PR comment using:
             gh pr comment {2} --body "YOUR_REVIEW_HERE"
@@ -90,8 +96,9 @@ jobs:
           # CLI arguments (v1 format)
           claude_args: |
             --model ${{ vars.CLAUDE_PR_REVIEW_MODEL || 'claude-sonnet-4-6' }}
-            --max-turns 60
-            --allowedTools "Bash,Edit,Read,Write,Glob,Grep,LS"
+            --max-turns 15
+            --max-budget-usd 3.00
+            --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Read,Glob,Grep"
             --append-system-prompt "You are reviewing a pull request for the AI Curation application - a full-stack platform
             for AI-assisted scientific literature curation built with FastAPI (Python) backend and
             React (TypeScript) frontend.
