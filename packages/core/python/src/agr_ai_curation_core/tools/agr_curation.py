@@ -16,10 +16,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
 from agents import function_tool
 
-# TODO: Replace backend src.* imports with package-local/public runtime
-# dependencies before agr.core ships independently.
-from src.lib.database.curation_resolver import get_curation_resolver
-from src.lib.identifier_validation import is_valid_curie
+from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_groups
 from .search_helpers import (
     validate_search_symbol,
     enrich_with_match_context,
@@ -44,7 +41,6 @@ class AgrQueryResult(BaseModel):
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
 def _load_group_taxon_mappings() -> dict:
     """Build group-to-taxon mapping from config/groups.yaml."""
-    from src.lib.config.groups_loader import list_groups
     mapping = {}
     for group in list_groups():
         if group.taxon:
@@ -56,6 +52,8 @@ _GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
 try:
     PROVIDER_TO_TAXON = _load_group_taxon_mappings()
 except Exception as exc:
+    # Preserve the long-standing degraded mode for package imports: provider
+    # lookups fail closed, while non-provider methods still remain importable.
     _GROUP_MAPPING_LOAD_ERROR = str(exc)
     PROVIDER_TO_TAXON = {}
     logger.error("Failed to load group-to-taxon mappings: %s", exc)

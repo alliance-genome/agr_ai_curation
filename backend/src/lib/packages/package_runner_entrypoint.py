@@ -14,6 +14,7 @@ from typing import Any
 
 CURRENT_DIR = Path(__file__).resolve().parent
 HOST_RUNTIME_SRC_DIR = CURRENT_DIR.parent.parent
+HOST_RUNTIME_ROOT_DIR = HOST_RUNTIME_SRC_DIR.parent
 
 
 def main() -> int:
@@ -165,6 +166,12 @@ def _extend_sys_path(request) -> None:
         candidate_text = str(candidate)
         if candidate_text not in sys.path:
             sys.path.insert(0, candidate_text)
+
+    host_runtime_root_text = str(HOST_RUNTIME_ROOT_DIR)
+    if host_runtime_root_text not in sys.path:
+        # Keep the backend package root available for public runtime imports
+        # without letting it outrank package-local or backend src modules.
+        sys.path.append(host_runtime_root_text)
 
 
 if __name__ == "__main__":

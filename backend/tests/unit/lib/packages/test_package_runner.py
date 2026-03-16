@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,10 +19,13 @@ from src.lib.packages.paths import (
     get_package_runner_state_dir,
     get_package_runner_venv_dir,
 )
+from src.lib.packages.runner_protocol import PROTOCOL_VERSION, RunnerRequest, encode_request
 from src.lib.packages.tool_registry import load_tool_registry
 
 REPO_ROOT = find_repo_root(Path(__file__))
+BACKEND_ROOT = REPO_ROOT / "backend"
 CORE_PACKAGE_SRC = REPO_ROOT / "packages" / "core" / "python" / "src"
+BACKEND_SRC = REPO_ROOT / "backend" / "src"
 FIXTURE_PACKAGE_DIR = (
     Path(__file__).resolve().parent / "fixtures" / "package_runner" / "demo_runner"
 )
@@ -41,6 +45,10 @@ def _clear_runtime_path_env(monkeypatch):
         "FILE_OUTPUT_STORAGE_PATH",
         "IDENTIFIER_PREFIX_STATE_DIR",
         "IDENTIFIER_PREFIX_FILE_PATH",
+        "GROUPS_CONFIG_PATH",
+        "CONNECTIONS_CONFIG_PATH",
+        "CURATION_DB_URL",
+        "PYTHONPATH",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -284,6 +292,145 @@ print(
     assert payload["loaded"] == ["agr_ai_curation_core.tools"]
 
 
+def test_core_agr_runtime_boundary_loads_from_public_runtime_surface(tmp_path):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    env = os.environ.copy()
+    env["AGR_RUNTIME_ROOT"] = str(runtime_root)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1]).resolve()
+backend_root = Path(sys.argv[2]).resolve()
+backend_src = Path(sys.argv[3]).resolve()
+clean_paths = []
+for entry in sys.path:
+    if not entry:
+        continue
+    try:
+        resolved = Path(entry).resolve()
+    except Exception:
+        continue
+    if resolved == repo_root or repo_root in resolved.parents:
+        continue
+    clean_paths.append(str(resolved))
+
+sys.path[:] = [str(backend_src), str(backend_root), *dict.fromkeys(clean_paths)]
+
+from agr_ai_curation_runtime import (
+    get_curation_resolver,
+    is_valid_curie,
+    list_groups,
+)
+
+print(
+    json.dumps(
+        {
+            "is_valid_curie": is_valid_curie("FB:FBgn0262738"),
+            "groups": [
+                {"group_id": group.group_id, "taxon": group.taxon}
+                for group in list_groups()
+            ],
+            "connection_url": get_curation_resolver().get_connection_url(),
+        }
+    )
+)
+""",
+            str(REPO_ROOT),
+            str(BACKEND_ROOT),
+            str(BACKEND_SRC),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert completed.returncode == 0, (
+        "Isolated agr_ai_curation_runtime import failed.\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["is_valid_curie"] is True
+    assert payload["groups"] == [{"group_id": "FB", "taxon": "NCBITaxon:7227"}]
+    assert payload["connection_url"] == "postgresql://db.invalid:5432/curation"
+
+
+def test_core_agr_curation_module_preserves_group_mapping_load_failure(tmp_path):
+    env = os.environ.copy()
+    env["GROUPS_CONFIG_PATH"] = str(tmp_path / "missing-groups.yaml")
+    env["PYTHONPATH"] = str(_write_fake_agents_dependency(tmp_path))
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1]).resolve()
+backend_root = Path(sys.argv[2]).resolve()
+backend_src = Path(sys.argv[3]).resolve()
+package_src = Path(sys.argv[4]).resolve()
+clean_paths = []
+for entry in sys.path:
+    if not entry:
+        continue
+    try:
+        resolved = Path(entry).resolve()
+    except Exception:
+        continue
+    if resolved == repo_root or repo_root in resolved.parents:
+        continue
+    clean_paths.append(str(resolved))
+
+sys.path[:] = [str(backend_src), str(backend_root), str(package_src), *dict.fromkeys(clean_paths)]
+
+module = importlib.import_module("agr_ai_curation_core.tools.agr_curation")
+print(
+    json.dumps(
+        {
+            "provider_to_taxon": module.PROVIDER_TO_TAXON,
+            "load_error": module._GROUP_MAPPING_LOAD_ERROR,
+        }
+    )
+)
+""",
+            str(REPO_ROOT),
+            str(BACKEND_ROOT),
+            str(BACKEND_SRC),
+            str(CORE_PACKAGE_SRC),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert completed.returncode == 0, (
+        "Isolated agr_ai_curation_core.tools.agr_curation import failed.\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["provider_to_taxon"] == {}
+    assert "missing-groups.yaml" in (payload["load_error"] or "")
+
+
 def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch, tmp_path):
     fake_backend_root = _write_fake_weaviate_backend(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
@@ -386,6 +533,110 @@ def test_package_runner_executes_core_file_output_binding_in_isolation(
     assert output_path.read_text(encoding="utf-8") == (
         "gene_id,symbol\nFBgn0001,Notch\n"
     )
+
+
+def test_package_runner_executes_core_agr_curation_binding_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    registry = load_tool_registry(
+        REPO_ROOT / "packages",
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    runner = PackageToolRunner(
+        tool_registry=registry,
+        env_manager=_CurrentInterpreterEnvironmentManager(),
+    )
+
+    result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "search_genes",
+            "gene_symbol": "norpA",
+            "data_provider": "FB",
+            "limit": 5,
+        },
+    )
+
+    assert result.ok is True
+    assert result.error is None
+    assert result.result["status"] == "ok"
+    assert result.result["count"] == 1
+    assert result.result["warnings"] is None
+    assert result.result["data"] == [
+        {
+            "curie": "FB:FBgn0262738",
+            "curie_validated": True,
+            "match_type": "exact",
+            "name": "phospholipase C at 21C",
+            "symbol": "norpA",
+            "taxon": "NCBITaxon:7227",
+        }
+    ]
+
+
+def test_package_runner_entrypoint_resolves_public_runtime_outside_backend_cwd(tmp_path):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    fake_agents_root = _write_fake_agents_dependency(tmp_path)
+    request = RunnerRequest(
+        protocol_version=PROTOCOL_VERSION,
+        package_id="agr.core",
+        package_version="1.0.0",
+        package_root=str(REPO_ROOT / "packages" / "core"),
+        python_package_root="python/src/agr_ai_curation_core",
+        tool_id="agr_curation_query",
+        import_path="agr_ai_curation_core.tools.agr_curation:agr_curation_query",
+        import_attribute_kind="callable",
+        binding_kind="static",
+        required_context=[],
+        context={},
+        args=[],
+        kwargs={
+            "method": "search_genes",
+            "gene_symbol": "norpA",
+            "data_provider": "FB",
+            "limit": 5,
+        },
+    )
+    env = os.environ.copy()
+    env["AGR_RUNTIME_ROOT"] = str(runtime_root)
+    env["PYTHONPATH"] = os.pathsep.join(
+        (
+            str(fake_dependency_root),
+            str(fake_agents_root),
+        )
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "backend" / "src" / "lib" / "packages" / "package_runner_entrypoint.py"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        input=encode_request(request),
+        cwd=tmp_path,
+        env=env,
+    )
+
+    assert completed.returncode == 0, (
+        "Package runner entrypoint failed outside backend cwd.\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "ok"
+    assert payload["result"]["status"] == "ok"
+    assert payload["result"]["count"] == 1
+    assert payload["result"]["data"][0]["curie"] == "FB:FBgn0262738"
 
 
 def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
@@ -580,3 +831,123 @@ def SessionLocal():
     )
 
     return backend_root
+
+
+def _write_fake_agr_runtime(tmp_path: Path) -> Path:
+    runtime_root = tmp_path / "runtime"
+    config_dir = runtime_root / "config"
+    prefix_dir = runtime_root / "state" / "identifier_prefixes"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    prefix_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "groups.yaml").write_text(
+        """identity_provider:
+  type: cognito
+  group_claim: cognito:groups
+groups:
+  FB:
+    name: FlyBase
+    taxon: NCBITaxon:7227
+    provider_groups:
+      - fb-curators
+""",
+        encoding="utf-8",
+    )
+    (config_dir / "connections.yaml").write_text(
+        """services:
+  curation_db:
+    url: postgresql://db.invalid:5432/curation
+    credentials:
+      source: env
+""",
+        encoding="utf-8",
+    )
+    (prefix_dir / "identifier_prefixes.json").write_text(
+        json.dumps({"prefixes": ["FB"]}),
+        encoding="utf-8",
+    )
+    return runtime_root
+
+
+def _write_fake_agr_curation_api_dependency(tmp_path: Path) -> Path:
+    dependency_root = tmp_path / "fake_external"
+    package_root = dependency_root / "agr_curation_api"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "db_methods.py").write_text(
+        """class DatabaseConfig:
+    def __init__(self):
+        self.username = None
+        self.password = None
+        self.database = None
+        self.host = None
+        self.port = None
+
+
+class _Display:
+    def __init__(self, text):
+        self.displayText = text
+
+
+class _Gene:
+    def __init__(self, curie, symbol, name, taxon):
+        self.primaryExternalId = curie
+        self.geneSymbol = _Display(symbol)
+        self.geneFullName = _Display(name)
+        self.taxon = taxon
+        self.geneType = None
+
+
+class DatabaseMethods:
+    def __init__(self, config):
+        self.config = config
+
+    def search_entities(self, entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+        if (
+            entity_type == "gene"
+            and search_pattern == "norpA"
+            and taxon_curie == "NCBITaxon:7227"
+        ):
+            return [
+                {
+                    "entity_curie": "FB:FBgn0262738",
+                    "entity": "norpA",
+                    "match_type": "exact",
+                }
+            ]
+        return []
+
+    def get_gene(self, gene_id):
+        if gene_id == "FB:FBgn0262738":
+            return _Gene(
+                "FB:FBgn0262738",
+                "norpA",
+                "phospholipase C at 21C",
+                "NCBITaxon:7227",
+            )
+        return None
+
+    def get_data_providers(self):
+        return [("FB", "NCBITaxon:7227")]
+""",
+        encoding="utf-8",
+    )
+    return dependency_root
+
+
+def _write_fake_agents_dependency(tmp_path: Path) -> Path:
+    dependency_root = tmp_path / "fake_agents"
+    package_root = dependency_root / "agents"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "__init__.py").write_text(
+        """def function_tool(*decorator_args, **decorator_kwargs):
+    def decorate(func):
+        return func
+
+    if decorator_args and callable(decorator_args[0]) and not decorator_kwargs:
+        return decorate(decorator_args[0])
+    return decorate
+""",
+        encoding="utf-8",
+    )
+    return dependency_root

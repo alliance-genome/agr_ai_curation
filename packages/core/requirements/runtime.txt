@@ -1,8 +1,6 @@
-# Temporary bootstrap dependencies for the tracked AGR core package.
-# The migrated entrypoints currently delegate to the existing backend
-# implementations until runtime tool resolution switches to packages.
-# TODO: Replace these bootstrap dependencies and remaining backend src.*
-# imports before agr.core ships independently outside the monorepo runtime.
+# Runtime dependencies for the tracked AGR core package.
+# Some packaged tools still rely on public host-runtime surfaces exposed via
+# agr_ai_curation_runtime during isolated package execution.
 openai-agents[litellm]
 pydantic>=2.0
 requests>=2.0
