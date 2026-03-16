@@ -96,7 +96,7 @@ jobs:
           # CLI arguments (v1 format)
           claude_args: |
             --model ${{ vars.CLAUDE_PR_REVIEW_MODEL || 'claude-sonnet-4-6' }}
-            --max-turns 15
+            --max-turns 60
             --max-budget-usd 3.00
             --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Read,Glob,Grep"
             --append-system-prompt "You are reviewing a pull request for the AI Curation application - a full-stack platform
