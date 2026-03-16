@@ -191,6 +191,39 @@ jobs:
           echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
           echo "Artifact: \`installer-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
 
+  publish-artifact-shell-regression-tests:
+    name: Publish Artifact Shell Regression Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run publish-artifact shell regression suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/publish-artifact-shell-tests
+          bash scripts/tests/test_prepare_publish_artifacts.sh | tee artifacts/publish-artifact-shell-tests/publish-artifact-shell-regression.log
+
+      - name: Upload publish-artifact shell regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-artifact-shell-regression-log
+          path: artifacts/publish-artifact-shell-tests/publish-artifact-shell-regression.log
+          if-no-files-found: error
+
+      - name: Publish-artifact shell summary
+        if: always()
+        run: |
+          echo "## Publish Artifact Shell Regression Suite" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Ran \`bash scripts/tests/test_prepare_publish_artifacts.sh\` on \`ubuntu-latest\`." >> $GITHUB_STEP_SUMMARY
+          echo "This suite checks reproducible bundled core artifacts and image-tag alignment for backend, frontend, and trace-review assets." >> $GITHUB_STEP_SUMMARY
+          echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "Artifact: \`publish-artifact-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
+
   backend-persistence-tests:
     name: Backend Persistence Tests
     runs-on: ubuntu-latest
