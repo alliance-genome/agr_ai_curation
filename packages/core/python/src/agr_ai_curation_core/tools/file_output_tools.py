@@ -38,17 +38,16 @@ import csv
 import io
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from agents import function_tool
-
-# TODO: Replace backend src.* imports with package-local/public runtime
-# dependencies before agr.core ships independently.
-from src.lib.file_outputs.storage import FileOutputStorageService
-from src.models.sql.database import SessionLocal
-from src.models.sql.file_output import FileOutput
+from agr_ai_curation_runtime.file_outputs import (
+    FileOutputRequestContext,
+    PersistedFileOutput,
+    get_current_file_output_context,
+    persist_file_output,
+)
 from ..models import FileInfo
 
 logger = logging.getLogger(__name__)
@@ -63,22 +62,76 @@ def _get_context_from_contextvars() -> tuple[Optional[str], Optional[str], Optio
     Returns:
         Tuple of (trace_id, session_id, curator_id) - any may be None
     """
-    from src.lib.context import (
-        get_current_trace_id,
-        get_current_session_id,
-        get_current_user_id,
+    context = get_current_file_output_context()
+    return (context.trace_id, context.session_id, context.curator_id)
+
+
+def _persist_output(
+    *,
+    content: str,
+    file_type: str,
+    filename: str,
+    agent_name: str,
+    tool_label: str,
+    mime_type: str,
+    trace_id: str | None,
+    session_id: str | None,
+    curator_id: str | None,
+) -> dict:
+    persisted_output = persist_file_output(
+        content=content,
+        file_type=file_type,
+        descriptor=filename,
+        agent_name=agent_name,
+        context=FileOutputRequestContext(
+            trace_id=trace_id,
+            session_id=session_id,
+            curator_id=curator_id,
+        ),
+    )
+    _log_validation_warnings(tool_label, persisted_output)
+    return _build_file_info(
+        persisted_output=persisted_output,
+        file_format=file_type,
+        mime_type=mime_type,
+        trace_id=trace_id,
+        session_id=session_id,
+        curator_id=curator_id,
     )
 
-    return (
-        get_current_trace_id(),
-        get_current_session_id(),
-        get_current_user_id(),
+
+def _log_validation_warnings(
+    tool_label: str,
+    persisted_output: PersistedFileOutput,
+) -> None:
+    for warning in persisted_output.warnings:
+        logger.warning("[%s Tool] Validation warning: %s", tool_label, warning)
+
+
+def _build_file_info(
+    *,
+    persisted_output: PersistedFileOutput,
+    file_format: str,
+    mime_type: str,
+    trace_id: str | None,
+    session_id: str | None,
+    curator_id: str | None,
+) -> dict:
+    file_info = FileInfo(
+        file_id=persisted_output.file_id,
+        filename=persisted_output.filename,
+        format=file_format,
+        size_bytes=persisted_output.size_bytes,
+        hash_sha256=persisted_output.hash_sha256,
+        mime_type=mime_type,
+        download_url=persisted_output.download_url,
+        created_at=datetime.now(timezone.utc),
+        trace_id=trace_id,
+        session_id=session_id,
+        curator_id=curator_id,
     )
 
-
-def _build_download_url(file_id: str) -> str:
-    """Build the download URL for a file."""
-    return f"/api/files/{file_id}/download"
+    return file_info.model_dump(mode="json")
 
 
 async def _save_csv_impl(
@@ -134,74 +187,17 @@ async def _save_csv_impl(
     writer.writerows(data)
     content = output.getvalue()
 
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
-
-    # Use the storage service to save with validation
-    storage = FileOutputStorageService()
-    file_path, file_hash, file_size, warnings = storage.save_output(
-        trace_id=effective_trace_id,
-        session_id=effective_session_id,
+    return _persist_output(
         content=content,
         file_type="csv",
-        descriptor=filename,
-    )
-
-    # Log any warnings from validation
-    for warning in warnings:
-        logger.warning('[CSV Tool] Validation warning: %s', warning)
-
-    # Extract just the filename from the path
-    full_filename = file_path.name
-
-    # Register file in database for download API
-    db = SessionLocal()
-    try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="csv",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
-            trace_id=effective_trace_id,
-            agent_name="csv_formatter",
-        )
-        db.add(file_output)
-        db.commit()
-        db.refresh(file_output)
-        file_id = str(file_output.id)
-        logger.info(
-            f"[CSV Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
-        )
-    except Exception as e:
-        db.rollback()
-        logger.error('[CSV Tool] Failed to register file in database: %s', e)
-        raise
-    finally:
-        db.close()
-
-    file_info = FileInfo(
-        file_id=file_id,
-        filename=full_filename,
-        format="csv",
-        size_bytes=file_size,
-        hash_sha256=file_hash,
+        filename=filename,
+        agent_name="csv_formatter",
+        tool_label="CSV",
         mime_type="text/csv",
-        download_url=_build_download_url(file_id),
-        created_at=datetime.now(timezone.utc),
         trace_id=trace_id,
         session_id=session_id,
         curator_id=curator_id,
     )
-
-    # Return as dict for JSON serialization in tool response
-    return file_info.model_dump(mode="json")
 
 
 def create_csv_tool():
@@ -296,70 +292,17 @@ async def _save_tsv_impl(
     writer.writerows(data)
     content = output.getvalue()
 
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
-
-    storage = FileOutputStorageService()
-    file_path, file_hash, file_size, warnings = storage.save_output(
-        trace_id=effective_trace_id,
-        session_id=effective_session_id,
+    return _persist_output(
         content=content,
         file_type="tsv",
-        descriptor=filename,
-    )
-
-    for warning in warnings:
-        logger.warning('[TSV Tool] Validation warning: %s', warning)
-
-    full_filename = file_path.name
-
-    # Register file in database for download API
-    db = SessionLocal()
-    try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="tsv",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
-            trace_id=effective_trace_id,
-            agent_name="tsv_formatter",
-        )
-        db.add(file_output)
-        db.commit()
-        db.refresh(file_output)
-        file_id = str(file_output.id)
-        logger.info(
-            f"[TSV Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
-        )
-    except Exception as e:
-        db.rollback()
-        logger.error('[TSV Tool] Failed to register file in database: %s', e)
-        raise
-    finally:
-        db.close()
-
-    file_info = FileInfo(
-        file_id=file_id,
-        filename=full_filename,
-        format="tsv",
-        size_bytes=file_size,
-        hash_sha256=file_hash,
+        filename=filename,
+        agent_name="tsv_formatter",
+        tool_label="TSV",
         mime_type="text/tab-separated-values",
-        download_url=_build_download_url(file_id),
-        created_at=datetime.now(timezone.utc),
         trace_id=trace_id,
         session_id=session_id,
         curator_id=curator_id,
     )
-
-    return file_info.model_dump(mode="json")
 
 
 def create_tsv_tool():
@@ -424,70 +367,17 @@ async def _save_json_impl(
     indent = 2 if pretty else None
     content = json.dumps(data, indent=indent, ensure_ascii=False)
 
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
-
-    storage = FileOutputStorageService()
-    file_path, file_hash, file_size, warnings = storage.save_output(
-        trace_id=effective_trace_id,
-        session_id=effective_session_id,
+    return _persist_output(
         content=content,
         file_type="json",
-        descriptor=filename,
-    )
-
-    for warning in warnings:
-        logger.warning('[JSON Tool] Validation warning: %s', warning)
-
-    full_filename = file_path.name
-
-    # Register file in database for download API
-    db = SessionLocal()
-    try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="json",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
-            trace_id=effective_trace_id,
-            agent_name="json_formatter",
-        )
-        db.add(file_output)
-        db.commit()
-        db.refresh(file_output)
-        file_id = str(file_output.id)
-        logger.info(
-            f"[JSON Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
-        )
-    except Exception as e:
-        db.rollback()
-        logger.error('[JSON Tool] Failed to register file in database: %s', e)
-        raise
-    finally:
-        db.close()
-
-    file_info = FileInfo(
-        file_id=file_id,
-        filename=full_filename,
-        format="json",
-        size_bytes=file_size,
-        hash_sha256=file_hash,
+        filename=filename,
+        agent_name="json_formatter",
+        tool_label="JSON",
         mime_type="application/json",
-        download_url=_build_download_url(file_id),
-        created_at=datetime.now(timezone.utc),
         trace_id=trace_id,
         session_id=session_id,
         curator_id=curator_id,
     )
-
-    return file_info.model_dump(mode="json")
 
 
 def create_json_tool():

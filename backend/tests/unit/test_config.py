@@ -1,8 +1,9 @@
 """Unit tests for configuration and environment variable handling."""
 
+import builtins
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -230,12 +231,6 @@ class TestConfiguration:
 
     def test_configuration_with_docker_compose_override(self):
         """Test that Docker Compose environment variables override .env file."""
-        # Simulate .env file values
-        env_file_vars = {
-            'WEAVIATE_HOST': 'localhost',
-            'WEAVIATE_PORT': '8080'
-        }
-
         # Simulate Docker Compose override
         docker_override = {
             'WEAVIATE_HOST': 'weaviate',  # Docker service name
@@ -275,3 +270,27 @@ class TestConfiguration:
 
             assert isinstance(config['log_failed_chunks'], bool)
             assert config['log_failed_chunks'] is False
+
+    def test_config_module_tolerates_missing_python_dotenv(self, monkeypatch):
+        """Importing src.config should not require python-dotenv in package runtimes."""
+        config_path = Path(__file__).resolve().parents[2] / "src" / "config.py"
+        source = config_path.read_text(encoding="utf-8")
+        real_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "dotenv":
+                raise ModuleNotFoundError("No module named 'dotenv'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        module_globals = {
+            "__file__": str(config_path),
+            "__name__": "src.config_without_dotenv",
+            "__package__": "src",
+        }
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        exec(compile(source, str(config_path), "exec"), module_globals)
+
+        assert module_globals["load_dotenv"] is None
+        assert module_globals["_load_env_file"]() is None
