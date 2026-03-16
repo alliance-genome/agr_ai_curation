@@ -64,6 +64,8 @@ def _get_context_from_contextvars() -> tuple[Optional[str], Optional[str], Optio
     """
     context = get_current_file_output_context()
     return (context.trace_id, context.session_id, context.curator_id)
+
+
 def _persist_output(
     *,
     content: str,

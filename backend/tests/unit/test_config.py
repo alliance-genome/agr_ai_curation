@@ -3,7 +3,7 @@
 import builtins
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -231,12 +231,6 @@ class TestConfiguration:
 
     def test_configuration_with_docker_compose_override(self):
         """Test that Docker Compose environment variables override .env file."""
-        # Simulate .env file values
-        env_file_vars = {
-            'WEAVIATE_HOST': 'localhost',
-            'WEAVIATE_PORT': '8080'
-        }
-
         # Simulate Docker Compose override
         docker_override = {
             'WEAVIATE_HOST': 'weaviate',  # Docker service name
