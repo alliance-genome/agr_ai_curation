@@ -10,6 +10,11 @@ on:
       - 'alliance_agents/**'
       - 'packages/**'
       - 'docker-compose.test.yml'
+      - 'docker-compose.production.yml'
+      - 'scripts/install/**'
+      - 'scripts/release/**'
+      - 'scripts/tests/**'
+      - 'trace_review/**'
       - '.github/workflows/test.yml'
   push:
     branches: [main, develop]
@@ -20,6 +25,11 @@ on:
       - 'alliance_agents/**'
       - 'packages/**'
       - 'docker-compose.test.yml'
+      - 'docker-compose.production.yml'
+      - 'scripts/install/**'
+      - 'scripts/release/**'
+      - 'scripts/tests/**'
+      - 'trace_review/**'
       - '.github/workflows/test.yml'
 
 jobs:
