@@ -3,10 +3,15 @@
 import os
 import logging
 import socket
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Dict, Any, Optional
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - exercised by package runtime imports
+    load_dotenv = None
 
 from src.lib.packages.paths import (
     get_file_output_dir,
@@ -29,6 +34,9 @@ _env_loaded_from: Optional[str] = None
 
 def _load_env_file() -> Optional[str]:
     """Load .env from secure home directory location only."""
+    if load_dotenv is None:
+        return None
+
     home = Path.home()
     env_path = home / '.agr_ai_curation' / '.env'
 
@@ -47,8 +55,8 @@ DEFAULT_RUNTIME_PACKAGE_API_VERSION = "1.0.0"
 
 # Warn if .env not found in required location
 if not _env_loaded_from:
-    print("[config] WARNING: No .env file found at ~/.agr_ai_curation/.env")
-    print("[config] Run 'make setup' to create and normalize ~/.agr_ai_curation/.env")
+    print("[config] WARNING: No .env file found at ~/.agr_ai_curation/.env", file=sys.stderr)
+    print("[config] Run 'make setup' to create and normalize ~/.agr_ai_curation/.env", file=sys.stderr)
 
 
 class ConfigurationError(Exception):

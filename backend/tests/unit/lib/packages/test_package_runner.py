@@ -338,6 +338,56 @@ def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch
     }
 
 
+def test_package_runner_executes_core_file_output_binding_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    fake_backend_root = _write_fake_file_output_backend(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
+    monkeypatch.setenv("FAKE_TRACE_ID", "feedfacefeedfacefeedfacefeedface")
+    monkeypatch.setenv("FAKE_SESSION_ID", "session-42")
+    monkeypatch.setenv("FAKE_USER_ID", "user-24")
+
+    registry = load_tool_registry(
+        REPO_ROOT / "packages",
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    runner = PackageToolRunner(
+        tool_registry=registry,
+        env_manager=_CurrentInterpreterEnvironmentManager(),
+    )
+
+    result = runner.execute_tool(
+        "save_csv_file",
+        kwargs={
+            "data_json": json.dumps(
+                [{"gene_id": "FBgn0001", "symbol": "Notch"}]
+            ),
+            "filename": "gene_results",
+        },
+    )
+
+    assert result.ok is True
+    assert result.result["file_id"] == "fake-file-id-001"
+    assert result.result["filename"] == (
+        "feedfacefeedfacefeedfacefeedface_gene_results.csv"
+    )
+    assert result.result["format"] == "csv"
+    assert result.result["size_bytes"] > 0
+    assert result.result["hash_sha256"] == "fake-hash-123"
+    assert result.result["mime_type"] == "text/csv"
+    assert result.result["download_url"] == "/api/files/fake-file-id-001/download"
+    assert result.result["trace_id"] == "feedfacefeedfacefeedfacefeedface"
+    assert result.result["session_id"] == "session-42"
+    assert result.result["curator_id"] == "user-24"
+
+    output_path = fake_backend_root / "file_outputs" / result.result["filename"]
+    assert output_path.read_text(encoding="utf-8") == (
+        "gene_id,symbol\nFBgn0001,Notch\n"
+    )
+
+
 def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
     package_dir = _stage_fixture_package(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
@@ -439,6 +489,92 @@ async def get_chunks_by_subsection(*, document_id, parent_section, subsection, u
             },
         }
     ]
+""",
+        encoding="utf-8",
+    )
+
+    return backend_root
+
+
+def _write_fake_file_output_backend(tmp_path: Path) -> Path:
+    backend_root = tmp_path / "fake_backend"
+    file_outputs_root = backend_root / "src" / "lib" / "file_outputs"
+    models_root = backend_root / "src" / "models" / "sql"
+    file_output_dir = backend_root / "file_outputs"
+    file_output_dir.mkdir(parents=True)
+
+    for directory in (
+        backend_root / "src",
+        backend_root / "src" / "lib",
+        file_outputs_root,
+        backend_root / "src" / "models",
+        models_root,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "__init__.py").write_text("", encoding="utf-8")
+
+    (backend_root / "src" / "lib" / "context.py").write_text(
+        """import os
+
+
+def get_current_trace_id():
+    return os.environ.get("FAKE_TRACE_ID")
+
+
+def get_current_session_id():
+    return os.environ.get("FAKE_SESSION_ID")
+
+
+def get_current_user_id():
+    return os.environ.get("FAKE_USER_ID")
+""",
+        encoding="utf-8",
+    )
+
+    (file_outputs_root / "storage.py").write_text(
+        """from pathlib import Path
+
+
+class FileOutputStorageService:
+    def save_output(self, *, trace_id, session_id, content, file_type, descriptor):
+        output_dir = Path(__file__).resolve().parents[3] / "file_outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        file_path = output_dir / f"{trace_id}_{descriptor}.{file_type}"
+        file_path.write_text(content, encoding="utf-8")
+        return file_path, "fake-hash-123", len(content.encode("utf-8")), ["fake warning"]
+""",
+        encoding="utf-8",
+    )
+
+    (models_root / "database.py").write_text(
+        """class _Session:
+    def add(self, _file_output):
+        return None
+
+    def commit(self):
+        return None
+
+    def refresh(self, _file_output):
+        return None
+
+    def rollback(self):
+        return None
+
+    def close(self):
+        return None
+
+
+def SessionLocal():
+    return _Session()
+""",
+        encoding="utf-8",
+    )
+
+    (models_root / "file_output.py").write_text(
+        """class FileOutput:
+    def __init__(self, **kwargs):
+        self.id = "fake-file-id-001"
+        self.__dict__.update(kwargs)
 """,
         encoding="utf-8",
     )

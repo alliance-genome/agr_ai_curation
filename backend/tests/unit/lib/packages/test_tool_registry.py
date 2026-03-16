@@ -18,6 +18,7 @@ from src.lib.packages.tool_registry import (
 
 REPO_ROOT = find_repo_root(Path(__file__))
 CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
+CORE_RUNTIME_REQUIREMENTS_PATH = REPO_ROOT / "packages" / "core" / "requirements" / "runtime.txt"
 BOOTSTRAP_SRC_IMPORT_TODO = (
     "TODO: Replace backend src.* imports with package-local/public runtime"
 )
@@ -323,7 +324,6 @@ def test_repo_core_package_exports_current_built_in_tools():
 def test_repo_core_package_copies_tool_implementations_locally():
     temporarily_coupled_modules = {
         "agr_curation.py",
-        "file_output_tools.py",
     }
     copied_modules = [
         "agr_curation.py",
@@ -346,6 +346,18 @@ def test_repo_core_package_copies_tool_implementations_locally():
             assert BOOTSTRAP_SRC_IMPORT_TODO in source
         else:
             assert not has_backend_src_dependency
+
+
+def test_repo_core_package_runtime_requirements_include_file_output_driver():
+    requirements = CORE_RUNTIME_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
+    normalized = {
+        line.strip()
+        for line in requirements
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert "openai-agents[litellm]" in normalized
+    assert "psycopg2-binary" in normalized
 
 
 def test_repo_core_tools_package_root_exports_are_lazy(monkeypatch):
