@@ -1,10 +1,13 @@
 """Unit tests for merged package-declared tool registry construction."""
 
+import importlib
+import sys
+
 from pathlib import Path
 
 import pytest
 
-from . import find_repo_root
+from . import CORE_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import (
@@ -343,3 +346,34 @@ def test_repo_core_package_copies_tool_implementations_locally():
             assert BOOTSTRAP_SRC_IMPORT_TODO in source
         else:
             assert not has_backend_src_dependency
+
+
+def test_repo_core_tools_package_root_exports_are_lazy(monkeypatch):
+    package_src = REPO_ROOT / "packages" / "core" / "python" / "src"
+    module_prefix = "agr_ai_curation_core.tools"
+    saved_modules = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == module_prefix or name.startswith(f"{module_prefix}.")
+    }
+    monkeypatch.syspath_prepend(str(package_src))
+
+    try:
+        module = importlib.import_module(module_prefix)
+
+        assert module.__all__ == list(CORE_TOOLS_PACKAGE_EXPORTS)
+        assert "agr_ai_curation_core.tools.agr_curation" not in sys.modules
+        assert "agr_ai_curation_core.tools.documents" not in sys.modules
+        assert "agr_ai_curation_core.tools.file_output" not in sys.modules
+        assert "agr_ai_curation_core.tools.file_output_tools" not in sys.modules
+        assert "agr_ai_curation_core.tools.weaviate_search" not in sys.modules
+
+        assert module.chebi_api_call is not None
+        assert "agr_ai_curation_core.tools.rest" in sys.modules
+        assert "agr_ai_curation_core.tools.agr_curation" not in sys.modules
+        assert "agr_ai_curation_core.tools.file_output_tools" not in sys.modules
+    finally:
+        for name in list(sys.modules):
+            if name == module_prefix or name.startswith(f"{module_prefix}."):
+                sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
