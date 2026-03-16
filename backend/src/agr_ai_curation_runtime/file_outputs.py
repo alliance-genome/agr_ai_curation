@@ -134,10 +134,11 @@ def persist_file_output(
 def _build_effective_context(
     context: FileOutputRequestContext,
 ) -> tuple[str, str, str]:
-    fallback_id = uuid.uuid4().hex
+    fallback_trace_id = uuid.uuid4().hex
+    fallback_session_id = uuid.uuid4().hex[:8]
     return (
-        context.trace_id or fallback_id[:32],
-        context.session_id or fallback_id[:8],
+        context.trace_id or fallback_trace_id,
+        context.session_id or fallback_session_id,
         context.curator_id or "unknown",
     )
 

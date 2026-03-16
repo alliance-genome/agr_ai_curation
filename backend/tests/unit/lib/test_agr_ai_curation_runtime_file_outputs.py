@@ -121,3 +121,25 @@ def test_persist_file_output_registers_saved_file(monkeypatch, tmp_path):
         download_url="/api/files/file-123/download",
         warnings=("Line 2, cell 1: warning",),
     )
+
+
+def test_build_effective_context_generates_independent_fallback_ids(monkeypatch):
+    fallback_values = iter(
+        [
+            SimpleNamespace(hex="a" * 32),
+            SimpleNamespace(hex="b" * 32),
+        ]
+    )
+    monkeypatch.setattr(
+        runtime_file_outputs.uuid,
+        "uuid4",
+        lambda: next(fallback_values),
+    )
+
+    assert runtime_file_outputs._build_effective_context(
+        runtime_file_outputs.FileOutputRequestContext(
+            trace_id=None,
+            session_id=None,
+            curator_id=None,
+        )
+    ) == ("a" * 32, "b" * 8, "unknown")
