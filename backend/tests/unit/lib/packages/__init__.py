@@ -2,6 +2,21 @@
 
 from pathlib import Path
 
+CORE_TOOLS_PACKAGE_EXPORTS = (
+    "agr_curation_query",
+    "alliance_api_call",
+    "chebi_api_call",
+    "create_curation_db_sql_tool",
+    "create_read_section_tool",
+    "create_read_subsection_tool",
+    "create_search_document_tool",
+    "go_api_call",
+    "quickgo_api_call",
+    "save_csv_file",
+    "save_json_file",
+    "save_tsv_file",
+)
+
 
 def find_repo_root(start: Path) -> Path:
     """Resolve the repository root by walking upward to a known sentinel."""

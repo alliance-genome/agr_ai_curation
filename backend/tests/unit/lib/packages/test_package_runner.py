@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from . import find_repo_root
+from . import CORE_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.package_runner import PackageToolRunner
 from src.lib.packages.paths import (
     get_package_runner_metadata_path,
@@ -21,6 +21,7 @@ from src.lib.packages.paths import (
 from src.lib.packages.tool_registry import load_tool_registry
 
 REPO_ROOT = find_repo_root(Path(__file__))
+CORE_PACKAGE_SRC = REPO_ROOT / "packages" / "core" / "python" / "src"
 FIXTURE_PACKAGE_DIR = (
     Path(__file__).resolve().parent / "fixtures" / "package_runner" / "demo_runner"
 )
@@ -220,6 +221,67 @@ def test_package_runner_returns_timeout_failure(monkeypatch, tmp_path):
     assert result.error.code == "execution_failure"
     assert "Timed out while executing package tool 'echo_value'" == result.error.message
     assert result.error.details["timeout_seconds"] == 60.0
+
+
+def test_repo_core_tools_package_import_succeeds_without_backend_src(tmp_path):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib
+import json
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1]).resolve()
+package_src = Path(sys.argv[2]).resolve()
+clean_paths = []
+for entry in sys.path:
+    if not entry:
+        continue
+    try:
+        resolved = Path(entry).resolve()
+    except Exception:
+        continue
+    if resolved == repo_root or repo_root in resolved.parents:
+        continue
+    clean_paths.append(str(resolved))
+
+sys.path[:] = [str(package_src), *dict.fromkeys(clean_paths)]
+module = importlib.import_module("agr_ai_curation_core.tools")
+print(
+    json.dumps(
+        {
+            "exports": list(getattr(module, "__all__", [])),
+            "loaded": sorted(
+                name
+                for name in sys.modules
+                if name == "agr_ai_curation_core.tools"
+                or name.startswith("agr_ai_curation_core.tools.")
+            ),
+        }
+    )
+)
+""",
+            str(REPO_ROOT),
+            str(CORE_PACKAGE_SRC),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        text=True,
+    )
+
+    assert completed.returncode == 0, (
+        "Isolated agr_ai_curation_core.tools import failed.\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["exports"] == list(CORE_TOOLS_PACKAGE_EXPORTS)
+    assert payload["loaded"] == ["agr_ai_curation_core.tools"]
 
 
 def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch, tmp_path):
