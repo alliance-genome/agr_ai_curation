@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 CURRENT_DIR = Path(__file__).resolve().parent
+HOST_RUNTIME_SRC_DIR = CURRENT_DIR.parent.parent
 
 
 def main() -> int:
@@ -20,7 +21,7 @@ def main() -> int:
     try:
         request = protocol["decode_request"](sys.stdin.read())
         tool_target = _resolve_tool_target(request)
-        result = _execute_tool_target(tool_target, request)
+        result = _normalize_result(_execute_tool_target(tool_target, request))
         json.dumps(result)
         sys.stdout.write(protocol["encode_success_response"](result))
         return 0
@@ -138,12 +139,29 @@ def _execute_tool_target(target: Any, request) -> Any:
     return result
 
 
+def _normalize_result(value: Any) -> Any:
+    """Convert SDK/Pydantic return values into plain JSON-compatible objects."""
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _normalize_result(model_dump())
+    if isinstance(value, dict):
+        return {key: _normalize_result(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_result(item) for item in value]
+    return value
+
+
 def _extend_sys_path(request) -> None:
     package_root = Path(request.package_root).expanduser().resolve(strict=False)
     python_package_root = (
         package_root / request.python_package_root
     ).expanduser().resolve(strict=False)
-    for candidate in (python_package_root.parent, python_package_root, package_root):
+    for candidate in (
+        HOST_RUNTIME_SRC_DIR,
+        python_package_root.parent,
+        python_package_root,
+        package_root,
+    ):
         candidate_text = str(candidate)
         if candidate_text not in sys.path:
             sys.path.insert(0, candidate_text)
