@@ -321,7 +321,6 @@ def test_repo_core_package_copies_tool_implementations_locally():
     temporarily_coupled_modules = {
         "agr_curation.py",
         "file_output_tools.py",
-        "weaviate_search.py",
     }
     copied_modules = [
         "agr_curation.py",
