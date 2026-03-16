@@ -52,6 +52,8 @@ _GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
 try:
     PROVIDER_TO_TAXON = _load_group_taxon_mappings()
 except Exception as exc:
+    # Preserve the long-standing degraded mode for package imports: provider
+    # lookups fail closed, while non-provider methods still remain importable.
     _GROUP_MAPPING_LOAD_ERROR = str(exc)
     PROVIDER_TO_TAXON = {}
     logger.error("Failed to load group-to-taxon mappings: %s", exc)

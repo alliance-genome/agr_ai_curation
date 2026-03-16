@@ -169,6 +169,8 @@ def _extend_sys_path(request) -> None:
 
     host_runtime_root_text = str(HOST_RUNTIME_ROOT_DIR)
     if host_runtime_root_text not in sys.path:
+        # Keep the backend package root available for public runtime imports
+        # without letting it outrank package-local or backend src modules.
         sys.path.append(host_runtime_root_text)
 
 
