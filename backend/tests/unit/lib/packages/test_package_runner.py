@@ -112,6 +112,7 @@ def test_package_runner_reuses_existing_virtual_environment(monkeypatch, tmp_pat
     first_result = runner.execute_tool("echo_value", kwargs={"value": "one"})
     second_result = runner.execute_tool("echo_value", kwargs={"value": "two"})
 
+    expected_python = _venv_python_path(get_package_runner_venv_dir("demo.runner"))
     metadata = json.loads(
         get_package_runner_metadata_path("demo.runner").read_text(encoding="utf-8")
     )
@@ -120,6 +121,7 @@ def test_package_runner_reuses_existing_virtual_environment(monkeypatch, tmp_pat
     assert second_result.ok is True
     assert second_result.environment_reused is True
     assert metadata["package_id"] == "demo.runner"
+    assert Path(metadata["python_executable"]) == expected_python
     assert get_package_runner_state_dir() == tmp_path / "runtime" / "state" / "package_runner"
 
 
@@ -435,15 +437,7 @@ def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch
     fake_backend_root = _write_fake_weaviate_backend(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
 
-    registry = load_tool_registry(
-        REPO_ROOT / "packages",
-        runtime_version="1.5.0",
-        supported_package_api_version="1.0.0",
-    )
-    runner = PackageToolRunner(
-        tool_registry=registry,
-        env_manager=_CurrentInterpreterEnvironmentManager(),
-    )
+    runner, env_manager = _build_core_runner(tmp_path)
 
     search_result = runner.execute_tool(
         "search_document",
@@ -465,6 +459,7 @@ def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch
             }
         ],
     }
+    _assert_isolated_python(env_manager)
 
     section_result = runner.execute_tool(
         "read_section",
@@ -495,15 +490,7 @@ def test_package_runner_executes_core_file_output_binding_in_isolation(
     monkeypatch.setenv("FAKE_SESSION_ID", "session-42")
     monkeypatch.setenv("FAKE_USER_ID", "user-24")
 
-    registry = load_tool_registry(
-        REPO_ROOT / "packages",
-        runtime_version="1.5.0",
-        supported_package_api_version="1.0.0",
-    )
-    runner = PackageToolRunner(
-        tool_registry=registry,
-        env_manager=_CurrentInterpreterEnvironmentManager(),
-    )
+    runner, env_manager = _build_core_runner(tmp_path)
 
     result = runner.execute_tool(
         "save_csv_file",
@@ -516,6 +503,7 @@ def test_package_runner_executes_core_file_output_binding_in_isolation(
     )
 
     assert result.ok is True
+    _assert_isolated_python(env_manager)
     assert result.result["file_id"] == "fake-file-id-001"
     assert result.result["filename"] == (
         "feedfacefeedfacefeedfacefeedface_gene_results.csv"
@@ -544,15 +532,7 @@ def test_package_runner_executes_core_agr_curation_binding_in_isolation(
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    registry = load_tool_registry(
-        REPO_ROOT / "packages",
-        runtime_version="1.5.0",
-        supported_package_api_version="1.0.0",
-    )
-    runner = PackageToolRunner(
-        tool_registry=registry,
-        env_manager=_CurrentInterpreterEnvironmentManager(),
-    )
+    runner, env_manager = _build_core_runner(tmp_path)
 
     result = runner.execute_tool(
         "agr_curation_query",
@@ -566,6 +546,7 @@ def test_package_runner_executes_core_agr_curation_binding_in_isolation(
 
     assert result.ok is True
     assert result.error is None
+    _assert_isolated_python(env_manager)
     assert result.result["status"] == "ok"
     assert result.result["count"] == 1
     assert result.result["warnings"] is None
@@ -645,6 +626,18 @@ def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
     return _build_runner_from_packages_dir(package_dir.parent)
 
 
+def _build_core_runner(
+    tmp_path: Path,
+) -> tuple[PackageToolRunner, "_IsolatedInterpreterEnvironmentManager"]:
+    registry = load_tool_registry(
+        REPO_ROOT / "packages",
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    env_manager = _IsolatedInterpreterEnvironmentManager(tmp_path / "isolated_runner")
+    return PackageToolRunner(tool_registry=registry, env_manager=env_manager), env_manager
+
+
 def _build_runner_from_packages_dir(packages_dir: Path) -> PackageToolRunner:
     registry = load_tool_registry(
         packages_dir,
@@ -661,11 +654,77 @@ def _stage_fixture_package(tmp_path: Path) -> Path:
     return package_dir
 
 
-class _CurrentInterpreterEnvironmentManager:
+def _assert_isolated_python(
+    env_manager: "_IsolatedInterpreterEnvironmentManager",
+) -> None:
+    assert env_manager.python_executable is not None
+    completed = subprocess.run(
+        [
+            str(env_manager.python_executable),
+            "-c",
+            (
+                "import json, sys; "
+                "print(json.dumps({"
+                "'executable': sys.executable, "
+                "'prefix': sys.prefix, "
+                "'base_prefix': sys.base_prefix"
+                "}))"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    payload = json.loads(completed.stdout)
+    assert Path(payload["executable"]) == env_manager.python_executable
+    assert Path(payload["prefix"]) == env_manager.venv_dir
+    assert Path(payload["base_prefix"]) != env_manager.venv_dir
+
+
+def _venv_python_path(venv_dir: Path) -> Path:
+    bin_dir = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    return venv_dir / bin_dir / executable
+
+
+class _IsolatedInterpreterEnvironmentManager:
+    def __init__(self, venv_dir: Path) -> None:
+        self.venv_dir = venv_dir
+        self.python_executable: Path | None = None
+
     def ensure_environment(self, _package):
+        reused = self.venv_dir.exists()
+        if not reused:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    "--system-site-packages",
+                    str(self.venv_dir),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "Failed to create isolated test virtual environment.\n"
+                    f"stdout:\n{completed.stdout}\n"
+                    f"stderr:\n{completed.stderr}"
+                )
+
+        self.python_executable = _venv_python_path(self.venv_dir)
+        if not self.python_executable.is_file():
+            raise RuntimeError(
+                f"Expected virtual environment python at {self.python_executable}"
+            )
+
         return SimpleNamespace(
-            python_executable=Path(sys.executable),
-            reused=False,
+            python_executable=self.python_executable,
+            reused=reused,
         )
 
 
