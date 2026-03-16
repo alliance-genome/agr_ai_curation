@@ -19,9 +19,6 @@ from src.lib.packages.tool_registry import (
 REPO_ROOT = find_repo_root(Path(__file__))
 CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
 CORE_RUNTIME_REQUIREMENTS_PATH = REPO_ROOT / "packages" / "core" / "requirements" / "runtime.txt"
-BOOTSTRAP_SRC_IMPORT_TODO = (
-    "TODO: Replace backend src.* imports with package-local/public runtime"
-)
 
 
 def _write_package(
@@ -322,9 +319,6 @@ def test_repo_core_package_exports_current_built_in_tools():
 
 
 def test_repo_core_package_copies_tool_implementations_locally():
-    temporarily_coupled_modules = {
-        "agr_curation.py",
-    }
     copied_modules = [
         "agr_curation.py",
         "search_helpers.py",
@@ -339,13 +333,11 @@ def test_repo_core_package_copies_tool_implementations_locally():
         assert module_path.exists()
         source = module_path.read_text(encoding="utf-8")
         assert "src.lib.openai_agents.tools" not in source
-        has_backend_src_dependency = "from src." in source or "src.models." in source
+        assert "from src." not in source
+        assert "src.models." not in source
 
-        if module_name in temporarily_coupled_modules:
-            assert has_backend_src_dependency
-            assert BOOTSTRAP_SRC_IMPORT_TODO in source
-        else:
-            assert not has_backend_src_dependency
+    agr_source = (CORE_TOOLS_DIR / "agr_curation.py").read_text(encoding="utf-8")
+    assert "agr_ai_curation_runtime" in agr_source
 
 
 def test_repo_core_package_runtime_requirements_include_file_output_driver():

@@ -1,5 +1,6 @@
 """Public runtime surfaces exposed to isolated package tools."""
 
+from .agr_curation import get_curation_resolver, is_valid_curie, list_groups
 from .file_outputs import (
     FileOutputRequestContext,
     PersistedFileOutput,
@@ -14,6 +15,9 @@ from .weaviate_chunks import (
 )
 
 __all__ = [
+    "get_curation_resolver",
+    "is_valid_curie",
+    "list_groups",
     "FileOutputRequestContext",
     "PersistedFileOutput",
     "get_current_file_output_context",
