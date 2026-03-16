@@ -179,7 +179,9 @@ class PackageEnvironmentManager:
     def _resolve_venv_python(self, venv_dir: Path) -> Path:
         bin_dir = "Scripts" if sys.platform.startswith("win") else "bin"
         executable = "python.exe" if sys.platform.startswith("win") else "python"
-        return (venv_dir / bin_dir / executable).expanduser().resolve(strict=False)
+        # Preserve the venv-local interpreter path. Resolving symlinks here can
+        # collapse back to the base interpreter and defeat isolation.
+        return (venv_dir / bin_dir / executable).expanduser()
 
     def _run_command(
         self,

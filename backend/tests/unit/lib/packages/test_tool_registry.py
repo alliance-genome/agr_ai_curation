@@ -1,5 +1,6 @@
 """Unit tests for merged package-declared tool registry construction."""
 
+import ast
 import importlib
 import sys
 
@@ -19,6 +20,26 @@ from src.lib.packages.tool_registry import (
 REPO_ROOT = find_repo_root(Path(__file__))
 CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
 CORE_RUNTIME_REQUIREMENTS_PATH = REPO_ROOT / "packages" / "core" / "requirements" / "runtime.txt"
+
+
+def _find_backend_src_imports(source: str) -> tuple[str, ...]:
+    """Return direct backend `src` imports found in one module source file."""
+    parsed = ast.parse(source)
+    direct_imports: set[str] = set()
+
+    for node in ast.walk(parsed):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "src" or alias.name.startswith("src."):
+                    direct_imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            module_name = node.module or ""
+            if node.level == 0 and (
+                module_name == "src" or module_name.startswith("src.")
+            ):
+                direct_imports.add(module_name)
+
+    return tuple(sorted(direct_imports))
 
 
 def _write_package(
@@ -319,22 +340,17 @@ def test_repo_core_package_exports_current_built_in_tools():
 
 
 def test_repo_core_package_copies_tool_implementations_locally():
-    copied_modules = [
-        "agr_curation.py",
-        "search_helpers.py",
-        "weaviate_search.py",
-        "sql_query.py",
-        "rest_api.py",
-        "file_output_tools.py",
-    ]
+    copied_modules = sorted(
+        path.name for path in CORE_TOOLS_DIR.glob("*.py") if path.name != "__init__.py"
+    )
 
     for module_name in copied_modules:
         module_path = CORE_TOOLS_DIR / module_name
-        assert module_path.exists()
         source = module_path.read_text(encoding="utf-8")
-        assert "src.lib.openai_agents.tools" not in source
-        assert "from src." not in source
-        assert "src.models." not in source
+        direct_imports = _find_backend_src_imports(source)
+        assert direct_imports == (), (
+            f"{module_name} imports backend modules directly: {direct_imports}"
+        )
 
     agr_source = (CORE_TOOLS_DIR / "agr_curation.py").read_text(encoding="utf-8")
     assert "agr_ai_curation_runtime" in agr_source
