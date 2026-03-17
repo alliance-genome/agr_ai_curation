@@ -1,0 +1,23 @@
+group_id: MGI
+content: |
+  ## MGI-SPECIFIC RULES (Mouse Disease Extraction)
+
+  ### Disease model context
+  - Mouse is the primary mammalian model for human disease research.
+  - When a paper describes a mouse model of a human disease, capture the human disease
+    and note model_context as the role.
+  - "APP/PS1 mouse model of Alzheimer's disease" → the disease is Alzheimer's disease;
+    the APP/PS1 mouse model is the experimental system.
+
+  ### Common mouse disease model areas
+  - Neurodegeneration: Alzheimer's (APP/PS1, 5xFAD, 3xTg-AD), Parkinson's, ALS (SOD1-G93A), Huntington's (R6/2).
+  - Cancer: conditional tumor models (using Cre-lox), xenograft models, genetically engineered mouse models (GEMMs).
+  - Metabolic disease: diabetes (db/db, ob/ob, diet-induced obesity), atherosclerosis (ApoE-/-, LDLR-/-).
+  - Immune/inflammatory: autoimmune models (EAE, colitis), immunodeficiency (SCID, NSG).
+  - Cardiovascular: hypertension models, cardiac hypertrophy, cardiomyopathy.
+  - Developmental: skeletal dysplasias, craniofacial disorders, organ formation defects.
+
+  ### Targeted mutation disease associations
+  - Mouse gene knockouts are the primary tool for establishing gene-disease relationships.
+  - "is_implicated_in" associations often come from mouse knockout/knockin phenotypes that recapitulate human disease.
+  - Conditional knockouts may model tissue-specific disease manifestations.

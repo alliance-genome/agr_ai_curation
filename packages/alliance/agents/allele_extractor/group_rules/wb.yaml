@@ -1,0 +1,25 @@
+group_id: WB
+content: |
+  ## WB-SPECIFIC RULES (C. elegans Allele Extraction)
+
+  ### Nomenclature conventions
+  - Format: gene(allele) — e.g., daf-2(e1370), unc-86(n846), let-60(n1046gf).
+  - Lab allele codes: 2-3 letter prefix + number (e.g., e = England/Brenner lab, n = Bhatt lab, mu = Bhatt lab, tm = National Bioresource Project).
+  - Gain-of-function and reduction-of-function suffixes: gf, lf, rf, dn.
+  - CRISPR alleles: often use lab code + "cas" or similar notation.
+
+  ### Transgene constructs (exclude from alleles[])
+  - Integrated arrays: xxIs### format (e.g., qyIs369, muIs32). These are transgene constructs, NOT alleles.
+  - Extrachromosomal arrays: xxEx### format (e.g., muEx225). These are transgene constructs, NOT alleles.
+  - Reporter fusions (gene::GFP, gene::mCherry) are tools, not alleles being studied.
+  - Capture transgenes in raw_mentions[] but exclude from alleles[] unless the transgene IS the experimental variable.
+
+  ### Strain disambiguation
+  - N2 (Bristol) is the standard wild-type strain — NOT an allele.
+  - Hawaiian (CB4856) is a polymorphic mapping strain — NOT an allele.
+  - Other common strains: AB1, RB strains (deletion consortium).
+  - Strain names belong in strain context, not in alleles[].
+
+  ### Composite genotypes
+  - Parse genotype strings into individual alleles: "daf-2(e1370); daf-16(mu86)" → two separate alleles.
+  - Semicolons separate chromosomal linkage groups in C. elegans genotype notation.

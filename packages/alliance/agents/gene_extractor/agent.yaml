@@ -1,0 +1,76 @@
+# =============================================================================
+# AGENT DEFINITION: gene_extractor
+# =============================================================================
+# Extracts experimentally supported gene assertions from uploaded PDFs.
+# Tool name generated at runtime: ask_gene_extractor_specialist
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASIC INFORMATION
+# -----------------------------------------------------------------------------
+agent_id: gene_extractor
+
+name: "Gene Extraction Agent"
+
+description: >
+  Extracts gene assertions from uploaded PDFs with evidence-first
+  inclusion/exclusion decisions and optional database-assisted normalization.
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+# -----------------------------------------------------------------------------
+# SUPERVISOR ROUTING
+# -----------------------------------------------------------------------------
+# Tool name is generated at runtime as: ask_{folder}_specialist
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for extracting gene assertions from the loaded paper,
+    including normalized gene candidates and explicit exclusions.
+  batchable: false  # Document-based agent, processes one document at a time
+
+# -----------------------------------------------------------------------------
+# TOOLS
+# -----------------------------------------------------------------------------
+tools:
+  - search_document
+  - read_section
+  - read_subsection
+  - agr_curation_query
+
+# -----------------------------------------------------------------------------
+# OUTPUT SCHEMA
+# -----------------------------------------------------------------------------
+output_schema: GeneExtractionResultEnvelope
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION
+# -----------------------------------------------------------------------------
+model_config:
+  model: "${AGENT_GENE_EXTRACTOR_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "medium"
+
+# -----------------------------------------------------------------------------
+# EXECUTION REQUIREMENTS
+# -----------------------------------------------------------------------------
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+# -----------------------------------------------------------------------------
+# FRONTEND DISPLAY
+# -----------------------------------------------------------------------------
+frontend:
+  icon: "🧬"
+  show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# GROUP RULES
+# -----------------------------------------------------------------------------
+group_rules_enabled: true

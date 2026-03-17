@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: WB
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the allele agent's prompt when users
+# belong to the WB group.
+# =============================================================================
+
+content: '
+
+  ## WB-SPECIFIC RULES (Caenorhabditis elegans)
+
+
+  ## WormBase Allele Search Strategy (Caenorhabditis elegans)
+
+
+  ### General Guidelines
+
+
+  - C. elegans gene names are typically lowercase and italicized (e.g., unc-4)
+
+  - Allele names follow the pattern: mutation-type + number (e.g., e1315)
+
+  - Search using the allele designation as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add worm-specific allele search strategies here.
+
+
+
+  ### Interpreting WB Results:
+
+  ### Interpreting WormBase Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the allele type matches what''s described in the paper
+
+
+  This is a placeholder. Add worm-specific interpretation guidelines as needed.
+
+
+  '
+group_id: WB

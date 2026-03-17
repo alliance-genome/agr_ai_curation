@@ -58,7 +58,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 
 ### Key Components
 
-1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `config/agents/*/` is the source-development mirror for the shipped `core` package. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
+1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `config/agents/*/` is the source-development mirror for the shipped `agr.alliance` package. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
 
 2. **Unified Agents Table** (`agents` in Postgres) -- Single table for both system agents (seeded from YAML) and custom agents (created via UI). Contains all runtime fields: instructions, model settings, tool IDs, output schema key, group rules config, supervisor routing, and visibility.
 
@@ -79,7 +79,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 ```text
 runtime/packages/*/agents/*.yaml ──→ registry_builder.py ──→ AGENT_REGISTRY (UI metadata)
                                  └──→ Alembic migration ──→ agents table (runtime authority)
-config/agents/*.yaml (repo mirror for shipped core) ──────┘
+config/agents/*.yaml (repo mirror for shipped agr.alliance) ──────┘
                                                                   │
                                                                   ▼
                                                           get_agent_by_id()
@@ -123,7 +123,7 @@ config/agents/*.yaml (repo mirror for shipped core) ──────┘
 ### System Agents (package-defined)
 
 1. A package author creates `agents/my_agent/agent.yaml`, `prompt.yaml`, and optional `group_rules/` inside a runtime package.
-2. If the shipped `core` package is being maintained from this repository, the same bundle is mirrored under `config/agents/my_agent/` for source-development workflows.
+2. If the shipped `agr.alliance` package is being maintained from this repository, the same bundle is mirrored under `config/agents/my_agent/` for source-development workflows.
 3. An Alembic migration reads the package-backed YAML and inserts a row into `agents` with `visibility='system'`.
 4. At backend startup, `registry_builder.py` reads the bundle to build `AGENT_REGISTRY` for UI metadata.
 5. The prompt cache loads active prompts from `prompt_templates` for group rule injection.
@@ -183,7 +183,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 Use `<agent_root>` below to mean either:
 
 - `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` for a standalone install, or
-- `config/agents/<agent>/` when maintaining the shipped `core` package from this repository.
+- `config/agents/<agent>/` when maintaining the shipped `agr.alliance` package from this repository.
 
 See the runtime bundle contract in `config/agents/README.md` or the repo mirror
 template at `config/agents/_examples/basic_agent/agent.yaml` for all fields. Key sections:
@@ -399,7 +399,7 @@ AGENT_PDF_MODEL=gpt-5.4
 ## Output Schemas
 
 For package-authored agents, output schemas live in the bundle's `schema.py`.
-The shipped `core` package keeps its schema modules in repo-controlled source,
+The shipped `agr.alliance` package keeps its schema modules in repo-controlled source,
 and `output_schema_key` maps to the exported class name that runtime schema
 discovery resolves.
 
@@ -575,8 +575,9 @@ See `packages/core/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 - `backend/src/models/sql/agent.py` -- Unified agent SQL model
 - `backend/src/lib/openai_agents/agents/supervisor_agent.py` -- Dynamic supervisor with tool discovery
 - `backend/src/lib/config/` -- All configuration loaders
-- `packages/core/` -- Shipped core package source, manifests, and bindings
+- `packages/core/` -- Shipped core foundation package source, manifests, and bindings
+- `packages/alliance/` -- Shipped Alliance agent catalog package source
 - `config/models.yaml` -- Model catalog
-- `config/agents/` -- Repo mirror of shipped core agent bundles
+- `config/agents/` -- Repo mirror of shipped agr.alliance agent bundles
 - Langfuse docs: https://langfuse.com/docs
 - OpenAI Agents SDK: https://github.com/openai/openai-agents-python

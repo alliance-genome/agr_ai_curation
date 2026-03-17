@@ -2,7 +2,7 @@
 # =============================================================================
 # DEPLOY ALLIANCE CONTENT
 # =============================================================================
-# Deploys Alliance-specific content to the config directories.
+# Deploys Alliance-specific content to the package-owned and mirror directories.
 # This script copies organization-specific agents and tools to the runtime
 # locations where the loaders expect them.
 #
@@ -12,7 +12,7 @@
 #   ./scripts/deploy_alliance.sh --dry-run # Show what would be copied
 #
 # What gets deployed:
-#   alliance_agents/*       -> config/agents/
+#   alliance_agents/*       -> packages/alliance/agents/ and config/agents/
 #   alliance_config/*.yaml  -> config/
 #   backend/tools/alliance_tools/*  -> backend/tools/custom/
 #
@@ -39,6 +39,7 @@ ALLIANCE_TOOLS="${PROJECT_ROOT}/backend/tools/alliance_tools"
 
 CONFIG_DIR="${PROJECT_ROOT}/config"
 CONFIG_AGENTS="${PROJECT_ROOT}/config/agents"
+PACKAGE_ALLIANCE_AGENTS="${PROJECT_ROOT}/packages/alliance/agents"
 CUSTOM_TOOLS="${PROJECT_ROOT}/backend/tools/custom"
 
 # Parse arguments
@@ -124,6 +125,13 @@ check_prerequisites() {
         fi
     fi
 
+    if [ ! -d "$PACKAGE_ALLIANCE_AGENTS" ]; then
+        log_warn "Alliance package agents directory not found, creating: $PACKAGE_ALLIANCE_AGENTS"
+        if [ "$DRY_RUN" = false ]; then
+            mkdir -p "$PACKAGE_ALLIANCE_AGENTS"
+        fi
+    fi
+
     if [ ! -d "$CUSTOM_TOOLS" ]; then
         log_warn "Custom tools directory not found, creating: $CUSTOM_TOOLS"
         if [ "$DRY_RUN" = false ]; then
@@ -142,7 +150,8 @@ clean_existing() {
 
     log_info "Cleaning existing Alliance agent content..."
 
-    # Find agent folders from alliance_agents and remove corresponding ones in config/agents
+    # Find agent folders from alliance_agents and remove corresponding ones in
+    # both the package-owned tree and the repo mirror.
     for agent_dir in "$ALLIANCE_AGENTS"/*/; do
         agent_name=$(basename "$agent_dir")
 
@@ -151,14 +160,24 @@ clean_existing() {
             continue
         fi
 
-        target_dir="${CONFIG_AGENTS}/${agent_name}"
+        package_target_dir="${PACKAGE_ALLIANCE_AGENTS}/${agent_name}"
+        config_target_dir="${CONFIG_AGENTS}/${agent_name}"
 
-        if [ -d "$target_dir" ]; then
-            log_verbose "Removing: $target_dir"
+        if [ -d "$package_target_dir" ]; then
+            log_verbose "Removing: $package_target_dir"
             if [ "$DRY_RUN" = false ]; then
-                rm -rf "$target_dir"
+                rm -rf "$package_target_dir"
             else
-                echo "  Would remove: $target_dir"
+                echo "  Would remove: $package_target_dir"
+            fi
+        fi
+
+        if [ -d "$config_target_dir" ]; then
+            log_verbose "Removing: $config_target_dir"
+            if [ "$DRY_RUN" = false ]; then
+                rm -rf "$config_target_dir"
+            else
+                echo "  Would remove: $config_target_dir"
             fi
         fi
     done
@@ -166,7 +185,7 @@ clean_existing() {
     log_success "Clean complete"
 }
 
-# Copy Alliance agents to config/agents
+# Copy Alliance agents to both the package-owned source tree and config/agents
 deploy_agents() {
     log_info "Deploying Alliance agents..."
 
@@ -181,21 +200,25 @@ deploy_agents() {
             continue
         fi
 
-        target_dir="${CONFIG_AGENTS}/${agent_name}"
+        package_target_dir="${PACKAGE_ALLIANCE_AGENTS}/${agent_name}"
+        config_target_dir="${CONFIG_AGENTS}/${agent_name}"
 
-        log_verbose "Copying: $agent_name -> $target_dir"
+        log_verbose "Copying: $agent_name -> $package_target_dir"
+        log_verbose "Copying: $agent_name -> $config_target_dir"
 
         if [ "$DRY_RUN" = false ]; then
             # Use rsync for smart copying (only updates changed files)
-            rsync -a --delete "$agent_dir" "$target_dir/"
+            rsync -a --delete "$agent_dir" "$package_target_dir/"
+            rsync -a --delete "$agent_dir" "$config_target_dir/"
         else
-            echo "  Would copy: $agent_dir -> $target_dir"
+            echo "  Would copy: $agent_dir -> $package_target_dir"
+            echo "  Would copy: $agent_dir -> $config_target_dir"
         fi
 
         count=$((count + 1))
     done
 
-    log_success "Deployed $count agents"
+    log_success "Deployed $count agents into packages/alliance/agents and config/agents"
 }
 
 # Copy Alliance config files to config/
@@ -288,17 +311,30 @@ verify_deployment() {
             continue
         fi
 
-        target_dir="${CONFIG_AGENTS}/${agent_name}"
+        package_target_dir="${PACKAGE_ALLIANCE_AGENTS}/${agent_name}"
+        config_target_dir="${CONFIG_AGENTS}/${agent_name}"
 
-        # Check agent.yaml exists
-        if [ ! -f "$target_dir/agent.yaml" ]; then
-            log_error "Missing agent.yaml: $target_dir"
+        # Check package-owned agent.yaml exists
+        if [ ! -f "$package_target_dir/agent.yaml" ]; then
+            log_error "Missing agent.yaml: $package_target_dir"
             errors=$((errors + 1))
         fi
 
-        # Check prompt.yaml exists
-        if [ ! -f "$target_dir/prompt.yaml" ]; then
-            log_error "Missing prompt.yaml: $target_dir"
+        # Check package-owned prompt.yaml exists
+        if [ ! -f "$package_target_dir/prompt.yaml" ]; then
+            log_error "Missing prompt.yaml: $package_target_dir"
+            errors=$((errors + 1))
+        fi
+
+        # Check repo-mirror agent.yaml exists
+        if [ ! -f "$config_target_dir/agent.yaml" ]; then
+            log_error "Missing agent.yaml: $config_target_dir"
+            errors=$((errors + 1))
+        fi
+
+        # Check repo-mirror prompt.yaml exists
+        if [ ! -f "$config_target_dir/prompt.yaml" ]; then
+            log_error "Missing prompt.yaml: $config_target_dir"
             errors=$((errors + 1))
         fi
     done
@@ -348,13 +384,15 @@ print_summary() {
         fi
     done
 
-    echo "  Agents deployed:  $agent_count  ($CONFIG_AGENTS)"
+    echo "  Package agents:   $agent_count  ($PACKAGE_ALLIANCE_AGENTS)"
+    echo "  Mirror agents:    $agent_count  ($CONFIG_AGENTS)"
     echo "  Config files:     $config_count  ($CONFIG_DIR)"
     echo "  Custom tools:     $tool_count  ($CUSTOM_TOOLS)"
     echo ""
 
     if [ "$DRY_RUN" = false ]; then
         echo "To verify, run:"
+        echo "  ls -la $PACKAGE_ALLIANCE_AGENTS"
         echo "  ls -la $CONFIG_AGENTS"
         echo "  ls -la $CONFIG_DIR/*.yaml"
         echo "  ls -la $CUSTOM_TOOLS"

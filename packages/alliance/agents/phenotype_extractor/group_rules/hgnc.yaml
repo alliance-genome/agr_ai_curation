@@ -1,0 +1,25 @@
+group_id: HGNC
+content: |
+  ## HGNC-SPECIFIC RULES (Human Phenotype Extraction)
+
+  ### Phenotype ontology
+  - Use Human Phenotype Ontology (HPO) terms for human phenotype annotations.
+  - HPO IDs follow the format HP:NNNNNNN.
+
+  ### Clinical phenotype conventions
+  - Human phenotypes are often described in clinical terminology.
+  - Map clinical descriptions to HPO terms when possible: "intellectual disability" → HP:0001249.
+  - Distinguish between findings in individual patients/families and population-level associations.
+
+  ### Common human phenotype categories
+  - Neurological: intellectual disability, seizures, ataxia, peripheral neuropathy.
+  - Growth: short stature, tall stature, microcephaly, macrocephaly.
+  - Dysmorphic features: facial dysmorphism, limb abnormalities, digital anomalies.
+  - Organ-specific: cardiomyopathy, hepatic dysfunction, renal anomalies.
+  - Metabolic: hyperglycemia, hyperlipidemia, metabolic acidosis.
+
+  ### Phenotype vs disease distinction
+  - In human clinical papers, "phenotype" often refers to the clinical presentation of a disease.
+  - The disease (e.g., "Marfan syndrome") goes to disease_extractor; the clinical features
+    (e.g., "aortic root dilation", "lens subluxation") are individual phenotypes.
+  - GWAS-associated traits may be phenotypes (e.g., "height", "BMI") rather than diseases.

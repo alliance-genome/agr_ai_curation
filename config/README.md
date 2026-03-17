@@ -15,10 +15,12 @@ Public customization path:
 
 Repository-development note:
 
-- The repo-local `config/` tree is still the source tree for the shipped `core`
-  package and installer-seeded defaults.
-- `config/agents/` remains useful when maintaining the built-in catalog from a
-  source checkout.
+- The repo-local `config/` tree still carries installer-seeded defaults plus
+  source mirrors used when maintaining shipped packages from this checkout.
+- `config/agents/` is the repo mirror for the shipped `agr.alliance` agent
+  catalog in `packages/alliance/agents/`.
+- `config/models.yaml`, `config/providers.yaml`, and
+  `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
 
 ## Directory Structure
 
@@ -33,7 +35,7 @@ config/
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
-└── agents/                      # Repo-local mirror of shipped core agent bundles
+└── agents/                      # Repo-local mirror of shipped agr.alliance agent bundles
     ├── README.md               # Agent configuration guide
     ├── _examples/              # Template agents (not loaded)
     │   └── basic_agent/        # Example agent structure
@@ -76,7 +78,7 @@ For repo-local development of the shipped defaults:
    - Define health check parameters
 
 4. **Edit repo-local agent bundles** in `config/agents/` only when you are
-   developing the built-in `core` package from source.
+   developing the built-in `agr.alliance` package from source.
 
 ## Configuration Files
 
@@ -219,7 +221,7 @@ Notes:
 
 ### agents/
 
-This repo-local directory mirrors the shipped `core` package agent bundles for
+This repo-local directory mirrors the shipped `agr.alliance` package agent bundles for
 source development. Public standalone installs load agents from
 `runtime/packages/*/agents`, not from `runtime/config/agents`.
 

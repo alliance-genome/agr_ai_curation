@@ -69,12 +69,12 @@ def test_load_prompts_defaults_to_runtime_packages_and_tracks_package_paths(monk
     assert result["base_prompts"] >= 1
     assert result["group_rules"] >= 1
     assert any(
-        call["source_file"] == "packages/agr.core/agents/gene/prompt.yaml"
+        call["source_file"] == "packages/agr.alliance/agents/gene/prompt.yaml"
         and call["prompt_type"] == "system"
         for call in captured_calls
     )
     assert any(
-        call["source_file"] == "packages/agr.core/agents/gene/group_rules/fb.yaml"
+        call["source_file"] == "packages/agr.alliance/agents/gene/group_rules/fb.yaml"
         and call["prompt_type"] == "group_rules"
         and call["group_id"] == "FB"
         for call in captured_calls

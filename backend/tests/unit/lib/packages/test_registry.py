@@ -160,12 +160,27 @@ def test_repo_core_package_is_discoverable_and_compatible():
     assert core_package.manifest.requirements_file == "requirements/runtime.txt"
     export_kinds = {export.kind for export in core_package.manifest.exports}
     assert export_kinds == {
-        ExportKind.AGENT,
-        ExportKind.PROMPT,
-        ExportKind.GROUP_RULE,
-        ExportKind.SCHEMA,
         ExportKind.TOOL_BINDING,
         ExportKind.MODEL,
         ExportKind.PROVIDER,
         ExportKind.TOOL_POLICY_DEFAULTS,
+    }
+
+
+def test_repo_alliance_package_is_discoverable_and_owns_shipped_agent_catalog():
+    packages_dir = REPO_ROOT / "packages"
+
+    registry = load_package_registry(packages_dir)
+
+    alliance_package = registry.get_package("agr.alliance")
+    assert alliance_package is not None
+    assert alliance_package.package_path == packages_dir / "alliance"
+    assert alliance_package.manifest.python_package_root == "python/src/agr_ai_curation_alliance"
+    assert alliance_package.manifest.requirements_file == "requirements/runtime.txt"
+    export_kinds = {export.kind for export in alliance_package.manifest.exports}
+    assert export_kinds == {
+        ExportKind.AGENT,
+        ExportKind.PROMPT,
+        ExportKind.GROUP_RULE,
+        ExportKind.SCHEMA,
     }

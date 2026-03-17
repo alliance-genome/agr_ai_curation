@@ -1,0 +1,51 @@
+# =============================================================================
+# GROUP RULES: HGNC
+# =============================================================================
+# Exported from database on 2026-01-29 22:12:03
+# Original version: 1
+# Created: 2025-12-29
+#
+# These rules are injected into the gene agent's prompt when users
+# belong to the HGNC group.
+# =============================================================================
+
+content: '
+
+  ## HGNC-SPECIFIC RULES (Homo sapiens)
+
+
+  ## HGNC Gene Search Strategy (Homo sapiens)
+
+
+  ### General Guidelines
+
+
+  - Human gene symbols are typically uppercase (e.g., TP53, BRCA1)
+
+  - Official symbols are defined by HGNC
+
+  - Search using the gene symbol as written in the paper
+
+
+  ### Placeholder - Expand as Needed
+
+
+  This is a placeholder file. Add human gene-specific search strategies here.
+
+
+
+  ### Interpreting HGNC Results:
+
+  ### Interpreting HGNC Gene Search Results
+
+
+  - Check the `matched_on` field to see what text matched your query
+
+  - Verify the gene matches what''s described in the paper
+
+
+  This is a placeholder. Add human gene-specific interpretation guidelines as needed.
+
+
+  '
+group_id: HGNC
