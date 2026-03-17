@@ -12,6 +12,7 @@ env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
 image_tag_override="${INSTALL_IMAGE_TAG:-}"
 
 mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
+mapfile -t bundled_package_names < <(install_bundled_package_names)
 
 prompt_optional_value() {
   local prompt_text="$1"
@@ -37,11 +38,10 @@ seed_runtime_layout() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
-  local core_package_source_dir="$7"
-  local core_package_target_dir="$8"
-  local config_source_dir="$9"
+  local packages_source_dir="$7"
+  local config_source_dir="$8"
 
-  require_directory_exists "$core_package_source_dir"
+  require_directory_exists "$packages_source_dir"
   require_directory_exists "$config_source_dir"
 
   mkdir -p \
@@ -58,9 +58,16 @@ seed_runtime_layout() {
     cp "${config_source_dir}/${filename}" "${runtime_config_dir}/${filename}"
   done
 
-  require_non_empty "core_package_target_dir" "$core_package_target_dir"
-  rm -rf "$core_package_target_dir"
-  cp -a "$core_package_source_dir" "$core_package_target_dir"
+  local package_name=""
+  for package_name in "${bundled_package_names[@]}"; do
+    local package_source_dir="${packages_source_dir}/${package_name}"
+    local package_target_dir="${runtime_packages_dir}/${package_name}"
+
+    require_directory_exists "$package_source_dir"
+    require_file_exists "${package_source_dir}/package.yaml"
+    rm -rf "$package_target_dir"
+    cp -a "$package_source_dir" "$package_target_dir"
+  done
 }
 
 print_stage_intro() {
@@ -104,8 +111,7 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
-  local core_package_source_dir
-  local core_package_target_dir
+  local packages_source_dir
   local config_source_dir
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
@@ -116,8 +122,7 @@ main() {
   pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
-  core_package_source_dir="${repo_root}/packages/core"
-  core_package_target_dir="${runtime_packages_dir}/core"
+  packages_source_dir="${repo_root}/packages"
   config_source_dir="${repo_root}/config"
 
   mkdir -p "$install_home_dir"
@@ -128,8 +133,7 @@ main() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir" \
-    "$core_package_source_dir" \
-    "$core_package_target_dir" \
+    "$packages_source_dir" \
     "$config_source_dir"
 
   if [[ -f "$env_output_path" ]]; then
@@ -227,7 +231,7 @@ main() {
   chmod 600 "$env_output_path"
   log_success "Generated core config at ${env_output_path}"
   log_success "Seeded runtime config into ${runtime_config_dir}"
-  log_success "Seeded bundled core package into ${core_package_target_dir}"
+  log_success "Seeded bundled runtime packages into ${runtime_packages_dir}"
 }
 
 main "$@"

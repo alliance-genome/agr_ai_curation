@@ -10,6 +10,7 @@ deployment_config_filenames=()
 while IFS= read -r filename; do
   deployment_config_filenames+=("$filename")
 done < <(install_deployment_config_filenames)
+mapfile -t bundled_package_names < <(install_bundled_package_names)
 
 readonly EXIT_MANUAL_REVIEW_REQUIRED=3
 
@@ -21,15 +22,15 @@ install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 declare -a extra_package_dirs=()
 declare -a non_package_extra_dirs=()
 declare -a custom_agent_dirs=()
-declare -a modified_core_agent_dirs=()
+declare -a modified_shipped_agent_dirs=()
 declare -a custom_tool_files=()
 declare -a custom_tool_dirs=()
-modified_core_package=0
-core_baseline_unresolved=0
-helper_canonical_core_dir_cache=""
-canonical_core_dir_cache=""
-helper_canonical_core_dir_temp_root=""
-canonical_core_dir_temp_root=""
+declare -a modified_shipped_package_names=()
+declare -a unresolved_shipped_package_names=()
+helper_canonical_packages_dir_cache=""
+canonical_packages_dir_cache=""
+helper_canonical_packages_dir_temp_root=""
+canonical_packages_dir_temp_root=""
 
 usage() {
   cat <<'EOF'
@@ -109,6 +110,20 @@ join_by() {
   done
 
   printf '%s\n' "$result"
+}
+
+array_contains() {
+  local needle="$1"
+  shift || true
+  local item=""
+
+  for item in "$@"; do
+    if [[ "$item" == "$needle" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 directory_has_entries() {
@@ -250,90 +265,135 @@ resolve_git_baseline_commit() {
   return 1
 }
 
-resolve_helper_canonical_core_dir() {
+resolve_helper_canonical_packages_dir() {
   local baseline_commit=""
   local head_commit=""
+  local package_name=""
+  local helper_has_live_customizations=0
+  local archive_paths=()
 
-  if [[ -n "$helper_canonical_core_dir_cache" ]]; then
-    printf '%s\n' "$helper_canonical_core_dir_cache"
+  if [[ -n "$helper_canonical_packages_dir_cache" ]]; then
+    printf '%s\n' "$helper_canonical_packages_dir_cache"
     return 0
   fi
 
-  helper_canonical_core_dir_cache="${helper_repo_root}/packages/core"
+  helper_canonical_packages_dir_cache="${helper_repo_root}/packages"
 
   if command -v git >/dev/null 2>&1 && git -C "$helper_repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     baseline_commit="$(resolve_git_baseline_commit "$helper_repo_root")" || baseline_commit=""
-    if [[ -z "$baseline_commit" ]] && repo_has_live_git_path_customizations "$helper_repo_root" "packages/core"; then
-      head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
-      baseline_commit="$head_commit"
+    if [[ -z "$baseline_commit" ]]; then
+      for package_name in "${bundled_package_names[@]}"; do
+        if repo_has_live_git_path_customizations "$helper_repo_root" "packages/${package_name}"; then
+          helper_has_live_customizations=1
+          break
+        fi
+      done
+      if [[ "$helper_has_live_customizations" -eq 1 ]]; then
+        head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
+        baseline_commit="$head_commit"
+      fi
     fi
     if [[ -n "$baseline_commit" ]]; then
-      helper_canonical_core_dir_temp_root="$(mktemp -d)"
-      if git -C "$helper_repo_root" archive "$baseline_commit" packages/core | tar -x -C "$helper_canonical_core_dir_temp_root"; then
-        helper_canonical_core_dir_cache="${helper_canonical_core_dir_temp_root}/packages/core"
+      helper_canonical_packages_dir_temp_root="$(mktemp -d)"
+      for package_name in "${bundled_package_names[@]}"; do
+        archive_paths+=("packages/${package_name}")
+      done
+      if git -C "$helper_repo_root" archive "$baseline_commit" "${archive_paths[@]}" | tar -x -C "$helper_canonical_packages_dir_temp_root"; then
+        helper_canonical_packages_dir_cache="${helper_canonical_packages_dir_temp_root}/packages"
       else
-        rm -rf "$helper_canonical_core_dir_temp_root"
-        helper_canonical_core_dir_temp_root=""
+        rm -rf "$helper_canonical_packages_dir_temp_root"
+        helper_canonical_packages_dir_temp_root=""
       fi
     fi
   fi
 
-  printf '%s\n' "$helper_canonical_core_dir_cache"
+  printf '%s\n' "$helper_canonical_packages_dir_cache"
 }
 
-resolve_canonical_core_dir() {
+resolve_canonical_packages_dir() {
   local baseline_commit=""
-  local helper_canonical_core_dir=""
+  local helper_canonical_packages_dir=""
+  local source_has_package_customizations=0
+  local package_name=""
+  local archive_paths=()
 
-  if [[ -n "$canonical_core_dir_cache" ]]; then
-    printf '%s\n' "$canonical_core_dir_cache"
+  if [[ -n "$canonical_packages_dir_cache" ]]; then
+    printf '%s\n' "$canonical_packages_dir_cache"
     return 0
   fi
 
-  helper_canonical_core_dir="$(resolve_helper_canonical_core_dir)"
-  canonical_core_dir_cache="$helper_canonical_core_dir"
+  helper_canonical_packages_dir="$(resolve_helper_canonical_packages_dir)"
+  canonical_packages_dir_cache="$helper_canonical_packages_dir"
 
   if command -v git >/dev/null 2>&1 && git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     baseline_commit="$(resolve_git_baseline_commit "$source_repo")" || baseline_commit=""
     if [[ -n "$baseline_commit" ]]; then
-      if repo_has_git_path_customizations "$source_repo" "packages/core"; then
-        canonical_core_dir_temp_root="$(mktemp -d)"
-        if git -C "$source_repo" archive "$baseline_commit" packages/core | tar -x -C "$canonical_core_dir_temp_root"; then
-          canonical_core_dir_cache="${canonical_core_dir_temp_root}/packages/core"
+      for package_name in "${bundled_package_names[@]}"; do
+        if repo_has_git_path_customizations "$source_repo" "packages/${package_name}"; then
+          source_has_package_customizations=1
+          break
+        fi
+      done
+      if [[ "$source_has_package_customizations" -eq 1 ]]; then
+        canonical_packages_dir_temp_root="$(mktemp -d)"
+        for package_name in "${bundled_package_names[@]}"; do
+          archive_paths+=("packages/${package_name}")
+        done
+        if git -C "$source_repo" archive "$baseline_commit" "${archive_paths[@]}" | tar -x -C "$canonical_packages_dir_temp_root"; then
+          canonical_packages_dir_cache="${canonical_packages_dir_temp_root}/packages"
         else
-          rm -rf "$canonical_core_dir_temp_root"
-          canonical_core_dir_temp_root=""
+          rm -rf "$canonical_packages_dir_temp_root"
+          canonical_packages_dir_temp_root=""
         fi
       else
-        canonical_core_dir_cache="${source_repo}/packages/core"
+        canonical_packages_dir_cache="${source_repo}/packages"
       fi
     fi
   fi
 
-  printf '%s\n' "$canonical_core_dir_cache"
+  printf '%s\n' "$canonical_packages_dir_cache"
+}
+
+find_canonical_agent_dir() {
+  local canonical_packages_dir="$1"
+  local agent_name="$2"
+  local package_name=""
+
+  for package_name in "${bundled_package_names[@]}"; do
+    local candidate="${canonical_packages_dir}/${package_name}/agents/${agent_name}"
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 record_source_scan() {
   local packages_dir="${source_repo}/packages"
-  local source_core_dir="${packages_dir}/core"
-  local canonical_core_dir
-  local baseline_agents_dir=""
+  local canonical_packages_dir=""
   local config_agents_dir="${source_repo}/config/agents"
   local tools_dir="${source_repo}/backend/tools/custom"
   local source_baseline_commit=""
+  local package_name=""
 
   if command -v git >/dev/null 2>&1 && git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     source_baseline_commit="$(resolve_git_baseline_commit "$source_repo")" || source_baseline_commit=""
   fi
 
-  canonical_core_dir="$(resolve_canonical_core_dir)"
-  baseline_agents_dir="${canonical_core_dir}/agents"
-  if ! agent_dirs_match "$source_core_dir" "$canonical_core_dir"; then
-    modified_core_package=1
-    if [[ -z "$source_baseline_commit" ]]; then
-      core_baseline_unresolved=1
+  canonical_packages_dir="$(resolve_canonical_packages_dir)"
+  for package_name in "${bundled_package_names[@]}"; do
+    local source_package_dir="${packages_dir}/${package_name}"
+    local canonical_package_dir="${canonical_packages_dir}/${package_name}"
+
+    if ! agent_dirs_match "$source_package_dir" "$canonical_package_dir"; then
+      modified_shipped_package_names+=("$package_name")
+      if [[ -z "$source_baseline_commit" ]]; then
+        unresolved_shipped_package_names+=("$package_name")
+      fi
     fi
-  fi
+  done
 
   local dir_path=""
   for dir_path in "${packages_dir}"/*; do
@@ -341,7 +401,7 @@ record_source_scan() {
 
     local dir_name
     dir_name="$(basename "$dir_path")"
-    if [[ "$dir_name" == "core" ]]; then
+    if array_contains "$dir_name" "${bundled_package_names[@]}"; then
       continue
     fi
 
@@ -361,14 +421,15 @@ record_source_scan() {
       agent_name="$(basename "$agent_dir")"
       [[ "$agent_name" == _* ]] && continue
 
-      local baseline_dir="${baseline_agents_dir}/${agent_name}"
-      if [[ ! -d "$baseline_dir" ]]; then
+      local baseline_dir=""
+      baseline_dir="$(find_canonical_agent_dir "$canonical_packages_dir" "$agent_name")" || baseline_dir=""
+      if [[ -z "$baseline_dir" ]]; then
         custom_agent_dirs+=("$agent_dir")
         continue
       fi
 
       if ! agent_dirs_match "$agent_dir" "$baseline_dir"; then
-        modified_core_agent_dirs+=("$agent_dir")
+        modified_shipped_agent_dirs+=("$agent_dir")
       fi
     done
   fi
@@ -393,10 +454,10 @@ record_source_scan() {
 }
 
 has_custom_code() {
-  [[ "$modified_core_package" -eq 1 ]] \
+  [[ "${#modified_shipped_package_names[@]}" -gt 0 ]] \
     || [[ "${#non_package_extra_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_agent_dirs[@]}" -gt 0 ]] \
-    || [[ "${#modified_core_agent_dirs[@]}" -gt 0 ]] \
+    || [[ "${#modified_shipped_agent_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_tool_files[@]}" -gt 0 ]]
 }
 
@@ -418,15 +479,18 @@ copy_runtime_config() {
 copy_runtime_packages() {
   local runtime_packages_dir="$1"
   local packages_dir="${source_repo}/packages"
-  local source_core_dir="${packages_dir}/core"
-  local core_source_dir
+  local canonical_packages_dir
+  local package_name=""
   local extra_dir=""
 
   echo
   log_info "Runtime package migration"
-  require_directory_exists "$source_core_dir"
-  core_source_dir="$(resolve_canonical_core_dir)"
-  copy_tree_exact "$core_source_dir" "${runtime_packages_dir}/core"
+  canonical_packages_dir="$(resolve_canonical_packages_dir)"
+  for package_name in "${bundled_package_names[@]}"; do
+    local source_package_dir="${packages_dir}/${package_name}"
+    require_directory_exists "$source_package_dir"
+    copy_tree_exact "${canonical_packages_dir}/${package_name}" "${runtime_packages_dir}/${package_name}"
+  done
 
   for extra_dir in "${extra_package_dirs[@]}"; do
     local package_name
@@ -612,16 +676,25 @@ write_legacy_local_readme() {
   local readme_path="${scaffold_dir}/README.md"
   local custom_agent_names=()
   local modified_agent_names=()
+  local modified_package_snapshots=()
+  local unresolved_package_snapshots=()
   local non_package_names=()
   local tool_rel_paths=()
   local agent_dir=""
   local path=""
+  local package_name=""
 
   for agent_dir in "${custom_agent_dirs[@]}"; do
     custom_agent_names+=("$(basename "$agent_dir")")
   done
-  for agent_dir in "${modified_core_agent_dirs[@]}"; do
+  for agent_dir in "${modified_shipped_agent_dirs[@]}"; do
     modified_agent_names+=("$(basename "$agent_dir")")
+  done
+  for package_name in "${modified_shipped_package_names[@]}"; do
+    modified_package_snapshots+=("packages/${package_name}_repo_snapshot")
+  done
+  for package_name in "${unresolved_shipped_package_names[@]}"; do
+    unresolved_package_snapshots+=("packages/${package_name}_repo_snapshot")
   done
   for path in "${non_package_extra_dirs[@]}"; do
     non_package_names+=("$(basename "$path")")
@@ -650,11 +723,11 @@ Why this exists:
 What was preserved here:
 EOF
 
-  if [[ "$core_baseline_unresolved" -eq 1 ]]; then
-    printf -- '- shipped core baseline could not be verified automatically; preserved source snapshot: packages/core_repo_snapshot\n' >>"$readme_path"
+  if [[ "${#unresolved_package_snapshots[@]}" -gt 0 ]]; then
+    printf -- '- shipped package baselines could not be verified automatically; preserved source snapshots: %s\n' "$(join_by ", " "${unresolved_package_snapshots[@]}")" >>"$readme_path"
   fi
-  if [[ "$modified_core_package" -eq 1 ]]; then
-    printf -- '- modified shipped core package snapshot: packages/core_repo_snapshot\n' >>"$readme_path"
+  if [[ "${#modified_package_snapshots[@]}" -gt 0 ]]; then
+    printf -- '- modified shipped package snapshots: %s\n' "$(join_by ", " "${modified_package_snapshots[@]}")" >>"$readme_path"
   fi
   if [[ "${#custom_agent_names[@]}" -gt 0 ]]; then
     printf -- '- custom agent bundles: %s\n' "$(join_by ", " "${custom_agent_names[@]}")" >>"$readme_path"
@@ -676,7 +749,7 @@ Next steps:
 2. Decide which custom agents should become package-owned runtime bundles.
 3. Fill in `package.yaml.template` and, when custom tools are present, `tools/bindings.yaml.template`.
 4. Move the completed package into `runtime/packages/` only after the manifest and bindings are valid.
-5. If you changed shipped agent bundles or package-local core files, reconcile those changes manually against the canonical `runtime/packages/core`.
+5. If you changed shipped agent bundles or package-local shipped files, reconcile those changes manually against the canonical bundled packages in `runtime/packages/`.
 EOF
 }
 
@@ -733,7 +806,7 @@ EOF
     cat >>"$template_path" <<'EOF'
 
 # No brand-new custom agent bundles were detected.
-# Modified shipped agents were preserved under agents/modified_core/ for manual review.
+# Modified shipped agents were preserved under agents/modified_shipped/ for manual review.
 EOF
   fi
 }
@@ -757,21 +830,21 @@ EOF
 
 create_legacy_local_scaffold() {
   local scaffold_dir="${install_home_dir}/migration/legacy_local"
-  local source_core_dir="${source_repo}/packages/core"
   local custom_tools_source_dir="${source_repo}/backend/tools/custom"
   local custom_tools_target_dir="${scaffold_dir}/python/src/legacy_local/custom_tools"
   local agent_dir=""
   local dir_path=""
+  local package_name=""
 
   echo
   log_warn "Legacy local code detected; preserving a manual-review scaffold"
   printf '  - scaffold dir: %s\n' "$scaffold_dir"
 
   if [[ "$apply_mode" -eq 0 ]]; then
-    printf '  - shipped core baseline unresolved: %s\n' "$core_baseline_unresolved"
-    printf '  - modified shipped core package: %s\n' "$modified_core_package"
+    printf '  - shipped package baselines unresolved: %s\n' "${#unresolved_shipped_package_names[@]}"
+    printf '  - modified shipped packages: %s\n' "${#modified_shipped_package_names[@]}"
     printf '  - custom agents: %s\n' "${#custom_agent_dirs[@]}"
-    printf '  - modified shipped agents: %s\n' "${#modified_core_agent_dirs[@]}"
+    printf '  - modified shipped agents: %s\n' "${#modified_shipped_agent_dirs[@]}"
     printf '  - custom tool files: %s\n' "${#custom_tool_files[@]}"
     printf '  - extra non-package dirs: %s\n' "${#non_package_extra_dirs[@]}"
     return 0
@@ -781,24 +854,28 @@ create_legacy_local_scaffold() {
   backup_existing_path "$scaffold_dir"
   mkdir -p \
     "${scaffold_dir}/agents/custom" \
-    "${scaffold_dir}/agents/modified_core" \
+    "${scaffold_dir}/agents/modified_shipped" \
     "${scaffold_dir}/python/src/legacy_local" \
     "${scaffold_dir}/requirements"
 
   printf '%s\n' '"""Legacy local migration scaffold."""' >"${scaffold_dir}/python/src/legacy_local/__init__.py"
   : >"${scaffold_dir}/requirements/runtime.txt"
 
-  if [[ "$core_baseline_unresolved" -eq 1 || "$modified_core_package" -eq 1 ]]; then
+  if [[ "${#unresolved_shipped_package_names[@]}" -gt 0 || "${#modified_shipped_package_names[@]}" -gt 0 ]]; then
     mkdir -p "${scaffold_dir}/packages"
-    copy_tree_exact "$source_core_dir" "${scaffold_dir}/packages/core_repo_snapshot"
+    for package_name in "${bundled_package_names[@]}"; do
+      if array_contains "$package_name" "${unresolved_shipped_package_names[@]}" || array_contains "$package_name" "${modified_shipped_package_names[@]}"; then
+        copy_tree_exact "${source_repo}/packages/${package_name}" "${scaffold_dir}/packages/${package_name}_repo_snapshot"
+      fi
+    done
   fi
 
   for agent_dir in "${custom_agent_dirs[@]}"; do
     copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/custom/$(basename "$agent_dir")"
   done
 
-  for agent_dir in "${modified_core_agent_dirs[@]}"; do
-    copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/modified_core/$(basename "$agent_dir")"
+  for agent_dir in "${modified_shipped_agent_dirs[@]}"; do
+    copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/modified_shipped/$(basename "$agent_dir")"
   done
 
   if [[ "${#custom_tool_files[@]}" -gt 0 || "${#custom_tool_dirs[@]}" -gt 0 ]]; then
@@ -847,10 +924,10 @@ print_summary() {
   printf '  - file outputs: %s\n' "$file_outputs_dir"
   printf '  - weaviate data: %s\n' "$weaviate_data_dir"
   printf '  - extra migrated packages: %s\n' "${#extra_package_dirs[@]}"
-  printf '  - shipped core baseline unresolved: %s\n' "$core_baseline_unresolved"
-  printf '  - modified shipped core package preserved: %s\n' "$modified_core_package"
+  printf '  - shipped package baselines unresolved: %s\n' "${#unresolved_shipped_package_names[@]}"
+  printf '  - modified shipped packages preserved: %s\n' "${#modified_shipped_package_names[@]}"
   printf '  - custom agents preserved: %s\n' "${#custom_agent_dirs[@]}"
-  printf '  - modified shipped agents preserved: %s\n' "${#modified_core_agent_dirs[@]}"
+  printf '  - modified shipped agents preserved: %s\n' "${#modified_shipped_agent_dirs[@]}"
   printf '  - custom tool files preserved: %s\n' "${#custom_tool_files[@]}"
   printf '  - extra non-package dirs preserved: %s\n' "${#non_package_extra_dirs[@]}"
   printf '  - next step: %s\n' "$next_step"
@@ -858,7 +935,7 @@ print_summary() {
 }
 
 main() {
-  trap '[[ -n "$helper_canonical_core_dir_temp_root" ]] && rm -rf "$helper_canonical_core_dir_temp_root"; [[ -n "$canonical_core_dir_temp_root" ]] && rm -rf "$canonical_core_dir_temp_root"' EXIT
+  trap '[[ -n "$helper_canonical_packages_dir_temp_root" ]] && rm -rf "$helper_canonical_packages_dir_temp_root"; [[ -n "$canonical_packages_dir_temp_root" ]] && rm -rf "$canonical_packages_dir_temp_root"' EXIT
 
   parse_args "$@"
 
@@ -866,8 +943,11 @@ main() {
   source_repo="$(cd "$source_repo" && pwd)"
   require_directory_exists "${source_repo}/config"
   require_directory_exists "${source_repo}/packages"
-  require_directory_exists "${source_repo}/packages/core"
-  require_file_exists "${source_repo}/packages/core/package.yaml"
+  local package_name=""
+  for package_name in "${bundled_package_names[@]}"; do
+    require_directory_exists "${source_repo}/packages/${package_name}"
+    require_file_exists "${source_repo}/packages/${package_name}/package.yaml"
+  done
 
   local runtime_root_dir
   local runtime_config_dir

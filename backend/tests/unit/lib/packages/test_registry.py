@@ -154,18 +154,34 @@ def test_repo_core_package_is_discoverable_and_compatible():
     registry = load_package_registry(packages_dir)
 
     core_package = registry.get_package("agr.core")
+    alliance_package = registry.get_package("agr.alliance")
+
     assert core_package is not None
+    assert alliance_package is not None
     assert core_package.package_path == packages_dir / "core"
+    assert alliance_package.package_path == packages_dir / "alliance"
     assert core_package.manifest.python_package_root == "python/src/agr_ai_curation_core"
     assert core_package.manifest.requirements_file == "requirements/runtime.txt"
-    export_kinds = {export.kind for export in core_package.manifest.exports}
-    assert export_kinds == {
+    assert alliance_package.manifest.python_package_root == "python/src/agr_ai_curation_alliance"
+    assert alliance_package.manifest.requirements_file == "requirements/runtime.txt"
+
+    core_export_kinds = {export.kind for export in core_package.manifest.exports}
+    alliance_export_kinds = {
+        export.kind for export in alliance_package.manifest.exports
+    }
+
+    assert core_export_kinds == {
         ExportKind.AGENT,
         ExportKind.PROMPT,
         ExportKind.GROUP_RULE,
-        ExportKind.SCHEMA,
         ExportKind.TOOL_BINDING,
         ExportKind.MODEL,
         ExportKind.PROVIDER,
         ExportKind.TOOL_POLICY_DEFAULTS,
+    }
+    assert alliance_export_kinds == {
+        ExportKind.AGENT,
+        ExportKind.PROMPT,
+        ExportKind.GROUP_RULE,
+        ExportKind.SCHEMA,
     }

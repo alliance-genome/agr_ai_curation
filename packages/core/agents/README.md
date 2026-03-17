@@ -1,9 +1,10 @@
 # Agents Directory
 
-This directory is the tracked core-package copy of the shipped AGR agent
-catalog. For temporary compatibility, the current runtime loader still reads
-`config/agents/`; keep the two locations aligned until the later package-aware
-loader migration lands.
+This directory is the tracked core-package copy of the shipped AGR supervisor
+bundle. The shipped specialist catalog now lives in
+`packages/alliance/agents/`. For temporary compatibility, the current runtime
+loader still reads `config/agents/`; keep the package copies aligned until the
+later package-aware loader migration lands.
 
 This directory contains agent definitions that are loaded at runtime. Each agent is a self-contained folder with YAML configuration and Python schema.
 
@@ -14,11 +15,7 @@ agents/
 ├── README.md           # This file
 ├── _examples/          # Template agents (NOT loaded - underscore prefix)
 │   └── basic_agent/    # Copy this to create new agents
-├── supervisor/         # Core supervisor agent (ships with base)
-├── gene/               # Gene validation agent
-├── allele/             # Allele validation agent
-├── disease/            # Disease validation agent
-└── [your_agent]/       # Your custom agents
+└── supervisor/         # Core supervisor agent (ships with base)
 ```
 
 ## Agent Folder Structure

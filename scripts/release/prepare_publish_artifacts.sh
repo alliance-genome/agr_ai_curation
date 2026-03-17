@@ -11,6 +11,10 @@ ref_name=""
 short_sha=""
 source_date_epoch="${SOURCE_DATE_EPOCH:-}"
 temp_dir=""
+bundled_package_paths=(
+  "packages/core"
+  "packages/alliance"
+)
 
 usage() {
   cat <<'USAGE'
@@ -173,18 +177,21 @@ main() {
     exit 1
   fi
 
-  if ! git -C "${repo_root}" cat-file -e HEAD:packages/core/package.yaml 2>/dev/null; then
-    echo "Missing packages/core/package.yaml in HEAD; cannot build bundled core artifact" >&2
-    exit 1
-  fi
+  local package_path=""
+  for package_path in "${bundled_package_paths[@]}"; do
+    if ! git -C "${repo_root}" cat-file -e "HEAD:${package_path}/package.yaml" 2>/dev/null; then
+      echo "Missing ${package_path}/package.yaml in HEAD; cannot build bundled runtime package artifact" >&2
+      exit 1
+    fi
+  done
 
   resolve_names
   mkdir -p "${output_dir}"
 
   temp_dir="$(mktemp -d)"
 
-  git -C "${repo_root}" archive --format=tar HEAD packages/core | tar -xf - -C "${temp_dir}"
-  mv "${temp_dir}/packages/core" "${temp_dir}/core"
+  git -C "${repo_root}" archive --format=tar HEAD "${bundled_package_paths[@]}" | tar -xf - -C "${temp_dir}"
+  mv "${temp_dir}/packages/"* "${temp_dir}/"
   rmdir "${temp_dir}/packages"
 
   local core_output_path="${output_dir}/${core_artifact_name}"
@@ -201,7 +208,7 @@ main() {
     --numeric-owner \
     --pax-option=delete=atime,delete=ctime \
     -C "${temp_dir}" \
-    -cf - core | gzip -n > "${core_output_path}"
+    -cf - core alliance | gzip -n > "${core_output_path}"
 
   local core_sha256
   local env_sha256

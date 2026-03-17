@@ -1,4 +1,4 @@
-"""Tests for the tracked core package agent catalog."""
+"""Tests for the tracked shipped runtime package agent catalogs."""
 
 from pathlib import Path
 
@@ -10,13 +10,16 @@ REPO_ROOT = find_repo_root(Path(__file__))
 CONFIG_AGENTS_DIR = REPO_ROOT / "config" / "agents"
 CONFIG_DIR = REPO_ROOT / "config"
 CORE_PACKAGE_DIR = REPO_ROOT / "packages" / "core"
+ALLIANCE_PACKAGE_DIR = REPO_ROOT / "packages" / "alliance"
 CORE_AGENTS_DIR = CORE_PACKAGE_DIR / "agents"
+ALLIANCE_AGENTS_DIR = ALLIANCE_PACKAGE_DIR / "agents"
 CORE_CONFIG_DIR = CORE_PACKAGE_DIR / "config"
 RUNTIME_CONFIG_FILES = (
     "models.yaml",
     "providers.yaml",
     "tool_policy_defaults.yaml",
 )
+CORE_AGENT_NAMES = {"supervisor"}
 
 
 def _iter_shipped_agent_dirs(root: Path) -> tuple[Path, ...]:
@@ -37,35 +40,75 @@ def _iter_source_files(root: Path) -> set[Path]:
     }
 
 
-def test_core_package_mirrors_shipped_agent_files():
-    shipped_agents = _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR)
+def _expected_agent_exports(agents_dir: Path) -> set[tuple[ExportKind, str, str]]:
+    exports: set[tuple[ExportKind, str, str]] = set()
 
-    assert shipped_agents
-    assert not (CORE_AGENTS_DIR / "_examples").exists()
+    for agent_dir in _iter_shipped_agent_dirs(agents_dir):
+        agent_name = agent_dir.name
+        exports.add((ExportKind.AGENT, agent_name, f"agents/{agent_name}"))
+        exports.add(
+            (ExportKind.PROMPT, f"{agent_name}.system", f"agents/{agent_name}/prompt.yaml")
+        )
 
-    expected_agent_names = {agent_dir.name for agent_dir in shipped_agents}
+        schema_path = agent_dir / "schema.py"
+        if schema_path.exists():
+            exports.add(
+                (ExportKind.SCHEMA, f"{agent_name}.schema", f"agents/{agent_name}/schema.py")
+            )
+
+        rules_dir = agent_dir / "group_rules"
+        if rules_dir.exists():
+            for rule_path in sorted(rules_dir.glob("*.yaml")):
+                exports.add(
+                    (
+                        ExportKind.GROUP_RULE,
+                        f"{agent_name}.{rule_path.stem.upper()}",
+                        f"agents/{agent_name}/group_rules/{rule_path.name}",
+                    )
+                )
+
+    return exports
+
+
+def _assert_package_agents_match_config(package_agents_dir: Path, agent_names: set[str]) -> None:
     actual_agent_names = {
         agent_dir.name
-        for agent_dir in _iter_shipped_agent_dirs(CORE_AGENTS_DIR)
+        for agent_dir in _iter_shipped_agent_dirs(package_agents_dir)
     }
-    assert actual_agent_names == expected_agent_names
+    assert actual_agent_names == agent_names
 
-    for config_agent_dir in shipped_agents:
-        core_agent_dir = CORE_AGENTS_DIR / config_agent_dir.name
+    for agent_name in sorted(agent_names):
+        config_agent_dir = CONFIG_AGENTS_DIR / agent_name
+        package_agent_dir = package_agents_dir / agent_name
         expected_files = _iter_source_files(config_agent_dir)
-        actual_files = _iter_source_files(core_agent_dir)
+        actual_files = _iter_source_files(package_agent_dir)
 
         assert actual_files == expected_files
 
         for relative_path in sorted(expected_files):
             config_path = config_agent_dir / relative_path
-            core_path = core_agent_dir / relative_path
-            assert core_path.read_text(encoding="utf-8") == config_path.read_text(
+            package_path = package_agent_dir / relative_path
+            assert package_path.read_text(encoding="utf-8") == config_path.read_text(
                 encoding="utf-8"
             )
 
 
-def test_core_package_manifest_exports_all_shipped_agent_assets():
+def test_core_package_mirrors_shipped_supervisor_files():
+    assert not (CORE_AGENTS_DIR / "_examples").exists()
+    _assert_package_agents_match_config(CORE_AGENTS_DIR, CORE_AGENT_NAMES)
+
+
+def test_alliance_package_mirrors_shipped_specialist_files():
+    shipped_specialists = {
+        agent_dir.name
+        for agent_dir in _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR)
+        if agent_dir.name not in CORE_AGENT_NAMES
+    }
+
+    _assert_package_agents_match_config(ALLIANCE_AGENTS_DIR, shipped_specialists)
+
+
+def test_core_package_manifest_exports_runtime_foundation_and_supervisor_assets():
     manifest = load_package_manifest(CORE_PACKAGE_DIR / "package.yaml")
 
     expected_exports = {
@@ -78,29 +121,7 @@ def test_core_package_manifest_exports_all_shipped_agent_assets():
             "config/tool_policy_defaults.yaml",
         ),
     }
-    for agent_dir in _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR):
-        agent_name = agent_dir.name
-        expected_exports.add((ExportKind.AGENT, agent_name, f"agents/{agent_name}"))
-        expected_exports.add(
-            (ExportKind.PROMPT, f"{agent_name}.system", f"agents/{agent_name}/prompt.yaml")
-        )
-
-        schema_path = agent_dir / "schema.py"
-        if schema_path.exists():
-            expected_exports.add(
-                (ExportKind.SCHEMA, f"{agent_name}.schema", f"agents/{agent_name}/schema.py")
-            )
-
-        rules_dir = agent_dir / "group_rules"
-        if rules_dir.exists():
-            for rule_path in sorted(rules_dir.glob("*.yaml")):
-                expected_exports.add(
-                    (
-                        ExportKind.GROUP_RULE,
-                        f"{agent_name}.{rule_path.stem.upper()}",
-                        f"agents/{agent_name}/group_rules/{rule_path.name}",
-                    )
-                )
+    expected_exports |= _expected_agent_exports(CORE_AGENTS_DIR)
 
     actual_exports = {
         (export.kind, export.name, export.path)
@@ -108,6 +129,17 @@ def test_core_package_manifest_exports_all_shipped_agent_assets():
     }
 
     assert actual_exports == expected_exports
+
+
+def test_alliance_package_manifest_exports_all_shipped_specialist_assets():
+    manifest = load_package_manifest(ALLIANCE_PACKAGE_DIR / "package.yaml")
+
+    actual_exports = {
+        (export.kind, export.name, export.path)
+        for export in manifest.exports
+    }
+
+    assert actual_exports == _expected_agent_exports(ALLIANCE_AGENTS_DIR)
 
 
 def test_core_package_mirrors_shipped_runtime_config_files():

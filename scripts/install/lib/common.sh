@@ -203,6 +203,13 @@ maintenance_message.txt
 EOF
 }
 
+install_bundled_package_names() {
+  cat <<'EOF'
+core
+alliance
+EOF
+}
+
 install_runtime_config_dir() {
   local install_home_dir="$1"
   printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"
