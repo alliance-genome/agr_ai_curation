@@ -1,0 +1,55 @@
+package_id: agr.alliance
+display_name: AGR Alliance Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_alliance
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default AGR Alliance specialist tool bindings
+agent_bundles:
+  - name: allele
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: allele_extractor
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: chat_output
+  - name: chemical
+    has_schema: true
+  - name: chemical_extractor
+    has_schema: true
+  - name: csv_formatter
+  - name: disease
+    has_schema: true
+  - name: disease_extractor
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: gene
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: gene_expression
+    has_schema: true
+    group_rules: [wb]
+  - name: gene_extractor
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: gene_ontology
+    has_schema: true
+  - name: go_annotations
+    has_schema: true
+  - name: json_formatter
+  - name: ontology_mapping
+    has_schema: true
+  - name: orthologs
+    has_schema: true
+  - name: pdf
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: phenotype_extractor
+    has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: tsv_formatter

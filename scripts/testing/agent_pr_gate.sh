@@ -228,14 +228,14 @@ PY"
 run_path_scoped_check \
   "installer-shell-regression-suite" \
   "bash scripts/install/tests/run.sh" \
-  "scripts/install/**, docker-compose.production.yml, packages/core/**" \
-  scripts/install docker-compose.production.yml packages/core
+  "scripts/install/**, docker-compose.production.yml, packages/core/**, packages/alliance/**" \
+  scripts/install docker-compose.production.yml packages/core packages/alliance
 
 run_path_scoped_check \
   "publish-artifact-shell-regression-suite" \
   "bash scripts/tests/test_prepare_publish_artifacts.sh" \
-  "scripts/release/**, scripts/tests/test_prepare_publish_artifacts.sh, scripts/install/lib/templates/env.standalone, packages/core/**" \
-  scripts/release scripts/tests/test_prepare_publish_artifacts.sh scripts/install/lib/templates/env.standalone packages/core
+  "scripts/release/**, scripts/tests/test_prepare_publish_artifacts.sh, scripts/install/lib/templates/env.standalone, packages/core/**, packages/alliance/**" \
+  scripts/release scripts/tests/test_prepare_publish_artifacts.sh scripts/install/lib/templates/env.standalone packages/core packages/alliance
 
 CHANGED_BACKEND_FILES="$(git diff --name-only "${DIFF_RANGE}" -- backend || true)"
 if [[ -n "${CHANGED_BACKEND_FILES}" ]]; then

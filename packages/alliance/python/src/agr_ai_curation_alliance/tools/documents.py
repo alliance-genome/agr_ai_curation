@@ -1,4 +1,4 @@
-"""Context-driven document tool factories for the AGR core package."""
+"""Context-driven document tool factories for the AGR Alliance package."""
 
 from __future__ import annotations
 

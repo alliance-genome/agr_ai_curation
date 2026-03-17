@@ -1,2 +1,1 @@
-"""Tracked source for the AGR core runtime package."""
-
+"""Tracked source for the minimal AI Core runtime package."""

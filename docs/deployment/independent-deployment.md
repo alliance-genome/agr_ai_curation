@@ -42,7 +42,8 @@ The standalone installer seeds the modular runtime under
 - Runtime config: `~/.agr_ai_curation/runtime/config`
 - Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
-- Shipped core package: `~/.agr_ai_curation/runtime/packages/core`
+- Shipped AI Core package: `~/.agr_ai_curation/runtime/packages/core`
+- Shipped Alliance package: `~/.agr_ai_curation/runtime/packages/alliance`
 - Runtime state: `~/.agr_ai_curation/runtime/state`
 - Package-runner virtualenvs: `~/.agr_ai_curation/runtime/state/package_runner/<package_id>/venv`
 - Host data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
@@ -59,8 +60,9 @@ When the existing deployment already runs from `~/.agr_ai_curation/`:
    and any custom package directories under
    `~/.agr_ai_curation/runtime/packages/`.
 3. Move any long-lived customizations out of
-   `~/.agr_ai_curation/runtime/packages/core/` before upgrading. Stage 2
-   refreshes the shipped `core` package and re-seeds the runtime config files.
+   `~/.agr_ai_curation/runtime/packages/core/` and
+   `~/.agr_ai_curation/runtime/packages/alliance/` before upgrading. Stage 2
+   refreshes the shipped packages and re-seeds the runtime config files.
 4. Re-run the installer from Stage 2:
 
    ```bash
