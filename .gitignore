@@ -172,6 +172,8 @@ find_*.py
 # Claude Code settings
 .claude/
 .symphony/
+.superpowers/
+docs/superpowers/
 
 # Git worktrees
 .worktrees/

@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+# Wrapper for Symphony Human Review Prep local stack bring-up.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  symphony_human_review_prep.sh [options]
+
+Options:
+  --workspace-dir DIR      Workspace/repo to prepare (default: current directory)
+  --issue-key KEY          Issue key used for deterministic port allocation
+  --compose-project NAME   Docker Compose project name (default: derived from issue key)
+  --review-host HOST       Host/IP to publish in review URLs
+  --env-file PATH          Private env file (default: ~/.agr_ai_curation/.env when present)
+  --build-backend          Rebuild the backend image before review
+  --build-frontend         Rebuild the frontend image before review
+  --skip-db-tunnel         Skip DB tunnel startup
+  --skip-runtime-refresh   Skip managed workspace runtime refresh before prep
+  -h, --help              Show this help
+USAGE
+}
+
+WORKSPACE_DIR="${PWD}"
+ISSUE_KEY="${ISSUE_KEY:-}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-}"
+REVIEW_HOST="${REVIEW_HOST:-${SYMPHONY_REVIEW_HOST:-}}"
+PRIVATE_ENV_FILE="${AGR_AI_CURATION_ENV_FILE:-${HOME}/.agr_ai_curation/.env}"
+BUILD_BACKEND=0
+BUILD_FRONTEND=0
+SKIP_DB_TUNNEL=0
+SKIP_RUNTIME_REFRESH="${SYMPHONY_REVIEW_PREP_REFRESH_MANAGED:-1}"
+FRONTEND_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS:-20}"
+FRONTEND_HEALTH_SLEEP="${SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS:-2}"
+BACKEND_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS:-30}"
+BACKEND_HEALTH_SLEEP="${SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS:-2}"
+CURATION_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS:-15}"
+CURATION_HEALTH_SLEEP="${SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS:-2}"
+PDF_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_PDF_HEALTH_ATTEMPTS:-3}"
+PDF_HEALTH_SLEEP="${SYMPHONY_REVIEW_PDF_HEALTH_SLEEP_SECONDS:-2}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workspace-dir)
+      WORKSPACE_DIR="$2"
+      shift 2
+      ;;
+    --issue-key)
+      ISSUE_KEY="$2"
+      shift 2
+      ;;
+    --compose-project)
+      COMPOSE_PROJECT="$2"
+      shift 2
+      ;;
+    --review-host)
+      REVIEW_HOST="$2"
+      shift 2
+      ;;
+    --env-file)
+      PRIVATE_ENV_FILE="$2"
+      shift 2
+      ;;
+    --build-backend)
+      BUILD_BACKEND=1
+      shift
+      ;;
+    --build-frontend)
+      BUILD_FRONTEND=1
+      shift
+      ;;
+    --skip-db-tunnel)
+      SKIP_DB_TUNNEL=1
+      shift
+      ;;
+    --skip-runtime-refresh)
+      SKIP_RUNTIME_REFRESH=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+WORKSPACE_DIR="$(cd "${WORKSPACE_DIR}" && pwd -P)"
+COMPOSE_FILE="${WORKSPACE_DIR}/docker-compose.yml"
+TUNNEL_ENV_FILE="${WORKSPACE_DIR}/scripts/local_db_tunnel_env.sh"
+
+if [[ ! -d "${WORKSPACE_DIR}" ]]; then
+  echo "Workspace directory does not exist: ${WORKSPACE_DIR}" >&2
+  exit 2
+fi
+
+resolve_helper() {
+  local relative_path="$1"
+  if [[ -x "${WORKSPACE_DIR}/${relative_path}" ]]; then
+    printf '%s\n' "${WORKSPACE_DIR}/${relative_path}"
+    return 0
+  fi
+  if [[ -x "${REPO_ROOT}/${relative_path}" ]]; then
+    printf '%s\n' "${REPO_ROOT}/${relative_path}"
+    return 0
+  fi
+  return 1
+}
+
+log_step() {
+  printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"
+}
+
+normalize_private_env_file() {
+  if [[ ! -f "${PRIVATE_ENV_FILE}" ]]; then
+    return 0
+  fi
+
+  local helper=""
+  helper="$(resolve_helper "scripts/utilities/ensure_local_langfuse_env.sh" || true)"
+  if [[ -z "${helper}" ]]; then
+    return 0
+  fi
+
+  log_step "Normalizing local Langfuse env values"
+  bash "${helper}" "${PRIVATE_ENV_FILE}"
+}
+
+refresh_workspace_runtime() {
+  if [[ "${SKIP_RUNTIME_REFRESH}" != "1" ]]; then
+    return 0
+  fi
+
+  local helper=""
+  if [[ -x "${REPO_ROOT}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+    helper="${REPO_ROOT}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  elif [[ -x "${WORKSPACE_DIR}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+    helper="${WORKSPACE_DIR}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  fi
+
+  if [[ -z "${helper}" ]]; then
+    echo "warning_runtime_refresh=missing_helper" >&2
+    return 0
+  fi
+
+  log_step "Refreshing managed Symphony runtime files"
+  bash "${helper}" --workspace-dir "${WORKSPACE_DIR}" --refresh-managed
+}
+
+json_compact() {
+  local raw="$1"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "${raw}" | jq -c . 2>/dev/null || printf '%s' "${raw}"
+    return 0
+  fi
+  printf '%s' "${raw}"
+}
+
+derive_issue_key() {
+  local value="${1:-}"
+  if [[ -n "${value}" ]]; then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+
+  value="$(basename "${WORKSPACE_DIR}")"
+  if [[ "${value}" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+
+  echo "Unable to derive issue key from workspace '${WORKSPACE_DIR}'. Use --issue-key." >&2
+  exit 2
+}
+
+issue_number_from_key() {
+  local key="$1"
+  if [[ "${key}" =~ -([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  echo "Issue key must end with a numeric suffix: ${key}" >&2
+  exit 2
+}
+
+compose_project_from_issue() {
+  printf '%s' "$1" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]'
+}
+
+seed_port_env() {
+  local issue_number="$1"
+
+  export LANGFUSE_HOST_PORT="${LANGFUSE_HOST_PORT:-$((3400 + issue_number))}"
+  export FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-$((3000 + issue_number))}"
+  export BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-$((8000 + issue_number))}"
+  export POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-$((5400 + issue_number))}"
+  export REDIS_HOST_PORT="${REDIS_HOST_PORT:-$((6400 + issue_number))}"
+  export WEAVIATE_HTTP_HOST_PORT="${WEAVIATE_HTTP_HOST_PORT:-$((18400 + issue_number))}"
+  export WEAVIATE_GRPC_HOST_PORT="${WEAVIATE_GRPC_HOST_PORT:-$((15400 + issue_number))}"
+}
+
+prepare_docker_config() {
+  local helper_path="${1:-}"
+  if [[ -n "${helper_path}" ]]; then
+    bash "${helper_path}" --workspace-dir "${WORKSPACE_DIR}"
+    return 0
+  fi
+
+  local docker_config_dir="${WORKSPACE_DIR}/.symphony-docker-config"
+  local source_config="${HOME}/.docker/config.json"
+  local target_config="${docker_config_dir}/config.json"
+  mkdir -p "${docker_config_dir}"
+  if [[ -f "${source_config}" && ! -f "${target_config}" ]]; then
+    cp "${source_config}" "${target_config}" >/dev/null 2>&1 || true
+  fi
+  printf '%s\n' "${docker_config_dir}"
+}
+
+load_exported_env_file() {
+  local env_file="$1"
+  if [[ -f "${env_file}" ]]; then
+    local restore_nounset=0
+    if [[ $- == *u* ]]; then
+      restore_nounset=1
+      set +u
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    source "${env_file}"
+    set +a
+    if [[ "${restore_nounset}" == "1" ]]; then
+      set -u
+    fi
+  fi
+}
+
+compose_run() {
+  local args=()
+  if [[ -f "${PRIVATE_ENV_FILE}" ]]; then
+    args+=(--env-file "${PRIVATE_ENV_FILE}")
+  fi
+  (
+    cd "${WORKSPACE_DIR}"
+    DOCKER_CONFIG="${WORKSPACE_DOCKER_CONFIG}" docker compose "${args[@]}" -p "${COMPOSE_PROJECT}" "$@"
+  )
+}
+
+wait_for_url() {
+  local url="$1"
+  local attempts="${2:-30}"
+  local sleep_seconds="${3:-2}"
+  local result=""
+  local i
+
+  for i in $(seq 1 "${attempts}"); do
+    if result="$(curl -fsS -m 5 "${url}" 2>/dev/null)"; then
+      printf '%s\n' "${result}"
+      return 0
+    fi
+    sleep "${sleep_seconds}"
+  done
+
+  return 1
+}
+
+first_backend_root_cause() {
+  compose_run logs backend 2>/dev/null | rg -m 1 'UndefinedColumn|ProgrammingError|Traceback|Exception|ERROR' || true
+}
+
+print_urls() {
+  local frontend_local="http://127.0.0.1:${FRONTEND_HOST_PORT}/"
+  local backend_local="http://127.0.0.1:${BACKEND_HOST_PORT}/health"
+  local frontend_review="http://${REVIEW_HOST}:${FRONTEND_HOST_PORT}/"
+  local backend_review="http://${REVIEW_HOST}:${BACKEND_HOST_PORT}/health"
+
+  echo "review_frontend_local=${frontend_local}"
+  echo "review_backend_local=${backend_local}"
+  if [[ -n "${REVIEW_HOST}" ]]; then
+    echo "review_frontend_url=${frontend_review}"
+    echo "review_backend_url=${backend_review}"
+  fi
+}
+
+check_required_vars() {
+  local missing=()
+  local key
+  for key in OPENAI_API_KEY GROQ_API_KEY; do
+    if [[ -z "${!key:-}" ]]; then
+      missing+=("${key}")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf 'warning_missing_runtime_vars=%s\n' "$(IFS=,; echo "${missing[*]}")"
+  fi
+}
+
+ISSUE_KEY="$(derive_issue_key "${ISSUE_KEY}")"
+ISSUE_NUMBER="$(issue_number_from_key "${ISSUE_KEY}")"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-$(compose_project_from_issue "${ISSUE_KEY}")}"
+if [[ -z "${REVIEW_HOST}" ]] && command -v hostname >/dev/null 2>&1; then
+  REVIEW_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+fi
+refresh_workspace_runtime
+if [[ ! -f "${COMPOSE_FILE}" ]]; then
+  echo "Workspace is missing docker-compose.yml: ${COMPOSE_FILE}" >&2
+  exit 2
+fi
+seed_port_env "${ISSUE_NUMBER}"
+normalize_private_env_file
+load_exported_env_file "${PRIVATE_ENV_FILE}"
+check_required_vars
+export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-true}"
+export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"
+
+if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
+  TUNNEL_START_HELPER="$(resolve_helper "scripts/utilities/symphony_local_db_tunnel_start.sh" || true)"
+  TUNNEL_STATUS_HELPER="$(resolve_helper "scripts/utilities/symphony_local_db_tunnel_status.sh" || true)"
+  if [[ -z "${TUNNEL_START_HELPER}" ]]; then
+    echo "Unable to find symphony_local_db_tunnel_start.sh in workspace or repo" >&2
+    exit 2
+  fi
+else
+  TUNNEL_START_HELPER=""
+  TUNNEL_STATUS_HELPER=""
+fi
+
+DOCKER_CONFIG_HELPER="$(resolve_helper "scripts/utilities/symphony_prepare_docker_config.sh" || true)"
+WORKSPACE_DOCKER_CONFIG="$(prepare_docker_config "${DOCKER_CONFIG_HELPER}")"
+
+log_step "Preparing Human Review stack for ${ISSUE_KEY}"
+echo "workspace_dir=${WORKSPACE_DIR}"
+echo "compose_project=${COMPOSE_PROJECT}"
+echo "workspace_docker_config=${WORKSPACE_DOCKER_CONFIG}"
+echo "frontend_host_port=${FRONTEND_HOST_PORT}"
+echo "backend_host_port=${BACKEND_HOST_PORT}"
+echo "postgres_host_port=${POSTGRES_HOST_PORT}"
+echo "redis_host_port=${REDIS_HOST_PORT}"
+echo "langfuse_host_port=${LANGFUSE_HOST_PORT}"
+echo "weaviate_http_host_port=${WEAVIATE_HTTP_HOST_PORT}"
+echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
+echo "run_db_bootstrap_on_start=${RUN_DB_BOOTSTRAP_ON_START}"
+echo "run_db_migrations_on_start=${RUN_DB_MIGRATIONS_ON_START}"
+
+if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
+  log_step "Starting DB tunnel"
+  bash "${TUNNEL_START_HELPER}" --workspace-dir "${WORKSPACE_DIR}"
+  if [[ -f "${TUNNEL_ENV_FILE}" ]]; then
+    load_exported_env_file "${TUNNEL_ENV_FILE}"
+    echo "tunnel_env_file=${TUNNEL_ENV_FILE}"
+    echo "tunnel_curation_db_url_host=${CURATION_DB_TUNNEL_FORWARD_HOST:-}"
+    echo "tunnel_curation_db_url_port=${CURATION_DB_TUNNEL_DOCKER_PORT:-}"
+  fi
+  if [[ -n "${TUNNEL_STATUS_HELPER}" ]]; then
+    bash "${TUNNEL_STATUS_HELPER}" --workspace-dir "${WORKSPACE_DIR}" || true
+  fi
+fi
+
+log_step "Starting Docker services"
+compose_run up -d postgres backend frontend
+
+if [[ "${BUILD_BACKEND}" -eq 1 ]]; then
+  log_step "Rebuilding backend"
+  compose_run up -d --build backend
+fi
+
+if [[ "${BUILD_FRONTEND}" -eq 1 ]]; then
+  log_step "Rebuilding frontend"
+  compose_run up -d --build frontend
+fi
+
+log_step "Force-recreating backend to pick up fresh tunnel/runtime env"
+compose_run up -d --force-recreate backend
+
+FRONTEND_URL="http://127.0.0.1:${FRONTEND_HOST_PORT}/"
+BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_HOST_PORT}/health"
+CURATION_HEALTH_URL="http://127.0.0.1:${BACKEND_HOST_PORT}/api/admin/health/connections/curation_db"
+
+log_step "Checking service health"
+frontend_status="unreachable"
+backend_status="unreachable"
+curation_status="skipped"
+pdf_status="skipped"
+
+if wait_for_url "${FRONTEND_URL}" "${FRONTEND_HEALTH_ATTEMPTS}" "${FRONTEND_HEALTH_SLEEP}" >/dev/null; then
+  frontend_status="healthy"
+fi
+
+backend_payload=""
+if backend_payload="$(wait_for_url "${BACKEND_HEALTH_URL}" "${BACKEND_HEALTH_ATTEMPTS}" "${BACKEND_HEALTH_SLEEP}")"; then
+  backend_status="$(json_compact "${backend_payload}")"
+fi
+
+if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
+  curation_payload=""
+  if curation_payload="$(wait_for_url "${CURATION_HEALTH_URL}" "${CURATION_HEALTH_ATTEMPTS}" "${CURATION_HEALTH_SLEEP}")"; then
+    curation_status="$(json_compact "${curation_payload}")"
+  else
+    curation_status="unreachable"
+  fi
+fi
+
+if [[ -n "${PDF_EXTRACTION_SERVICE_URL:-}" ]]; then
+  pdf_payload=""
+  if pdf_payload="$(wait_for_url "${PDF_EXTRACTION_SERVICE_URL%/}/api/v1/health" "${PDF_HEALTH_ATTEMPTS}" "${PDF_HEALTH_SLEEP}")"; then
+    pdf_status="$(json_compact "${pdf_payload}")"
+  else
+    pdf_status="unreachable"
+  fi
+fi
+
+echo "frontend_health=${frontend_status}"
+echo "backend_health=${backend_status}"
+echo "curation_db_health=${curation_status}"
+echo "pdf_extraction_health=${pdf_status}"
+print_urls
+
+if [[ "${backend_status}" == "unreachable" ]]; then
+  backend_root_cause="$(first_backend_root_cause)"
+  if [[ -n "${backend_root_cause}" ]]; then
+    echo "backend_root_cause=${backend_root_cause}"
+  fi
+  exit 1
+fi

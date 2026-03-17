@@ -223,6 +223,23 @@ Starts the SSM tunnel and `socat` forwarder in the background, writes
 ./scripts/utilities/symphony_local_db_tunnel_stop.sh
 ```
 
+### utilities/symphony_human_review_prep.sh
+
+One-command Human Review Prep for a Symphony workspace. It derives issue-specific
+ports, starts the local curation DB tunnel, prepares a workspace-local Docker
+config, brings up the review stack, force-recreates the backend so fresh tunnel
+env reaches the container, and prints review URLs plus health summaries.
+
+```bash
+# Prepare the current workspace for local review
+./scripts/utilities/symphony_human_review_prep.sh
+
+# Prepare a specific workspace with explicit review host
+./scripts/utilities/symphony_human_review_prep.sh \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
+  --review-host 192.168.86.44
+```
+
 ### local_db_tunnel.sh
 
 Interactive/manual version of the curation DB tunnel. This keeps the tunnel alive in the

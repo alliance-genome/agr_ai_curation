@@ -41,12 +41,26 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 - Migrations/data integrity: review backend persistence changes carefully.
 - Tool policy and agent config: changes in `config/` can alter runtime behavior broadly.
 - Symphony runtime controls: `.symphony/WORKFLOW.md` controls unattended execution behavior.
+- Symphony runtime helper copies in issue workspaces may be intentionally untracked; do not assume `git status` noise in a Symphony workspace means PR-relevant repo changes.
 - CI ignore-path files:
   - `backend/tests/unit/.ci-ignore-paths`
   - `backend/tests/contract/.core-test-paths`
   - Treat edits as high-risk and always justify in PR notes.
 
-## 5) Expected Change Workflow
+## 5) Symphony Runtime Notes
+
+- Canonical Symphony orchestration sources live under `.symphony/`.
+- `.symphony/` may be intentionally untracked in this repo/workspace; do not assume its absence from Git is accidental or PR-relevant.
+- The `.symphony/` tree is manually backed up every night, so local runtime changes may be preserved outside normal Git tracking.
+- Workspace-local runtime helpers are materialized by `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
+- Some helpers are copied and renamed for workspace use. Important example:
+  - source of truth: `.symphony/allocate_issue_ports.sh`
+  - workspace runtime copy: `scripts/symphony_allocate_issue_ports.sh`
+- Workspace helper copies may exist on disk without being tracked by Git in the main repo or in the workspace branch. This is intentional for local/Symphony runtime support.
+- Presence on disk is not the same as a tracked repo file. Check `git ls-files` before deciding a helper belongs in a PR.
+- If a workflow references `scripts/symphony_allocate_issue_ports.sh` and the file is missing in a workspace, check the source under `.symphony/allocate_issue_ports.sh` and the runtime sync script before assuming the repo lost functionality.
+
+## 6) Expected Change Workflow
 
 1. Sync branch and inspect changed scope.
 2. Reproduce or define the expected behavior first.
@@ -54,4 +68,3 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 4. Run targeted validation + tests.
 5. Update docs if behavior or process changed.
 6. For Symphony/Linear execution, keep a single workpad-style progress trail and clear acceptance criteria.
-

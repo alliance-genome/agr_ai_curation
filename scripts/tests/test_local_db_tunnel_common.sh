@@ -116,10 +116,31 @@ test_state_dir_is_workspace_specific() {
   unset SYMPHONY_LOCAL_DB_TUNNEL_STATE_ROOT
 }
 
+test_state_root_falls_back_when_xdg_runtime_dir_is_unusable() {
+  local temp_root blocked home_dir state_dir
+  temp_root="$(mktemp -d)"
+  blocked="${temp_root}/xdg-runtime-file"
+  home_dir="${temp_root}/home"
+  mkdir -p "${home_dir}"
+  : > "${blocked}"
+
+  XDG_RUNTIME_DIR="${blocked}"
+  HOME="${home_dir}"
+  state_dir="$(local_db_tunnel_state_dir "/tmp/workspaces/ALL-30")"
+
+  [[ "${state_dir}" == "${home_dir}/.local/state/agr_ai_curation_symphony_db_tunnels/"* ]] || {
+    echo "Expected fallback under ${home_dir}/.local/state, got ${state_dir}" >&2
+    exit 1
+  }
+
+  unset XDG_RUNTIME_DIR
+}
+
 test_forward_host_defaults_to_host_docker_internal
 test_bind_ip_override_wins
 test_docker_gateway_ip_uses_docker_bridge_when_available
 test_write_env_file_uses_container_forward_host
 test_state_dir_is_workspace_specific
+test_state_root_falls_back_when_xdg_runtime_dir_is_unusable
 
 echo "local_db_tunnel_common tests passed"
