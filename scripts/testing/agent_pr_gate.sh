@@ -29,6 +29,15 @@ record_check() {
   local name="$1"
   local result="$2"
   local detail="$3"
+  local status="${4:-}"
+
+  if [[ -z "${status}" ]]; then
+    if [[ "${result}" == "pass" ]]; then
+      status="passed"
+    else
+      status="failed"
+    fi
+  fi
 
   if [[ "${result}" == "pass" ]]; then
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -36,7 +45,17 @@ record_check() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 
-  printf "%s\t%s\t%s\n" "${name}" "${result}" "${detail//$'\n'/ }" >> "${CHECKS_TSV}"
+  printf "%s\t%s\t%s\t%s\n" \
+    "${name}" \
+    "${result}" \
+    "${detail//$'\n'/ }" \
+    "${status}" >> "${CHECKS_TSV}"
+}
+
+record_skip() {
+  local name="$1"
+  local detail="$2"
+  record_check "${name}" "pass" "${detail}" "skipped"
 }
 
 run_check() {
@@ -51,6 +70,85 @@ run_check() {
       error_output="$(cat /tmp/agent_gate.out)"
     fi
     record_check "${name}" "fail" "${error_output}"
+  fi
+}
+
+changed_paths_in_scope() {
+  git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- "$@" || true
+}
+
+summarize_changed_paths() {
+  local changed_paths="$1"
+  local -a paths=()
+  local count=0
+
+  mapfile -t paths <<<"${changed_paths}"
+  count="${#paths[@]}"
+  if (( count == 0 )); then
+    printf 'none'
+    return
+  fi
+
+  if (( count <= 5 )); then
+    printf '%s' "${paths[*]}"
+    return
+  fi
+
+  printf '%s ... (+%d more)' "${paths[*]:0:5}" "$((count - 5))"
+}
+
+summarize_output_tail() {
+  local output="$1"
+
+  printf '%s\n' "${output}" | awk '
+    NF { lines[++count] = $0 }
+    END {
+      start = (count > 5) ? count - 4 : 1
+      for (i = start; i <= count; i++) {
+        if (lines[i] != "") {
+          print lines[i]
+        }
+      }
+    }
+  '
+}
+
+run_path_scoped_check() {
+  local name="$1"
+  local cmd="$2"
+  local scope_label="$3"
+  shift 3
+
+  local changed_paths
+  changed_paths="$(changed_paths_in_scope "$@")"
+  if [[ -z "${changed_paths}" ]]; then
+    record_skip "${name}" "scope=${scope_label}; skipped because no relevant changed paths were detected"
+    return
+  fi
+
+  local changed_summary
+  changed_summary="$(summarize_changed_paths "${changed_paths}")"
+  if bash -lc "${cmd}" >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
+    local output
+    local output_summary
+    output="$(cat /tmp/agent_gate.out)"
+    output_summary="$(summarize_output_tail "${output}")"
+    if [[ -n "${output_summary}" ]]; then
+      record_check "${name}" "pass" \
+        "scope=${scope_label}; ran because changed paths: ${changed_summary}; suite summary: ${output_summary}"
+    else
+      record_check "${name}" "pass" "scope=${scope_label}; ran because changed paths: ${changed_summary}"
+    fi
+  else
+    local error_output
+    local error_summary
+    error_output="$(cat /tmp/agent_gate.err)"
+    if [[ -z "${error_output}" ]]; then
+      error_output="$(cat /tmp/agent_gate.out)"
+    fi
+    error_summary="$(summarize_output_tail "${error_output}")"
+    record_check "${name}" "fail" \
+      "scope=${scope_label}; ran because changed paths: ${changed_summary}; suite summary: ${error_summary}"
   fi
 }
 
@@ -72,7 +170,7 @@ if "${PYTHON_BIN}" -m ruff --version >/dev/null 2>&1; then
     run_check "ruff-lint" \
       "${PYTHON_BIN} -m ruff check ${RUFF_FILE_ARGS}"
   else
-    record_check "ruff-lint" "pass" "no changed backend Python files; lint not required"
+    record_skip "ruff-lint" "no changed backend Python files; lint not required"
   fi
 
   if [[ "${AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK:-0}" == "1" ]]; then
@@ -81,26 +179,28 @@ if "${PYTHON_BIN}" -m ruff --version >/dev/null 2>&1; then
       run_check "ruff-format-check" \
         "${PYTHON_BIN} -m ruff format --check ${RUFF_FILE_ARGS}"
     else
-      record_check "ruff-format-check" "pass" "no changed backend Python files; format check not required"
+      record_skip "ruff-format-check" "no changed backend Python files; format check not required"
     fi
   else
-    record_check "ruff-format-check" "pass" "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
+    record_skip "ruff-format-check" \
+      "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
   fi
 else
   if [[ "${AGENT_GATE_SKIP_RUFF_IF_MISSING:-0}" == "1" ]]; then
-    record_check "ruff-lint" "pass" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
+    record_skip "ruff-lint" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
   else
     record_check "ruff-lint" "fail" "ruff is not installed (install with: python3 -m pip install ruff)"
   fi
 
   if [[ "${AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK:-0}" == "1" ]]; then
     if [[ "${AGENT_GATE_SKIP_RUFF_IF_MISSING:-0}" == "1" ]]; then
-      record_check "ruff-format-check" "pass" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
+      record_skip "ruff-format-check" "ruff missing; skipped by AGENT_GATE_SKIP_RUFF_IF_MISSING=1"
     else
       record_check "ruff-format-check" "fail" "ruff is not installed (install with: python3 -m pip install ruff)"
     fi
   else
-    record_check "ruff-format-check" "pass" "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
+    record_skip "ruff-format-check" \
+      "ruff format check disabled by default (set AGENT_GATE_ENABLE_RUFF_FORMAT_CHECK=1 to enable)"
   fi
 fi
 
@@ -125,6 +225,18 @@ if errors:
 print('yaml-parse-check: ok')
 PY"
 
+run_path_scoped_check \
+  "installer-shell-regression-suite" \
+  "bash scripts/install/tests/run.sh" \
+  "scripts/install/**, docker-compose.production.yml, packages/core/**" \
+  scripts/install docker-compose.production.yml packages/core
+
+run_path_scoped_check \
+  "publish-artifact-shell-regression-suite" \
+  "bash scripts/tests/test_prepare_publish_artifacts.sh" \
+  "scripts/release/**, scripts/tests/test_prepare_publish_artifacts.sh, scripts/install/lib/templates/env.standalone, packages/core/**" \
+  scripts/release scripts/tests/test_prepare_publish_artifacts.sh scripts/install/lib/templates/env.standalone packages/core
+
 CHANGED_BACKEND_FILES="$(git diff --name-only "${DIFF_RANGE}" -- backend || true)"
 if [[ -n "${CHANGED_BACKEND_FILES}" ]]; then
   if docker image inspect ai-curation-unit-tests:latest >/dev/null 2>&1; then
@@ -132,13 +244,14 @@ if [[ -n "${CHANGED_BACKEND_FILES}" ]]; then
       "docker run --rm -v \"${ROOT_DIR}/backend:/app/backend\" ai-curation-unit-tests:latest python -m pytest tests/unit/test_exceptions.py -q"
   else
     if [[ "${AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING:-0}" == "1" ]]; then
-      record_check "backend-unit-smoke" "pass" "backend changed; skipped because image missing and AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING=1"
+      record_skip "backend-unit-smoke" \
+        "backend changed; skipped because image missing and AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING=1"
     else
       record_check "backend-unit-smoke" "fail" "backend changed but ai-curation-unit-tests:latest image is missing"
     fi
   fi
 else
-  record_check "backend-unit-smoke" "pass" "backend unchanged; smoke test not required"
+  record_skip "backend-unit-smoke" "backend unchanged; smoke test not required"
 fi
 
 # Frontend validation intentionally lives in .github/workflows/test.yml.
@@ -175,7 +288,17 @@ with open(checks_tsv, "r", encoding="utf-8") as handle:
     for row in reader:
         if len(row) < 3:
             continue
-        checks.append({"name": row[0], "result": row[1], "detail": row[2]})
+        status = row[3] if len(row) > 3 and row[3] else ("passed" if row[1] == "pass" else "failed")
+        execution = "skipped" if status == "skipped" else "ran"
+        checks.append(
+            {
+                "name": row[0],
+                "result": row[1],
+                "status": status,
+                "execution": execution,
+                "detail": row[2],
+            }
+        )
 
 payload = {
     "overall": overall,
