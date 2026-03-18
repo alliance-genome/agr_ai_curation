@@ -49,7 +49,7 @@ main() {
   backup_file_with_timestamp "$env_output_path"
 
   echo
-  log_info "=== Stage 3: Authentication Setup ==="
+  log_info "=== Stage 3 of 6: Authentication Setup ==="
   echo
   echo "  Choose how users will log in to AI Curation."
   echo

@@ -196,6 +196,7 @@ BANNER
   else
     printf "${yellow}  Tip: re-run with --from-stage N to resume from a specific stage.${reset}\n"
     printf "${dim}  Run with --help for all options.${reset}\n"
+    printf "${dim}  Safe to re-run -- existing config files are backed up automatically.${reset}\n"
     printf "\n"
 
     # Pause so the user can read before output scrolls

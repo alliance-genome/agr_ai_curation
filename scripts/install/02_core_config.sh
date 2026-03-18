@@ -199,7 +199,7 @@ print_stage_intro() {
   local data_root_dir="$2"
 
   echo
-  log_info "=== Stage 2: Core Configuration ==="
+  log_info "=== Stage 2 of 6: Core Configuration ==="
   echo
   echo "  This stage creates the main environment file that holds API keys,"
   echo "  database passwords, encryption secrets, and the installed runtime layout."
@@ -260,6 +260,7 @@ main() {
 
   mkdir -p "$install_home_dir"
   resolve_image_tag_defaults
+  print_stage_intro "$runtime_root_dir" "$data_root_dir"
   default_package_profile="$(load_existing_package_profile)"
   package_profile="$(resolve_package_profile "$default_package_profile")"
   package_profile_label="$(install_package_profile_label "$package_profile")"
@@ -283,8 +284,6 @@ main() {
 
   cp "$env_template_path" "$env_output_path"
   chmod 600 "$env_output_path"
-
-  print_stage_intro "$runtime_root_dir" "$data_root_dir"
 
   local openai_api_key
   local groq_api_key

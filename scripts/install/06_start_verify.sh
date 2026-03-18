@@ -248,8 +248,6 @@ validate_runtime_layout() {
   require_directory_exists "${FILE_OUTPUT_STORAGE_HOST_DIR}"
   require_directory_exists "${WEAVIATE_DATA_HOST_DIR}"
 
-  # Stage 2 currently seeds the minimal core package. Later installer-profile work
-  # can extend this validation once optional package selection is implemented.
   require_file_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}/core/package.yaml"
 }
 
@@ -347,7 +345,7 @@ main() {
   normalize_main_compose_file
 
   echo
-  log_info "=== Stage 6: Start & Verify ==="
+  log_info "=== Stage 6 of 6: Start & Verify ==="
   echo
   echo "  Launching the standalone production stack from published images and verifying it's healthy."
   echo
@@ -365,7 +363,7 @@ main() {
   local yellow='\033[1;33m'
   local reset='\033[0m'
   if ! supports_color; then yellow="" reset=""; fi
-  printf "  ${yellow}This is the slowest stage -- first run can take 10-20 minutes${reset}\n"
+  printf "  ${yellow}This is the slowest stage -- first run can take 5-15 minutes${reset}\n"
   printf "  ${yellow}while Docker pulls the published images. Grab a coffee!${reset}\n"
   printf "\n"
   printf "  ${yellow}NOTE: You will see docker WARN messages, curl errors, and 404s${reset}\n"
@@ -384,6 +382,12 @@ main() {
     refresh_service_statuses
     print_status_table
     print_summary
+    echo
+    echo "  Troubleshooting:"
+    echo "    - Check container logs:    docker compose --env-file ${env_output_path} -f ${main_compose_file} logs <service>"
+    echo "    - Restart a single service: docker compose --env-file ${env_output_path} -f ${main_compose_file} restart <service>"
+    echo "    - Re-run this stage:        scripts/install/install.sh --from-stage 6"
+    echo
     log_error "One or more services failed verification"
     exit 1
   fi

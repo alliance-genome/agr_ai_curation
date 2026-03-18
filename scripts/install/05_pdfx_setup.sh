@@ -170,7 +170,7 @@ main() {
   require_command "$git_cmd"
 
   echo
-  log_info "=== Stage 5: PDF Extraction Setup ==="
+  log_info "=== Stage 5 of 6: PDF Extraction Setup ==="
   echo
   echo "  The PDF extraction service lets curators upload research papers and"
   echo "  have them automatically parsed into text that the AI agents can read."

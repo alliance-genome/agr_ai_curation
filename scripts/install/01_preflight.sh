@@ -265,7 +265,7 @@ emit_summary_and_exit() {
 
 print_stage_intro() {
   echo
-  log_info "=== Stage 1: Preflight Checks ==="
+  log_info "=== Stage 1 of 6: Preflight Checks ==="
   echo
   echo "  Verifying that this machine has everything needed to run AI Curation."
   echo "  This checks for:"

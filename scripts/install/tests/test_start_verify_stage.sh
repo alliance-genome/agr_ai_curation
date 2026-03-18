@@ -216,7 +216,7 @@ EOF
     exit 1
   }
 
-  assert_contains 'Stage 6: Start & Verify' "$output_path"
+  assert_contains 'Stage 6 of 6: Start & Verify' "$output_path"
   assert_contains 'Compose file:' "$output_path"
   assert_contains "${repo_root}/docker-compose.production.yml" "$output_path"
   assert_contains "${temp_home}/.agr_ai_curation/runtime/config" "$output_path"

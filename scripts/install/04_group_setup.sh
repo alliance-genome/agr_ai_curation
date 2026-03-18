@@ -42,11 +42,12 @@ validate_group_id() {
 }
 
 prompt_group_mode() {
+  local default_mode="${1:-1}"
   local response=""
 
   while true; do
-    read -r -p "Group setup [1=all Alliance groups, 2=single Alliance group, 3=custom group] (default 1): " response
-    response="${response:-1}"
+    read -r -p "Group setup [1=all Alliance groups, 2=single Alliance group, 3=custom group] (default ${default_mode}): " response
+    response="${response:-${default_mode}}"
     case "$response" in
       1|2|3)
         printf '%s\n' "$response"
@@ -180,8 +181,15 @@ main() {
     exit 1
   fi
 
+  local runtime_packages_dir
+  runtime_packages_dir="$(install_runtime_packages_dir "$install_home_dir")"
+  local default_group_mode="3"
+  if [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]]; then
+    default_group_mode="1"
+  fi
+
   echo
-  log_info "=== Stage 4: Group Mapping ==="
+  log_info "=== Stage 4 of 6: Group Mapping ==="
   echo
   echo "  Groups control how users are organized and how the AI agents behave."
   echo "  Each group can define a species, taxon, and organization-specific rules"
@@ -190,7 +198,11 @@ main() {
   echo "  The Alliance uses groups for its Model Organism Databases (MODs), but"
   echo "  groups can represent any organization, team, or community."
   echo
-  echo "    Option 1: All Alliance groups (default)"
+  if [[ "$default_group_mode" == "1" ]]; then
+    echo "    Option 1: All Alliance groups (default)"
+  else
+    echo "    Option 1: All Alliance groups"
+  fi
   echo "      Installs the standard Alliance groups (MGI, ZFIN, FlyBase, WormBase,"
   echo "      SGD, RGD, XenBase, and others). Choose this for Alliance deployments."
   echo
@@ -198,12 +210,21 @@ main() {
   echo "      Pick just one Alliance group. Good if your instance serves a single"
   echo "      community within the Alliance."
   echo
-  echo "    Option 3: Custom group"
+  if [[ "$default_group_mode" == "3" ]]; then
+    echo "    Option 3: Custom group (default)"
+  else
+    echo "    Option 3: Custom group"
+  fi
   echo "      Define your own group with a custom name, species, taxon ID, and"
   echo "      identity provider group names. Use this for non-Alliance organizations."
   echo "      Species and taxon are optional -- if omitted, the group still works"
   echo "      but organism-scoped queries (gene/allele lookup by taxon) won't apply."
   echo
+  if [[ "$default_group_mode" == "3" ]]; then
+    echo "  The Alliance agent package is not installed, so Option 3 is the default."
+    echo "  Options 1 and 2 still work but are designed for Alliance deployments."
+    echo
+  fi
   echo "  Output file: ${groups_output_path}"
   echo
 
@@ -213,7 +234,7 @@ main() {
   fi
 
   local mode
-  mode="$(prompt_group_mode)"
+  mode="$(prompt_group_mode "$default_group_mode")"
 
   local tmp_output
   tmp_output="$(mktemp)"
