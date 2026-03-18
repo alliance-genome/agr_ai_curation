@@ -70,6 +70,18 @@ def resolve_packages_dir(packages_dir: Path | None) -> Path:
     return (packages_dir or get_default_packages_dir()).expanduser().resolve(strict=False)
 
 
+def _runtime_packages_dir_has_package_manifests() -> bool:
+    """Whether the active runtime packages root has been materialized with packages."""
+    runtime_packages_dir = get_runtime_packages_dir().expanduser().resolve(strict=False)
+    if not runtime_packages_dir.exists() or not runtime_packages_dir.is_dir():
+        return False
+
+    return any(
+        child.is_dir() and (child / "package.yaml").exists()
+        for child in runtime_packages_dir.iterdir()
+    )
+
+
 def resolve_runtime_config_path(
     explicit_path: Path | None,
     *,
@@ -86,6 +98,12 @@ def resolve_runtime_config_path(
 
     runtime_path = (get_runtime_config_dir() / filename).expanduser().resolve(strict=False)
     if runtime_path.exists():
+        return runtime_path, False
+
+    # Once a real runtime packages tree is present, package exports are the
+    # default source of truth. Only explicit/runtime-mounted files should act
+    # as overrides in that mode.
+    if _runtime_packages_dir_has_package_manifests():
         return runtime_path, False
 
     project_root = _find_project_root()

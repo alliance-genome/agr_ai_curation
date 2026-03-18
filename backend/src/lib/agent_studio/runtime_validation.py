@@ -102,6 +102,20 @@ def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
         return set(), f"Failed to load expected system agents from config: {exc}"
 
 
+def _allow_unseeded_core_only_runtime(
+    *,
+    expected_system_agent_keys: set[str],
+    actual_system_agent_keys: set[str],
+    agent_count: int,
+) -> bool:
+    """Whether a fresh `agr.core`-only runtime should skip missing-system hard failure."""
+    return (
+        agent_count == 0
+        and not actual_system_agent_keys
+        and expected_system_agent_keys == {"supervisor"}
+    )
+
+
 def build_agent_runtime_report(
     *,
     strict_mode: Optional[bool] = None,
@@ -191,10 +205,21 @@ def build_agent_runtime_report(
         missing_system_agents = sorted(expected_system_agent_keys - actual_system_agent_keys)
         if missing_system_agents:
             missing_system_agent_count = len(missing_system_agents)
-            errors.append(
-                "Missing active system agents in unified agents table: "
-                + ", ".join(missing_system_agents)
-            )
+            if _allow_unseeded_core_only_runtime(
+                expected_system_agent_keys=expected_system_agent_keys,
+                actual_system_agent_keys=actual_system_agent_keys,
+                agent_count=len(agents),
+            ):
+                warnings.append(
+                    "No active system agents are seeded yet; allowing core-only runtime "
+                    "bootstrap with expected agent(s): "
+                    + ", ".join(missing_system_agents)
+                )
+            else:
+                errors.append(
+                    "Missing active system agents in unified agents table: "
+                    + ", ".join(missing_system_agents)
+                )
 
     unhealthy_agent_count = 0
     degraded_agent_count = 0

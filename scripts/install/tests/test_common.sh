@@ -88,6 +88,16 @@ if ! grep -q '^ONE=1$' "$env_file"; then
 fi
 rm -f "$env_file"
 
+mapfile -t shipped_package_names < <(install_shipped_package_names)
+if [[ "${shipped_package_names[0]:-}" != "core" ]]; then
+  echo "install_shipped_package_names should list core first" >&2
+  exit 1
+fi
+if ! printf '%s\n' "${shipped_package_names[@]}" | grep -qx 'alliance'; then
+  echo "install_shipped_package_names should include alliance when shipped" >&2
+  exit 1
+fi
+
 port_stub_dir="$(mktemp -d)"
 cat >"${port_stub_dir}/lsof" <<'EOF'
 #!/usr/bin/env bash
