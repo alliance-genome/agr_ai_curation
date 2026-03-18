@@ -37,9 +37,11 @@ async def my_internal_api(query: str) -> dict:
 Declare that callable in the same package's `tools/bindings.yaml`, or use
 [../README.md](../README.md) as the fuller package-first authoring guide.
 
-If you are maintaining the shipped core package from this repository, update the
-package-owned sources in `packages/core/` instead of treating
-`backend/tools/custom/` as the supported public extension point.
+If you are maintaining shipped tool catalogs from this repository, update the
+package-owned sources in `packages/alliance/` for `agr.alliance` (Alliance
+Defaults). `agr.core` (Alliance Core) intentionally ships no package-owned tool
+bindings, so `backend/tools/custom/` is not the supported public extension
+point for either shipped package.
 
 ## See also
 

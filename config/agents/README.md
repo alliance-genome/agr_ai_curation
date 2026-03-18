@@ -1,8 +1,9 @@
 # Agents Directory
 
-This repo directory is the source-development mirror of the shipped AGR agent
-catalog. Public or organization-specific customization for a standard install
-should happen through runtime packages under
+This repo directory is the source-development mirror of the shipped
+`agr.core` (Alliance Core) supervisor bundle plus the shipped `agr.alliance`
+(Alliance Defaults) specialist catalog. Public or organization-specific
+customization for a standard install should happen through runtime packages under
 `~/.agr_ai_curation/runtime/packages/` plus deployment overrides under
 `~/.agr_ai_curation/runtime/config/`, not by editing this checkout in place.
 

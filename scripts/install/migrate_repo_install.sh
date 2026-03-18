@@ -294,7 +294,6 @@ resolve_git_baseline_commit() {
 
 resolve_helper_canonical_package_dir() {
   local package_name="$1"
-  local baseline_commit=""
   local head_commit=""
   local package_repo_path="packages/${package_name}"
   local temp_root=""
@@ -307,14 +306,13 @@ resolve_helper_canonical_package_dir() {
   helper_canonical_package_dir_cache["$package_name"]="${helper_repo_root}/${package_repo_path}"
 
   if command -v git >/dev/null 2>&1 && git -C "$helper_repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    baseline_commit="$(resolve_git_baseline_commit "$helper_repo_root")" || baseline_commit=""
-    if [[ -z "$baseline_commit" ]] && repo_has_live_git_path_customizations "$helper_repo_root" "$package_repo_path"; then
-      head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
-      baseline_commit="$head_commit"
-    fi
-    if [[ -n "$baseline_commit" ]]; then
+    # The helper checkout's committed HEAD is the canonical shipped package
+    # content for this helper version. Archive HEAD so local helper working-tree
+    # dirtiness does not make clean source repos look customized.
+    head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
+    if [[ -n "$head_commit" ]]; then
       temp_root="$(mktemp -d)"
-      if git -C "$helper_repo_root" archive "$baseline_commit" "$package_repo_path" | tar -x -C "$temp_root"; then
+      if git -C "$helper_repo_root" archive "$head_commit" "$package_repo_path" | tar -x -C "$temp_root"; then
         helper_canonical_package_dir_temp_roots["$package_name"]="$temp_root"
         helper_canonical_package_dir_cache["$package_name"]="${temp_root}/${package_repo_path}"
       else

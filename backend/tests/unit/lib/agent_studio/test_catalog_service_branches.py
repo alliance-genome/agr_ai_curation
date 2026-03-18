@@ -52,7 +52,7 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
         source=SimpleNamespace(
             package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Alliance Package",
+            package_display_name="Alliance Defaults",
             export_name="default",
             source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py",
         ),
@@ -65,7 +65,7 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
         source=SimpleNamespace(
             package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Alliance Package",
+            package_display_name="Alliance Defaults",
             export_name="default",
             source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/broken.py",
         ),
@@ -115,7 +115,7 @@ def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
         source=SimpleNamespace(
             package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Alliance Package",
+            package_display_name="Alliance Defaults",
             export_name="default",
             source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py",
         ),

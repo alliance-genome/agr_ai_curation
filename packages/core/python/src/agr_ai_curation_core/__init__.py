@@ -1,1 +1,1 @@
-"""Tracked source for the minimal AI Core runtime package."""
+"""Tracked source for the minimal Alliance Core runtime package."""

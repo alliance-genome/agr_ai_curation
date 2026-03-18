@@ -41,10 +41,20 @@ repository in place:
    scripts/install/install.sh
    ```
 
-   To pin a published release, pass `--image-tag vX.Y.Z`.
+   Stage 2 prompts `Package profile [1=core only, 2=core + alliance]` and
+   defaults to `core only`. That seeds `agr.core` (Alliance Core) only, and a
+   core-only install is expected to start healthy. To pin a published release,
+   pass `--image-tag vX.Y.Z`.
+
+   To add `agr.alliance` (Alliance Defaults) later, re-run Stage 2:
+
+   ```bash
+   scripts/install/install.sh --from-stage 2 --package-profile core-plus-alliance
+   ```
 
 3. **Review the installed runtime**
    - Secrets and image tags: `~/.agr_ai_curation/.env`
+   - Selected package profile: `~/.agr_ai_curation/.install_package_profile.env`
    - Runtime config: `~/.agr_ai_curation/runtime/config/`
    - Shipped and custom packages: `~/.agr_ai_curation/runtime/packages/`
    - Mutable data: `~/.agr_ai_curation/data/`
@@ -112,8 +122,10 @@ install requirement.
 
 ### Config-Driven Agent System
 
-Agents are no longer hardcoded Python files. The shipped catalog now comes from
-the bundled `core` runtime package, while standalone deployments customize
+Agents are no longer hardcoded Python files. The default standalone install
+seeds `agr.core` (Alliance Core), which provides the minimal supervisor/startup
+contract. Installing `agr.alliance` (Alliance Defaults) restores the shipped
+specialist catalog and tool bindings, while standalone deployments customize
 behavior through additional packages under
 `~/.agr_ai_curation/runtime/packages/` and deployment YAML overrides under
 `~/.agr_ai_curation/runtime/config/`.
@@ -125,7 +137,8 @@ behavior through additional packages under
 │   ├── providers.yaml
 │   └── tool_policy_defaults.yaml
 └── runtime/packages/
-    ├── core/                    # Shipped AGR package
+    ├── core/                    # `agr.core` (Alliance Core)
+    ├── alliance/                # `agr.alliance` (Alliance Defaults, optional)
     └── org-custom/              # Your custom package(s)
 ```
 
@@ -207,9 +220,10 @@ editing the repo-local `config/agents/` directory directly. See
 [Modular Packages and Upgrades](docs/deployment/modular-packages.md) for the
 package contract.
 
-If you are developing the built-in catalog from a repository checkout, the
-repo-local `config/agents/<name>/` folders remain the source tree for the
-shipped `core` package.
+If you are developing the built-in catalog from a repository checkout,
+`config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle and
+the remaining `config/agents/<name>/` folders mirror the shipped
+`agr.alliance` specialist bundles.
 
 ## Configuration
 

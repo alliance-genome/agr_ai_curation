@@ -13,7 +13,7 @@ scripts/
 │           ├── env.standalone  # Authoritative standalone .env template
 │           └── groups.standalone.yaml # Standalone groups mapping template
 ├── release/
-│   └── prepare_publish_artifacts.sh # Build reproducible core/env assets for publish-images.yml
+│   └── prepare_publish_artifacts.sh # Build reproducible split package/env assets for publish-images.yml
 ├── create_agent.py              # Agent scaffolding CLI (see Agents Development Guide)
 ├── validate_registry.py         # Validate AGENT_REGISTRY consistency
 ├── validate_current_agents.py   # Validate all agents can be instantiated
