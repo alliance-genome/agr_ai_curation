@@ -1,4 +1,4 @@
-"""Package-local REST tool exports for the AGR core package."""
+"""Package-local REST tool exports for the AGR Alliance package."""
 
 from .rest_api import create_rest_api_tool
 

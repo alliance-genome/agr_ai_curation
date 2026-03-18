@@ -50,11 +50,11 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
         required_context=("document_id", "user_id"),
         binding_kind=SimpleNamespace(value="context_factory"),
         source=SimpleNamespace(
-            package_id="agr.core",
+            package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Core Package",
+            package_display_name="AGR Alliance Package",
             export_name="default",
-            source_file="packages/core/python/src/agr_ai_curation_core/tools/documents.py",
+            source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py",
         ),
     )
     binding_bad = SimpleNamespace(
@@ -63,11 +63,11 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
         required_context=(),
         binding_kind=SimpleNamespace(value="static"),
         source=SimpleNamespace(
-            package_id="agr.core",
+            package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Core Package",
+            package_display_name="AGR Alliance Package",
             export_name="default",
-            source_file="packages/core/python/src/agr_ai_curation_core/tools/broken.py",
+            source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/broken.py",
         ),
     )
     monkeypatch.setattr(
@@ -113,11 +113,11 @@ def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
         required_context=("document_id", "user_id"),
         binding_kind=SimpleNamespace(value="context_factory"),
         source=SimpleNamespace(
-            package_id="agr.core",
+            package_id="agr.alliance",
             package_version="1.0.0",
-            package_display_name="AGR Core Package",
+            package_display_name="AGR Alliance Package",
             export_name="default",
-            source_file="packages/core/python/src/agr_ai_curation_core/tools/documents.py",
+            source_file="packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py",
         ),
     )
 

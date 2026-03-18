@@ -1,4 +1,4 @@
-"""Package-local exports for the built-in AGR toolset."""
+"""Package-local exports for the AGR Alliance toolset."""
 
 from __future__ import annotations
 

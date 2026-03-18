@@ -1,4 +1,4 @@
-"""Minimal structured output models used by the core package tools."""
+"""Minimal structured output models used by the AGR Alliance package tools."""
 
 from datetime import datetime
 

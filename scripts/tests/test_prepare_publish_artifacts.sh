@@ -90,6 +90,10 @@ test_release_lane_outputs_reproducible_assets() {
     echo "Expected bundled core artifact to contain core/package.yaml" >&2
     exit 1
   fi
+  if ! grep -qx 'alliance/package.yaml' <<<"${archive_listing}"; then
+    echo "Expected bundled core artifact to contain alliance/package.yaml" >&2
+    exit 1
+  fi
 
   local first_sha
   local second_sha
@@ -118,6 +122,13 @@ test_main_lane_outputs_sha_pinned_assets() {
   assert_contains '^FRONTEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '"image_tag": "sha-abc1234"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
+
+  local archive_listing
+  archive_listing="$(tar -tzf "${temp_dir}/core-main-sha-abc1234.tar.gz")"
+  if ! grep -qx 'alliance/package.yaml' <<<"${archive_listing}"; then
+    echo "Expected bundled core artifact to contain alliance/package.yaml" >&2
+    exit 1
+  fi
 }
 
 test_rejects_missing_required_flags() {

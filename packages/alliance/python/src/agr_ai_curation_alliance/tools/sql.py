@@ -1,4 +1,4 @@
-"""Context-driven SQL tool factory for the AGR core package."""
+"""Context-driven SQL tool factory for the AGR Alliance package."""
 
 from __future__ import annotations
 

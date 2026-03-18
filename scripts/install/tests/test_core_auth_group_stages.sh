@@ -224,6 +224,11 @@ test_core_config_generates_env_and_backups() {
     exit 1
   }
   cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
+  [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
+    echo "Expected seeded alliance package manifest at ${runtime_packages_dir}/alliance/package.yaml" >&2
+    exit 1
+  }
+  cmp "${repo_root}/packages/alliance/package.yaml" "${runtime_packages_dir}/alliance/package.yaml"
 
   local init_public_key
   local public_key
@@ -423,6 +428,10 @@ test_orchestrator_skip_flags() {
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=release-20260313$' "$env_file"
   [[ -f "${temp_home}/.agr_ai_curation/runtime/packages/core/package.yaml" ]] || {
     echo "Expected orchestrator to seed the bundled core package" >&2
+    exit 1
+  }
+  [[ -f "${temp_home}/.agr_ai_curation/runtime/packages/alliance/package.yaml" ]] || {
+    echo "Expected orchestrator to seed the bundled alliance package" >&2
     exit 1
   }
   assert_contains 'Completed Stage 6 - Start and verify services' "$output_path"

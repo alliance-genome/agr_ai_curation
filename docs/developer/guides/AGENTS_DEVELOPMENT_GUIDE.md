@@ -227,9 +227,10 @@ These are seeded into `prompt_templates` with `prompt_type='group_rules'` and in
 Public and organization-specific tools are implemented inside runtime packages.
 Each package exports its tool IDs through `tools/bindings.yaml`, and the
 backend merges those exports into the runtime tool registry exposed through
-`TOOL_BINDINGS` in `catalog_service.py`. For the shipped `core` package in this
-repository, the corresponding sources live under
-`packages/core/python/src/agr_ai_curation_core/tools/`.
+`TOOL_BINDINGS` in `catalog_service.py`. In this repository, the shipped
+Alliance tool catalog lives under
+`packages/alliance/python/src/agr_ai_curation_alliance/tools/`, while `agr.core`
+is the minimal supervisor/startup package.
 
 | Tool ID | Category | Description |
 |---------|----------|-------------|
@@ -255,16 +256,16 @@ Each package binding declaration in `tools/bindings.yaml` declares:
 - **`callable` / `callable_factory`**: Python import path used to build the tool instance
 
 ```yaml
-package_id: agr.core
+package_id: agr.alliance
 bindings_api_version: 1.0.0
 tools:
   - tool_id: agr_curation_query
     binding_kind: static
-    callable: agr_ai_curation_core.tools.agr_curation:agr_curation_query
+    callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
   - tool_id: search_document
     binding_kind: context_factory
-    callable_factory: agr_ai_curation_core.tools.documents:create_search_document_tool
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool
     required_context: [document_id, user_id]
 ```
 
@@ -276,7 +277,7 @@ At runtime, `catalog_service.py` materializes the merged package exports into
 When adding a new tool that agents reference:
 
 1. For a standalone install or custom org package, create the tool module inside the package's `python/src/.../tools/` tree and declare it in that package's `tools/bindings.yaml`.
-2. For shipped core-package maintenance, update `packages/core/python/src/agr_ai_curation_core/tools/` and `packages/core/tools/bindings.yaml`, keeping the repo mirror docs aligned.
+2. For shipped-package maintenance, update `packages/alliance/python/src/agr_ai_curation_alliance/tools/` and `packages/alliance/tools/bindings.yaml`, keeping the repo mirror docs aligned.
 3. Only edit `catalog_service.py` or the package runtime modules when the runtime needs new binding semantics, validation, or resolver behavior.
 4. See [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) for the package-authoring walkthrough.
 
@@ -535,7 +536,7 @@ docker compose exec postgres psql -U postgres ai_curation -c \
 
 ### Tools
 
-See `packages/core/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
+See `packages/alliance/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 `TOOL_BINDINGS` in `catalog_service.py` for the complete list. Key tools:
 
 - `agr_curation_query` -- Multi-method AGR database access
