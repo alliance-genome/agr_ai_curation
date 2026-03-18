@@ -1,5 +1,5 @@
 package_id: agr.alliance
-display_name: AGR Alliance Package
+display_name: Alliance Defaults
 version: 1.0.0
 package_api_version: 1.0.0
 min_runtime_version: 1.0.0

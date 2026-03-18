@@ -1,12 +1,12 @@
 package_id: agr.core
-display_name: AI Core
+display_name: Alliance Core
 version: 1.0.0
 package_api_version: 1.0.0
 min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_core
 requirements_file: requirements/runtime.txt
-# AI Core is intentionally the smallest healthy standalone package.
+# Alliance Core is intentionally the smallest healthy standalone package.
 # It owns startup config and the supervisor bundle, but no package-owned tools.
 exports:
   - kind: model

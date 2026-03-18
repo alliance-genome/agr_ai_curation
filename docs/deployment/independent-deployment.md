@@ -1,6 +1,6 @@
 # Independent Deployment
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
 
 ## Scope
 
@@ -21,7 +21,10 @@ The standalone stack now expects `backend`, `frontend`, and `trace_review_backen
 - Canonical trace review image repository: `public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
 - `publish-images.yml` publishes backend/frontend/trace-review runtime images from `main` as `latest` plus `sha-<shortsha>` for dev and local-server validation
 - Pushed `vX.Y.Z` tags publish versioned backend/frontend/trace-review runtime images tagged `vX.Y.Z`
-- Tagged releases also attach `core-vX.Y.Z.tar.gz`, `env.standalone-vX.Y.Z`, and `release-manifest-vX.Y.Z.json` so installer/release consumers can pin exact image refs instead of a floating `latest` lane
+- Tagged releases also attach `core-vX.Y.Z.tar.gz`, `alliance-vX.Y.Z.tar.gz`,
+  `env.standalone-vX.Y.Z`, and `release-manifest-vX.Y.Z.json` so
+  installer/release consumers can pin exact image refs instead of a floating
+  `latest` lane
 
 ## Compose file
 
@@ -39,11 +42,13 @@ The standalone installer seeds the modular runtime under
 `~/.agr_ai_curation/`.
 
 - Secrets + image tags: `~/.agr_ai_curation/.env`
+- Selected package profile state: `~/.agr_ai_curation/.install_package_profile.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
 - Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`
 - Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
-- Shipped core package: `~/.agr_ai_curation/runtime/packages/core`
+- Default shipped package directory: `~/.agr_ai_curation/runtime/packages/core`
+- Optional shipped Alliance defaults directory: `~/.agr_ai_curation/runtime/packages/alliance`
 - Runtime state: `~/.agr_ai_curation/runtime/state`
 - Package-runner virtualenvs: `~/.agr_ai_curation/runtime/state/package_runner/<package_id>/venv`
 - Host data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
@@ -57,6 +62,32 @@ Without an explicit override, Stage 2 resolves the checked-out repo to an exact 
 
 For tagged releases, prefer the exact `vX.Y.Z` tag or image digests from the release manifest (or use the attached `env.standalone-vX.Y.Z` asset) instead of a floating `latest` lane.
 
+## Package install profiles
+
+Stage 2 of `scripts/install/install.sh` prompts:
+
+```text
+Package profile [1=core only, 2=core + alliance]
+```
+
+- `core only` is the default profile. It seeds only `agr.core` (Alliance Core),
+  records `INSTALL_PACKAGE_IDS=agr.core` in
+  `~/.agr_ai_curation/.install_package_profile.env`, and is expected to start
+  healthy.
+- `core + alliance` seeds both `agr.core` (Alliance Core) and `agr.alliance`
+  (Alliance Defaults), restoring the richer shipped AGR/Alliance specialist and
+  tool catalog.
+- You can add `agr.alliance` later by re-running Stage 2:
+
+  ```bash
+  scripts/install/install.sh --from-stage 2 --package-profile core-plus-alliance
+  ```
+
+On a healthy `core only` install, the main chat still starts in core-only mode
+but without the domain specialist/tool catalog, Agent Studio shows only
+`task_input` plus `supervisor`, and flow helpers report that no flow-capable
+agents are installed until `agr.alliance` is added.
+
 ## Upgrading a standard standalone install
 
 When the existing deployment already runs from `~/.agr_ai_curation/`:
@@ -65,9 +96,10 @@ When the existing deployment already runs from `~/.agr_ai_curation/`:
 2. Back up `~/.agr_ai_curation/.env`, `~/.agr_ai_curation/runtime/config/`,
    and any custom package directories under
    `~/.agr_ai_curation/runtime/packages/`.
-3. Move any long-lived customizations out of
-   `~/.agr_ai_curation/runtime/packages/core/` before upgrading. Stage 2
-   refreshes the shipped `core` package and re-seeds the runtime config files.
+3. Move any long-lived customizations out of the shipped package directories
+   before upgrading. Stage 2 refreshes `agr.core`, refreshes `agr.alliance`
+   when the selected profile includes it, and re-seeds the runtime config
+   files.
 4. Re-run the installer from Stage 2:
 
    ```bash
@@ -76,10 +108,11 @@ When the existing deployment already runs from `~/.agr_ai_curation/`:
 
 5. Stage 2 is interactive today: it backs up `~/.agr_ai_curation/.env`,
    recreates it from `scripts/install/lib/templates/env.standalone`, and
-   prompts again for provider/API keys. If your deployment uses OIDC, Stage 3
-   also re-prompts for issuer/client/secret values. Reconcile any local `.env`
-   or runtime-config changes from your backup after the refresh completes, and
-   treat this as a manual checkpoint when automating upgrades.
+   prompts again for the package profile and provider/API keys. If your
+   deployment uses OIDC, Stage 3 also re-prompts for issuer/client/secret
+   values. Reconcile any local `.env` or runtime-config changes from your
+   backup after the refresh completes, and treat this as a manual checkpoint
+   when automating upgrades.
 
 Use `--from-stage 6` only for restart/verification work. It does not refresh
 the packaged runtime content.
@@ -101,13 +134,18 @@ scripts/install/migrate_repo_install.sh --apply
 What the helper does:
 
 - Copies repo-local deployment config into `~/.agr_ai_curation/runtime/config`
-- Copies `packages/core` and any additional package-backed content into `~/.agr_ai_curation/runtime/packages`
+- Copies the shipped `packages/core` and `packages/alliance` directories plus
+  any additional package-backed content into
+  `~/.agr_ai_curation/runtime/packages`
 - Copies repo-local mutable data into `~/.agr_ai_curation/data/*`
 - Patches `~/.agr_ai_curation/.env` with the standalone host-directory variables when a repo `.env` already exists
 
 Custom local code handling:
 
-- If repo-local custom agents, modified shipped `packages/core` content, repo-local custom tool sources, or extra non-package code directories are detected, the helper preserves them under `~/.agr_ai_curation/migration/legacy_local`
+- If repo-local custom agents, modified shipped `packages/core` or
+  `packages/alliance` content, repo-local custom tool sources, or extra
+  non-package code directories are detected, the helper preserves them under
+  `~/.agr_ai_curation/migration/legacy_local`
 - In that case `--apply` exits with `MIGRATION_STATUS=manual_review_required` and a non-zero status so the upgrade cannot look clean by accident
 - Review the preserved scaffold and package/binding templates before mounting any legacy local code into `runtime/packages`
 

@@ -158,7 +158,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
     core_package = registry.get_package("agr.core")
     assert core_package is not None
     assert core_package.package_path == packages_dir / "core"
-    assert core_package.display_name == "AI Core"
+    assert core_package.display_name == "Alliance Core"
     assert core_package.manifest.python_package_root == "python/src/agr_ai_curation_core"
     assert core_package.manifest.requirements_file == "requirements/runtime.txt"
     core_export_kinds = {export.kind for export in core_package.manifest.exports}
@@ -174,7 +174,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
     alliance_package = registry.get_package("agr.alliance")
     assert alliance_package is not None
     assert alliance_package.package_path == packages_dir / "alliance"
-    assert alliance_package.display_name == "AGR Alliance Package"
+    assert alliance_package.display_name == "Alliance Defaults"
     assert (
         alliance_package.manifest.python_package_root
         == "python/src/agr_ai_curation_alliance"

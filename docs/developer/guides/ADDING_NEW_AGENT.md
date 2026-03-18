@@ -8,7 +8,10 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 > **Scope**: Public or organization-specific customization for a standard
 > install should be packaged under `~/.agr_ai_curation/runtime/packages/`.
 > The repo-local `config/agents/` paths in this guide are for source checkout
-> work and shipped `agr.alliance` maintenance. For the public runtime contract,
+> work and shipped-package maintenance: `config/agents/supervisor/` mirrors the
+> shipped `agr.core` supervisor bundle, while the remaining `config/agents/*/`
+> paths mirror shipped `agr.alliance` specialist bundles. For the public runtime
+> contract,
 > see [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
@@ -18,12 +21,12 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 Choose the path that matches your goal:
 
 1. **Runtime package authoring** -- For standalone installs and org-specific customization, add the agent bundle under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`, update that package's manifest, and install the package.
-2. **Source checkout maintenance** -- For shipped `agr.alliance` work in this repository, use the repo-local `config/agents/` mirror and keep `packages/alliance/agents/` aligned.
+2. **Source checkout maintenance** -- For shipped-package work in this repository, use the repo-local `config/agents/` mirror, keep `config/agents/supervisor/` aligned with `packages/core/agents/supervisor/`, and keep specialist bundles aligned with `packages/alliance/agents/`.
 3. **Agent Studio UI** -- For personal or project-scoped agents, use the browser and skip file edits entirely.
 
 Agents are defined through two complementary paths:
 
-1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/` is the source-development mirror for the shipped `agr.alliance` package while `packages/alliance/agents/` is the package-owned source tree.
+1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle, while the remaining `config/agents/` folders mirror the shipped `agr.alliance` specialist bundles in `packages/alliance/agents/`.
 2. **Agent Studio UI** (custom agents) -- Curators create personal or project-scoped agents through the browser. These are stored directly in the `agents` table with `visibility='private'` or `visibility='project'`.
 
 Both paths produce rows in the same `agents` table. At runtime, the supervisor discovers all active, supervisor-enabled agents from the database and creates streaming tool wrappers for them dynamically. **No Python agent files are needed.**
@@ -46,9 +49,9 @@ Both paths produce rows in the same `agents` table. At runtime, the supervisor d
 ## Path A: Add a System Agent via a Package Bundle
 
 This is the primary path for standalone installs and reusable organization
-packages. If you are maintaining the shipped `agr.alliance` package from a source
-checkout, use the same bundle structure and keep the repo mirror aligned rather
-than teaching installed users to edit `config/agents/` directly.
+packages. If you are maintaining shipped packages from a source checkout, use
+the same bundle structure and keep the repo mirror aligned rather than
+teaching installed users to edit `config/agents/` directly.
 
 System agents ship with the product and are visible to all users. In the modular
 runtime, the public authoring unit is a package-owned agent bundle.
@@ -59,9 +62,11 @@ runtime, the public authoring unit is a package-owned agent bundle.
 mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent
 ```
 
-If you are maintaining the shipped `agr.alliance` package from this repository, keep
-the repo mirror in `config/agents/my_agent/` aligned with the package-owned
-bundle in `packages/alliance/agents/my_agent/`.
+If you are maintaining the shipped `agr.alliance` specialist catalog from this
+repository, keep the repo mirror in `config/agents/my_agent/` aligned with the
+package-owned bundle in `packages/alliance/agents/my_agent/`. If you are
+editing the shipped supervisor instead, keep `config/agents/supervisor/`
+aligned with `packages/core/agents/supervisor/`.
 
 ### Step 2: Define Your Agent (agent.yaml)
 
@@ -417,7 +422,7 @@ The gene agent demonstrates the full pattern. See these files:
 | Agent not appearing in UI | Check that the agent exists in the `agents` table with `is_active=true`. Run `docker compose exec postgres psql -U postgres ai_curation -c "SELECT agent_key, is_active, visibility FROM agents;"` |
 | Supervisor not routing to agent | Verify `supervisor_enabled=true` and `supervisor_description` is clear in the DB row. Check logs: `docker compose logs backend \| grep ask_my_agent` |
 | "Unknown agent_id" error | The bundle was not loaded into the runtime. Verify the package manifest exports the agent, confirm it is installed under `runtime/packages/`, then restart the backend. |
-| Schema not found | Verify `output_schema_key` matches a class name in the installed bundle's `schema.py` (or the shipped core schema module when developing from source) |
+| Schema not found | Verify `output_schema_key` matches a class name in the installed bundle's `schema.py` (or the matching `config/agents/.../schema.py` repo mirror when maintaining shipped packages from source) |
 | Tools not resolving | Verify the tool ID is exported from a package `tools/bindings.yaml` and survived merged-registry validation |
 | Group rules not injected | Check `group_rules_enabled=true` and `group_rules_component` points to a valid prompt cache key |
 | Prompt changes not reflected | Refresh cache: `curl -X POST http://localhost:8000/api/admin/prompts/cache/refresh` |

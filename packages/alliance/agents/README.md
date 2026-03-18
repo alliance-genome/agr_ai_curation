@@ -1,6 +1,7 @@
 # Alliance Agents Directory
 
-This directory contains the tracked `agr.alliance` specialist agent catalog.
+This directory contains the tracked `agr.alliance` (Alliance Defaults)
+specialist agent catalog.
 Public or organization-specific customization for a standard install should
 happen through runtime packages under `~/.agr_ai_curation/runtime/packages/`
 plus deployment overrides under `~/.agr_ai_curation/runtime/config/`, not by

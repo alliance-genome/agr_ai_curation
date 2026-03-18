@@ -1,6 +1,6 @@
 # Modular Packages and Upgrades
 
-Last updated: 2026-03-14
+Last updated: 2026-03-18
 
 ## Scope
 
@@ -21,6 +21,7 @@ The standalone installer seeds an installed runtime under
 ```text
 ~/.agr_ai_curation/
 ├── .env
+├── .install_package_profile.env
 ├── runtime/
 │   ├── config/
 │   │   ├── connections.yaml
@@ -37,7 +38,7 @@ The standalone installer seeds an installed runtime under
 │   │   │   ├── config/
 │   │   │   ├── requirements/
 │   │   │   └── python/
-│   │   ├── alliance/
+│   │   ├── alliance/                   # optional unless profile includes agr.alliance
 │   │   │   ├── package.yaml
 │   │   │   ├── agents/
 │   │   │   ├── python/
@@ -61,10 +62,10 @@ Key ownership rules:
 
 - `~/.agr_ai_curation/.env` stores secrets, image tags, and host mount paths.
 - `runtime/config/` is the operator-owned override layer for deployment YAML.
-- `runtime/packages/core/` is the shipped AI Core package: the minimum
+- `runtime/packages/core/` is `agr.core` (Alliance Core): the minimum
   supervisor/startup contract for a healthy standalone install.
-- `runtime/packages/alliance/` is the shipped AGR Alliance package: the
-  specialist catalog plus default shipped tool bindings.
+- `runtime/packages/alliance/` is `agr.alliance` (Alliance Defaults): the
+  optional specialist catalog plus default shipped tool bindings.
 - `runtime/packages/<your-package>/` is where custom organization packages
   belong.
 - `runtime/state/` is writable runtime state. The package runner creates one
@@ -91,17 +92,49 @@ For a standard standalone install:
    scripts/install/install.sh --image-tag vX.Y.Z
    ```
 
-4. The installer creates `~/.agr_ai_curation/.env`, seeds
-   `runtime/config/`, seeds `runtime/packages/core/` and
+4. Stage 2 prompts `Package profile [1=core only, 2=core + alliance]` and
+   defaults to `core only`.
+5. The installer creates `~/.agr_ai_curation/.env`, writes the selected
+   package profile to `~/.agr_ai_curation/.install_package_profile.env`, seeds
+   `runtime/config/`, seeds `runtime/packages/core/`, optionally seeds
    `runtime/packages/alliance/`, creates the runtime/data directories, and
    starts the standalone stack.
+
+## Install profiles
+
+Two shipped package profiles are supported:
+
+- `core only` (default) installs `agr.core` (Alliance Core) only.
+- `core + alliance` installs both `agr.core` (Alliance Core) and
+  `agr.alliance` (Alliance Defaults).
+
+`core only` is expected to start healthy. In that profile:
+
+- the main chat still runs through the core supervisor in core-only mode, but
+  without the domain specialist/tool catalog,
+- Agent Studio shows only `task_input` plus `supervisor`, and
+- flow helpers report that no flow-capable agents are installed until
+  `agr.alliance` is added.
+
+Use `core + alliance` when you want the richer shipped AGR/Alliance defaults,
+including the specialist agent catalog and tool bindings.
+
+You can add `agr.alliance` later by re-running Stage 2:
+
+```bash
+scripts/install/install.sh --from-stage 2 --package-profile core-plus-alliance
+```
+
+That updates `~/.agr_ai_curation/.install_package_profile.env` to include both
+`agr.core` and `agr.alliance`.
 
 ## Package model
 
 Each runtime package is a directory under `runtime/packages/` with a
-`package.yaml` manifest. The shipped `core` directory contains the minimal AI
-Core contract, and the shipped `alliance` directory contains the full Alliance
-specialist/tool catalog. Custom organization packages live alongside them.
+`package.yaml` manifest. The shipped `core` directory is package ID
+`agr.core` with display name `Alliance Core`, and the shipped `alliance`
+directory is package ID `agr.alliance` with display name `Alliance Defaults`.
+Custom organization packages live alongside them.
 
 Packages can contribute:
 
@@ -111,10 +144,10 @@ Packages can contribute:
 - model defaults
 - tool policy defaults
 
-The `core` package ships the default provider/model/tool policy files plus the
-supervisor bundle. The `alliance` package ships the default specialist agent
-catalog and shipped tool bindings. Keep custom behavior in a separate package
-so upgrades can replace the shipped packages safely.
+`agr.core` ships the default provider/model/tool policy files plus the
+supervisor bundle. `agr.alliance` ships the default specialist agent catalog
+and shipped tool bindings. Keep custom behavior in a separate package so
+upgrades can replace the shipped packages safely.
 
 ### Minimal custom package layout
 
@@ -258,10 +291,11 @@ Use this path when you already have a modular install under
    - `~/.agr_ai_curation/.env`
    - `~/.agr_ai_curation/runtime/config/`
    - any custom directories under `~/.agr_ai_curation/runtime/packages/`
-3. Move any local edits out of `runtime/packages/core/` before upgrading.
-   Standard upgrades replace the shipped `core` package. If you need long-lived
-   custom behavior, keep it in a separate package instead.
-4. Re-run the installer from Stage 2 so the bundled `core` package and runtime
+3. Move any local edits out of the shipped package directories before
+   upgrading. Standard upgrades replace `agr.core`, and they replace
+   `agr.alliance` too when the selected profile includes it. If you need
+   long-lived custom behavior, keep it in a separate package instead.
+4. Re-run the installer from Stage 2 so the bundled packages and runtime
    config files are refreshed:
 
    ```bash
@@ -270,22 +304,22 @@ Use this path when you already have a modular install under
 
 5. Stage 2 is interactive today: it backs up the existing `.env`, recreates it
    from `scripts/install/lib/templates/env.standalone`, and prompts again for
-   provider/API keys. If your deployment uses OIDC, Stage 3 also re-prompts
-   for issuer/client/secret values. Reconcile any local changes you keep in
-   `.env` or `runtime/config/` from your backup after the refresh, and treat
-   this as a manual checkpoint when automating upgrades.
+   the package profile and provider/API keys. If your deployment uses OIDC,
+   Stage 3 also re-prompts for issuer/client/secret values. Reconcile any
+   local changes you keep in `.env` or `runtime/config/` from your backup after
+   the refresh, and treat this as a manual checkpoint when automating upgrades.
 6. Let Stage 6 restart and verify the stack.
 
 Notes:
 
 - `--from-stage 6` is a restart/verification shortcut only. It does not refresh
-  `runtime/packages/core/` or the runtime config files, so it is not a full
+  shipped package contents or the runtime config files, so it is not a full
   package upgrade.
 - There is no dedicated non-interactive Stage 2 flag today; if you automate
   upgrades, plan around the manual `.env` reconciliation step instead of
   assuming an unattended refresh.
-- Extra packages that are not `core` are left in place, but you should still
-  keep them backed up or version-controlled.
+- Extra packages beyond the selected shipped profile are left in place, but you
+  should still keep them backed up or version-controlled.
 
 ## Migrate an existing repo-based install
 
@@ -307,14 +341,14 @@ scripts/install/migrate_repo_install.sh --apply
 The helper:
 
 - copies repo-local deployment config into `~/.agr_ai_curation/runtime/config/`
-- copies `packages/core` and any already-package-backed content into
-  `~/.agr_ai_curation/runtime/packages/`
+- copies the shipped `packages/core` and `packages/alliance` directories plus
+  any already-package-backed content into `~/.agr_ai_curation/runtime/packages/`
 - copies mutable data into `~/.agr_ai_curation/data/`
 - patches `~/.agr_ai_curation/.env` with the standalone host-directory paths
 
 Manual review is required when the helper finds custom repo-local agents,
-modified shipped `core` files, repo-local tool sources, or extra non-package
-directories. In that case it preserves a scaffold under
+modified shipped `core` or `alliance` files, repo-local tool sources, or extra
+non-package directories. In that case it preserves a scaffold under
 `~/.agr_ai_curation/migration/legacy_local/` and exits with
 `MIGRATION_STATUS=manual_review_required`.
 

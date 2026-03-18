@@ -1,2 +1,2 @@
-# AI Core intentionally declares no package-owned runtime dependencies.
+# Alliance Core intentionally declares no package-owned runtime dependencies.
 # The file remains because `requirements_file` is part of the package contract.

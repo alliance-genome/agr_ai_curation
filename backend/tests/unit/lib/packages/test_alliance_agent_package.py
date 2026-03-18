@@ -65,7 +65,7 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
     manifest = load_package_manifest(ALLIANCE_PACKAGE_DIR / "package.yaml")
 
     assert manifest.package_id == "agr.alliance"
-    assert manifest.display_name == "AGR Alliance Package"
+    assert manifest.display_name == "Alliance Defaults"
 
     expected_exports = {
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),

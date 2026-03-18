@@ -17,10 +17,10 @@ Repository-development note:
 
 - The repo-local `config/` tree still carries installer-seeded defaults plus
   source mirrors used when maintaining shipped packages from this checkout.
-- `config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle
-  in `packages/core/agents/supervisor/`.
+- `config/agents/supervisor/` mirrors the shipped `agr.core` (Alliance Core)
+  supervisor bundle in `packages/core/agents/supervisor/`.
 - The remaining shipped specialist bundles under `config/agents/` mirror the
-  `agr.alliance` catalog in `packages/alliance/agents/`.
+  `agr.alliance` (Alliance Defaults) catalog in `packages/alliance/agents/`.
 - `config/models.yaml`, `config/providers.yaml`, and
   `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
 
@@ -37,7 +37,7 @@ config/
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
-└── agents/                      # Repo-local mirror of shipped AGR agent bundles
+└── agents/                      # Repo-local mirror of shipped agr.core + agr.alliance agent bundles
     ├── README.md               # Agent configuration guide
     ├── _examples/              # Template agents (not loaded)
     │   └── basic_agent/        # Example agent structure
@@ -223,9 +223,10 @@ Notes:
 
 ### agents/
 
-This repo-local directory mirrors the shipped `agr.alliance` package agent bundles for
-source development. Public standalone installs load agents from
-`runtime/packages/*/agents`, not from `runtime/config/agents`.
+This repo-local directory mirrors the shipped `agr.core` supervisor bundle plus
+the shipped `agr.alliance` specialist bundles for source development. Public
+standalone installs load agents from `runtime/packages/*/agents`, not from
+`runtime/config/agents`.
 
 Each agent bundle is a self-contained folder with:
 

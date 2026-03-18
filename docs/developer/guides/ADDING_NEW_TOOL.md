@@ -7,9 +7,11 @@ Step-by-step guide to adding a new tool that agents can use to interact with ext
 >
 > **Scope**: Public or organization-specific customization for a standard
 > install should add tool code and bindings to a runtime package under
-> `~/.agr_ai_curation/runtime/packages/`. Repo-local `packages/core/...` and
-> `backend/src/...` references in this guide are for shipped core-package or
-> runtime-internals maintenance only. For the public runtime contract, see
+> `~/.agr_ai_curation/runtime/packages/`. Repo-local
+> `packages/alliance/...` and `backend/src/...` references in this guide are
+> for shipped `agr.alliance` package maintenance or runtime-internals
+> maintenance only. `agr.core` stays minimal and does not ship tool bindings.
+> For the public runtime contract, see
 > [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
@@ -21,10 +23,10 @@ Choose the path that matches your goal:
 1. **Runtime package authoring** -- Add a Python module under your package's
    `python/src/.../tools/` tree and declare the exported tool ID in that
    package's `tools/bindings.yaml`.
-2. **Source checkout maintenance** -- Update `packages/core/...` when you are
-   changing the shipped core package, and only touch repo-local `backend/src/...`
-   code when you are changing runtime behavior rather than normal package
-   content.
+2. **Source checkout maintenance** -- Update `packages/alliance/...` when you
+   are changing the shipped `agr.alliance` tool catalog, and only touch
+   repo-local `backend/src/...` code when you are changing runtime behavior
+   rather than normal package content.
 
 Tools are Python functions decorated with `@function_tool` that agents call to
 interact with databases, APIs, and files.
@@ -196,8 +198,8 @@ tools:
 ```
 
 Only add curated runtime metadata in `catalog_service.py` when you are
-maintaining the shipped core package and need to override the automatically
-derived metadata.
+maintaining the shipped `agr.alliance` tool catalog or the runtime itself and
+need to override the automatically derived metadata.
 
 ---
 

@@ -4,8 +4,9 @@ This guide explains the config-driven architecture for AGR AI Curation, where **
 
 > **Last Updated:** February 24, 2026 (Added LLM provider/model config system, unified agents table, tool policies)
 >
-> **Scope**: This guide describes the repository source layout used by core
-> package and runtime maintainers. Standard installs load package-owned agents,
+> **Scope**: This guide describes the repository source layout used by
+> `agr.core` / `agr.alliance` package maintainers and runtime maintainers.
+> Standard installs load package-owned agents,
 > tools, and defaults from `~/.agr_ai_curation/runtime/packages/` plus
 > deployment overrides under `~/.agr_ai_curation/runtime/config/`. Public/custom
 > deployments should not edit repo `config/` or `backend/src/` paths directly.
@@ -58,7 +59,8 @@ The config-driven architecture separates the **base product** (reusable by any o
 
 Two layouts matter in the modular system: the installed runtime under
 `~/.agr_ai_curation/`, and the repository source tree used to build and maintain
-the shipped `core` and `agr.alliance` packages.
+the shipped `agr.core` (Alliance Core) and `agr.alliance` (Alliance Defaults)
+packages.
 
 ```text
 ~/.agr_ai_curation/
@@ -73,17 +75,18 @@ the shipped `core` and `agr.alliance` packages.
 │   │   ├── providers.yaml
 │   │   └── tool_policy_defaults.yaml
 │   ├── packages/
-│   │   ├── core/                        # Shipped AGR foundation package
+│   │   ├── core/                        # `agr.core` (Alliance Core)
 │   │   │   ├── package.yaml
+│   │   │   ├── agents/
 │   │   │   ├── config/
 │   │   │   ├── python/src/...
 │   │   │   ├── requirements/
-│   │   │   └── tools/bindings.yaml
-│   │   ├── alliance/                    # Shipped AGR Alliance catalog package
+│   │   ├── alliance/                    # `agr.alliance` (Alliance Defaults)
 │   │   │   ├── package.yaml
 │   │   │   ├── agents/
 │   │   │   ├── python/src/...
-│   │   │   └── requirements/
+│   │   │   ├── requirements/
+│   │   │   └── tools/bindings.yaml
 │   │   └── org-custom/                  # Your package(s)
 │   └── state/
 │       └── package_runner/              # Per-package virtualenvs and runtime state
@@ -98,22 +101,24 @@ agr_ai_curation/
 │   ├── tool_policy_defaults.yaml
 │   ├── groups.yaml.example
 │   ├── connections.yaml.example
-│   └── agents/                          # Source-development mirror of agr.alliance agent bundles
+│   └── agents/                          # Source-development mirror of agr.core supervisor + agr.alliance specialists
 │       ├── README.md
 │       ├── _examples/
 │       └── ...
 ├── packages/
 │   ├── core/
 │   │   ├── package.yaml
+│   │   ├── agents/
 │   │   ├── config/
-│   │   ├── python/src/agr_ai_curation_core/tools/
+│   │   ├── python/src/agr_ai_curation_core/
 │   │   ├── requirements/
-│   │   └── tools/bindings.yaml
+│   │   └── ...
 │   └── alliance/
 │       ├── package.yaml
 │       ├── agents/
 │       ├── python/src/agr_ai_curation_alliance/
-│       └── requirements/
+│       ├── requirements/
+│       └── tools/bindings.yaml
 ├── backend/
 │   ├── src/lib/config/                  # Runtime config/package loaders
 │   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
@@ -144,8 +149,9 @@ agents/my_agent/
 
 For standalone installs, that folder lives under
 `~/.agr_ai_curation/runtime/packages/<package>/agents/`. In this repository,
-`config/agents/` is the source-development mirror for the shipped `agr.alliance`
-package.
+`config/agents/` is the source-development mirror for the shipped
+`agr.core` supervisor bundle plus the shipped `agr.alliance` specialist
+bundles.
 
 ### Loading Order
 

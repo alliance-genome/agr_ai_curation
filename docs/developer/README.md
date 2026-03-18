@@ -34,8 +34,8 @@ Start here for new developers:
 | Guide | Description |
 |-------|-------------|
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
-| [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Add agent bundles for runtime packages or source-checkout agr.alliance maintenance |
-| [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain core runtime tool plumbing |
+| [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Add agent bundles for runtime packages or source-checkout shipped-package maintenance |
+| [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
@@ -108,7 +108,7 @@ cp config/connections.yaml.example config/connections.yaml
 
 The system uses a **config-driven, database-backed architecture** where:
 
-1. **Package-backed YAML defines initial state** -- Agent metadata, prompts, and group rules come from bundles under `~/.agr_ai_curation/runtime/packages/*/agents/` in standalone installs. In a source checkout, `config/agents/` is the repo mirror for the shipped `agr.alliance` package.
+1. **Package-backed YAML defines initial state** -- Agent metadata, prompts, and group rules come from bundles under `~/.agr_ai_curation/runtime/packages/*/agents/` in standalone installs. In a source checkout, `config/agents/` is the repo mirror for the shipped `agr.core` supervisor plus the shipped `agr.alliance` specialist bundles.
 2. **Database is runtime authority** -- The unified `agents` table stores all agent records (system + custom)
 3. **Dynamic discovery** -- The supervisor queries the database for enabled agents and builds streaming tools at runtime
 4. **Declarative tool bindings** -- Package `tools/bindings.yaml` exports are normalized into `TOOL_BINDINGS` with explicit context requirements
@@ -143,7 +143,8 @@ Runtime Agent           # OpenAI Agents SDK Agent instance
   (output schema resolved from schema discovery)
 ```
 
-For shipped `agr.alliance` maintenance in this repository, keep the repo mirror
-in `config/agents/` aligned with `packages/alliance/agents/`.
+For shipped-package maintenance in this repository, keep
+`config/agents/supervisor/` aligned with `packages/core/agents/supervisor/` and
+the remaining repo mirror bundles aligned with `packages/alliance/agents/`.
 
 See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) and [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) for the complete reference.
