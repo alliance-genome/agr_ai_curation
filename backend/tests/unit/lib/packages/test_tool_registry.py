@@ -321,8 +321,19 @@ tools:
     )
 
 
-def test_repo_alliance_package_exports_current_built_in_tools():
+def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
     registry = load_tool_registry(REPO_ROOT / "packages")
+
+    loaded_exports = {
+        (
+            export.package_id,
+            export.export_name,
+            export.bindings_path.relative_to(REPO_ROOT).as_posix(),
+        )
+        for export in registry.loaded_binding_exports
+    }
+    assert ("agr.alliance", "default", "packages/alliance/tools/bindings.yaml") in loaded_exports
+    assert not any(export.package_id == "agr.core" for export in registry.loaded_binding_exports)
 
     expected_bindings = {
         "agr_curation_query": ("static", (), "agr.alliance"),
@@ -347,6 +358,10 @@ def test_repo_alliance_package_exports_current_built_in_tools():
         assert binding.binding_kind.value == binding_kind
         assert binding.required_context == required_context
         assert binding.source.package_id == package_id
+        assert (
+            binding.source.bindings_path.relative_to(REPO_ROOT).as_posix()
+            == "packages/alliance/tools/bindings.yaml"
+        )
 
 
 def test_repo_alliance_package_copies_tool_implementations_locally():
