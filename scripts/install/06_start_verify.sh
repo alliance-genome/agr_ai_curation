@@ -5,7 +5,6 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 # shellcheck source=scripts/install/lib/common.sh
 source "${repo_root}/scripts/install/lib/common.sh"
-mapfile -t bundled_package_names < <(install_shipped_package_names)
 
 install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
@@ -249,10 +248,9 @@ validate_runtime_layout() {
   require_directory_exists "${FILE_OUTPUT_STORAGE_HOST_DIR}"
   require_directory_exists "${WEAVIATE_DATA_HOST_DIR}"
 
-  local package_name=""
-  for package_name in "${bundled_package_names[@]}"; do
-    require_file_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}/${package_name}/package.yaml"
-  done
+  # Stage 2 currently seeds the minimal core package. Later installer-profile work
+  # can extend this validation once optional package selection is implemented.
+  require_file_exists "${AGR_RUNTIME_PACKAGES_HOST_DIR}/core/package.yaml"
 }
 
 print_runtime_layout() {
