@@ -4,8 +4,16 @@ Tests for registry_builder.py - YAML to AGENT_REGISTRY conversion.
 Tests the helper functions that build registry entries from YAML configurations.
 """
 
+import shutil
+from pathlib import Path
+
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
+from src.lib.config import agent_loader
 from src.lib.agent_studio.registry_builder import _build_config_defaults, build_agent_registry
+
+from ..packages import find_repo_root
+
+REPO_ROOT = find_repo_root(Path(__file__))
 
 
 class TestBuildConfigDefaults:
@@ -121,3 +129,24 @@ class TestAgentDocumentationCoverage:
 
         assert registry.get("pdf") is None
         assert pdf_extraction_entry is not None
+
+    def test_build_agent_registry_core_only_runtime_excludes_alliance_agents(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Core-only installs should expose only task_input plus supervisor metadata."""
+        runtime_packages_dir = tmp_path / "runtime-packages"
+        shutil.copytree(REPO_ROOT / "packages" / "core", runtime_packages_dir / "agr.core")
+
+        monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(runtime_packages_dir))
+        agent_loader.reset_cache()
+
+        registry = build_agent_registry()
+
+        assert set(registry.keys()) == {"task_input", "supervisor"}
+        assert "pdf_extraction" not in registry
+        assert "gene" not in registry
+        assert "chat_output" not in registry
+
+        agent_loader.reset_cache()
