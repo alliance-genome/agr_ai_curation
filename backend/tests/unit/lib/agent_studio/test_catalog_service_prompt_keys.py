@@ -88,6 +88,61 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
     assert agent.group_rules["FB"].content == "fb rules"
 
 
+def test_build_catalog_core_only_registry_hides_missing_alliance_agents(monkeypatch):
+    """Catalog build should stay valid when only task_input and supervisor exist."""
+    supervisor_prompt = PromptTemplate(
+        id=uuid.uuid4(),
+        agent_name="supervisor",
+        prompt_type="system",
+        group_id=None,
+        content="supervisor prompt",
+        version=1,
+        is_active=True,
+    )
+
+    monkeypatch.setattr(
+        catalog_service,
+        "AGENT_REGISTRY",
+        {
+            "task_input": {
+                "name": "Initial Instructions",
+                "description": "Start the flow",
+                "category": "Input",
+                "tools": [],
+                "frontend": {"show_in_palette": False},
+            },
+            "supervisor": {
+                "name": "Supervisor",
+                "description": "Route curator requests",
+                "category": "Routing",
+                "tools": [],
+                "frontend": {"show_in_palette": False},
+            },
+        },
+    )
+    monkeypatch.setattr(catalog_service, "expand_tools_for_agent", lambda _a, _t: [])
+
+    from src.lib.prompts import cache as prompt_cache
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        prompt_cache,
+        "get_all_active_prompts",
+        lambda: {"supervisor:system:base": supervisor_prompt},
+    )
+
+    catalog = catalog_service._build_catalog()
+    agent_ids = {
+        agent.agent_id
+        for category in catalog.categories
+        for agent in category.agents
+    }
+
+    assert agent_ids == {"task_input", "supervisor"}
+    assert catalog.total_agents == 2
+    assert "gene" not in agent_ids
+    assert "pdf_extraction" not in agent_ids
+
+
 def test_get_agent_by_id_requires_unified_agents_table(monkeypatch):
     """Runtime creation should fail fast when no unified agent record exists."""
     monkeypatch.setattr(

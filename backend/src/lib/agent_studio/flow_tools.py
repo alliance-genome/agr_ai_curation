@@ -125,6 +125,262 @@ def _get_flow_agent_ids() -> List[str]:
 FLOW_AGENT_IDS = _get_flow_agent_ids()
 
 
+_AGENT_ID_EQUIVALENTS: Dict[str, tuple[str, ...]] = {
+    "gene": ("gene", "gene_validation"),
+    "gene_validation": ("gene", "gene_validation"),
+    "allele": ("allele", "allele_validation"),
+    "allele_validation": ("allele", "allele_validation"),
+    "disease": ("disease", "disease_validation"),
+    "disease_validation": ("disease", "disease_validation"),
+    "chemical": ("chemical", "chemical_validation"),
+    "chemical_validation": ("chemical", "chemical_validation"),
+    "gene_expression": ("gene_expression", "gene_expression_extraction"),
+    "gene_expression_extraction": ("gene_expression", "gene_expression_extraction"),
+    "gene_ontology": ("gene_ontology", "gene_ontology_lookup"),
+    "gene_ontology_lookup": ("gene_ontology", "gene_ontology_lookup"),
+    "chat_output": ("chat_output", "chat_output_formatter"),
+    "chat_output_formatter": ("chat_output", "chat_output_formatter"),
+    "csv_formatter": ("csv_formatter", "csv_output_formatter"),
+    "csv_output_formatter": ("csv_formatter", "csv_output_formatter"),
+    "tsv_formatter": ("tsv_formatter", "tsv_output_formatter"),
+    "tsv_output_formatter": ("tsv_formatter", "tsv_output_formatter"),
+    "json_formatter": ("json_formatter", "json_output_formatter"),
+    "json_output_formatter": ("json_formatter", "json_output_formatter"),
+}
+
+_OUTPUT_AGENT_PREFERENCES = (
+    "chat_output",
+    "csv_formatter",
+    "tsv_formatter",
+    "json_formatter",
+)
+_DOCUMENT_CONTEXT_AGENT_IDS = (
+    "gene",
+    "gene_extractor",
+    "allele",
+    "allele_extractor",
+    "disease",
+    "disease_extractor",
+    "chemical",
+    "chemical_extractor",
+    "gene_expression",
+    "phenotype_extractor",
+)
+_GENE_VALIDATION_AGENT_IDS = ("gene", "gene_validation")
+_GENE_EXPRESSION_AGENT_IDS = ("gene_expression", "gene_expression_extraction")
+
+_RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
+    {
+        "name": "Gene Curation",
+        "description": "Extract gene mentions from PDF and validate against database",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find gene symbols and identifiers"},
+            {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
+            {"agent_id": "chat_output", "step_goal": "Display validated results"},
+        ],
+    },
+    {
+        "name": "Gene Extraction",
+        "description": "Extract experimentally supported gene assertions from papers",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find gene mentions and context"},
+            {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results"},
+        ],
+    },
+    {
+        "name": "Disease Annotation",
+        "description": "Extract disease mentions and map to ontology terms",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions"},
+            {"agent_id": "disease", "step_goal": "Map to Disease Ontology terms"},
+            {"agent_id": "chat_output", "step_goal": "Display annotation results"},
+        ],
+    },
+    {
+        "name": "Disease Extraction",
+        "description": "Extract experimentally supported disease assertions from papers",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions and evidence context"},
+            {"agent_id": "disease_extractor", "step_goal": "Extract evidence-backed disease assertions"},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results"},
+        ],
+    },
+    {
+        "name": "Chemical Entity Extraction",
+        "description": "Extract chemical compounds and link to ChEBI",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Extract chemical names"},
+            {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"},
+        ],
+    },
+    {
+        "name": "Chemical Extraction",
+        "description": "Extract experimentally supported chemical assertions from papers",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find chemical mentions and context"},
+            {"agent_id": "chemical_extractor", "step_goal": "Extract evidence-backed chemical assertions"},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results"},
+        ],
+    },
+    {
+        "name": "Gene Expression Analysis",
+        "description": "Extract gene expression data from methods sections",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find experimental methods"},
+            {"agent_id": "gene_expression", "step_goal": "Extract expression patterns"},
+            {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
+            {"agent_id": "chat_output", "step_goal": "Display expression data"},
+        ],
+    },
+    {
+        "name": "Phenotype Extraction",
+        "description": "Extract experimentally supported phenotype assertions from papers",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find phenotype-related result sections"},
+            {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
+            {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results"},
+        ],
+    },
+    {
+        "name": "Allele/Variant Extraction",
+        "description": "Extract experimentally supported allele and variant assertions from papers",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions and context"},
+            {"agent_id": "allele_extractor", "step_goal": "Extract evidence-backed allele/variant assertions"},
+            {"agent_id": "chat_output", "step_goal": "Display extraction results"},
+        ],
+    },
+    {
+        "name": "Allele Annotation",
+        "description": "Extract allele/variant mentions and link to database",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions"},
+            {"agent_id": "allele", "step_goal": "Validate alleles in Alliance database"},
+            {"agent_id": "chat_output", "step_goal": "Display allele results"},
+        ],
+    },
+    {
+        "name": "GO Annotation Pipeline",
+        "description": "Extract and validate Gene Ontology annotations",
+        "steps": [
+            {"agent_id": "pdf_extraction", "step_goal": "Find GO term mentions and gene functions"},
+            {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
+            {"agent_id": "gene_ontology", "step_goal": "Validate GO terms"},
+            {"agent_id": "chat_output", "step_goal": "Display GO annotations"},
+        ],
+    },
+]
+
+
+def _equivalent_agent_ids(agent_id: str) -> tuple[str, ...]:
+    """Return equivalent aliases/canonical IDs for a flow-facing agent ID."""
+    return _AGENT_ID_EQUIVALENTS.get(agent_id, (agent_id,))
+
+
+def _resolve_available_agent_id(
+    agent_id: str,
+    available_agent_ids: set[str],
+) -> Optional[str]:
+    """Resolve a preferred flow agent ID to an installed equivalent."""
+    for candidate in _equivalent_agent_ids(agent_id):
+        if candidate in available_agent_ids:
+            return candidate
+    return None
+
+
+def _installed_agent_choices(
+    preferred_agent_ids: tuple[str, ...],
+    available_agent_ids: set[str],
+) -> List[str]:
+    """Return installed agent IDs in preferred display order."""
+    installed: List[str] = []
+    for agent_id in preferred_agent_ids:
+        resolved = _resolve_available_agent_id(agent_id, available_agent_ids)
+        if resolved and resolved not in installed:
+            installed.append(resolved)
+    return installed
+
+
+def _seen_any_equivalent(seen_agents: set[str], preferred_agent_ids: tuple[str, ...]) -> bool:
+    """Whether any seen agent matches one of the preferred IDs or its aliases."""
+    for agent_id in preferred_agent_ids:
+        if any(candidate in seen_agents for candidate in _equivalent_agent_ids(agent_id)):
+            return True
+    return False
+
+
+def _is_output_agent_id(agent_id: str) -> bool:
+    """Whether an agent ID belongs to the output-agent family."""
+    return any(agent_id in _equivalent_agent_ids(output_agent) for output_agent in _OUTPUT_AGENT_PREFERENCES)
+
+
+def _build_output_suggestion(
+    seen_agents: set[str],
+    available_agent_ids: set[str],
+) -> Optional[str]:
+    """Build a final-step suggestion that only mentions installed agents."""
+    installed_output_agents = _installed_agent_choices(
+        _OUTPUT_AGENT_PREFERENCES,
+        available_agent_ids,
+    )
+    if not installed_output_agents or _seen_any_equivalent(seen_agents, _OUTPUT_AGENT_PREFERENCES):
+        return None
+
+    primary_output = installed_output_agents[0]
+    additional_outputs = installed_output_agents[1:]
+
+    if primary_output in _equivalent_agent_ids("chat_output"):
+        if additional_outputs:
+            formatted_outputs = ", ".join(additional_outputs)
+            return (
+                f"Consider adding '{primary_output}' as final step to display results, "
+                f"or use installed file formatters ({formatted_outputs}) for downloadable files"
+            )
+        return f"Consider adding '{primary_output}' as final step to display results"
+
+    if len(installed_output_agents) == 1:
+        return f"Consider ending the flow with installed output agent '{primary_output}'"
+
+    formatted_outputs = ", ".join(installed_output_agents)
+    return f"Consider ending the flow with one of the installed output agents: {formatted_outputs}"
+
+
+def _filter_flow_templates(available_agent_ids: set[str]) -> List[Dict[str, Any]]:
+    """Filter template steps to installed agents without advertising missing specialists."""
+    templates: List[Dict[str, Any]] = []
+
+    for template in _RAW_FLOW_TEMPLATES:
+        filtered_steps: List[Dict[str, Any]] = []
+        missing_required_step = False
+
+        for step in template["steps"]:
+            resolved_agent_id = _resolve_available_agent_id(
+                step["agent_id"],
+                available_agent_ids,
+            )
+            if resolved_agent_id is None:
+                if _is_output_agent_id(step["agent_id"]):
+                    continue
+                missing_required_step = True
+                break
+
+            filtered_steps.append({**step, "agent_id": resolved_agent_id})
+
+        if missing_required_step or not filtered_steps:
+            continue
+
+        templates.append(
+            {
+                "name": template["name"],
+                "description": template["description"],
+                "steps": filtered_steps,
+            }
+        )
+
+    return templates
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -354,6 +610,7 @@ def _validate_flow_handler():
         errors = []
         warnings = []
         suggestions = []
+        available_agent_ids = set(FLOW_AGENT_IDS)
 
         # Validate step count
         if not steps:
@@ -403,33 +660,31 @@ def _validate_flow_handler():
                 errors.append("Flow name exceeds 255 characters")
 
         # Generate suggestions based on agent patterns
-        if "pdf_extraction" not in seen_agents and any(
-            a in seen_agents
-            for a in [
-                "gene",
-                "gene_extractor",
-                "allele",
-                "allele_extractor",
-                "disease",
-                "disease_extractor",
-                "chemical",
-                "chemical_extractor",
-                "gene_expression",
-                "phenotype_extractor",
-            ]
+        pdf_agent_id = _resolve_available_agent_id("pdf_extraction", available_agent_ids)
+        if (
+            pdf_agent_id
+            and not _seen_any_equivalent(seen_agents, ("pdf_extraction",))
+            and _seen_any_equivalent(seen_agents, _DOCUMENT_CONTEXT_AGENT_IDS)
         ):
             suggestions.append(
-                "Consider adding 'pdf_extraction' step first to extract entities from documents"
+                f"Consider adding '{pdf_agent_id}' step first to extract entities from documents"
             )
 
-        if "chat_output" not in seen_agents and len(seen_agents) >= 2:
-            suggestions.append(
-                "Consider adding 'chat_output' as final step to display results, or use file formatters (csv_formatter, tsv_formatter, json_formatter) for downloadable files"
-            )
+        output_suggestion = _build_output_suggestion(seen_agents, available_agent_ids)
+        if output_suggestion and len(seen_agents) >= 2:
+            suggestions.append(output_suggestion)
 
-        if "gene_expression" in seen_agents and "gene" not in seen_agents:
+        gene_expression_agent_id = _resolve_available_agent_id("gene_expression", available_agent_ids)
+        gene_validation_agent_id = _resolve_available_agent_id("gene", available_agent_ids)
+        if (
+            gene_expression_agent_id
+            and gene_validation_agent_id
+            and _seen_any_equivalent(seen_agents, _GENE_EXPRESSION_AGENT_IDS)
+            and not _seen_any_equivalent(seen_agents, _GENE_VALIDATION_AGENT_IDS)
+        ):
             suggestions.append(
-                "Consider adding 'gene' step after 'gene_expression' to validate gene identifiers"
+                f"Consider adding '{gene_validation_agent_id}' step after "
+                f"'{gene_expression_agent_id}' to validate gene identifiers"
             )
 
         return {
@@ -455,108 +710,8 @@ def _get_flow_templates_handler():
         Returns:
             Dict with templates list, available_agents, and help message
         """
-        templates = [
-            {
-                "name": "Gene Curation",
-                "description": "Extract gene mentions from PDF and validate against database",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find gene symbols and identifiers"},
-                    {"agent_id": "gene", "step_goal": "Validate genes in Alliance database"},
-                    {"agent_id": "chat_output", "step_goal": "Display validated results"}
-                ]
-            },
-            {
-                "name": "Gene Extraction",
-                "description": "Extract experimentally supported gene assertions from papers",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find gene mentions and context"},
-                    {"agent_id": "gene_extractor", "step_goal": "Extract evidence-backed gene assertions"},
-                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
-                ]
-            },
-            {
-                "name": "Disease Annotation",
-                "description": "Extract disease mentions and map to ontology terms",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions"},
-                    {"agent_id": "disease", "step_goal": "Map to Disease Ontology terms"},
-                    {"agent_id": "chat_output", "step_goal": "Display annotation results"}
-                ]
-            },
-            {
-                "name": "Disease Extraction",
-                "description": "Extract experimentally supported disease assertions from papers",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find disease mentions and evidence context"},
-                    {"agent_id": "disease_extractor", "step_goal": "Extract evidence-backed disease assertions"},
-                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
-                ]
-            },
-            {
-                "name": "Chemical Entity Extraction",
-                "description": "Extract chemical compounds and link to ChEBI",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Extract chemical names"},
-                    {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"}
-                ]
-            },
-            {
-                "name": "Chemical Extraction",
-                "description": "Extract experimentally supported chemical assertions from papers",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find chemical mentions and context"},
-                    {"agent_id": "chemical_extractor", "step_goal": "Extract evidence-backed chemical assertions"},
-                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
-                ]
-            },
-            {
-                "name": "Gene Expression Analysis",
-                "description": "Extract gene expression data from methods sections",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find experimental methods"},
-                    {"agent_id": "gene_expression", "step_goal": "Extract expression patterns"},
-                    {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
-                    {"agent_id": "chat_output", "step_goal": "Display expression data"}
-                ]
-            },
-            {
-                "name": "Phenotype Extraction",
-                "description": "Extract experimentally supported phenotype assertions from papers",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find phenotype-related result sections"},
-                    {"agent_id": "phenotype_extractor", "step_goal": "Extract phenotype assertions with evidence"},
-                    {"agent_id": "chat_output", "step_goal": "Display phenotype extraction results"}
-                ]
-            },
-            {
-                "name": "Allele/Variant Extraction",
-                "description": "Extract experimentally supported allele and variant assertions from papers",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions and context"},
-                    {"agent_id": "allele_extractor", "step_goal": "Extract evidence-backed allele/variant assertions"},
-                    {"agent_id": "chat_output", "step_goal": "Display extraction results"}
-                ]
-            },
-            {
-                "name": "Allele Annotation",
-                "description": "Extract allele/variant mentions and link to database",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find allele/variant mentions"},
-                    {"agent_id": "allele", "step_goal": "Validate alleles in Alliance database"},
-                    {"agent_id": "chat_output", "step_goal": "Display allele results"}
-                ]
-            },
-            {
-                "name": "GO Annotation Pipeline",
-                "description": "Extract and validate Gene Ontology annotations",
-                "steps": [
-                    {"agent_id": "pdf_extraction", "step_goal": "Find GO term mentions and gene functions"},
-                    {"agent_id": "gene", "step_goal": "Validate gene identifiers"},
-                    {"agent_id": "gene_ontology", "step_goal": "Validate GO terms"},
-                    {"agent_id": "chat_output", "step_goal": "Display GO annotations"}
-                ]
-            }
-        ]
+        available_agent_ids = set(FLOW_AGENT_IDS)
+        templates = _filter_flow_templates(available_agent_ids)
 
         # Get available agents with descriptions
         available_agents = []
@@ -570,13 +725,21 @@ def _get_flow_templates_handler():
                 "requires_document": agent_info.get("requires_document", False)
             })
 
+        if not available_agents:
+            message = (
+                "No flow-capable agents are currently installed. "
+                "Add specialist packages to unlock flow templates."
+            )
+        else:
+            message = (
+                f"Found {len(templates)} compatible templates and {len(available_agents)} available agents. "
+                "Use validate_flow to check a custom workflow, or create_flow to save one."
+            )
+
         return {
             "templates": templates,
             "available_agents": available_agents,
-            "message": (
-                f"Found {len(templates)} templates and {len(available_agents)} available agents. "
-                "Use validate_flow to check a custom workflow, or create_flow to save one."
-            )
+            "message": message,
         }
 
     return handler
@@ -626,17 +789,31 @@ def _get_available_agents_handler():
             elif category == "Validation":
                 validation_agents.append(agent_id)
 
+        total_agents = sum(len(agents) for agents in categories.values())
+        if total_agents == 0:
+            message = (
+                "No flow-capable agents are currently installed. "
+                "Install additional agent packages to unlock flow verification helpers."
+            )
+        elif output_agents:
+            message = (
+                f"Found {total_agents} agents across {len(categories)} categories. "
+                f"Output agents ({len(output_agents)}): {', '.join(output_agents)}. "
+                "These are designed to be final steps in a flow."
+            )
+        else:
+            message = (
+                f"Found {total_agents} agents across {len(categories)} categories. "
+                "No output agents are currently installed."
+            )
+
         return {
             "categories": categories,
             "output_agents": output_agents,
             "extraction_agents": extraction_agents,
             "validation_agents": validation_agents,
-            "total_agents": sum(len(agents) for agents in categories.values()),
-            "message": (
-                f"Found {sum(len(agents) for agents in categories.values())} agents across "
-                f"{len(categories)} categories. Output agents ({len(output_agents)}): "
-                f"{', '.join(output_agents)}. These are designed to be final steps in a flow."
-            )
+            "total_agents": total_agents,
+            "message": message,
         }
 
     return handler
@@ -1066,9 +1243,9 @@ Use this tool to understand agent types and purposes when verifying or analyzing
 Returns agents grouped by category (Extraction, Validation, Output) and identifies
 which agents are designed for specific purposes:
 
-- output_agents: Agents meant to be the final step (chat_output, csv_formatter, tsv_formatter, json_formatter)
-- extraction_agents: Agents that extract data from documents (pdf_extraction, gene_extractor, gene_expression, phenotype, allele_extractor, disease_extractor, chemical_extractor)
-- validation_agents: Agents that validate/lookup data (gene, allele, disease, etc.)
+- output_agents: Agents meant to be the final step
+- extraction_agents: Agents that extract structured data from documents
+- validation_agents: Agents that validate or look up structured entities
 
 ALWAYS call this tool along with get_current_flow() when verifying a flow,
 so you can check if the flow ends with an appropriate output agent.""",

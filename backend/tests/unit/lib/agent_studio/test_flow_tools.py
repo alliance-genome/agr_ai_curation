@@ -50,7 +50,11 @@ def test_get_flow_agent_ids_excludes_supervisor_and_task_input(monkeypatch):
 
 
 def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypatch):
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene_expression", "chat_output"])
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene_expression", "chat_output", "gene"],
+    )
     validate = flow_tools._validate_flow_handler()
 
     result = validate(
@@ -74,7 +78,11 @@ def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypat
 
 
 def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["gene", "disease"])
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene", "disease", "pdf_extraction", "chat_output"],
+    )
     validate = flow_tools._validate_flow_handler()
     result = validate(
         steps=[{"agent_id": "gene"}, {"agent_id": "disease"}],
@@ -84,6 +92,27 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
     assert result["valid"] is True
     assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
     assert any("Consider adding 'chat_output'" in s for s in result["suggestions"])
+
+
+def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_expression_extraction", "gene_validation"],
+    )
+    validate = flow_tools._validate_flow_handler()
+
+    result = validate(
+        steps=[{"agent_id": "gene_expression_extraction"}],
+        name="Expression Flow",
+    )
+
+    assert result["valid"] is True
+    assert result["suggestions"] == [
+        "Consider adding 'gene_validation' step after 'gene_expression_extraction' to validate gene identifiers"
+    ]
+    assert not any("pdf_extraction" in suggestion for suggestion in result["suggestions"])
+    assert not any("chat_output" in suggestion for suggestion in result["suggestions"])
 
 
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
@@ -115,6 +144,72 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
     assert "Found" in result["message"]
 
 
+def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed_aliases(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["pdf_extraction", "gene_validation", "gene_ontology_lookup"],
+    )
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {
+                "name": "PDF Specialist",
+                "description": "Extract entities",
+                "category": "Extraction",
+                "requires_document": True,
+            },
+            "gene_validation": {
+                "name": "Gene Specialist",
+                "description": "Validate genes",
+                "category": "Validation",
+                "requires_document": False,
+            },
+            "gene_ontology_lookup": {
+                "name": "GO Specialist",
+                "description": "Validate GO terms",
+                "category": "Validation",
+                "requires_document": False,
+            },
+        },
+    )
+
+    handler = flow_tools._get_flow_templates_handler()
+    result = handler()
+
+    assert {template["name"] for template in result["templates"]} == {
+        "Gene Curation",
+        "GO Annotation Pipeline",
+    }
+    assert result["templates"][0]["steps"][0]["agent_id"] == "pdf_extraction"
+    assert all(
+        step["agent_id"] not in {"chat_output", "gene", "gene_ontology"}
+        for template in result["templates"]
+        for step in template["steps"]
+    )
+    assert "compatible templates" in result["message"]
+
+
+def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", [])
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "supervisor": {"name": "Supervisor", "category": "Routing"},
+            "task_input": {"name": "Initial Instructions", "category": "Input"},
+        },
+    )
+
+    handler = flow_tools._get_flow_templates_handler()
+    result = handler()
+
+    assert result["templates"] == []
+    assert result["available_agents"] == []
+    assert "No flow-capable agents are currently installed" in result["message"]
+
+
 def test_get_available_agents_handler_groups_categories(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
@@ -142,6 +237,26 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
     assert "chat_output" in result["output_agents"]
     assert "pdf_extraction" in result["extraction_agents"]
     assert "gene" in result["validation_agents"]
+
+
+def test_get_available_agents_handler_reports_core_only_install(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "supervisor": {"category": "Routing"},
+            "task_input": {"category": "Input"},
+        },
+    )
+
+    handler = flow_tools._get_available_agents_handler()
+    result = handler()
+
+    assert result["total_agents"] == 0
+    assert result["output_agents"] == []
+    assert result["extraction_agents"] == []
+    assert result["validation_agents"] == []
+    assert "No flow-capable agents are currently installed" in result["message"]
 
 
 def test_get_current_flow_handler_no_context_and_empty_flow():
