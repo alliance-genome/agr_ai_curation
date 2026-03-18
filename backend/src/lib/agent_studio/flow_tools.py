@@ -125,6 +125,8 @@ def _get_flow_agent_ids() -> List[str]:
 FLOW_AGENT_IDS = _get_flow_agent_ids()
 
 
+# Keep this map aligned with flow-facing agent aliases/canonical IDs exported
+# by the runtime packages so suggestions do not advertise missing agents.
 _AGENT_ID_EQUIVALENTS: Dict[str, tuple[str, ...]] = {
     "gene": ("gene", "gene_validation"),
     "gene_validation": ("gene", "gene_validation"),
@@ -278,6 +280,13 @@ def _equivalent_agent_ids(agent_id: str) -> tuple[str, ...]:
     return _AGENT_ID_EQUIVALENTS.get(agent_id, (agent_id,))
 
 
+_OUTPUT_AGENT_IDS = {
+    agent_id
+    for preferred_agent_id in _OUTPUT_AGENT_PREFERENCES
+    for agent_id in _equivalent_agent_ids(preferred_agent_id)
+}
+
+
 def _resolve_available_agent_id(
     agent_id: str,
     available_agent_ids: set[str],
@@ -312,7 +321,7 @@ def _seen_any_equivalent(seen_agents: set[str], preferred_agent_ids: tuple[str, 
 
 def _is_output_agent_id(agent_id: str) -> bool:
     """Whether an agent ID belongs to the output-agent family."""
-    return any(agent_id in _equivalent_agent_ids(output_agent) for output_agent in _OUTPUT_AGENT_PREFERENCES)
+    return agent_id in _OUTPUT_AGENT_IDS
 
 
 def _build_output_suggestion(
@@ -957,13 +966,13 @@ def _get_current_flow_handler():
             markdown_lines.append(f"- **Type:** `{node_type}`")
             markdown_lines.append(f"- **Agent:** `{agent_id}`")
             if is_task_input:
-                markdown_lines.append(f"- **Input:** Flow entry point")
+                markdown_lines.append("- **Input:** Flow entry point")
                 if task_instructions and task_instructions.strip():
                     truncated = task_instructions[:300] + ('...' if len(task_instructions) > 300 else '')
                     markdown_lines.append(f"- **Task Instructions:** {truncated}")
                 else:
                     # Explicitly flag empty task_instructions as a warning
-                    markdown_lines.append(f"- **Task Instructions:** ⚠️ EMPTY (this is required content)")
+                    markdown_lines.append("- **Task Instructions:** ⚠️ EMPTY (this is required content)")
             else:
                 markdown_lines.append(f"- **Input:** {input_source.replace('_', ' ')}")
                 if custom_input:
