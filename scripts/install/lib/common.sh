@@ -203,7 +203,7 @@ maintenance_message.txt
 EOF
 }
 
-install_bundled_package_names() {
+install_shipped_package_names() {
   cat <<'EOF'
 core
 alliance

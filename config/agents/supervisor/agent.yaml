@@ -33,16 +33,16 @@ supervisor_routing:
 # Agent Discovery
 # -----------------------------------------------------------------------------
 # The supervisor dynamically discovers available agents at startup. The
-# package-owned source for shipped agents now lives in packages/core/agents/
-# for the supervisor bundle and packages/alliance/agents/ for the shipped
-# specialist catalog, while the current runtime-compatible loader still scans
-# config/agents/ until the later package-aware loader migration lands.
+# package-owned sources for shipped agents now live under
+# packages/core/agents/ and packages/alliance/agents/, while the current
+# runtime-compatible loader still scans config/agents/ until the later
+# package-aware loader migration lands.
 #
 # NOTE: This section documents the discovery behavior but is not currently read
 # by Python code. The actual discovery logic is in agent_loader.py. If you need
 # to change discovery behavior, modify agent_loader.py rather than these values.
 agent_discovery:
-  # Package-owned source root for shipped agent definitions (documentation only)
+  # Package-owned source for shipped agent definitions (documentation only)
   scan_directory: "packages"
 
   # Patterns to exclude from discovery (documentation only - see note above)

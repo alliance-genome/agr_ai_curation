@@ -1,82 +1,82 @@
-package_id: agr.core
+package_id: agr.alliance
 bindings_api_version: 1.0.0
 tools:
   - tool_id: agr_curation_query
     binding_kind: static
-    callable: agr_ai_curation_core.tools.agr_curation:agr_curation_query
+    callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
     description: Structured AGR curation database queries
-    source_file: python/src/agr_ai_curation_core/tools/agr_curation.py
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
   - tool_id: search_document
     binding_kind: context_factory
-    callable_factory: agr_ai_curation_core.tools.documents:create_search_document_tool
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool
     required_context:
       - document_id
       - user_id
     description: Search chunks within a scoped document
-    source_file: python/src/agr_ai_curation_core/tools/documents.py
+    source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_section
     binding_kind: context_factory
-    callable_factory: agr_ai_curation_core.tools.documents:create_read_section_tool
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
     required_context:
       - document_id
       - user_id
     description: Read all content from a named document section
-    source_file: python/src/agr_ai_curation_core/tools/documents.py
+    source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_subsection
     binding_kind: context_factory
-    callable_factory: agr_ai_curation_core.tools.documents:create_read_subsection_tool
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_read_subsection_tool
     required_context:
       - document_id
       - user_id
     description: Read all content from a named document subsection
-    source_file: python/src/agr_ai_curation_core/tools/documents.py
+    source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: curation_db_sql
     binding_kind: context_factory
-    callable_factory: agr_ai_curation_core.tools.sql:create_curation_db_sql_tool
+    callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool
     required_context:
       - database_url
     description: Read-only SQL access to the configured curation database
-    source_file: python/src/agr_ai_curation_core/tools/sql.py
+    source_file: python/src/agr_ai_curation_alliance/tools/sql.py
   - tool_id: chebi_api_call
     binding_kind: static
-    callable: agr_ai_curation_core.tools.rest:chebi_api_call
+    callable: agr_ai_curation_alliance.tools.rest:chebi_api_call
     required_context: []
     description: Query the ChEBI API on ebi.ac.uk
-    source_file: python/src/agr_ai_curation_core/tools/rest.py
+    source_file: python/src/agr_ai_curation_alliance/tools/rest.py
   - tool_id: quickgo_api_call
     binding_kind: static
-    callable: agr_ai_curation_core.tools.rest:quickgo_api_call
+    callable: agr_ai_curation_alliance.tools.rest:quickgo_api_call
     required_context: []
     description: Query the QuickGO API on ebi.ac.uk
-    source_file: python/src/agr_ai_curation_core/tools/rest.py
+    source_file: python/src/agr_ai_curation_alliance/tools/rest.py
   - tool_id: go_api_call
     binding_kind: static
-    callable: agr_ai_curation_core.tools.rest:go_api_call
+    callable: agr_ai_curation_alliance.tools.rest:go_api_call
     required_context: []
     description: Query the Gene Ontology API on geneontology.org
-    source_file: python/src/agr_ai_curation_core/tools/rest.py
+    source_file: python/src/agr_ai_curation_alliance/tools/rest.py
   - tool_id: alliance_api_call
     binding_kind: static
-    callable: agr_ai_curation_core.tools.rest:alliance_api_call
+    callable: agr_ai_curation_alliance.tools.rest:alliance_api_call
     required_context: []
     description: Query the Alliance API on alliancegenome.org
-    source_file: python/src/agr_ai_curation_core/tools/rest.py
+    source_file: python/src/agr_ai_curation_alliance/tools/rest.py
   - tool_id: save_csv_file
     binding_kind: static
-    callable: agr_ai_curation_core.tools.file_output:save_csv_file
+    callable: agr_ai_curation_alliance.tools.file_output:save_csv_file
     required_context: []
     description: Save structured data as CSV output
-    source_file: python/src/agr_ai_curation_core/tools/file_output.py
+    source_file: python/src/agr_ai_curation_alliance/tools/file_output.py
   - tool_id: save_tsv_file
     binding_kind: static
-    callable: agr_ai_curation_core.tools.file_output:save_tsv_file
+    callable: agr_ai_curation_alliance.tools.file_output:save_tsv_file
     required_context: []
     description: Save structured data as TSV output
-    source_file: python/src/agr_ai_curation_core/tools/file_output.py
+    source_file: python/src/agr_ai_curation_alliance/tools/file_output.py
   - tool_id: save_json_file
     binding_kind: static
-    callable: agr_ai_curation_core.tools.file_output:save_json_file
+    callable: agr_ai_curation_alliance.tools.file_output:save_json_file
     required_context: []
     description: Save structured data as JSON output
-    source_file: python/src/agr_ai_curation_core/tools/file_output.py
+    source_file: python/src/agr_ai_curation_alliance/tools/file_output.py

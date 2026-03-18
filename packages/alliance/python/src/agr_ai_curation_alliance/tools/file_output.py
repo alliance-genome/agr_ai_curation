@@ -1,4 +1,4 @@
-"""Package-local file output tool exports for the AGR core package."""
+"""Package-local file output tool exports for the AGR Alliance package."""
 
 from .file_output_tools import (
     create_csv_tool,

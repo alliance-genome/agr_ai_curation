@@ -12,7 +12,6 @@ env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
 image_tag_override="${INSTALL_IMAGE_TAG:-}"
 
 mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
-mapfile -t bundled_package_names < <(install_bundled_package_names)
 
 prompt_optional_value() {
   local prompt_text="$1"
@@ -38,10 +37,10 @@ seed_runtime_layout() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
-  local packages_source_dir="$7"
+  local packages_source_root="$7"
   local config_source_dir="$8"
 
-  require_directory_exists "$packages_source_dir"
+  require_directory_exists "$packages_source_root"
   require_directory_exists "$config_source_dir"
 
   mkdir -p \
@@ -59,15 +58,18 @@ seed_runtime_layout() {
   done
 
   local package_name=""
-  for package_name in "${bundled_package_names[@]}"; do
-    local package_source_dir="${packages_source_dir}/${package_name}"
+  while IFS= read -r package_name; do
+    [[ -n "$package_name" ]] || continue
+
+    local package_source_dir="${packages_source_root}/${package_name}"
     local package_target_dir="${runtime_packages_dir}/${package_name}"
 
     require_directory_exists "$package_source_dir"
     require_file_exists "${package_source_dir}/package.yaml"
+    require_non_empty "package_target_dir" "$package_target_dir"
     rm -rf "$package_target_dir"
     cp -a "$package_source_dir" "$package_target_dir"
-  done
+  done < <(install_shipped_package_names)
 }
 
 print_stage_intro() {
@@ -111,7 +113,7 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
-  local packages_source_dir
+  local packages_source_root
   local config_source_dir
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
@@ -122,7 +124,7 @@ main() {
   pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
-  packages_source_dir="${repo_root}/packages"
+  packages_source_root="${repo_root}/packages"
   config_source_dir="${repo_root}/config"
 
   mkdir -p "$install_home_dir"
@@ -133,7 +135,7 @@ main() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir" \
-    "$packages_source_dir" \
+    "$packages_source_root" \
     "$config_source_dir"
 
   if [[ -f "$env_output_path" ]]; then

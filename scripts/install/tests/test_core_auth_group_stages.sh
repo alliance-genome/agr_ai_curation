@@ -223,11 +223,11 @@ test_core_config_generates_env_and_backups() {
     echo "Expected seeded core package manifest at ${runtime_packages_dir}/core/package.yaml" >&2
     exit 1
   }
+  cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
   [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
     echo "Expected seeded alliance package manifest at ${runtime_packages_dir}/alliance/package.yaml" >&2
     exit 1
   }
-  cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
   cmp "${repo_root}/packages/alliance/package.yaml" "${runtime_packages_dir}/alliance/package.yaml"
 
   local init_public_key

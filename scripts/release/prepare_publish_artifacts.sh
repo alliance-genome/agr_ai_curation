@@ -3,6 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
+# shellcheck source=scripts/install/lib/common.sh
+source "${repo_root}/scripts/install/lib/common.sh"
 env_template_path="${repo_root}/scripts/install/lib/templates/env.standalone"
 
 lane=""
@@ -11,10 +13,6 @@ ref_name=""
 short_sha=""
 source_date_epoch="${SOURCE_DATE_EPOCH:-}"
 temp_dir=""
-bundled_package_paths=(
-  "packages/core"
-  "packages/alliance"
-)
 
 usage() {
   cat <<'USAGE'
@@ -177,22 +175,26 @@ main() {
     exit 1
   fi
 
-  local package_path=""
-  for package_path in "${bundled_package_paths[@]}"; do
-    if ! git -C "${repo_root}" cat-file -e "HEAD:${package_path}/package.yaml" 2>/dev/null; then
-      echo "Missing ${package_path}/package.yaml in HEAD; cannot build bundled runtime package artifact" >&2
+  local package_name=""
+  while IFS= read -r package_name; do
+    [[ -n "$package_name" ]] || continue
+    if [[ ! -f "${repo_root}/packages/${package_name}/package.yaml" ]]; then
+      echo "Missing packages/${package_name}/package.yaml in checkout; cannot build bundled runtime artifact" >&2
       exit 1
     fi
-  done
+  done < <(install_shipped_package_names)
 
   resolve_names
   mkdir -p "${output_dir}"
 
   temp_dir="$(mktemp -d)"
 
-  git -C "${repo_root}" archive --format=tar HEAD "${bundled_package_paths[@]}" | tar -xf - -C "${temp_dir}"
-  mv "${temp_dir}/packages/"* "${temp_dir}/"
-  rmdir "${temp_dir}/packages"
+  local bundled_package_dirs=()
+  while IFS= read -r package_name; do
+    [[ -n "$package_name" ]] || continue
+    bundled_package_dirs+=("${package_name}")
+    cp -a "${repo_root}/packages/${package_name}" "${temp_dir}/${package_name}"
+  done < <(install_shipped_package_names)
 
   local core_output_path="${output_dir}/${core_artifact_name}"
   local env_output_path="${output_dir}/${standalone_env_name}"
@@ -208,7 +210,7 @@ main() {
     --numeric-owner \
     --pax-option=delete=atime,delete=ctime \
     -C "${temp_dir}" \
-    -cf - core alliance | gzip -n > "${core_output_path}"
+    -cf - "${bundled_package_dirs[@]}" | gzip -n > "${core_output_path}"
 
   local core_sha256
   local env_sha256

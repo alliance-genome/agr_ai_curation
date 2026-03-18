@@ -10,7 +10,7 @@ deployment_config_filenames=()
 while IFS= read -r filename; do
   deployment_config_filenames+=("$filename")
 done < <(install_deployment_config_filenames)
-mapfile -t bundled_package_names < <(install_bundled_package_names)
+mapfile -t bundled_package_names < <(install_shipped_package_names)
 
 readonly EXIT_MANUAL_REVIEW_REQUIRED=3
 

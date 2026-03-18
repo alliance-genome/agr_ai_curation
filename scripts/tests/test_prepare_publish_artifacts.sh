@@ -56,10 +56,10 @@ make_sandbox_repo() {
   local sandbox_repo="$1"
 
   mkdir -p "${sandbox_repo}"
-  tar -C "${repo_root}" -cf - . | tar -C "${sandbox_repo}" -xf -
+  tar --exclude=.git -C "${repo_root}" -cf - . | tar -C "${sandbox_repo}" -xf -
   chmod -R u+w "${sandbox_repo}"
-  rm -f "${sandbox_repo}/.git/shallow.lock"
 
+  git -C "${sandbox_repo}" init -q
   git -C "${sandbox_repo}" config user.name "Codex"
   git -C "${sandbox_repo}" config user.email "codex@example.com"
   git -C "${sandbox_repo}" add -A
@@ -142,6 +142,13 @@ test_main_lane_outputs_sha_pinned_assets() {
   assert_contains '^FRONTEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '"image_tag": "sha-abc1234"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
+
+  local archive_listing
+  archive_listing="$(tar -tzf "${temp_dir}/core-main-sha-abc1234.tar.gz")"
+  if ! grep -qx 'alliance/package.yaml' <<<"${archive_listing}"; then
+    echo "Expected bundled core artifact to contain alliance/package.yaml" >&2
+    exit 1
+  fi
 }
 
 test_rejects_missing_required_flags() {

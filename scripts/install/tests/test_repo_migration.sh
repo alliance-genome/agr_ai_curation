@@ -63,6 +63,14 @@ run_helper() {
   printf '%s\n' "$status"
 }
 
+run_helper_with_current_helper_repo() {
+  local helper_repo="$1"
+  local output_path="$2"
+  shift 2
+
+  MIGRATION_HELPER_SCRIPT="${helper_repo}/scripts/install/migrate_repo_install.sh" run_helper "$output_path" "$@"
+}
+
 write_source_config() {
   local source_repo="$1"
 
@@ -171,14 +179,16 @@ test_standard_repo_install_apply() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-standard"
   local install_home="${temp_root}/install-standard"
   local output_path="${temp_root}/standard-apply.out"
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
 
   local status
-  status="$(run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  status="$(run_helper_with_current_helper_repo "$helper_repo" "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$status" != "0" ]]; then
     echo "Expected standard apply migration to exit 0, got ${status}" >&2
     cat "$output_path" >&2
@@ -211,10 +221,12 @@ test_dry_run_allows_missing_data_dirs() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-missing-data"
   local install_home="${temp_root}/install-missing-data"
   local output_path="${temp_root}/missing-data-dry-run.out"
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
   rm -rf \
     "${source_repo}/pdf_storage" \
@@ -222,7 +234,7 @@ test_dry_run_allows_missing_data_dirs() {
     "${source_repo}/weaviate_data"
 
   local status
-  status="$(run_helper "$output_path" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  status="$(run_helper_with_current_helper_repo "$helper_repo" "$output_path" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$status" != "0" ]]; then
     echo "Expected missing-data dry-run migration to exit 0, got ${status}" >&2
     cat "$output_path" >&2
@@ -230,6 +242,7 @@ test_dry_run_allows_missing_data_dirs() {
   fi
 
   assert_contains 'MIGRATION_STATUS=ready' "$output_path"
+  assert_contains 'extra migrated packages: 0' "$output_path"
   assert_contains "skipped missing source dir: ${source_repo}/pdf_storage" "$output_path"
   assert_contains "skipped missing source dir: ${source_repo}/file_outputs" "$output_path"
   assert_contains "skipped missing source dir: ${source_repo}/weaviate_data" "$output_path"
@@ -280,10 +293,12 @@ test_git_source_without_upstream_can_still_be_ready() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-clean-no-upstream"
   local install_home="${temp_root}/install-clean-no-upstream"
   local output_path="${temp_root}/clean-no-upstream.out"
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
   git -C "$source_repo" init -q
   git -C "$source_repo" config user.name 'Repo Migration Test'
@@ -292,7 +307,7 @@ test_git_source_without_upstream_can_still_be_ready() {
   git -C "$source_repo" commit -qm 'baseline source repo'
 
   local status
-  status="$(run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  status="$(run_helper_with_current_helper_repo "$helper_repo" "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$status" != "0" ]]; then
     echo "Expected clean no-upstream migration to exit 0, got ${status}" >&2
     cat "$output_path" >&2
@@ -315,12 +330,14 @@ test_git_source_without_upstream_reports_manual_review() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-no-upstream"
   local install_home="${temp_root}/install-no-upstream"
   local dry_run_output="${temp_root}/no-upstream-dry-run.out"
   local apply_output="${temp_root}/no-upstream-apply.out"
   local local_marker='# committed local customization without upstream'
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
   git -C "$source_repo" init -q
   git -C "$source_repo" config user.name 'Repo Migration Test'
@@ -333,7 +350,7 @@ test_git_source_without_upstream_reports_manual_review() {
   git -C "$source_repo" commit -qm 'customized shipped alliance'
 
   local dry_run_status
-  dry_run_status="$(run_helper "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  dry_run_status="$(run_helper_with_current_helper_repo "$helper_repo" "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$dry_run_status" != "0" ]]; then
     echo "Expected no-upstream dry-run migration to exit 0, got ${dry_run_status}" >&2
     cat "$dry_run_output" >&2
@@ -345,7 +362,7 @@ test_git_source_without_upstream_reports_manual_review() {
   assert_contains 'modified shipped packages preserved: 1' "$dry_run_output"
 
   local apply_status
-  apply_status="$(run_helper "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  apply_status="$(run_helper_with_current_helper_repo "$helper_repo" "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$apply_status" != "3" ]]; then
     echo "Expected no-upstream apply migration to exit 3, got ${apply_status}" >&2
     cat "$apply_output" >&2
@@ -368,19 +385,21 @@ test_modified_shipped_package_reports_manual_review() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-modified-shipped-package"
   local install_home="${temp_root}/install-modified-shipped-package"
   local dry_run_output="${temp_root}/modified-shipped-package-dry-run.out"
   local apply_output="${temp_root}/modified-shipped-package-apply.out"
   local local_marker='# repo-local shipped package customization'
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
   printf '\n%s\n' "$local_marker" >>"${source_repo}/packages/alliance/agents/gene/prompt.yaml"
 
   local dry_run_status
-  dry_run_status="$(run_helper "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  dry_run_status="$(run_helper_with_current_helper_repo "$helper_repo" "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$dry_run_status" != "0" ]]; then
-    echo "Expected modified-core dry-run migration to exit 0, got ${dry_run_status}" >&2
+    echo "Expected modified-shipped-package dry-run migration to exit 0, got ${dry_run_status}" >&2
     cat "$dry_run_output" >&2
     exit 1
   fi
@@ -390,9 +409,9 @@ test_modified_shipped_package_reports_manual_review() {
   assert_contains 'Legacy local code detected' "$dry_run_output"
 
   local apply_status
-  apply_status="$(run_helper "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  apply_status="$(run_helper_with_current_helper_repo "$helper_repo" "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$apply_status" != "3" ]]; then
-    echo "Expected modified-core apply migration to exit 3, got ${apply_status}" >&2
+    echo "Expected modified-shipped-package apply migration to exit 3, got ${apply_status}" >&2
     cat "$apply_output" >&2
     exit 1
   fi
@@ -414,11 +433,13 @@ test_custom_repo_install_reports_manual_review() {
   temp_root="$(mktemp -d)"
   trap 'rm -rf "${temp_root}"' RETURN
 
+  local helper_repo="${temp_root}/helper-repo"
   local source_repo="${temp_root}/source-custom"
   local install_home="${temp_root}/install-custom"
   local dry_run_output="${temp_root}/custom-dry-run.out"
   local apply_output="${temp_root}/custom-apply.out"
 
+  prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
 
   mkdir -p "${source_repo}/config/agents"
@@ -465,7 +486,7 @@ EOF
   printf 'notes\n' >"${source_repo}/packages/local_notes/README.txt"
 
   local dry_run_status
-  dry_run_status="$(run_helper "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  dry_run_status="$(run_helper_with_current_helper_repo "$helper_repo" "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$dry_run_status" != "0" ]]; then
     echo "Expected custom dry-run migration to exit 0, got ${dry_run_status}" >&2
     cat "$dry_run_output" >&2
@@ -480,7 +501,7 @@ EOF
   assert_dir_not_exists "${install_home}/migration/legacy_local"
 
   local apply_status
-  apply_status="$(run_helper "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  apply_status="$(run_helper_with_current_helper_repo "$helper_repo" "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
   if [[ "$apply_status" != "3" ]]; then
     echo "Expected custom apply migration to exit 3, got ${apply_status}" >&2
     cat "$apply_output" >&2
