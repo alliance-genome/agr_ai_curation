@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-CORE_TOOLS_PACKAGE_EXPORTS = (
+SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "agr_curation_query",
     "alliance_api_call",
     "chebi_api_call",

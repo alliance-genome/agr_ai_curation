@@ -1,15 +1,17 @@
-# Agents Directory
+# Alliance Agents Directory
 
-This package directory contains the shipped `agr.alliance` agent catalog.
-Public or organization-specific customization for a standard install
-should happen through runtime packages under
-`~/.agr_ai_curation/runtime/packages/` plus deployment overrides under
-`~/.agr_ai_curation/runtime/config/`, not by editing this checkout in place.
+This directory contains the tracked `agr.alliance` specialist agent catalog.
+Public or organization-specific customization for a standard install should
+happen through runtime packages under `~/.agr_ai_curation/runtime/packages/`
+plus deployment overrides under `~/.agr_ai_curation/runtime/config/`, not by
+editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../../docs/deployment/modular-packages.md)
 for the installed runtime layout. If you are maintaining the shipped
-`agr.alliance` package in this repository, keep this package tree aligned with
-the repo mirror under `config/agents/`.
+specialist catalog in this repository, keep these agent bundles aligned with
+their repo mirror under [config/agents/README.md](../../../config/agents/README.md).
+The core supervisor bundle is owned separately by
+`packages/core/agents/supervisor/`.
 
 ## Package-first authoring layout
 
@@ -139,10 +141,10 @@ docker compose --env-file ~/.agr_ai_curation/.env \
 
 Use the repo paths in this directory only when you are:
 
-- maintaining the shipped `agr.alliance` package from source,
+- maintaining the shipped `agr.alliance` specialist catalog from source,
 - testing loader/runtime changes from a repository checkout.
 
-Do not treat `config/agents/` as the public customization path for standalone
+Do not treat this directory as the public customization path for standalone
 installs. Repo-local agent templates remain under `config/agents/_examples/`.
 
 ## File reference
@@ -223,7 +225,7 @@ Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 
 ## See also
 
-- [backend/tools/README.md](../../backend/tools/README.md) - Package-first tool authoring
-- [CONFIG_DRIVEN_ARCHITECTURE.md](../../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) - Repository architecture reference
-- [_examples/README.md](./_examples/README.md) - Template documentation
-- [groups.yaml.example](../groups.yaml.example) - Group configuration template
+- [config/agents/README.md](../../../config/agents/README.md) - Repo source mirror guidance
+- [backend/tools/README.md](../../../backend/tools/README.md) - Package-first tool authoring
+- [CONFIG_DRIVEN_ARCHITECTURE.md](../../../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) - Repository architecture reference
+- [groups.yaml.example](../../../config/groups.yaml.example) - Group configuration template

@@ -1,15 +1,15 @@
 # Agents Directory
 
-This repo directory is the source-development mirror of the shipped
-`agr.alliance` agent catalog. Public or organization-specific customization for
-a standard install
+This repo directory is the source-development mirror of the shipped AGR agent
+catalog. Public or organization-specific customization for a standard install
 should happen through runtime packages under
 `~/.agr_ai_curation/runtime/packages/` plus deployment overrides under
 `~/.agr_ai_curation/runtime/config/`, not by editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
-for the installed runtime layout. If you are maintaining the shipped
-`agr.alliance` package in this repository, keep `config/agents/` aligned with
+for the installed runtime layout. If you are maintaining the shipped packages
+in this repository, keep `config/agents/supervisor/` aligned with
+`packages/core/agents/supervisor/` and the specialist bundles aligned with
 `packages/alliance/agents/`.
 
 ## Package-first authoring layout
@@ -140,7 +140,7 @@ docker compose --env-file ~/.agr_ai_curation/.env \
 
 Use the repo paths in this directory only when you are:
 
-- maintaining the shipped `agr.alliance` package from source,
+- maintaining the shipped supervisor or specialist packages from source,
 - updating templates under `_examples/`, or
 - testing loader/runtime changes from a repository checkout.
 

@@ -1,16 +1,14 @@
 package_id: agr.core
-display_name: AGR Core Package
+display_name: AI Core
 version: 1.0.0
 package_api_version: 1.0.0
 min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_core
 requirements_file: requirements/runtime.txt
+# AI Core is intentionally the smallest healthy standalone package.
+# It owns startup config and the supervisor bundle, but no package-owned tools.
 exports:
-  - kind: tool_binding
-    name: default
-    path: tools/bindings.yaml
-    description: Default AGR built-in tool bindings
   - kind: model
     name: default_models
     path: config/models.yaml
@@ -23,3 +21,6 @@ exports:
     name: default_tool_policies
     path: config/tool_policy_defaults.yaml
     description: Default AGR tool policy defaults
+agent_bundles:
+  - name: supervisor
+    group_rules: [mgi, rgd]

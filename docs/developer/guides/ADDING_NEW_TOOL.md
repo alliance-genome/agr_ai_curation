@@ -43,9 +43,10 @@ into the merged `TOOL_BINDINGS` runtime registry.
     bindings.yaml
 ```
 
-If you are maintaining the shipped `core` package from this repository, the
-equivalent sources live under `packages/core/python/src/agr_ai_curation_core/tools/`
-and `packages/core/tools/bindings.yaml`.
+If you are maintaining the shipped Alliance tool catalog from this repository,
+the equivalent sources live under
+`packages/alliance/python/src/agr_ai_curation_alliance/tools/` and
+`packages/alliance/tools/bindings.yaml`.
 
 ---
 
@@ -150,8 +151,8 @@ be present. If any are missing at runtime, a clear error is raised.
 
 Repo-maintainer note:
 
-- Update `packages/core/tools/bindings.yaml` when you are changing the shipped
-  core package.
+- Update `packages/alliance/tools/bindings.yaml` when you are changing the
+  shipped Alliance tool catalog.
 - Only edit `catalog_service.py` or the package runtime internals when the
   runtime needs new binding semantics, registry merging, or execution behavior.
 

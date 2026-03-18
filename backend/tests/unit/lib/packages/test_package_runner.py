@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from . import CORE_TOOLS_PACKAGE_EXPORTS, find_repo_root
+from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.package_runner import PackageToolRunner
 from src.lib.packages.paths import (
     get_package_runner_metadata_path,
@@ -24,7 +24,7 @@ from src.lib.packages.tool_registry import load_tool_registry
 
 REPO_ROOT = find_repo_root(Path(__file__))
 BACKEND_ROOT = REPO_ROOT / "backend"
-CORE_PACKAGE_SRC = REPO_ROOT / "packages" / "core" / "python" / "src"
+ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 BACKEND_SRC = REPO_ROOT / "backend" / "src"
 FIXTURE_PACKAGE_DIR = (
     Path(__file__).resolve().parent / "fixtures" / "package_runner" / "demo_runner"
@@ -233,7 +233,7 @@ def test_package_runner_returns_timeout_failure(monkeypatch, tmp_path):
     assert result.error.details["timeout_seconds"] == 60.0
 
 
-def test_repo_core_tools_package_import_succeeds_without_backend_src(tmp_path):
+def test_repo_alliance_tools_package_import_succeeds_without_backend_src(tmp_path):
     completed = subprocess.run(
         [
             sys.executable,
@@ -259,7 +259,7 @@ for entry in sys.path:
     clean_paths.append(str(resolved))
 
 sys.path[:] = [str(package_src), *dict.fromkeys(clean_paths)]
-module = importlib.import_module("agr_ai_curation_core.tools")
+module = importlib.import_module("agr_ai_curation_alliance.tools")
 print(
     json.dumps(
         {
@@ -267,15 +267,15 @@ print(
             "loaded": sorted(
                 name
                 for name in sys.modules
-                if name == "agr_ai_curation_core.tools"
-                or name.startswith("agr_ai_curation_core.tools.")
+                if name == "agr_ai_curation_alliance.tools"
+                or name.startswith("agr_ai_curation_alliance.tools.")
             ),
         }
     )
 )
 """,
             str(REPO_ROOT),
-            str(CORE_PACKAGE_SRC),
+            str(ALLIANCE_PACKAGE_SRC),
         ],
         check=False,
         capture_output=True,
@@ -284,17 +284,17 @@ print(
     )
 
     assert completed.returncode == 0, (
-        "Isolated agr_ai_curation_core.tools import failed.\n"
+        "Isolated agr_ai_curation_alliance.tools import failed.\n"
         f"stdout:\n{completed.stdout}\n"
         f"stderr:\n{completed.stderr}"
     )
 
     payload = json.loads(completed.stdout)
-    assert payload["exports"] == list(CORE_TOOLS_PACKAGE_EXPORTS)
-    assert payload["loaded"] == ["agr_ai_curation_core.tools"]
+    assert payload["exports"] == list(SHIPPED_TOOLS_PACKAGE_EXPORTS)
+    assert payload["loaded"] == ["agr_ai_curation_alliance.tools"]
 
 
-def test_core_agr_runtime_boundary_loads_from_public_runtime_surface(tmp_path):
+def test_alliance_agr_runtime_boundary_loads_from_public_runtime_surface(tmp_path):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     env = os.environ.copy()
     env["AGR_RUNTIME_ROOT"] = str(runtime_root)
@@ -367,7 +367,7 @@ print(
     assert payload["connection_url"] == "postgresql://db.invalid:5432/curation"
 
 
-def test_core_agr_curation_module_preserves_group_mapping_load_failure(tmp_path):
+def test_alliance_agr_curation_module_preserves_group_mapping_load_failure(tmp_path):
     env = os.environ.copy()
     env["GROUPS_CONFIG_PATH"] = str(tmp_path / "missing-groups.yaml")
     env["PYTHONPATH"] = str(_write_fake_agents_dependency(tmp_path))
@@ -400,7 +400,7 @@ for entry in sys.path:
 
 sys.path[:] = [str(backend_src), str(backend_root), str(package_src), *dict.fromkeys(clean_paths)]
 
-module = importlib.import_module("agr_ai_curation_core.tools.agr_curation")
+module = importlib.import_module("agr_ai_curation_alliance.tools.agr_curation")
 print(
     json.dumps(
         {
@@ -413,7 +413,7 @@ print(
             str(REPO_ROOT),
             str(BACKEND_ROOT),
             str(BACKEND_SRC),
-            str(CORE_PACKAGE_SRC),
+            str(ALLIANCE_PACKAGE_SRC),
         ],
         check=False,
         capture_output=True,
@@ -423,7 +423,7 @@ print(
     )
 
     assert completed.returncode == 0, (
-        "Isolated agr_ai_curation_core.tools.agr_curation import failed.\n"
+        "Isolated agr_ai_curation_alliance.tools.agr_curation import failed.\n"
         f"stdout:\n{completed.stdout}\n"
         f"stderr:\n{completed.stderr}"
     )
@@ -433,11 +433,11 @@ print(
     assert "missing-groups.yaml" in (payload["load_error"] or "")
 
 
-def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch, tmp_path):
+def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(monkeypatch, tmp_path):
     fake_backend_root = _write_fake_weaviate_backend(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
 
-    runner, env_manager = _build_core_runner(tmp_path)
+    runner, env_manager = _build_alliance_runner(tmp_path)
 
     search_result = runner.execute_tool(
         "search_document",
@@ -480,7 +480,7 @@ def test_package_runner_executes_core_weaviate_bindings_in_isolation(monkeypatch
     }
 
 
-def test_package_runner_executes_core_file_output_binding_in_isolation(
+def test_package_runner_executes_alliance_file_output_binding_in_isolation(
     monkeypatch,
     tmp_path,
 ):
@@ -490,7 +490,7 @@ def test_package_runner_executes_core_file_output_binding_in_isolation(
     monkeypatch.setenv("FAKE_SESSION_ID", "session-42")
     monkeypatch.setenv("FAKE_USER_ID", "user-24")
 
-    runner, env_manager = _build_core_runner(tmp_path)
+    runner, env_manager = _build_alliance_runner(tmp_path)
 
     result = runner.execute_tool(
         "save_csv_file",
@@ -523,7 +523,7 @@ def test_package_runner_executes_core_file_output_binding_in_isolation(
     )
 
 
-def test_package_runner_executes_core_agr_curation_binding_in_isolation(
+def test_package_runner_executes_alliance_agr_curation_binding_in_isolation(
     monkeypatch,
     tmp_path,
 ):
@@ -532,7 +532,7 @@ def test_package_runner_executes_core_agr_curation_binding_in_isolation(
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_core_runner(tmp_path)
+    runner, env_manager = _build_alliance_runner(tmp_path)
 
     result = runner.execute_tool(
         "agr_curation_query",
@@ -568,12 +568,12 @@ def test_package_runner_entrypoint_resolves_public_runtime_outside_backend_cwd(t
     fake_agents_root = _write_fake_agents_dependency(tmp_path)
     request = RunnerRequest(
         protocol_version=PROTOCOL_VERSION,
-        package_id="agr.core",
+        package_id="agr.alliance",
         package_version="1.0.0",
-        package_root=str(REPO_ROOT / "packages" / "core"),
-        python_package_root="python/src/agr_ai_curation_core",
+        package_root=str(REPO_ROOT / "packages" / "alliance"),
+        python_package_root="python/src/agr_ai_curation_alliance",
         tool_id="agr_curation_query",
-        import_path="agr_ai_curation_core.tools.agr_curation:agr_curation_query",
+        import_path="agr_ai_curation_alliance.tools.agr_curation:agr_curation_query",
         import_attribute_kind="callable",
         binding_kind="static",
         required_context=[],
@@ -626,7 +626,7 @@ def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
     return _build_runner_from_packages_dir(package_dir.parent)
 
 
-def _build_core_runner(
+def _build_alliance_runner(
     tmp_path: Path,
 ) -> tuple[PackageToolRunner, "_IsolatedInterpreterEnvironmentManager"]:
     registry = load_tool_registry(

@@ -68,7 +68,7 @@ For configuration files, see:
 Choose the path that matches your goal:
 
 - Standard install or org customization: create a runtime package under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` and install that package.
-- Repository or shipped-catalog maintenance: use the repo template under `config/agents/_examples/basic_agent`, then keep the shipped `agr.alliance` package copy in `packages/alliance/agents/` aligned before shipping.
+- Repository package maintenance: use the repo template under `config/agents/_examples/basic_agent`, then keep the shipped supervisor copy in `packages/core/agents/` or the shipped specialist copy in `packages/alliance/agents/` aligned before shipping.
 - UI-only customization: create custom agents in Agent Studio with no file changes.
 
 See [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) and
@@ -79,7 +79,7 @@ See [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) and
 Choose the path that matches your goal:
 
 - Standard install or org customization: add Python code plus `tools/bindings.yaml` to a runtime package under `~/.agr_ai_curation/runtime/packages/<package>/`.
-- Repository or core-package maintenance: update the shipped package sources in `packages/core/python/src/...` and `packages/core/tools/bindings.yaml`.
+- Repository package maintenance: update the shipped tool sources in `packages/alliance/python/src/...` and `packages/alliance/tools/bindings.yaml`.
 - Runtime-internal development: only edit `backend/src/...` when the runtime itself needs new loader, resolver, or execution behavior.
 
 See [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) and

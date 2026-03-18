@@ -17,8 +17,10 @@ Repository-development note:
 
 - The repo-local `config/` tree still carries installer-seeded defaults plus
   source mirrors used when maintaining shipped packages from this checkout.
-- `config/agents/` is the repo mirror for the shipped `agr.alliance` agent
-  catalog in `packages/alliance/agents/`.
+- `config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle
+  in `packages/core/agents/supervisor/`.
+- The remaining shipped specialist bundles under `config/agents/` mirror the
+  `agr.alliance` catalog in `packages/alliance/agents/`.
 - `config/models.yaml`, `config/providers.yaml`, and
   `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
 
@@ -35,7 +37,7 @@ config/
 ├── maintenance_message.txt      # Optional maintenance banner content
 ├── groups.yaml.example          # Template for groups configuration
 ├── connections.yaml.example     # Template for connections configuration
-└── agents/                      # Repo-local mirror of shipped agr.alliance agent bundles
+└── agents/                      # Repo-local mirror of shipped AGR agent bundles
     ├── README.md               # Agent configuration guide
     ├── _examples/              # Template agents (not loaded)
     │   └── basic_agent/        # Example agent structure
@@ -78,7 +80,7 @@ For repo-local development of the shipped defaults:
    - Define health check parameters
 
 4. **Edit repo-local agent bundles** in `config/agents/` only when you are
-   developing the built-in `agr.alliance` package from source.
+   developing the shipped supervisor or specialist packages from source.
 
 ## Configuration Files
 

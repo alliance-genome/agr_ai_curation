@@ -1,8 +1,2 @@
-# Runtime dependencies for the tracked AGR core package.
-# Some packaged tools still rely on public host-runtime surfaces exposed via
-# agr_ai_curation_runtime during isolated package execution.
-openai-agents[litellm]
-pydantic>=2.0
-requests>=2.0
-SQLAlchemy>=2.0
-psycopg2-binary
+# AI Core intentionally declares no package-owned runtime dependencies.
+# The file remains because `requirements_file` is part of the package contract.

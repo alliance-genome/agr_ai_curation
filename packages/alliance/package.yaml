@@ -6,6 +6,11 @@ min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_alliance
 requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default AGR Alliance specialist tool bindings
 agent_bundles:
   - name: allele
     has_schema: true
@@ -47,6 +52,4 @@ agent_bundles:
   - name: phenotype_extractor
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
-  - name: supervisor
-    group_rules: [mgi, rgd]
   - name: tsv_formatter

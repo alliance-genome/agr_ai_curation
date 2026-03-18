@@ -1,4 +1,4 @@
-"""Tests for the shipped agr.alliance agent catalog and repo mirror."""
+"""Tests for the shipped agr.alliance specialist catalog and source mirror."""
 
 from pathlib import Path
 
@@ -10,6 +10,7 @@ REPO_ROOT = find_repo_root(Path(__file__))
 CONFIG_AGENTS_DIR = REPO_ROOT / "config" / "agents"
 ALLIANCE_PACKAGE_DIR = REPO_ROOT / "packages" / "alliance"
 ALLIANCE_AGENTS_DIR = ALLIANCE_PACKAGE_DIR / "agents"
+CORE_AGENT_NAMES = {"supervisor"}
 
 
 def _iter_shipped_agent_dirs(root: Path) -> tuple[Path, ...]:
@@ -30,20 +31,22 @@ def _iter_source_files(root: Path) -> set[Path]:
     }
 
 
-def test_alliance_package_mirrors_shipped_agent_files():
+def test_alliance_package_mirrors_shipped_specialist_agent_files():
     shipped_agents = _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR)
-
-    assert shipped_agents
-    assert not (ALLIANCE_AGENTS_DIR / "_examples").exists()
-
-    expected_agent_names = {agent_dir.name for agent_dir in shipped_agents}
+    expected_agent_names = {
+        agent_dir.name for agent_dir in shipped_agents if agent_dir.name not in CORE_AGENT_NAMES
+    }
     actual_agent_names = {
         agent_dir.name
         for agent_dir in _iter_shipped_agent_dirs(ALLIANCE_AGENTS_DIR)
     }
+
     assert actual_agent_names == expected_agent_names
+    assert not (ALLIANCE_AGENTS_DIR / "_examples").exists()
 
     for config_agent_dir in shipped_agents:
+        if config_agent_dir.name in CORE_AGENT_NAMES:
+            continue
         alliance_agent_dir = ALLIANCE_AGENTS_DIR / config_agent_dir.name
         expected_files = _iter_source_files(config_agent_dir)
         actual_files = _iter_source_files(alliance_agent_dir)
@@ -58,14 +61,19 @@ def test_alliance_package_mirrors_shipped_agent_files():
             )
 
 
-def test_alliance_package_manifest_exports_all_shipped_agent_assets():
+def test_alliance_package_manifest_exports_shipped_specialist_catalog():
     manifest = load_package_manifest(ALLIANCE_PACKAGE_DIR / "package.yaml")
 
     assert manifest.package_id == "agr.alliance"
     assert manifest.display_name == "AGR Alliance Package"
 
-    expected_exports = set()
+    expected_exports = {
+        (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
+    }
     for agent_dir in _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR):
+        if agent_dir.name in CORE_AGENT_NAMES:
+            continue
+
         agent_name = agent_dir.name
         expected_exports.add((ExportKind.AGENT, agent_name, f"agents/{agent_name}"))
         expected_exports.add(

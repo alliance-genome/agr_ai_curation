@@ -87,11 +87,12 @@ Important rules:
 
 ## Repo-local use in this checkout
 
-Use repository paths only when you are maintaining the shipped core package or
+Use repository paths only when you are maintaining the shipped Alliance package
+tool catalog or
 working on runtime internals from source. For that work:
 
-- keep core tool callables in `packages/core/python/src/agr_ai_curation_core/tools/`,
-- keep core bindings in `packages/core/tools/bindings.yaml`, and
+- keep shipped tool callables in `packages/alliance/python/src/agr_ai_curation_alliance/tools/`,
+- keep shipped bindings in `packages/alliance/tools/bindings.yaml`, and
 - treat `backend/tools/` as reference material rather than the public contract.
 
 ## Key principle

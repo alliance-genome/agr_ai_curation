@@ -771,11 +771,11 @@ tools:
 
 ### Repo-maintainer note
 
-If you are updating the shipped core package from this repository:
+If you are updating the shipped AGR/Alliance tool package from this repository:
 
 - put the tool implementation in
-  `packages/core/python/src/agr_ai_curation_core/tools/`,
-- export it from `packages/core/tools/bindings.yaml`, and
+  `packages/alliance/python/src/agr_ai_curation_alliance/tools/`,
+- export it from `packages/alliance/tools/bindings.yaml`, and
 - only edit `backend/src/lib/agent_studio/catalog_service.py` or the package
   runtime modules when you need new resolver behavior rather than a normal
   package-declared tool.

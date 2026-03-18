@@ -36,6 +36,12 @@ The standalone installer seeds an installed runtime under
 │   │   │   ├── agents/
 │   │   │   ├── config/
 │   │   │   ├── requirements/
+│   │   │   └── python/
+│   │   ├── alliance/
+│   │   │   ├── package.yaml
+│   │   │   ├── agents/
+│   │   │   ├── python/
+│   │   │   ├── requirements/
 │   │   │   └── tools/bindings.yaml
 │   │   └── <your-package>/
 │   │       └── ...
@@ -55,8 +61,10 @@ Key ownership rules:
 
 - `~/.agr_ai_curation/.env` stores secrets, image tags, and host mount paths.
 - `runtime/config/` is the operator-owned override layer for deployment YAML.
-- `runtime/packages/core/` is the shipped AGR package. Treat it as replaceable
-  release content, not as your long-term customization home.
+- `runtime/packages/core/` is the shipped AI Core package: the minimum
+  supervisor/startup contract for a healthy standalone install.
+- `runtime/packages/alliance/` is the shipped AGR Alliance package: the
+  specialist catalog plus default shipped tool bindings.
 - `runtime/packages/<your-package>/` is where custom organization packages
   belong.
 - `runtime/state/` is writable runtime state. The package runner creates one
@@ -84,14 +92,16 @@ For a standard standalone install:
    ```
 
 4. The installer creates `~/.agr_ai_curation/.env`, seeds
-   `runtime/config/`, seeds `runtime/packages/core/`, creates the runtime/data
-   directories, and starts the standalone stack.
+   `runtime/config/`, seeds `runtime/packages/core/` and
+   `runtime/packages/alliance/`, creates the runtime/data directories, and
+   starts the standalone stack.
 
 ## Package model
 
 Each runtime package is a directory under `runtime/packages/` with a
-`package.yaml` manifest. The shipped `core` directory contains the AGR defaults.
-Custom organization packages live alongside it.
+`package.yaml` manifest. The shipped `core` directory contains the minimal AI
+Core contract, and the shipped `alliance` directory contains the full Alliance
+specialist/tool catalog. Custom organization packages live alongside them.
 
 Packages can contribute:
 
@@ -101,9 +111,10 @@ Packages can contribute:
 - model defaults
 - tool policy defaults
 
-The `core` package ships the default agent catalog, default tool bindings, and
-default provider/model/tool policy files. Keep custom behavior in a separate
-package so upgrades can replace `core` safely.
+The `core` package ships the default provider/model/tool policy files plus the
+supervisor bundle. The `alliance` package ships the default specialist agent
+catalog and shipped tool bindings. Keep custom behavior in a separate package
+so upgrades can replace the shipped packages safely.
 
 ### Minimal custom package layout
 

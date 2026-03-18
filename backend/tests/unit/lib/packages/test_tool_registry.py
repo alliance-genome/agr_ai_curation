@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from . import CORE_TOOLS_PACKAGE_EXPORTS, find_repo_root
+from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import (
@@ -18,8 +18,18 @@ from src.lib.packages.tool_registry import (
 )
 
 REPO_ROOT = find_repo_root(Path(__file__))
-CORE_TOOLS_DIR = REPO_ROOT / "packages" / "core" / "python" / "src" / "agr_ai_curation_core" / "tools"
-CORE_RUNTIME_REQUIREMENTS_PATH = REPO_ROOT / "packages" / "core" / "requirements" / "runtime.txt"
+ALLIANCE_TOOLS_DIR = (
+    REPO_ROOT
+    / "packages"
+    / "alliance"
+    / "python"
+    / "src"
+    / "agr_ai_curation_alliance"
+    / "tools"
+)
+ALLIANCE_RUNTIME_REQUIREMENTS_PATH = (
+    REPO_ROOT / "packages" / "alliance" / "requirements" / "runtime.txt"
+)
 
 
 def _find_backend_src_imports(source: str) -> tuple[str, ...]:
@@ -311,22 +321,33 @@ tools:
     )
 
 
-def test_repo_core_package_exports_current_built_in_tools():
+def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
     registry = load_tool_registry(REPO_ROOT / "packages")
 
+    loaded_exports = {
+        (
+            export.package_id,
+            export.export_name,
+            export.bindings_path.relative_to(REPO_ROOT).as_posix(),
+        )
+        for export in registry.loaded_binding_exports
+    }
+    assert ("agr.alliance", "default", "packages/alliance/tools/bindings.yaml") in loaded_exports
+    assert not any(export.package_id == "agr.core" for export in registry.loaded_binding_exports)
+
     expected_bindings = {
-        "agr_curation_query": ("static", (), "agr.core"),
-        "search_document": ("context_factory", ("document_id", "user_id"), "agr.core"),
-        "read_section": ("context_factory", ("document_id", "user_id"), "agr.core"),
-        "read_subsection": ("context_factory", ("document_id", "user_id"), "agr.core"),
-        "curation_db_sql": ("context_factory", ("database_url",), "agr.core"),
-        "chebi_api_call": ("static", (), "agr.core"),
-        "quickgo_api_call": ("static", (), "agr.core"),
-        "go_api_call": ("static", (), "agr.core"),
-        "alliance_api_call": ("static", (), "agr.core"),
-        "save_csv_file": ("static", (), "agr.core"),
-        "save_tsv_file": ("static", (), "agr.core"),
-        "save_json_file": ("static", (), "agr.core"),
+        "agr_curation_query": ("static", (), "agr.alliance"),
+        "search_document": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
+        "read_section": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
+        "read_subsection": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
+        "curation_db_sql": ("context_factory", ("database_url",), "agr.alliance"),
+        "chebi_api_call": ("static", (), "agr.alliance"),
+        "quickgo_api_call": ("static", (), "agr.alliance"),
+        "go_api_call": ("static", (), "agr.alliance"),
+        "alliance_api_call": ("static", (), "agr.alliance"),
+        "save_csv_file": ("static", (), "agr.alliance"),
+        "save_tsv_file": ("static", (), "agr.alliance"),
+        "save_json_file": ("static", (), "agr.alliance"),
     }
 
     assert set(expected_bindings).issubset(registry.bindings_by_tool_id)
@@ -337,27 +358,31 @@ def test_repo_core_package_exports_current_built_in_tools():
         assert binding.binding_kind.value == binding_kind
         assert binding.required_context == required_context
         assert binding.source.package_id == package_id
+        assert (
+            binding.source.bindings_path.relative_to(REPO_ROOT).as_posix()
+            == "packages/alliance/tools/bindings.yaml"
+        )
 
 
-def test_repo_core_package_copies_tool_implementations_locally():
+def test_repo_alliance_package_copies_tool_implementations_locally():
     copied_modules = sorted(
-        path.name for path in CORE_TOOLS_DIR.glob("*.py") if path.name != "__init__.py"
+        path.name for path in ALLIANCE_TOOLS_DIR.glob("*.py") if path.name != "__init__.py"
     )
 
     for module_name in copied_modules:
-        module_path = CORE_TOOLS_DIR / module_name
+        module_path = ALLIANCE_TOOLS_DIR / module_name
         source = module_path.read_text(encoding="utf-8")
         direct_imports = _find_backend_src_imports(source)
         assert direct_imports == (), (
             f"{module_name} imports backend modules directly: {direct_imports}"
         )
 
-    agr_source = (CORE_TOOLS_DIR / "agr_curation.py").read_text(encoding="utf-8")
+    agr_source = (ALLIANCE_TOOLS_DIR / "agr_curation.py").read_text(encoding="utf-8")
     assert "agr_ai_curation_runtime" in agr_source
 
 
-def test_repo_core_package_runtime_requirements_include_file_output_driver():
-    requirements = CORE_RUNTIME_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
+def test_repo_alliance_package_runtime_requirements_include_file_output_driver():
+    requirements = ALLIANCE_RUNTIME_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
     normalized = {
         line.strip()
         for line in requirements
@@ -368,9 +393,9 @@ def test_repo_core_package_runtime_requirements_include_file_output_driver():
     assert "psycopg2-binary" in normalized
 
 
-def test_repo_core_tools_package_root_exports_are_lazy(monkeypatch):
-    package_src = REPO_ROOT / "packages" / "core" / "python" / "src"
-    module_prefix = "agr_ai_curation_core.tools"
+def test_repo_alliance_tools_package_root_exports_are_lazy(monkeypatch):
+    package_src = REPO_ROOT / "packages" / "alliance" / "python" / "src"
+    module_prefix = "agr_ai_curation_alliance.tools"
     saved_modules = {
         name: sys.modules.pop(name)
         for name in list(sys.modules)
@@ -381,17 +406,17 @@ def test_repo_core_tools_package_root_exports_are_lazy(monkeypatch):
     try:
         module = importlib.import_module(module_prefix)
 
-        assert module.__all__ == list(CORE_TOOLS_PACKAGE_EXPORTS)
-        assert "agr_ai_curation_core.tools.agr_curation" not in sys.modules
-        assert "agr_ai_curation_core.tools.documents" not in sys.modules
-        assert "agr_ai_curation_core.tools.file_output" not in sys.modules
-        assert "agr_ai_curation_core.tools.file_output_tools" not in sys.modules
-        assert "agr_ai_curation_core.tools.weaviate_search" not in sys.modules
+        assert module.__all__ == list(SHIPPED_TOOLS_PACKAGE_EXPORTS)
+        assert "agr_ai_curation_alliance.tools.agr_curation" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.documents" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.file_output" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.file_output_tools" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.weaviate_search" not in sys.modules
 
         assert module.chebi_api_call is not None
-        assert "agr_ai_curation_core.tools.rest" in sys.modules
-        assert "agr_ai_curation_core.tools.agr_curation" not in sys.modules
-        assert "agr_ai_curation_core.tools.file_output_tools" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.rest" in sys.modules
+        assert "agr_ai_curation_alliance.tools.agr_curation" not in sys.modules
+        assert "agr_ai_curation_alliance.tools.file_output_tools" not in sys.modules
     finally:
         for name in list(sys.modules):
             if name == module_prefix or name.startswith(f"{module_prefix}."):
