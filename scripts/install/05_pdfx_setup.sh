@@ -37,7 +37,7 @@ resolve_pdfx_port() {
     fi
 
     log_warn "Port ${port} is in use by ${owner}." >&2
-    read -r -p "Enter an alternative PDF extraction service port: " response
+    read -r -p "Enter an alternative PDF extraction service port (e.g. 5001): " response
 
     if ! validate_port_number "$response"; then
       log_warn "Please enter a valid TCP port (1-65535)." >&2
