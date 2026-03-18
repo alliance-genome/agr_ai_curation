@@ -203,6 +203,35 @@ maintenance_message.txt
 EOF
 }
 
+install_shipped_package_names() {
+  local common_dir=""
+  local repo_root=""
+  local package_dir=""
+  local package_name=""
+  local package_names=()
+
+  common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_root="$(cd "${common_dir}/../../.." && pwd)"
+
+  if [[ -f "${repo_root}/packages/core/package.yaml" ]]; then
+    printf 'core\n'
+  fi
+
+  for package_dir in "${repo_root}"/packages/*; do
+    [[ -d "${package_dir}" ]] || continue
+    [[ -f "${package_dir}/package.yaml" ]] || continue
+
+    package_name="$(basename "${package_dir}")"
+    [[ "${package_name}" == "core" ]] && continue
+
+    package_names+=("${package_name}")
+  done
+
+  if (( ${#package_names[@]} > 0 )); then
+    printf '%s\n' "${package_names[@]}" | LC_ALL=C sort
+  fi
+}
+
 install_runtime_config_dir() {
   local install_home_dir="$1"
   printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"
