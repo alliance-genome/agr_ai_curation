@@ -144,6 +144,7 @@ prepare_source_repo() {
 
   mkdir -p "${source_repo}/packages"
   cp -a "${repo_root}/packages/core" "${source_repo}/packages/core"
+  cp -a "${repo_root}/packages/alliance" "${source_repo}/packages/alliance"
   write_source_config "$source_repo"
   write_source_data "$source_repo"
   write_source_env "$source_repo"
@@ -156,11 +157,12 @@ prepare_helper_repo() {
   cp -a "${repo_root}/scripts/install/migrate_repo_install.sh" "${helper_repo}/scripts/install/migrate_repo_install.sh"
   cp -a "${repo_root}/scripts/install/lib/common.sh" "${helper_repo}/scripts/install/lib/common.sh"
   cp -a "${repo_root}/packages/core" "${helper_repo}/packages/core"
+  cp -a "${repo_root}/packages/alliance" "${helper_repo}/packages/alliance"
 
   git -C "$helper_repo" init -q
   git -C "$helper_repo" config user.name 'Repo Migration Test'
   git -C "$helper_repo" config user.email 'repo-migration-test@example.org'
-  git -C "$helper_repo" add scripts/install/migrate_repo_install.sh scripts/install/lib/common.sh packages/core
+  git -C "$helper_repo" add scripts/install/migrate_repo_install.sh scripts/install/lib/common.sh packages/core packages/alliance
   git -C "$helper_repo" commit -qm 'baseline helper repo'
 }
 
@@ -187,6 +189,7 @@ test_standard_repo_install_apply() {
   assert_contains 'extra migrated packages: 0' "$output_path"
   assert_file_exists "${install_home}/runtime/config/groups.yaml"
   assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/runtime/state/identifier_prefixes/identifier_prefixes.json"
   assert_file_exists "${install_home}/data/pdf_storage/user-1/paper.pdf"
   assert_file_exists "${install_home}/data/file_outputs/export.tsv"
@@ -249,11 +252,13 @@ test_non_git_source_ignores_dirty_helper_core() {
   local source_repo="${temp_root}/source-clean-copy"
   local install_home="${temp_root}/install-clean-copy"
   local output_path="${temp_root}/non-git-source.out"
-  local helper_marker='# helper checkout customization'
+  local helper_core_marker='# helper core checkout customization'
+  local helper_alliance_marker='# helper alliance checkout customization'
 
   prepare_helper_repo "$helper_repo"
   prepare_source_repo "$source_repo"
-  printf '\n%s\n' "$helper_marker" >>"${helper_repo}/packages/core/agents/supervisor/prompt.yaml"
+  printf '\n%s\n' "$helper_core_marker" >>"${helper_repo}/packages/core/agents/supervisor/prompt.yaml"
+  printf '\n%s\n' "$helper_alliance_marker" >>"${helper_repo}/packages/alliance/agents/gene/prompt.yaml"
 
   local status
   status="$(MIGRATION_HELPER_SCRIPT="${helper_repo}/scripts/install/migrate_repo_install.sh" run_helper "$output_path" --apply --source-repo "$source_repo" --install-home "$install_home")"
@@ -264,9 +269,11 @@ test_non_git_source_ignores_dirty_helper_core() {
   fi
 
   assert_contains 'MIGRATION_STATUS=ready' "$output_path"
-  assert_contains 'modified shipped core package preserved: 0' "$output_path"
+  assert_contains 'modified shipped packages preserved: 0' "$output_path"
   assert_file_exists "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
-  assert_not_contains "$helper_marker" "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/agents/gene/prompt.yaml"
+  assert_not_contains "$helper_core_marker" "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
+  assert_not_contains "$helper_alliance_marker" "${install_home}/runtime/packages/alliance/agents/gene/prompt.yaml"
   assert_dir_not_exists "${install_home}/migration/legacy_local"
 
   rm -rf "${temp_root}"
@@ -298,9 +305,10 @@ test_git_source_without_upstream_can_still_be_ready() {
   fi
 
   assert_contains 'MIGRATION_STATUS=ready' "$output_path"
-  assert_contains 'shipped core baseline unresolved: 0' "$output_path"
-  assert_contains 'modified shipped core package preserved: 0' "$output_path"
+  assert_contains 'shipped package baselines unresolved: 0' "$output_path"
+  assert_contains 'modified shipped packages preserved: 0' "$output_path"
   assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_dir_not_exists "${install_home}/migration/legacy_local"
 
   rm -rf "${temp_root}"
@@ -338,8 +346,8 @@ test_git_source_without_upstream_reports_manual_review() {
   fi
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output"
-  assert_contains 'shipped core baseline unresolved: 1' "$dry_run_output"
-  assert_contains 'modified shipped core package preserved: 1' "$dry_run_output"
+  assert_contains 'shipped package baselines unresolved: 1' "$dry_run_output"
+  assert_contains 'modified shipped packages preserved: 1' "$dry_run_output"
 
   local apply_status
   apply_status="$(run_helper "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
@@ -350,8 +358,9 @@ test_git_source_without_upstream_reports_manual_review() {
   fi
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$apply_output"
-  assert_contains 'shipped core baseline unresolved: 1' "$apply_output"
+  assert_contains 'shipped package baselines unresolved: 1' "$apply_output"
   assert_file_exists "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/migration/legacy_local/packages/core_repo_snapshot/agents/supervisor/prompt.yaml"
   assert_not_contains "$local_marker" "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
   assert_contains "$local_marker" "${install_home}/migration/legacy_local/packages/core_repo_snapshot/agents/supervisor/prompt.yaml"
@@ -383,7 +392,7 @@ test_modified_core_package_reports_manual_review() {
   fi
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output"
-  assert_contains 'modified shipped core package preserved: 1' "$dry_run_output"
+  assert_contains 'modified shipped packages preserved: 1' "$dry_run_output"
   assert_contains 'Legacy local code detected' "$dry_run_output"
 
   local apply_status
@@ -395,12 +404,60 @@ test_modified_core_package_reports_manual_review() {
   fi
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$apply_output"
-  assert_contains 'modified shipped core package preserved: 1' "$apply_output"
+  assert_contains 'modified shipped packages preserved: 1' "$apply_output"
   assert_file_exists "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/migration/legacy_local/packages/core_repo_snapshot/agents/supervisor/prompt.yaml"
   assert_not_contains "$local_marker" "${install_home}/runtime/packages/core/agents/supervisor/prompt.yaml"
   assert_contains "$local_marker" "${install_home}/migration/legacy_local/packages/core_repo_snapshot/agents/supervisor/prompt.yaml"
   assert_contains 'core_repo_snapshot' "${install_home}/migration/legacy_local/README.md"
+
+  rm -rf "${temp_root}"
+  trap - RETURN
+}
+
+test_modified_alliance_package_reports_manual_review() {
+  local temp_root
+  temp_root="$(mktemp -d)"
+  trap 'rm -rf "${temp_root}"' RETURN
+
+  local source_repo="${temp_root}/source-modified-alliance"
+  local install_home="${temp_root}/install-modified-alliance"
+  local dry_run_output="${temp_root}/modified-alliance-dry-run.out"
+  local apply_output="${temp_root}/modified-alliance-apply.out"
+  local local_marker='# repo-local alliance customization'
+
+  prepare_source_repo "$source_repo"
+  printf '\n%s\n' "$local_marker" >>"${source_repo}/packages/alliance/agents/gene/prompt.yaml"
+
+  local dry_run_status
+  dry_run_status="$(run_helper "$dry_run_output" --dry-run --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$dry_run_status" != "0" ]]; then
+    echo "Expected modified-alliance dry-run migration to exit 0, got ${dry_run_status}" >&2
+    cat "$dry_run_output" >&2
+    exit 1
+  fi
+
+  assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output"
+  assert_contains 'modified shipped packages preserved: 1' "$dry_run_output"
+  assert_contains 'Legacy local code detected' "$dry_run_output"
+
+  local apply_status
+  apply_status="$(run_helper "$apply_output" --apply --source-repo "$source_repo" --install-home "$install_home")"
+  if [[ "$apply_status" != "3" ]]; then
+    echo "Expected modified-alliance apply migration to exit 3, got ${apply_status}" >&2
+    cat "$apply_output" >&2
+    exit 1
+  fi
+
+  assert_contains 'MIGRATION_STATUS=manual_review_required' "$apply_output"
+  assert_contains 'modified shipped packages preserved: 1' "$apply_output"
+  assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/agents/gene/prompt.yaml"
+  assert_file_exists "${install_home}/migration/legacy_local/packages/alliance_repo_snapshot/agents/gene/prompt.yaml"
+  assert_not_contains "$local_marker" "${install_home}/runtime/packages/alliance/agents/gene/prompt.yaml"
+  assert_contains "$local_marker" "${install_home}/migration/legacy_local/packages/alliance_repo_snapshot/agents/gene/prompt.yaml"
+  assert_contains 'alliance_repo_snapshot' "${install_home}/migration/legacy_local/README.md"
 
   rm -rf "${temp_root}"
   trap - RETURN
@@ -421,6 +478,8 @@ test_custom_repo_install_reports_manual_review() {
   mkdir -p "${source_repo}/config/agents"
   cp -a "${repo_root}/packages/core/agents/supervisor" "${source_repo}/config/agents/supervisor"
   printf '\n# local override\n' >>"${source_repo}/config/agents/supervisor/prompt.yaml"
+  cp -a "${repo_root}/packages/alliance/agents/gene" "${source_repo}/config/agents/gene"
+  printf '\n# local alliance override\n' >>"${source_repo}/config/agents/gene/prompt.yaml"
 
   mkdir -p "${source_repo}/config/agents/custom_local"
   cat >"${source_repo}/config/agents/custom_local/agent.yaml" <<'EOF'
@@ -471,7 +530,7 @@ EOF
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output"
   assert_contains 'custom agents preserved: 1' "$dry_run_output"
-  assert_contains 'modified shipped agents preserved: 1' "$dry_run_output"
+  assert_contains 'modified shipped agents preserved: 2' "$dry_run_output"
   assert_contains 'custom tool files preserved: 1' "$dry_run_output"
   assert_contains 'extra non-package dirs preserved: 1' "$dry_run_output"
   assert_dir_not_exists "${install_home}/migration/legacy_local"
@@ -487,11 +546,13 @@ EOF
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$apply_output"
   assert_contains 'Manual review is required' "$apply_output"
   assert_file_exists "${install_home}/runtime/packages/core/package.yaml"
+  assert_file_exists "${install_home}/runtime/packages/alliance/package.yaml"
   assert_file_exists "${install_home}/migration/legacy_local/README.md"
   assert_file_exists "${install_home}/migration/legacy_local/package.yaml.template"
   assert_file_exists "${install_home}/migration/legacy_local/tools/bindings.yaml.template"
   assert_file_exists "${install_home}/migration/legacy_local/agents/custom/custom_local/agent.yaml"
-  assert_file_exists "${install_home}/migration/legacy_local/agents/modified_core/supervisor/prompt.yaml"
+  assert_file_exists "${install_home}/migration/legacy_local/agents/modified_shipped/supervisor/prompt.yaml"
+  assert_file_exists "${install_home}/migration/legacy_local/agents/modified_shipped/gene/prompt.yaml"
   assert_file_exists "${install_home}/migration/legacy_local/python/src/legacy_local/custom_tools/my_tool.py"
   assert_file_exists "${install_home}/migration/legacy_local/packages/local_notes/README.txt"
   assert_contains 'legacy_local' "${install_home}/migration/legacy_local/README.md"
@@ -510,6 +571,7 @@ test_non_git_source_ignores_dirty_helper_core
 test_git_source_without_upstream_can_still_be_ready
 test_git_source_without_upstream_reports_manual_review
 test_modified_core_package_reports_manual_review
+test_modified_alliance_package_reports_manual_review
 test_custom_repo_install_reports_manual_review
 
 echo "repo migration helper checks passed"

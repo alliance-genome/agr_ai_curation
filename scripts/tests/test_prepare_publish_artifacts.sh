@@ -52,6 +52,32 @@ assert_command_fails_with() {
   rm -f "${temp_output}"
 }
 
+assert_archive_has_entry() {
+  local archive_path="$1"
+  local entry_path="$2"
+  local archive_listing
+  archive_listing="$(tar -tzf "$archive_path")"
+
+  if ! grep -qx "$entry_path" <<<"${archive_listing}"; then
+    echo "Expected archive ${archive_path} to contain ${entry_path}" >&2
+    printf '%s\n' "${archive_listing}" >&2
+    exit 1
+  fi
+}
+
+assert_archive_lacks_entry() {
+  local archive_path="$1"
+  local entry_path="$2"
+  local archive_listing
+  archive_listing="$(tar -tzf "$archive_path")"
+
+  if grep -qx "$entry_path" <<<"${archive_listing}"; then
+    echo "Did not expect archive ${archive_path} to contain ${entry_path}" >&2
+    printf '%s\n' "${archive_listing}" >&2
+    exit 1
+  fi
+}
+
 make_sandbox_repo() {
   local sandbox_repo="$1"
 
@@ -92,6 +118,7 @@ test_release_lane_outputs_reproducible_assets() {
     --source-date-epoch 1700000000 >/dev/null
 
   assert_file_exists "${first_dir}/core-v9.9.9.tar.gz"
+  assert_file_exists "${first_dir}/alliance-v9.9.9.tar.gz"
   assert_file_exists "${first_dir}/env.standalone-v9.9.9"
   assert_file_exists "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
 
@@ -99,23 +126,27 @@ test_release_lane_outputs_reproducible_assets() {
   assert_contains '^FRONTEND_IMAGE_TAG=v9.9.9$' "${first_dir}/env.standalone-v9.9.9"
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=v9.9.9$' "${first_dir}/env.standalone-v9.9.9"
   assert_contains '"image_tag": "v9.9.9"' "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
+  assert_contains '"core_artifact": {' "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
+  assert_contains '"alliance_artifact": {' "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
+  assert_contains '"name": "core-v9.9.9.tar.gz"' "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
+  assert_contains '"name": "alliance-v9.9.9.tar.gz"' "${first_dir}/publish-artifacts-metadata-v9.9.9.json"
 
-  local archive_listing
-  archive_listing="$(tar -tzf "${first_dir}/core-v9.9.9.tar.gz")"
-  if ! grep -qx 'core/package.yaml' <<<"${archive_listing}"; then
-    echo "Expected bundled core artifact to contain core/package.yaml" >&2
-    exit 1
-  fi
-  if ! grep -qx 'alliance/package.yaml' <<<"${archive_listing}"; then
-    echo "Expected bundled core artifact to contain alliance/package.yaml" >&2
-    exit 1
-  fi
+  assert_archive_has_entry "${first_dir}/core-v9.9.9.tar.gz" 'core/package.yaml'
+  assert_archive_lacks_entry "${first_dir}/core-v9.9.9.tar.gz" 'alliance/package.yaml'
+  assert_archive_has_entry "${first_dir}/alliance-v9.9.9.tar.gz" 'alliance/package.yaml'
+  assert_archive_lacks_entry "${first_dir}/alliance-v9.9.9.tar.gz" 'core/package.yaml'
 
   local first_sha
   local second_sha
   first_sha="$(sha256sum "${first_dir}/core-v9.9.9.tar.gz" | awk '{print $1}')"
   second_sha="$(sha256sum "${second_dir}/core-v9.9.9.tar.gz" | awk '{print $1}')"
   assert_equals "$first_sha" "$second_sha"
+
+  local first_alliance_sha
+  local second_alliance_sha
+  first_alliance_sha="$(sha256sum "${first_dir}/alliance-v9.9.9.tar.gz" | awk '{print $1}')"
+  second_alliance_sha="$(sha256sum "${second_dir}/alliance-v9.9.9.tar.gz" | awk '{print $1}')"
+  assert_equals "$first_alliance_sha" "$second_alliance_sha"
 }
 
 test_main_lane_outputs_sha_pinned_assets() {
@@ -135,6 +166,7 @@ test_main_lane_outputs_sha_pinned_assets() {
     --source-date-epoch 1700000000 >/dev/null
 
   assert_file_exists "${temp_dir}/core-main-sha-abc1234.tar.gz"
+  assert_file_exists "${temp_dir}/alliance-main-sha-abc1234.tar.gz"
   assert_file_exists "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_file_exists "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
 
@@ -142,13 +174,12 @@ test_main_lane_outputs_sha_pinned_assets() {
   assert_contains '^FRONTEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=sha-abc1234$' "${temp_dir}/env.standalone-main-sha-abc1234"
   assert_contains '"image_tag": "sha-abc1234"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
-
-  local archive_listing
-  archive_listing="$(tar -tzf "${temp_dir}/core-main-sha-abc1234.tar.gz")"
-  if ! grep -qx 'alliance/package.yaml' <<<"${archive_listing}"; then
-    echo "Expected bundled core artifact to contain alliance/package.yaml" >&2
-    exit 1
-  fi
+  assert_contains '"name": "core-main-sha-abc1234.tar.gz"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
+  assert_contains '"name": "alliance-main-sha-abc1234.tar.gz"' "${temp_dir}/publish-artifacts-metadata-main-sha-abc1234.json"
+  assert_archive_has_entry "${temp_dir}/core-main-sha-abc1234.tar.gz" 'core/package.yaml'
+  assert_archive_lacks_entry "${temp_dir}/core-main-sha-abc1234.tar.gz" 'alliance/package.yaml'
+  assert_archive_has_entry "${temp_dir}/alliance-main-sha-abc1234.tar.gz" 'alliance/package.yaml'
+  assert_archive_lacks_entry "${temp_dir}/alliance-main-sha-abc1234.tar.gz" 'core/package.yaml'
 }
 
 test_rejects_missing_required_flags() {

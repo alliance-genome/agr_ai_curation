@@ -242,6 +242,13 @@ install_runtime_packages_dir() {
   printf '%s/packages\n' "$(install_runtime_root_dir "$install_home_dir")"
 }
 
+install_shipped_package_names() {
+  cat <<'EOF'
+core
+alliance
+EOF
+}
+
 install_runtime_state_dir() {
   local install_home_dir="$1"
   printf '%s/state\n' "$(install_runtime_root_dir "$install_home_dir")"

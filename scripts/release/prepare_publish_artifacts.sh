@@ -13,6 +13,9 @@ ref_name=""
 short_sha=""
 source_date_epoch="${SOURCE_DATE_EPOCH:-}"
 temp_dir=""
+declare -a shipped_package_names=()
+declare -A package_artifact_names=()
+declare -A package_artifact_sha256s=()
 
 usage() {
   cat <<'USAGE'
@@ -75,6 +78,24 @@ parse_args() {
   done
 }
 
+load_shipped_package_names() {
+  local package_name=""
+
+  if [[ "${#shipped_package_names[@]}" -gt 0 ]]; then
+    return 0
+  fi
+
+  while IFS= read -r package_name; do
+    [[ -n "${package_name}" ]] || continue
+    shipped_package_names+=("${package_name}")
+  done < <(install_shipped_package_names)
+
+  if [[ "${#shipped_package_names[@]}" -eq 0 ]]; then
+    echo "No shipped packages configured for publish artifacts" >&2
+    exit 1
+  fi
+}
+
 resolve_names() {
   local artifact_label=""
   local image_tag=""
@@ -99,7 +120,10 @@ resolve_names() {
       ;;
   esac
 
-  core_artifact_name="core-${artifact_label}.tar.gz"
+  local package_name=""
+  for package_name in "${shipped_package_names[@]}"; do
+    package_artifact_names["${package_name}"]="${package_name}-${artifact_label}.tar.gz"
+  done
   standalone_env_name="env.standalone-${artifact_label}"
   metadata_name="publish-artifacts-metadata-${artifact_label}.json"
   resolved_image_tag="${image_tag}"
@@ -117,8 +141,20 @@ render_env_template() {
 
 write_metadata() {
   local metadata_path="$1"
-  local core_sha256="$2"
-  local env_sha256="$3"
+  local env_sha256="$2"
+  local package_artifacts_json='{}'
+  local package_name=""
+
+  for package_name in "${shipped_package_names[@]}"; do
+    package_artifacts_json="$(
+      jq \
+        --arg package_name "${package_name}" \
+        --arg artifact_name "${package_artifact_names[$package_name]}" \
+        --arg artifact_sha256 "${package_artifact_sha256s[$package_name]}" \
+        '. + {($package_name): {name: $artifact_name, sha256: $artifact_sha256}}' \
+        <<<"${package_artifacts_json}"
+    )"
+  done
 
   jq -n \
     --arg lane "${lane}" \
@@ -126,8 +162,11 @@ write_metadata() {
     --arg short_sha "${short_sha}" \
     --arg image_tag "${resolved_image_tag}" \
     --argjson source_date_epoch "${source_date_epoch}" \
-    --arg core_name "${core_artifact_name}" \
-    --arg core_sha256 "${core_sha256}" \
+    --arg core_name "${package_artifact_names[core]}" \
+    --arg core_sha256 "${package_artifact_sha256s[core]}" \
+    --arg alliance_name "${package_artifact_names[alliance]}" \
+    --arg alliance_sha256 "${package_artifact_sha256s[alliance]}" \
+    --argjson package_artifacts "${package_artifacts_json}" \
     --arg env_name "${standalone_env_name}" \
     --arg env_sha256 "${env_sha256}" \
     '{
@@ -140,6 +179,11 @@ write_metadata() {
         name: $core_name,
         sha256: $core_sha256
       },
+      alliance_artifact: {
+        name: $alliance_name,
+        sha256: $alliance_sha256
+      },
+      package_artifacts: $package_artifacts,
       standalone_env: {
         name: $env_name,
         sha256: $env_sha256,
@@ -175,51 +219,52 @@ main() {
     exit 1
   fi
 
+  load_shipped_package_names
+
   local package_name=""
-  while IFS= read -r package_name; do
-    [[ -n "$package_name" ]] || continue
+  for package_name in "${shipped_package_names[@]}"; do
     if [[ ! -f "${repo_root}/packages/${package_name}/package.yaml" ]]; then
       echo "Missing packages/${package_name}/package.yaml in checkout; cannot build bundled runtime artifact" >&2
       exit 1
     fi
-  done < <(install_shipped_package_names)
+  done
 
   resolve_names
   mkdir -p "${output_dir}"
 
   temp_dir="$(mktemp -d)"
 
-  local bundled_package_dirs=()
-  while IFS= read -r package_name; do
-    [[ -n "$package_name" ]] || continue
-    bundled_package_dirs+=("${package_name}")
+  for package_name in "${shipped_package_names[@]}"; do
     cp -a "${repo_root}/packages/${package_name}" "${temp_dir}/${package_name}"
-  done < <(install_shipped_package_names)
+  done
 
-  local core_output_path="${output_dir}/${core_artifact_name}"
   local env_output_path="${output_dir}/${standalone_env_name}"
   local metadata_output_path="${output_dir}/${metadata_name}"
 
   render_env_template "${env_output_path}"
 
-  tar \
-    --sort=name \
-    --mtime="@${source_date_epoch}" \
-    --owner=0 \
-    --group=0 \
-    --numeric-owner \
-    --pax-option=delete=atime,delete=ctime \
-    -C "${temp_dir}" \
-    -cf - "${bundled_package_dirs[@]}" | gzip -n > "${core_output_path}"
+  local package_output_path=""
+  for package_name in "${shipped_package_names[@]}"; do
+    package_output_path="${output_dir}/${package_artifact_names[$package_name]}"
+    tar \
+      --sort=name \
+      --mtime="@${source_date_epoch}" \
+      --owner=0 \
+      --group=0 \
+      --numeric-owner \
+      --pax-option=delete=atime,delete=ctime \
+      -C "${temp_dir}" \
+      -cf - "${package_name}" | gzip -n > "${package_output_path}"
+    package_artifact_sha256s["${package_name}"]="$(sha256sum "${package_output_path}" | awk '{print $1}')"
+  done
 
-  local core_sha256
   local env_sha256
-  core_sha256="$(sha256sum "${core_output_path}" | awk '{print $1}')"
   env_sha256="$(sha256sum "${env_output_path}" | awk '{print $1}')"
 
-  write_metadata "${metadata_output_path}" "${core_sha256}" "${env_sha256}"
+  write_metadata "${metadata_output_path}" "${env_sha256}"
 
-  printf 'CORE_ARTIFACT=%s\n' "${core_artifact_name}"
+  printf 'CORE_ARTIFACT=%s\n' "${package_artifact_names[core]}"
+  printf 'ALLIANCE_ARTIFACT=%s\n' "${package_artifact_names[alliance]}"
   printf 'PINNED_ENV_TEMPLATE=%s\n' "${standalone_env_name}"
   printf 'PUBLISH_METADATA=%s\n' "${metadata_name}"
   printf 'PUBLISHED_IMAGE_TAG=%s\n' "${resolved_image_tag}"
