@@ -46,7 +46,7 @@ prompt_group_mode() {
   local response=""
 
   while true; do
-    read -r -p "Group setup [1=all Alliance groups, 2=single Alliance group, 3=custom group] (default ${default_mode}): " response
+    read -r -p "Group setup [1 = all Alliance groups, 2 = single Alliance group, 3 = custom group] (default ${default_mode}): " response
     response="${response:-${default_mode}}"
     case "$response" in
       1|2|3)

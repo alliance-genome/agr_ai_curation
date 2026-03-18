@@ -14,7 +14,7 @@ prompt_auth_mode() {
   local response=""
 
   while true; do
-    read -r -p "Authentication mode [1=dev, 2=oidc] (default 1): " response
+    read -r -p "Authentication mode [1 = dev, 2 = oidc] (default 1): " response
     response="${response:-1}"
     case "$response" in
       1)

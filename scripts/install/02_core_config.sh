@@ -127,7 +127,7 @@ prompt_package_profile() {
   fi
 
   while true; do
-    read -r -p "Package profile [1=core only, 2=core + alliance] (default ${default_choice}): " response
+    read -r -p "Package profile [1 = core only, 2 = core + alliance] (default ${default_choice}): " response
     response="${response:-$default_choice}"
 
     case "$response" in
