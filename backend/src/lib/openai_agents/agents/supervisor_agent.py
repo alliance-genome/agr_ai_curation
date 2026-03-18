@@ -258,6 +258,71 @@ def _get_supervisor_specialist_specs() -> List[Dict[str, Any]]:
     return specs
 
 
+def _build_runtime_tool_availability_note(
+    tool_specs: List[Dict[str, Any]],
+    available_specialist_tools: List[Callable],
+    document_loaded: bool,
+) -> str:
+    """Describe the specialist/tool runtime state for the current chat."""
+    available_tool_names = [
+        tool_name
+        for tool_name in (
+            str(getattr(tool, "name", "") or "").strip()
+            for tool in available_specialist_tools
+        )
+        if tool_name and tool_name != "export_to_file"
+    ]
+    document_tool_names = sorted(
+        {
+            str(spec.get("tool_name", "") or "").strip()
+            for spec in tool_specs
+            if spec.get("requires_document") and spec.get("tool_name")
+        }
+    )
+    available_document_tools = [
+        tool_name for tool_name in available_tool_names if tool_name in document_tool_names
+    ]
+
+    notes: List[str] = []
+
+    if available_tool_names:
+        notes.append(
+            "RUNTIME TOOL AVAILABILITY: Only these specialist tools are currently "
+            "installed and callable in this environment: "
+            f"{', '.join(available_tool_names)}. Do not mention or attempt any "
+            "other specialist tools."
+        )
+    else:
+        notes.append(
+            "CORE-ONLY MODE: No domain specialist tools are currently installed. "
+            "Treat this as a minimal general-purpose chat runtime and answer "
+            "general questions directly. If the user asks for Alliance-specific "
+            "database lookups, document extraction, annotation workflows, or other "
+            "specialist tasks, explain briefly that those specialist tools are not "
+            "installed in this environment."
+        )
+
+    if document_loaded and available_document_tools:
+        notes.append(
+            "DOCUMENT CONTEXT: A PDF document is loaded. For document-based requests, "
+            "use these document-aware specialist tools: "
+            f"{', '.join(available_document_tools)}."
+        )
+    elif not document_loaded and document_tool_names:
+        notes.append(
+            "No PDF document is currently loaded, so these document-dependent tools "
+            "are unavailable in this chat: "
+            f"{', '.join(document_tool_names)}."
+        )
+
+    notes.append(
+        "Use export_to_file only when the user explicitly asks to export or "
+        "download results."
+    )
+
+    return "\n\n".join(notes)
+
+
 def _create_dynamic_specialist_tools(
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -266,6 +331,7 @@ def _create_dynamic_specialist_tools(
     hierarchy: Optional[Dict[str, Any]] = None,
     abstract: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
+    tool_specs: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Callable]:
     """
     Dynamically create specialist tools based on unified agent records.
@@ -284,7 +350,7 @@ def _create_dynamic_specialist_tools(
     """
     from src.lib.agent_studio.catalog_service import get_agent_by_id
 
-    tools_metadata = _get_supervisor_specialist_specs()
+    tools_metadata = tool_specs if tool_specs is not None else _get_supervisor_specialist_specs()
     specialist_tools = []
 
     for tool_meta in tools_metadata:
@@ -442,6 +508,7 @@ def create_supervisor_agent(
     # Document-dependent agents are automatically filtered if no document is loaded.
     # Group-specific rules are injected for agents with group_rules_enabled=True.
     # =========================================================================
+    tool_specs = _get_supervisor_specialist_specs()
     specialist_tools = _create_dynamic_specialist_tools(
         document_id=document_id,
         user_id=user_id,
@@ -450,6 +517,7 @@ def create_supervisor_agent(
         hierarchy=hierarchy,
         abstract=abstract,
         active_groups=active_groups,
+        tool_specs=tool_specs,
     )
 
     routing_duration_ms = (time.monotonic() - route_start) * 1000
@@ -534,12 +602,11 @@ The tool returns file information including a download URL that will render as a
     # Build instructions from cached prompt
     instructions = base_prompt.content
 
-    if document_id:
-        # Document is loaded - tell supervisor to use it for extraction requests
-        instructions += "\n\n**DOCUMENT CONTEXT**: A PDF document is loaded. When users ask to \"create annotation\", \"extract\", or request curation tasks, use the loaded document as the source."
-    else:
-        # No document - inform supervisor that PDF tools are unavailable
-        instructions += "\n\nNOTE: No PDF document is currently loaded. The ask_pdf_specialist, ask_gene_extractor_specialist, ask_gene_expression_specialist, ask_phenotype_extractor_specialist, ask_allele_extractor_specialist, ask_disease_extractor_specialist, and ask_chemical_extractor_specialist tools are not available."
+    instructions += "\n\n" + _build_runtime_tool_availability_note(
+        tool_specs=tool_specs,
+        available_specialist_tools=specialist_tools,
+        document_loaded=bool(document_id and user_id),
+    )
 
     # Inject group-specific rules for supervisor dispatch behavior
     if active_groups:

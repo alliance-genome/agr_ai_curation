@@ -14,6 +14,25 @@ async def _collect_events(async_gen):
     return events
 
 
+class _FakeRunResult:
+    def __init__(self, events, final_output="ok"):
+        self._events = events
+        self.final_output = final_output
+
+    async def stream_events(self):
+        for event in self._events:
+            yield event
+
+
+class _FakeTextDelta:
+    def __init__(self, delta):
+        self.delta = delta
+
+
+def _raw_response_stream_event(data):
+    return SimpleNamespace(type="raw_response_event", data=data)
+
+
 def _patch_common_runtime(monkeypatch, captured):
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "clear_pending_configs", lambda: None)
@@ -202,6 +221,53 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
     assert "SPECIALIST_ERROR" in event_types
     assert "RUN_ERROR" in event_types
     assert captured["logged"][0][0] == "trace-specialist"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_core_only_round_trip_does_not_require_specialists(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(
+        runner,
+        "create_supervisor_agent",
+        lambda **_kwargs: SimpleNamespace(
+            name="Query Supervisor",
+            model="gpt-4o",
+            tools=[SimpleNamespace(name="export_to_file", description="Export data")],
+        ),
+    )
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [_raw_response_stream_event(_FakeTextDelta("Core-only hello"))],
+            final_output="Core-only hello",
+        ),
+    )
+
+    events = await _collect_events(
+        runner.run_agent_streamed(user_message="hello", user_id="user-core")
+    )
+
+    event_types = [event["type"] for event in events]
+    assert event_types[0] == "RUN_STARTED"
+    assert event_types[1] == "SUPERVISOR_START"
+    assert "TEXT_MESSAGE_CONTENT" in event_types
+    assert "TOOL_START" not in event_types
+    assert "CHAT_OUTPUT_READY" not in event_types
+    assert "FILE_READY" not in event_types
+    assert event_types[-1] == "RUN_FINISHED"
+    assert events[-1]["data"]["response"] == "Core-only hello"
+    assert captured["committed"] == ["Query Supervisor"]
 
 
 @pytest.mark.asyncio
