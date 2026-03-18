@@ -2,7 +2,9 @@
 
 import importlib
 import os
+import shutil
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -262,3 +264,102 @@ class TestLifespan:
         with pytest.raises(RuntimeError, match="Agent runtime validation failed"):
             async with _main_module().lifespan(app):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_path):
+    repo_root = Path(__file__).resolve().parents[3]
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+    shutil.copytree(repo_root / "packages" / "core", packages_dir / "agr.core")
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    monkeypatch.setenv("EMBEDDING_TOKEN_PREFLIGHT_ENABLED", "true")
+    monkeypatch.setenv("EMBEDDING_MODEL_TOKEN_LIMIT", "8192")
+    monkeypatch.setenv("EMBEDDING_TOKEN_SAFETY_MARGIN", "512")
+    monkeypatch.setenv("CONTENT_PREVIEW_CHARS", "400")
+
+    from src.lib.agent_studio import catalog_service
+    from src.lib.config import agent_loader, prompt_loader, schema_discovery
+    from src.lib.config.models_loader import reset_cache as reset_model_cache
+    from src.lib.config.providers_loader import reset_cache as reset_provider_cache
+
+    agent_loader.reset_cache()
+    prompt_loader.reset_cache()
+    schema_discovery.reset_cache()
+    reset_model_cache()
+    reset_provider_cache()
+    catalog_service.clear_package_tool_runtime_caches()
+
+    main = _main_module()
+    connection, client = make_connection()
+
+    class QueryStub:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return []
+
+        def first(self):
+            return None
+
+    class DBStub:
+        def __init__(self):
+            self.added = []
+            self.committed = False
+
+        def query(self, *_args, **_kwargs):
+            return QueryStub()
+
+        def execute(self, *_args, **_kwargs):
+            result = MagicMock()
+            result.scalar.return_value = True
+            return result
+
+        def add(self, item):
+            self.added.append(item)
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    db = DBStub()
+
+    with patch.object(main, "WeaviateConnection", return_value=connection), \
+         patch.object(main, "initialize_weaviate_collections", AsyncMock()), \
+         patch.object(main, "SessionLocal", return_value=db), \
+         patch(
+             "src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts",
+             return_value={
+                 "status": "healthy",
+                 "strict_mode": True,
+                 "validated_at": "2026-03-18T00:00:00+00:00",
+                 "errors": [],
+                 "warnings": [],
+                 "providers": [],
+                 "models": [],
+                 "summary": {"provider_count": 0, "model_count": 0},
+             },
+         ), \
+         patch("src.lib.prompts.cache.initialize"), \
+         patch("src.lib.config.groups_loader.load_groups", return_value={}), \
+         patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas"), \
+         patch("src.lib.agent_studio.runtime_validation._fetch_active_agents", lambda: []), \
+         patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
+        async with main.lifespan(FastAPI()):
+            pass
+
+    client.collections.list_all.assert_called()
+    assert db.committed is True
+    assert any(getattr(item, "agent_name", None) == "supervisor" for item in db.added)

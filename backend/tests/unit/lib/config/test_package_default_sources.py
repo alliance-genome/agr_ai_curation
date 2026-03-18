@@ -82,3 +82,50 @@ def test_resolve_runtime_config_path_reports_explicit_env_override(monkeypatch, 
 
     assert resolved_path == explicit_path
     assert explicitly_configured is True
+
+
+def test_resolve_runtime_config_path_does_not_fallback_to_repo_config_when_runtime_packages_exist(
+    monkeypatch,
+    tmp_path: Path,
+):
+    repo_root = tmp_path / "repo"
+    runtime_packages_dir = tmp_path / "runtime" / "packages"
+    runtime_config_dir = tmp_path / "runtime" / "config"
+    repo_config_dir = repo_root / "config"
+    module_path = (
+        repo_root / "backend" / "src" / "lib" / "config" / "package_default_sources.py"
+    )
+
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("", encoding="utf-8")
+    repo_config_dir.mkdir(parents=True)
+    runtime_packages_dir.mkdir(parents=True)
+    runtime_config_dir.mkdir(parents=True)
+    (repo_config_dir / "providers.yaml").write_text("providers: {}\n", encoding="utf-8")
+    (runtime_packages_dir / "agr.core").mkdir()
+    (runtime_packages_dir / "agr.core" / "package.yaml").write_text(
+        "package_id: agr.core\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(package_default_sources, "__file__", str(module_path))
+    monkeypatch.setattr(
+        package_default_sources,
+        "get_runtime_packages_dir",
+        lambda: runtime_packages_dir,
+    )
+    monkeypatch.setattr(
+        package_default_sources,
+        "get_runtime_config_dir",
+        lambda: runtime_config_dir,
+    )
+
+    resolved_path, explicitly_configured = package_default_sources.resolve_runtime_config_path(
+        None,
+        env_var="PROVIDERS_CONFIG_PATH",
+        filename="providers.yaml",
+    )
+
+    assert resolved_path == runtime_config_dir / "providers.yaml"
+    assert resolved_path.exists() is False
+    assert explicitly_configured is False

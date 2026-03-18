@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ import pytest
 from src.lib.packages.models import ExportKind, PackageExport, PackageManifest
 from src.lib.packages.registry import LoadedPackage, PackageRegistry
 from src.lib import runtime_entrypoint
+from .packages import find_repo_root
+
+REPO_ROOT = find_repo_root(Path(__file__))
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +64,20 @@ def test_validate_runtime_packages_requires_loaded_packages(monkeypatch, tmp_pat
 
     with pytest.raises(RuntimeError, match="No compatible runtime packages were discovered"):
         runtime_entrypoint.validate_runtime_packages()
+
+
+def test_validate_runtime_packages_accepts_core_only_runtime(monkeypatch, tmp_path: Path):
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    runtime_entrypoint.ensure_runtime_layout()
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "agr.core")
+
+    registry = runtime_entrypoint.validate_runtime_packages()
+
+    assert [package.package_id for package in registry.loaded_packages] == ["agr.core"]
+    assert registry.failed_packages == ()
 
 
 def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, tmp_path: Path):

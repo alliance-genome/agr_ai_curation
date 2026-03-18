@@ -119,6 +119,35 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
     assert any("Failed to load expected system agents from config: boom" in msg for msg in report["warnings"])
 
 
+def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"supervisor"}, None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": {"search_document"},
+            "agr_db_query_tool_ids": {"agr_curation_query"},
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+
+    assert report["status"] == "degraded"
+    assert report["errors"] == []
+    assert report["summary"]["missing_system_agent_count"] == 1
+    assert any(
+        "allowing core-only runtime bootstrap" in msg
+        for msg in report["warnings"]
+    )
+
+
 def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monkeypatch):
     import src.lib.agent_studio.runtime_validation as module
 

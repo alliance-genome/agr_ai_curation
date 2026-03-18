@@ -1,12 +1,16 @@
 """Additional runtime tests for prompt loader branches."""
 
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.lib.config import prompt_loader
+from ..packages import find_repo_root
+
+REPO_ROOT = find_repo_root(Path(__file__))
 
 
 class _QueryStub:
@@ -252,3 +256,36 @@ def test_load_prompts_uses_resolved_sources(monkeypatch):
 
     assert result == {"base_prompts": 1, "group_rules": 0}
     assert db.commit.called
+
+
+def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch):
+    packages_dir = tmp_path / "runtime" / "packages"
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_dir / "agr.core")
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+
+    db = MagicMock()
+    captured_calls = []
+
+    monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
+    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
+    monkeypatch.setattr(
+        prompt_loader,
+        "_upsert_prompt",
+        lambda **kwargs: (captured_calls.append(kwargs) or (True, 1)),
+    )
+
+    result = prompt_loader.load_prompts(db=db, force_reload=True)
+
+    assert result == {"base_prompts": 1, "group_rules": 2}
+    assert db.commit.called
+    assert any(
+        call["agent_name"] == "supervisor"
+        and call["prompt_type"] == "system"
+        and call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
+        for call in captured_calls
+    )
+    assert {
+        call["group_id"]
+        for call in captured_calls
+        if call["prompt_type"] == "group_rules"
+    } == {"MGI", "RGD"}
