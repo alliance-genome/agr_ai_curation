@@ -203,13 +203,6 @@ maintenance_message.txt
 EOF
 }
 
-install_shipped_package_names() {
-  cat <<'EOF'
-core
-alliance
-EOF
-}
-
 install_runtime_config_dir() {
   local install_home_dir="$1"
   printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"
@@ -243,6 +236,34 @@ install_file_outputs_dir() {
 install_weaviate_data_dir() {
   local install_home_dir="$1"
   printf '%s/weaviate\n' "$(install_data_root_dir "$install_home_dir")"
+}
+
+resolve_checkout_image_tag() {
+  local checkout_dir="$1"
+  local exact_tag=""
+  local short_sha=""
+
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! git -C "$checkout_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 1
+  fi
+
+  exact_tag="$(git -C "$checkout_dir" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  if [[ "$exact_tag" =~ ^v[0-9] ]]; then
+    printf '%s\n' "$exact_tag"
+    return 0
+  fi
+
+  short_sha="$(git -C "$checkout_dir" rev-parse --short HEAD 2>/dev/null || true)"
+  if [[ -n "$short_sha" ]]; then
+    printf 'sha-%s\n' "$short_sha"
+    return 0
+  fi
+
+  return 1
 }
 
 has_port_probe_command() {

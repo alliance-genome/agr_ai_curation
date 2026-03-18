@@ -1,6 +1,6 @@
 # Independent Deployment
 
-Last updated: 2026-03-13
+Last updated: 2026-03-17
 
 ## Scope
 
@@ -40,16 +40,22 @@ The standalone installer seeds the modular runtime under
 
 - Secrets + image tags: `~/.agr_ai_curation/.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
+- Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`
 - Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
-- Shipped AI Core package: `~/.agr_ai_curation/runtime/packages/core`
-- Shipped Alliance package: `~/.agr_ai_curation/runtime/packages/alliance`
+- Shipped core package: `~/.agr_ai_curation/runtime/packages/core`
 - Runtime state: `~/.agr_ai_curation/runtime/state`
 - Package-runner virtualenvs: `~/.agr_ai_curation/runtime/state/package_runner/<package_id>/venv`
 - Host data directories: `~/.agr_ai_curation/data/pdf_storage`, `~/.agr_ai_curation/data/file_outputs`, `~/.agr_ai_curation/data/weaviate`
 
 `scripts/install/install.sh --image-tag <tag>` can be used to pin the published backend/frontend/trace-review images to a specific release tag during installation.
-For tagged releases, prefer the exact `vX.Y.Z` tag or image digests from the release manifest (or use the attached `env.standalone-vX.Y.Z` asset) instead of `latest`.
+Without an explicit override, Stage 2 resolves the checked-out repo to an exact published image tag when possible:
+
+- exact `vX.Y.Z` when `HEAD` is a tagged release
+- `sha-<shortsha>` for ordinary Git checkouts such as `main`
+- checked-in template defaults when Git metadata is unavailable
+
+For tagged releases, prefer the exact `vX.Y.Z` tag or image digests from the release manifest (or use the attached `env.standalone-vX.Y.Z` asset) instead of a floating `latest` lane.
 
 ## Upgrading a standard standalone install
 
@@ -60,9 +66,8 @@ When the existing deployment already runs from `~/.agr_ai_curation/`:
    and any custom package directories under
    `~/.agr_ai_curation/runtime/packages/`.
 3. Move any long-lived customizations out of
-   `~/.agr_ai_curation/runtime/packages/core/` and
-   `~/.agr_ai_curation/runtime/packages/alliance/` before upgrading. Stage 2
-   refreshes the shipped packages and re-seeds the runtime config files.
+   `~/.agr_ai_curation/runtime/packages/core/` before upgrading. Stage 2
+   refreshes the shipped `core` package and re-seeds the runtime config files.
 4. Re-run the installer from Stage 2:
 
    ```bash
@@ -122,17 +127,46 @@ The authoritative standalone template is `scripts/install/lib/templates/env.stan
 Key values:
 
 - `BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-backend`
-- `BACKEND_IMAGE_TAG=smoke-20260310-final`
+- `BACKEND_IMAGE_TAG=latest`
 - `FRONTEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend`
-- `FRONTEND_IMAGE_TAG=smoke-20260310-final`
+- `FRONTEND_IMAGE_TAG=latest`
 - `TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend`
 - `TRACE_REVIEW_BACKEND_IMAGE_TAG=latest`
 - `TRACE_REVIEW_URL=http://trace_review_backend:8001`
 - `TRACE_REVIEW_LANGFUSE_HOST=http://langfuse:3000`
 - `TRACE_REVIEW_LANGFUSE_LOCAL_HOST=http://langfuse:3000`
 
-The checked-in template remains the dev/default baseline.
+The checked-in template is the manual baseline.
+When you run the installer from a Git checkout, Stage 2 rewrites those image tags to the matching published release tag or `sha-<shortsha>` for that checkout unless you pass `--image-tag`.
 Tagged releases publish a pinned `env.standalone-vX.Y.Z` companion asset so standalone installs can consume exact versioned image tags without editing the template by hand.
+
+## Optional Alliance curation database integration
+
+`curation_db` is optional in standalone deployment and is not part of the
+generic third-party install path.
+
+- If you do nothing, the standalone stack should still install and run normally
+  with `curation_db` treated as `not_configured`
+- The default standalone installer does not prompt for `CURATION_DB_*` values
+- This integration is mainly for deployments that want direct SQL access to an
+  AGR curation PostgreSQL database for extra lookup/tooling features
+
+Treat it as a post-install add-on rather than a base requirement.
+
+To add it later, set either:
+
+- `CURATION_DB_URL=postgresql://...`
+- or `CURATION_DB_CREDENTIALS_SOURCE=aws_secrets` plus the relevant
+  `CURATION_DB_AWS_SECRET_ID`, `AWS_PROFILE`, and `AWS_REGION`
+
+Then restart the backend:
+
+```bash
+docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+```
+
+On a generic third-party install, `/health` should not be degraded just because
+`curation_db` is unset.
 
 ## Authentication (OIDC)
 

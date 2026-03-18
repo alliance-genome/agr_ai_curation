@@ -286,6 +286,8 @@ main() {
   esac
 
   mv "$tmp_output" "$groups_output_path"
+  chmod 0644 "$groups_output_path"
+  chmod 0755 "$(dirname "$groups_output_path")"
   log_success "Generated group config at ${groups_output_path}"
 }
 

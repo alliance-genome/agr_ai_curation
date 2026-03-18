@@ -91,6 +91,10 @@ docker compose ps
 curl http://localhost:8000/health
 ```
 
+For a generic standalone install, `curation_db` is optional and can remain
+`not_configured`. It should be treated as a later integration step, not a base
+install requirement.
+
 ## Architecture
 
 ```

@@ -6,6 +6,8 @@ core_config_script="${repo_root}/scripts/install/02_core_config.sh"
 auth_setup_script="${repo_root}/scripts/install/03_auth_setup.sh"
 group_setup_script="${repo_root}/scripts/install/04_group_setup.sh"
 orchestrator_script="${repo_root}/scripts/install/install.sh"
+# shellcheck source=scripts/install/lib/common.sh
+source "${repo_root}/scripts/install/lib/common.sh"
 
 export NO_COLOR=1
 
@@ -153,6 +155,8 @@ test_core_config_generates_env_and_backups() {
   local pdf_storage_dir="${temp_home}/.agr_ai_curation/data/pdf_storage"
   local file_outputs_dir="${temp_home}/.agr_ai_curation/data/file_outputs"
   local weaviate_data_dir="${temp_home}/.agr_ai_curation/data/weaviate"
+  local expected_image_tag
+  expected_image_tag="$(resolve_checkout_image_tag "$repo_root")"
 
   run_core_config "$temp_home" $'sk-openai-first\n\n\n\n'
 
@@ -180,7 +184,11 @@ test_core_config_generates_env_and_backups() {
   assert_contains '^LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LLM_PROVIDER_STRICT_MODE=false$' "$env_file"
   assert_contains '^LANGFUSE_LOCAL_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres$' "$env_file"
+  assert_contains "^BACKEND_IMAGE_TAG=${expected_image_tag}$" "$env_file"
+  assert_contains "^FRONTEND_IMAGE_TAG=${expected_image_tag}$" "$env_file"
+  assert_contains "^TRACE_REVIEW_BACKEND_IMAGE_TAG=${expected_image_tag}$" "$env_file"
   assert_contains "^AGR_RUNTIME_CONFIG_HOST_DIR=${runtime_config_dir}$" "$env_file"
+  assert_contains "^AGR_REPO_CONFIG_HOST_DIR=${repo_root}/config$" "$env_file"
   assert_contains "^AGR_RUNTIME_PACKAGES_HOST_DIR=${runtime_packages_dir}$" "$env_file"
   assert_contains "^AGR_RUNTIME_STATE_HOST_DIR=${runtime_state_dir}$" "$env_file"
   assert_contains "^PDF_STORAGE_HOST_DIR=${pdf_storage_dir}$" "$env_file"
@@ -191,6 +199,10 @@ test_core_config_generates_env_and_backups() {
     echo "Expected runtime config dir at ${runtime_config_dir}" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "$runtime_config_dir")" == "755" ]] || {
+    echo "Expected runtime config dir to be readable by published containers" >&2
+    exit 1
+  }
   [[ -d "$runtime_packages_dir" ]] || {
     echo "Expected runtime packages dir at ${runtime_packages_dir}" >&2
     exit 1
@@ -199,16 +211,32 @@ test_core_config_generates_env_and_backups() {
     echo "Expected runtime state dir at ${runtime_state_dir}" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "$runtime_state_dir")" == "777" ]] || {
+    echo "Expected runtime state dir to be writable by published containers" >&2
+    exit 1
+  }
   [[ -d "$pdf_storage_dir" ]] || {
     echo "Expected PDF storage dir at ${pdf_storage_dir}" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%a' "$pdf_storage_dir")" == "777" ]] || {
+    echo "Expected PDF storage dir to be writable by published containers" >&2
     exit 1
   }
   [[ -d "$file_outputs_dir" ]] || {
     echo "Expected file outputs dir at ${file_outputs_dir}" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "$file_outputs_dir")" == "777" ]] || {
+    echo "Expected file outputs dir to be writable by published containers" >&2
+    exit 1
+  }
   [[ -d "$weaviate_data_dir" ]] || {
     echo "Expected Weaviate data dir at ${weaviate_data_dir}" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%a' "$weaviate_data_dir")" == "777" ]] || {
+    echo "Expected Weaviate data dir to be writable by published containers" >&2
     exit 1
   }
   [[ -f "${runtime_config_dir}/connections.yaml" ]] || {
@@ -219,16 +247,15 @@ test_core_config_generates_env_and_backups() {
     echo "Expected seeded runtime config file at ${runtime_config_dir}/providers.yaml" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "${runtime_config_dir}/providers.yaml")" == "644" ]] || {
+    echo "Expected seeded runtime config file to be readable by published containers" >&2
+    exit 1
+  }
   [[ -f "${runtime_packages_dir}/core/package.yaml" ]] || {
     echo "Expected seeded core package manifest at ${runtime_packages_dir}/core/package.yaml" >&2
     exit 1
   }
   cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
-  [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
-    echo "Expected seeded alliance package manifest at ${runtime_packages_dir}/alliance/package.yaml" >&2
-    exit 1
-  }
-  cmp "${repo_root}/packages/alliance/package.yaml" "${runtime_packages_dir}/alliance/package.yaml"
 
   local init_public_key
   local public_key
@@ -297,6 +324,10 @@ test_group_setup_defaults_to_runtime_config_path() {
     echo "Expected default runtime groups file at ${default_groups_path}" >&2
     exit 1
   }
+  [[ "$(stat -c '%a' "$default_groups_path")" == "644" ]] || {
+    echo "Expected default runtime groups file to be readable by published containers" >&2
+    exit 1
+  }
   assert_contains '^  FB:$' "$default_groups_path"
 }
 
@@ -321,6 +352,10 @@ test_group_setup_modes_and_backup() {
   assert_glob_exists "${groups_output_path}.bak.*"
   assert_contains '^  FB:$' "$groups_output_path"
   assert_not_contains '^  WB:$' "$groups_output_path"
+  [[ "$(stat -c '%a' "$groups_output_path")" == "644" ]] || {
+    echo "Expected generated group config to be readable by published containers" >&2
+    exit 1
+  }
 
   run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org\nclient-id\nclient-secret\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
   run_group_setup "$temp_home" "$groups_output_path" $'3\nMYORG\nMy Organization\nCustom deployment group\nHomo sapiens\nNCBITaxon:9606\nmyorg-curators,myorg-admins\n'
@@ -428,10 +463,6 @@ test_orchestrator_skip_flags() {
   assert_contains '^TRACE_REVIEW_BACKEND_IMAGE_TAG=release-20260313$' "$env_file"
   [[ -f "${temp_home}/.agr_ai_curation/runtime/packages/core/package.yaml" ]] || {
     echo "Expected orchestrator to seed the bundled core package" >&2
-    exit 1
-  }
-  [[ -f "${temp_home}/.agr_ai_curation/runtime/packages/alliance/package.yaml" ]] || {
-    echo "Expected orchestrator to seed the bundled alliance package" >&2
     exit 1
   }
   assert_contains 'Completed Stage 6 - Start and verify services' "$output_path"

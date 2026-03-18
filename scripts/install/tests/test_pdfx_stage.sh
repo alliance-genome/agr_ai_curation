@@ -89,6 +89,7 @@ run_pdfx_setup() {
   PATH="${stub_dir}:${PATH}" \
   INSTALL_GIT_CMD="git" \
   INSTALL_LSOF_CMD="lsof" \
+  INSTALL_SS_CMD="definitely-not-a-real-command" \
   INSTALL_PDFX_REPO_URL="https://example.invalid/agr_pdf_extraction_service.git" \
   bash "$pdfx_setup_script" <<<"$input_text" >"$output_path" 2>&1
   rc=$?

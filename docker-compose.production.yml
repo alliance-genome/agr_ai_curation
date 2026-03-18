@@ -150,6 +150,7 @@ services:
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      LLM_PROVIDER_STRICT_MODE: "${LLM_PROVIDER_STRICT_MODE:-false}"
       ANTHROPIC_OPUS_MODEL: "${ANTHROPIC_OPUS_MODEL:-claude-opus-4-6}"
       LANGFUSE_HOST: "http://langfuse:3000"
       LANGFUSE_PUBLIC_URL: "${LANGFUSE_PUBLIC_URL:-}"
@@ -182,7 +183,7 @@ services:
       POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
       CURATION_DB_URL: "${CURATION_DB_URL:-}"
       LITERATURE_DB_URL: "${LITERATURE_DB_URL:-}"
-      CURATION_DB_CREDENTIALS_SOURCE: "${CURATION_DB_CREDENTIALS_SOURCE:-}"
+      CURATION_DB_CREDENTIALS_SOURCE: "${CURATION_DB_CREDENTIALS_SOURCE:-env}"
       CURATION_DB_AWS_SECRET_ID: "${CURATION_DB_AWS_SECRET_ID:-}"
       CHAT_HISTORY_ENABLED: "${CHAT_HISTORY_ENABLED:-true}"
       CHAT_MAX_HISTORY_EXCHANGES: "${CHAT_MAX_HISTORY_EXCHANGES:-20}"
@@ -216,11 +217,16 @@ services:
       TESTING_API_KEY_EMAIL: "${TESTING_API_KEY_EMAIL:-testuser@example.org}"
       TESTING_API_KEY_GROUPS: "${TESTING_API_KEY_GROUPS:-developers}"
       TESTING_API_KEY_MODS: "${TESTING_API_KEY_MODS:-}"
+      MAINTENANCE_MESSAGE_FILE: "${MAINTENANCE_MESSAGE_FILE:-/runtime/config/maintenance_message.txt}"
       REDIS_URL: "${REDIS_URL:-redis://:${REDIS_AUTH:?set in standalone env}@redis:6379/0}"
     volumes:
       - type: bind
         source: "${AGR_RUNTIME_CONFIG_HOST_DIR:-./config}"
         target: /runtime/config
+        read_only: true
+      - type: bind
+        source: "${AGR_REPO_CONFIG_HOST_DIR:-./config}"
+        target: /app/config
         read_only: true
       - type: bind
         source: "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}"

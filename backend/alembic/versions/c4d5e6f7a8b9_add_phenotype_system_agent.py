@@ -38,6 +38,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _candidate_agent_dirs() -> list[Path]:
+    repo_root = _repo_root()
+    runtime_root = Path(os.environ.get("AGR_RUNTIME_ROOT", "/runtime"))
+    runtime_packages_dir = Path(
+        os.environ.get("AGR_RUNTIME_PACKAGES_DIR", str(runtime_root / "packages"))
+    )
+
+    return [
+        runtime_packages_dir / "core" / "agents" / _AGENT_KEY,
+        repo_root / "packages" / "core" / "agents" / _AGENT_KEY,
+        repo_root / "config" / "agents" / _AGENT_KEY,
+    ]
+
+
 def _resolve_model_name(raw_model: Any) -> str:
     model = str(raw_model or "gpt-4o")
     match = _MODEL_ENV_PATTERN.match(model)
@@ -49,14 +63,25 @@ def _resolve_model_name(raw_model: Any) -> str:
 
 
 def _load_phenotype_spec() -> Tuple[Dict[str, Any], str]:
-    repo_root = _repo_root()
-    agent_yaml = repo_root / "config" / "agents" / _AGENT_KEY / "agent.yaml"
-    prompt_yaml = repo_root / "config" / "agents" / _AGENT_KEY / "prompt.yaml"
+    agent_yaml = None
+    prompt_yaml = None
+    searched_dirs: list[str] = []
 
-    if not agent_yaml.exists():
-        raise RuntimeError(f"Missing phenotype agent config: {agent_yaml}")
-    if not prompt_yaml.exists():
-        raise RuntimeError(f"Missing phenotype prompt config: {prompt_yaml}")
+    for agent_dir in _candidate_agent_dirs():
+        searched_dirs.append(str(agent_dir))
+        candidate_agent_yaml = agent_dir / "agent.yaml"
+        candidate_prompt_yaml = agent_dir / "prompt.yaml"
+        if candidate_agent_yaml.exists() and candidate_prompt_yaml.exists():
+            agent_yaml = candidate_agent_yaml
+            prompt_yaml = candidate_prompt_yaml
+            break
+
+    if agent_yaml is None or prompt_yaml is None:
+        searched = ", ".join(searched_dirs)
+        raise RuntimeError(
+            "Missing phenotype agent bundle. Checked: "
+            f"{searched}"
+        )
 
     with agent_yaml.open("r", encoding="utf-8") as handle:
         agent_data = yaml.safe_load(handle) or {}

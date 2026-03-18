@@ -10,6 +10,8 @@ install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 env_template_path="${repo_root}/scripts/install/lib/templates/env.standalone"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
 image_tag_override="${INSTALL_IMAGE_TAG:-}"
+resolved_image_tag=""
+image_tag_note=""
 
 mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
 
@@ -37,10 +39,11 @@ seed_runtime_layout() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
-  local packages_source_root="$7"
-  local config_source_dir="$8"
+  local core_package_source_dir="$7"
+  local core_package_target_dir="$8"
+  local config_source_dir="$9"
 
-  require_directory_exists "$packages_source_root"
+  require_directory_exists "$core_package_source_dir"
   require_directory_exists "$config_source_dir"
 
   mkdir -p \
@@ -55,21 +58,40 @@ seed_runtime_layout() {
   for filename in "${deployment_config_filenames[@]}"; do
     require_file_exists "${config_source_dir}/${filename}"
     cp "${config_source_dir}/${filename}" "${runtime_config_dir}/${filename}"
+    chmod 0644 "${runtime_config_dir}/${filename}"
   done
 
-  local package_name=""
-  while IFS= read -r package_name; do
-    [[ -n "$package_name" ]] || continue
+  chmod 0755 "$runtime_config_dir"
 
-    local package_source_dir="${packages_source_root}/${package_name}"
-    local package_target_dir="${runtime_packages_dir}/${package_name}"
+  require_non_empty "core_package_target_dir" "$core_package_target_dir"
+  rm -rf "$core_package_target_dir"
+  cp -a "$core_package_source_dir" "$core_package_target_dir"
 
-    require_directory_exists "$package_source_dir"
-    require_file_exists "${package_source_dir}/package.yaml"
-    require_non_empty "package_target_dir" "$package_target_dir"
-    rm -rf "$package_target_dir"
-    cp -a "$package_source_dir" "$package_target_dir"
-  done < <(install_shipped_package_names)
+  # Published runtime containers run as non-root users, so the mutable
+  # host-mounted directories need write access regardless of the installer
+  # user's UID/GID on the host.
+  chmod 0777 \
+    "$runtime_state_dir" \
+    "$pdf_storage_dir" \
+    "$file_outputs_dir" \
+    "$weaviate_data_dir"
+}
+
+resolve_image_tag_defaults() {
+  if [[ -n "$image_tag_override" ]]; then
+    resolved_image_tag="$image_tag_override"
+    image_tag_note="override"
+    return 0
+  fi
+
+  resolved_image_tag="$(resolve_checkout_image_tag "$repo_root" || true)"
+  if [[ -n "$resolved_image_tag" ]]; then
+    image_tag_note="resolved from checkout"
+    return 0
+  fi
+
+  resolved_image_tag=""
+  image_tag_note="template default"
 }
 
 print_stage_intro() {
@@ -95,8 +117,10 @@ print_stage_intro() {
   echo "  Config location: ${install_home_dir}/.env"
   echo "  Runtime directory: ${runtime_root_dir}"
   echo "  Data directory: ${data_root_dir}"
-  if [[ -n "$image_tag_override" ]]; then
-    echo "  Image tag override: ${image_tag_override}"
+  if [[ -n "$resolved_image_tag" ]]; then
+    echo "  Published image tag: ${resolved_image_tag} (${image_tag_note})"
+  else
+    echo "  Published image tag: template defaults (${image_tag_note})"
   fi
   echo
 }
@@ -113,7 +137,8 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
-  local packages_source_root
+  local core_package_source_dir
+  local core_package_target_dir
   local config_source_dir
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
@@ -124,10 +149,12 @@ main() {
   pdf_storage_dir="$(install_pdf_storage_dir "$install_home_dir")"
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
-  packages_source_root="${repo_root}/packages"
+  core_package_source_dir="${repo_root}/packages/core"
+  core_package_target_dir="${runtime_packages_dir}/core"
   config_source_dir="${repo_root}/config"
 
   mkdir -p "$install_home_dir"
+  resolve_image_tag_defaults
   seed_runtime_layout \
     "$runtime_config_dir" \
     "$runtime_packages_dir" \
@@ -135,7 +162,8 @@ main() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir" \
-    "$packages_source_root" \
+    "$core_package_source_dir" \
+    "$core_package_target_dir" \
     "$config_source_dir"
 
   if [[ -f "$env_output_path" ]]; then
@@ -218,22 +246,23 @@ main() {
   upsert_env_var "$env_output_path" "LANGFUSE_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
   upsert_env_var "$env_output_path" "LANGFUSE_LOCAL_DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres'
   upsert_env_var "$env_output_path" "AGR_RUNTIME_CONFIG_HOST_DIR" "$runtime_config_dir"
+  upsert_env_var "$env_output_path" "AGR_REPO_CONFIG_HOST_DIR" "$config_source_dir"
   upsert_env_var "$env_output_path" "AGR_RUNTIME_PACKAGES_HOST_DIR" "$runtime_packages_dir"
   upsert_env_var "$env_output_path" "AGR_RUNTIME_STATE_HOST_DIR" "$runtime_state_dir"
   upsert_env_var "$env_output_path" "PDF_STORAGE_HOST_DIR" "$pdf_storage_dir"
   upsert_env_var "$env_output_path" "FILE_OUTPUT_STORAGE_HOST_DIR" "$file_outputs_dir"
   upsert_env_var "$env_output_path" "WEAVIATE_DATA_HOST_DIR" "$weaviate_data_dir"
 
-  if [[ -n "$image_tag_override" ]]; then
-    upsert_env_var "$env_output_path" "BACKEND_IMAGE_TAG" "$image_tag_override"
-    upsert_env_var "$env_output_path" "FRONTEND_IMAGE_TAG" "$image_tag_override"
-    upsert_env_var "$env_output_path" "TRACE_REVIEW_BACKEND_IMAGE_TAG" "$image_tag_override"
+  if [[ -n "$resolved_image_tag" ]]; then
+    upsert_env_var "$env_output_path" "BACKEND_IMAGE_TAG" "$resolved_image_tag"
+    upsert_env_var "$env_output_path" "FRONTEND_IMAGE_TAG" "$resolved_image_tag"
+    upsert_env_var "$env_output_path" "TRACE_REVIEW_BACKEND_IMAGE_TAG" "$resolved_image_tag"
   fi
 
   chmod 600 "$env_output_path"
   log_success "Generated core config at ${env_output_path}"
   log_success "Seeded runtime config into ${runtime_config_dir}"
-  log_success "Seeded bundled runtime packages into ${runtime_packages_dir}"
+  log_success "Seeded bundled core package into ${core_package_target_dir}"
 }
 
 main "$@"

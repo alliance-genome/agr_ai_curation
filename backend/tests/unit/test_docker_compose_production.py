@@ -70,6 +70,7 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
 
     assert backend_bindings == {
         "/runtime/config": "${AGR_RUNTIME_CONFIG_HOST_DIR:-./config}",
+        "/app/config": "${AGR_REPO_CONFIG_HOST_DIR:-./config}",
         "/runtime/packages": "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}",
         "/runtime/state": "${AGR_RUNTIME_STATE_HOST_DIR:-./runtime_state}",
         "/runtime/state/pdf_storage": "${PDF_STORAGE_HOST_DIR:-./pdf_storage}",
@@ -92,10 +93,15 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert backend_env["AGR_RUNTIME_ROOT"] == "/runtime"
     assert backend_env["RUN_DB_BOOTSTRAP_ON_START"] == "${RUN_DB_BOOTSTRAP_ON_START:-true}"
     assert backend_env["RUN_DB_MIGRATIONS_ON_START"] == "${RUN_DB_MIGRATIONS_ON_START:-true}"
+    assert backend_env["LLM_PROVIDER_STRICT_MODE"] == "${LLM_PROVIDER_STRICT_MODE:-false}"
     assert backend_env["TRACE_REVIEW_URL"] == "${TRACE_REVIEW_URL:-http://trace_review_backend:8001}"
     assert backend_env["PDF_STORAGE_PATH"] == "/runtime/state/pdf_storage"
     assert backend_env["FILE_OUTPUT_STORAGE_PATH"] == "/runtime/state/file_outputs"
     assert backend_env["DATABASE_URL"] == "${DATABASE_URL:?set in standalone env}"
+    assert backend_env["CURATION_DB_CREDENTIALS_SOURCE"] == "${CURATION_DB_CREDENTIALS_SOURCE:-env}"
+    assert backend_env["MAINTENANCE_MESSAGE_FILE"] == (
+        "${MAINTENANCE_MESSAGE_FILE:-/runtime/config/maintenance_message.txt}"
+    )
 
     assert langfuse_worker_env["DATABASE_URL"] == (
         "${LANGFUSE_LOCAL_DATABASE_URL:?set in standalone env}"
@@ -127,6 +133,7 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
 
     for key in (
         "AGR_RUNTIME_CONFIG_HOST_DIR=",
+        "AGR_REPO_CONFIG_HOST_DIR=",
         "AGR_RUNTIME_PACKAGES_HOST_DIR=",
         "AGR_RUNTIME_STATE_HOST_DIR=",
         "PDF_STORAGE_HOST_DIR=",
