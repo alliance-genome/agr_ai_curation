@@ -207,7 +207,10 @@ print_stage_intro() {
   echo "  What you'll be asked:"
   echo
   echo "    1. Package profile     (default core only; optionally add the alliance package)"
-  echo "    2. OpenAI API key      (REQUIRED - used for embeddings and default models)"
+  local red='\033[0;31m'
+  local reset='\033[0m'
+  if ! supports_color; then red="" reset=""; fi
+  printf "    2. OpenAI API key      (${red}REQUIRED${reset} - used for embeddings and default models)\n"
   echo "    3. Groq API key        (optional - adds Groq as an LLM provider)"
   echo "    4. Anthropic API key   (recommended - powers the in-app Claude help agent)"
   echo "    5. Gemini API key      (optional - adds Google Gemini models)"
