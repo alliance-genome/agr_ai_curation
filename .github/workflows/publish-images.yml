@@ -242,7 +242,7 @@ jobs:
           path: image-metadata/${{ matrix.manifest_key }}.json
 
   package-core:
-    name: Package bundled core artifact
+    name: Package split runtime artifacts
     needs: prepare
     if: needs.prepare.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -254,7 +254,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build bundled core artifact and pinned env template
+      - name: Build split package artifacts and pinned env template
         shell: bash
         run: |
           mkdir -p dist/runtime-assets
@@ -264,7 +264,7 @@ jobs:
             --ref-name "${{ needs.prepare.outputs.ref_name }}" \
             --short-sha "${{ needs.prepare.outputs.short_sha }}"
 
-      - name: Upload bundled runtime assets
+      - name: Upload split runtime assets
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.prepare.outputs.artifact_bundle_name }}
@@ -288,7 +288,7 @@ jobs:
           path: dist/image-metadata
           pattern: published-image-metadata-*
 
-      - name: Download bundled runtime assets
+      - name: Download split runtime assets
         uses: actions/download-artifact@v4
         with:
           path: dist/runtime-assets
@@ -304,15 +304,15 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
         run: |
-          mapfile -t core_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
-          if [[ "${#core_metadata_files[@]}" -ne 1 ]]; then
-            echo "Expected exactly 1 publish-artifacts metadata file, found ${#core_metadata_files[@]}." >&2
-            if [[ "${#core_metadata_files[@]}" -gt 0 ]]; then
-              printf 'Found: %s\n' "${core_metadata_files[@]}" >&2
+          mapfile -t publish_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
+          if [[ "${#publish_metadata_files[@]}" -ne 1 ]]; then
+            echo "Expected exactly 1 publish-artifacts metadata file, found ${#publish_metadata_files[@]}." >&2
+            if [[ "${#publish_metadata_files[@]}" -gt 0 ]]; then
+              printf 'Found: %s\n' "${publish_metadata_files[@]}" >&2
             fi
             exit 1
           fi
-          core_metadata_path="${core_metadata_files[0]}"
+          publish_metadata_path="${publish_metadata_files[0]}"
           images_json="$(jq -s '
             map({
               (.image_id): {
@@ -335,7 +335,7 @@ jobs:
             --arg release_tag "${RELEASE_TAG}" \
             --arg short_sha "${SHORT_SHA}" \
             --argjson images "${images_json}" \
-            --slurpfile publish_assets "${core_metadata_path}" \
+            --slurpfile publish_assets "${publish_metadata_path}" \
             '{
               schema_version: 1,
               git_sha: $git_sha,
@@ -346,6 +346,8 @@ jobs:
               release_tag: (if $release_tag == "" then null else $release_tag end),
               short_sha: $short_sha,
               core_artifact: $publish_assets[0].core_artifact,
+              alliance_artifact: $publish_assets[0].alliance_artifact,
+              package_artifacts: $publish_assets[0].package_artifacts,
               standalone_env_template: $publish_assets[0].standalone_env
             }' > "dist/runtime-assets/${MANIFEST_NAME}"
 
@@ -365,6 +367,7 @@ jobs:
         run: |
           files=(
             "dist/runtime-assets/core-${RELEASE_TAG}.tar.gz"
+            "dist/runtime-assets/alliance-${RELEASE_TAG}.tar.gz"
             "dist/runtime-assets/env.standalone-${RELEASE_TAG}"
             "dist/runtime-assets/${MANIFEST_NAME}"
           )
@@ -384,19 +387,17 @@ jobs:
           PUBLISH_LANE: ${{ needs.prepare.outputs.publish_lane }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          mapfile -t core_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
-          if [[ "${#core_metadata_files[@]}" -ne 1 ]]; then
-            echo "Expected exactly 1 publish-artifacts metadata file, found ${#core_metadata_files[@]}." >&2
-            if [[ "${#core_metadata_files[@]}" -gt 0 ]]; then
-              printf 'Found: %s\n' "${core_metadata_files[@]}" >&2
+          mapfile -t publish_metadata_files < <(find dist/runtime-assets -maxdepth 1 -type f -name 'publish-artifacts-metadata-*.json' | sort)
+          if [[ "${#publish_metadata_files[@]}" -ne 1 ]]; then
+            echo "Expected exactly 1 publish-artifacts metadata file, found ${#publish_metadata_files[@]}." >&2
+            if [[ "${#publish_metadata_files[@]}" -gt 0 ]]; then
+              printf 'Found: %s\n' "${publish_metadata_files[@]}" >&2
             fi
             exit 1
           fi
-          core_metadata_path="${core_metadata_files[0]}"
-          core_name="$(jq -r '.core_artifact.name' "${core_metadata_path}")"
-          core_sha="$(jq -r '.core_artifact.sha256' "${core_metadata_path}")"
-          env_name="$(jq -r '.standalone_env.name' "${core_metadata_path}")"
-          pinned_tag="$(jq -r '.image_tag' "${core_metadata_path}")"
+          publish_metadata_path="${publish_metadata_files[0]}"
+          env_name="$(jq -r '.standalone_env.name' "${publish_metadata_path}")"
+          pinned_tag="$(jq -r '.image_tag' "${publish_metadata_path}")"
 
           echo "## Published runtime assets" >> "${GITHUB_STEP_SUMMARY}"
           echo "" >> "${GITHUB_STEP_SUMMARY}"
@@ -405,9 +406,13 @@ jobs:
             echo "- Release tag: \`${RELEASE_TAG}\`" >> "${GITHUB_STEP_SUMMARY}"
           fi
           echo "- Exact installer tag: \`${pinned_tag}\`" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Bundled core artifact: \`${core_name}\` (\`${core_sha}\`)" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Pinned standalone env template: \`${env_name}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Machine-readable manifest: \`${MANIFEST_NAME}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "### Published package artifacts" >> "${GITHUB_STEP_SUMMARY}"
+          while IFS=$'\t' read -r package_name artifact_name artifact_sha; do
+            echo "- \`${package_name}\`: \`${artifact_name}\` (\`${artifact_sha}\`)" >> "${GITHUB_STEP_SUMMARY}"
+          done < <(jq -r '.package_artifacts | to_entries[] | "\(.key)\t\(.value.name)\t\(.value.sha256)"' "${publish_metadata_path}")
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "### Published image refs" >> "${GITHUB_STEP_SUMMARY}"
           while IFS= read -r metadata_file; do
