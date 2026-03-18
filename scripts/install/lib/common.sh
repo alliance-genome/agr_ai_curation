@@ -232,6 +232,50 @@ install_shipped_package_names() {
   fi
 }
 
+normalize_install_package_profile() {
+  local raw_profile="${1:-}"
+  raw_profile="${raw_profile,,}"
+
+  case "$raw_profile" in
+    core-only|core_only|core|coreonly)
+      printf 'core-only\n'
+      return 0
+      ;;
+    core-plus-alliance|core_plus_alliance|core+alliance|alliance)
+      printf 'core-plus-alliance\n'
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_package_profile_label() {
+  local package_profile="$1"
+
+  case "$package_profile" in
+    core-only)
+      printf 'core only\n'
+      return 0
+      ;;
+    core-plus-alliance)
+      printf 'core + alliance\n'
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_package_profile_includes_alliance() {
+  local normalized_profile=""
+
+  normalized_profile="$(normalize_install_package_profile "$1")" || return 1
+  [[ "$normalized_profile" == "core-plus-alliance" ]]
+}
+
 install_runtime_config_dir() {
   local install_home_dir="$1"
   printf '%s/config\n' "$(install_runtime_root_dir "$install_home_dir")"

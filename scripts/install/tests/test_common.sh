@@ -98,6 +98,41 @@ if ! printf '%s\n' "${shipped_package_names[@]}" | grep -qx 'alliance'; then
   exit 1
 fi
 
+if [[ "$(normalize_install_package_profile "core")" != "core-only" ]]; then
+  echo "normalize_install_package_profile should normalize core aliases" >&2
+  exit 1
+fi
+
+if [[ "$(normalize_install_package_profile "core+alliance")" != "core-plus-alliance" ]]; then
+  echo "normalize_install_package_profile should normalize alliance aliases" >&2
+  exit 1
+fi
+
+if normalize_install_package_profile "not-a-profile" >/dev/null 2>&1; then
+  echo "normalize_install_package_profile should reject unknown profiles" >&2
+  exit 1
+fi
+
+if [[ "$(install_package_profile_label "core-only")" != "core only" ]]; then
+  echo "install_package_profile_label should label core-only" >&2
+  exit 1
+fi
+
+if [[ "$(install_package_profile_label "core-plus-alliance")" != "core + alliance" ]]; then
+  echo "install_package_profile_label should label core-plus-alliance" >&2
+  exit 1
+fi
+
+if ! install_package_profile_includes_alliance "core-plus-alliance"; then
+  echo "install_package_profile_includes_alliance should detect alliance profile" >&2
+  exit 1
+fi
+
+if install_package_profile_includes_alliance "core-only"; then
+  echo "install_package_profile_includes_alliance should reject core-only" >&2
+  exit 1
+fi
+
 port_stub_dir="$(mktemp -d)"
 cat >"${port_stub_dir}/lsof" <<'EOF'
 #!/usr/bin/env bash
