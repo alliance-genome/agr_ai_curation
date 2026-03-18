@@ -79,6 +79,11 @@ def test_load_prompts_defaults_to_runtime_packages_and_tracks_package_paths(monk
         and call["group_id"] == "FB"
         for call in captured_calls
     )
+    assert any(
+        call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
+        and call["prompt_type"] == "system"
+        for call in captured_calls
+    )
 
 
 def test_discover_agent_schemas_defaults_to_runtime_packages(monkeypatch):

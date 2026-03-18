@@ -3,7 +3,6 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-helper_script="${repo_root}/scripts/release/prepare_publish_artifacts.sh"
 
 assert_contains() {
   local pattern="$1"
@@ -53,13 +52,30 @@ assert_command_fails_with() {
   rm -f "${temp_output}"
 }
 
+make_sandbox_repo() {
+  local sandbox_repo="$1"
+
+  mkdir -p "${sandbox_repo}"
+  tar --exclude=.git -C "${repo_root}" -cf - . | tar -C "${sandbox_repo}" -xf -
+  chmod -R u+w "${sandbox_repo}"
+
+  git -C "${sandbox_repo}" init -q
+  git -C "${sandbox_repo}" config user.name "Codex"
+  git -C "${sandbox_repo}" config user.email "codex@example.com"
+  git -C "${sandbox_repo}" add -A
+  git -C "${sandbox_repo}" commit --allow-empty -q -m "baseline for prepare_publish_artifacts regression"
+}
+
 test_release_lane_outputs_reproducible_assets() {
   local temp_dir
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
 
+  local sandbox_repo="${temp_dir}/repo"
   local first_dir="${temp_dir}/first"
   local second_dir="${temp_dir}/second"
+  make_sandbox_repo "${sandbox_repo}"
+  local helper_script="${sandbox_repo}/scripts/release/prepare_publish_artifacts.sh"
 
   bash "$helper_script" \
     --lane release \
@@ -107,6 +123,10 @@ test_main_lane_outputs_sha_pinned_assets() {
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
 
+  local sandbox_repo="${temp_dir}/repo"
+  make_sandbox_repo "${sandbox_repo}"
+  local helper_script="${sandbox_repo}/scripts/release/prepare_publish_artifacts.sh"
+
   bash "$helper_script" \
     --lane main \
     --output-dir "$temp_dir" \
@@ -136,6 +156,10 @@ test_rejects_missing_required_flags() {
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
 
+  local sandbox_repo="${temp_dir}/repo"
+  make_sandbox_repo "${sandbox_repo}"
+  local helper_script="${sandbox_repo}/scripts/release/prepare_publish_artifacts.sh"
+
   assert_command_fails_with 'Missing required value for --lane' \
     bash "$helper_script" \
     --output-dir "${temp_dir}/missing-lane" \
@@ -152,6 +176,10 @@ test_rejects_unsupported_lane() {
   local temp_dir
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' RETURN
+
+  local sandbox_repo="${temp_dir}/repo"
+  make_sandbox_repo "${sandbox_repo}"
+  local helper_script="${sandbox_repo}/scripts/release/prepare_publish_artifacts.sh"
 
   assert_command_fails_with 'Unsupported lane: preview' \
     bash "$helper_script" \
