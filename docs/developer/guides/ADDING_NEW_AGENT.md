@@ -8,7 +8,7 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 > **Scope**: Public or organization-specific customization for a standard
 > install should be packaged under `~/.agr_ai_curation/runtime/packages/`.
 > The repo-local `config/agents/` paths in this guide are for source checkout
-> work and shipped core-package maintenance. For the public runtime contract,
+> work and shipped `agr.alliance` maintenance. For the public runtime contract,
 > see [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
@@ -18,12 +18,12 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 Choose the path that matches your goal:
 
 1. **Runtime package authoring** -- For standalone installs and org-specific customization, add the agent bundle under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`, update that package's manifest, and install the package.
-2. **Source checkout maintenance** -- For shipped core-package work in this repository, use the repo-local `config/agents/` mirror and keep `packages/core/agents/` aligned.
+2. **Source checkout maintenance** -- For shipped `agr.alliance` work in this repository, use the repo-local `config/agents/` mirror and keep `packages/alliance/agents/` aligned.
 3. **Agent Studio UI** -- For personal or project-scoped agents, use the browser and skip file edits entirely.
 
 Agents are defined through two complementary paths:
 
-1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/` is the source-development mirror for the shipped `core` package while `packages/core/agents/` is the package-owned source tree.
+1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/` is the source-development mirror for the shipped `agr.alliance` package while `packages/alliance/agents/` is the package-owned source tree.
 2. **Agent Studio UI** (custom agents) -- Curators create personal or project-scoped agents through the browser. These are stored directly in the `agents` table with `visibility='private'` or `visibility='project'`.
 
 Both paths produce rows in the same `agents` table. At runtime, the supervisor discovers all active, supervisor-enabled agents from the database and creates streaming tool wrappers for them dynamically. **No Python agent files are needed.**
@@ -46,7 +46,7 @@ Both paths produce rows in the same `agents` table. At runtime, the supervisor d
 ## Path A: Add a System Agent via a Package Bundle
 
 This is the primary path for standalone installs and reusable organization
-packages. If you are maintaining the shipped `core` package from a source
+packages. If you are maintaining the shipped `agr.alliance` package from a source
 checkout, use the same bundle structure and keep the repo mirror aligned rather
 than teaching installed users to edit `config/agents/` directly.
 
@@ -59,9 +59,9 @@ runtime, the public authoring unit is a package-owned agent bundle.
 mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent
 ```
 
-If you are maintaining the shipped `core` package from this repository, keep
+If you are maintaining the shipped `agr.alliance` package from this repository, keep
 the repo mirror in `config/agents/my_agent/` aligned with the package-owned
-bundle in `packages/core/agents/my_agent/`.
+bundle in `packages/alliance/agents/my_agent/`.
 
 ### Step 2: Define Your Agent (agent.yaml)
 
@@ -232,7 +232,7 @@ class MyAgentEnvelope(BaseModel):
 
 The `output_schema` value in `agent.yaml` must match the class name exactly.
 Runtime schema discovery resolves it from the installed bundle (or from the
-shipped core-package source when you are working in a source checkout).
+shipped `agr.alliance` package source when you are working in a source checkout).
 
 #### Schema Rules
 
@@ -298,8 +298,8 @@ docker compose --env-file ~/.agr_ai_curation/.env \
 
 Repo-maintainer note:
 
-- Keep `packages/core/agents/my_agent/` and `config/agents/my_agent/` aligned.
-- If the shipped core catalog changes require migration-time seed adjustments,
+- Keep `packages/alliance/agents/my_agent/` and `config/agents/my_agent/` aligned.
+- If the shipped `agr.alliance` catalog changes require migration-time seed adjustments,
   update the relevant Alembic/bootstrap flow in the repository rather than
   telling installed users to edit repo-local YAML directly.
 
@@ -402,11 +402,11 @@ Key source files:
 
 The gene agent demonstrates the full pattern. See these files:
 
-- `packages/core/agents/gene/agent.yaml` -- Package-owned agent definition with batching, group rules, and model config
-- `packages/core/agents/gene/prompt.yaml` -- Detailed prompt with search strategies and output format
-- `packages/core/agents/gene/group_rules/fb.yaml` -- FlyBase-specific rules
-- `packages/core/agents/gene/group_rules/wb.yaml` -- WormBase-specific rules
-- `config/agents/gene/` -- Repo mirror used when maintaining the shipped core package from source
+- `packages/alliance/agents/gene/agent.yaml` -- Package-owned agent definition with batching, group rules, and model config
+- `packages/alliance/agents/gene/prompt.yaml` -- Detailed prompt with search strategies and output format
+- `packages/alliance/agents/gene/group_rules/fb.yaml` -- FlyBase-specific rules
+- `packages/alliance/agents/gene/group_rules/wb.yaml` -- WormBase-specific rules
+- `config/agents/gene/` -- Repo mirror used when maintaining the shipped `agr.alliance` package from source
 
 ---
 

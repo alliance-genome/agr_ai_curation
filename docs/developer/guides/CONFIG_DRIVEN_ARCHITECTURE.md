@@ -58,7 +58,7 @@ The config-driven architecture separates the **base product** (reusable by any o
 
 Two layouts matter in the modular system: the installed runtime under
 `~/.agr_ai_curation/`, and the repository source tree used to build and maintain
-the shipped `core` package.
+the shipped `core` and `agr.alliance` packages.
 
 ```text
 ~/.agr_ai_curation/
@@ -73,13 +73,17 @@ the shipped `core` package.
 │   │   ├── providers.yaml
 │   │   └── tool_policy_defaults.yaml
 │   ├── packages/
-│   │   ├── core/                        # Shipped AGR package
+│   │   ├── core/                        # Shipped AGR foundation package
 │   │   │   ├── package.yaml
-│   │   │   ├── agents/
 │   │   │   ├── config/
 │   │   │   ├── python/src/...
 │   │   │   ├── requirements/
 │   │   │   └── tools/bindings.yaml
+│   │   ├── alliance/                    # Shipped AGR Alliance catalog package
+│   │   │   ├── package.yaml
+│   │   │   ├── agents/
+│   │   │   ├── python/src/...
+│   │   │   └── requirements/
 │   │   └── org-custom/                  # Your package(s)
 │   └── state/
 │       └── package_runner/              # Per-package virtualenvs and runtime state
@@ -88,31 +92,35 @@ the shipped `core` package.
 
 ```text
 agr_ai_curation/
-├── config/                              # Repo mirror of shipped core defaults
+├── config/                              # Repo mirrors of shipped defaults
 │   ├── models.yaml
 │   ├── providers.yaml
 │   ├── tool_policy_defaults.yaml
 │   ├── groups.yaml.example
 │   ├── connections.yaml.example
-│   └── agents/                          # Source-development mirror of core agent bundles
+│   └── agents/                          # Source-development mirror of agr.alliance agent bundles
 │       ├── README.md
 │       ├── _examples/
 │       └── ...
 ├── packages/
-│   └── core/
+│   ├── core/
+│   │   ├── package.yaml
+│   │   ├── config/
+│   │   ├── python/src/agr_ai_curation_core/tools/
+│   │   ├── requirements/
+│   │   └── tools/bindings.yaml
+│   └── alliance/
 │       ├── package.yaml
 │       ├── agents/
-│       ├── config/
-│       ├── python/src/agr_ai_curation_core/tools/
-│       ├── requirements/
-│       └── tools/bindings.yaml
+│       ├── python/src/agr_ai_curation_alliance/
+│       └── requirements/
 ├── backend/
 │   ├── src/lib/config/                  # Runtime config/package loaders
 │   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
 │   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
 │   └── src/models/sql/                  # Database models
 └── scripts/
-    └── deploy_alliance.sh               # Repo-local core-package sync helper
+    └── deploy_alliance.sh               # Repo-local agr.alliance sync helper
 ```
 
 ---
@@ -136,7 +144,7 @@ agents/my_agent/
 
 For standalone installs, that folder lives under
 `~/.agr_ai_curation/runtime/packages/<package>/agents/`. In this repository,
-`config/agents/` is the source-development mirror for the shipped `core`
+`config/agents/` is the source-development mirror for the shipped `agr.alliance`
 package.
 
 ### Loading Order
@@ -549,8 +557,8 @@ Choose the path that matches your goal:
 
 - **Standalone install or org customization** -- Create the bundle inside a
   package under `~/.agr_ai_curation/runtime/packages/<package>/agents/`.
-- **Shipped core package maintenance** -- Update the repo mirror under
-  `config/agents/` and keep `packages/core/agents/` aligned before shipping.
+- **Shipped `agr.alliance` package maintenance** -- Update the repo mirror under
+  `config/agents/` and keep `packages/alliance/agents/` aligned before shipping.
 
 ### Step 1: Create or choose a package
 
@@ -653,8 +661,8 @@ agent_bundles:
     group_rules: [fb]
 ```
 
-If you are maintaining the shipped core package from this repository, keep the
-same bundle aligned in `packages/core/agents/my_agent/` and the repo mirror
+If you are maintaining the shipped `agr.alliance` package from this repository, keep the
+same bundle aligned in `packages/alliance/agents/my_agent/` and the repo mirror
 under `config/agents/my_agent/`.
 
 ### Step 6: Restart and test
@@ -919,8 +927,9 @@ inside a source checkout.
 
 ### Alliance Deployment
 
-In the repo-maintainer workflow, Alliance agents are developed in
-`alliance_agents/` and synced into the repo mirror at `config/agents/`:
+In the repo-maintainer workflow, Alliance agents can be staged in
+`alliance_agents/` and synced into the package-owned source tree at
+`packages/alliance/agents/` plus the repo mirror at `config/agents/`:
 
 ```bash
 # Preview changes (dry run)
@@ -1124,4 +1133,4 @@ print(json.dumps(report, indent=2))
 
 - [config/README.md](../../../config/README.md) - Configuration directory overview
 - [config/agents/README.md](../../../config/agents/README.md) - Agent configuration details
-- [alliance_agents/README.md](../../../alliance_agents/README.md) - Alliance-specific agents
+- [packages/alliance/agents/README.md](../../../packages/alliance/agents/README.md) - Shipped agr.alliance agent catalog

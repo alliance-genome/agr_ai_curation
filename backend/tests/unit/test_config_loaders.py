@@ -15,8 +15,8 @@ import pytest
 # In Docker, backend is mounted at /app/backend, so parent is /app
 CONFIG_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "config" / "agents"
 
-# Legacy path for Alliance-specific agents (kept for reference)
-# Note: alliance_agents/ is the source directory that gets deployed to config/agents/
+# Legacy path alias for the shipped Alliance catalog mirror
+# Note: config/agents/ mirrors the `agr.alliance` package catalog in this repo.
 # Tests should use CONFIG_AGENTS_PATH since that's what runtime actually uses.
 ALLIANCE_AGENTS_PATH = CONFIG_AGENTS_PATH  # Alias for backwards compatibility
 

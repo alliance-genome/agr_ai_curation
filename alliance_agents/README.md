@@ -1,6 +1,7 @@
 # Alliance Agents
 
-This directory contains Alliance Genome Resources-specific agent definitions.
+This directory contains Alliance Genome Resources-specific agent definitions
+used as an upstream staging source for the shipped `agr.alliance` package.
 
 ## Directory Structure
 
@@ -18,9 +19,12 @@ Each agent folder contains:
 
 ## Deployment
 
-These agents are **not loaded directly** from this location. During Alliance deployment, they are copied to `config/agents/`:
+These agents are **not loaded directly** from this location. During
+repo-maintainer sync, they are copied into both the package-owned catalog and
+the repo mirror:
 
 ```bash
+cp -r alliance_agents/* packages/alliance/agents/
 cp -r alliance_agents/* config/agents/
 ```
 
@@ -28,8 +32,8 @@ cp -r alliance_agents/* config/agents/
 
 If you're using this software outside of Alliance:
 - You can ignore this directory entirely
-- Create your own agents directly in `config/agents/`
-- Use `config/agents/_examples/` as templates
+- Create your own runtime package under `~/.agr_ai_curation/runtime/packages/`
+- Use `config/agents/_examples/` only as a repo-local source template
 
 ## Agents Included
 

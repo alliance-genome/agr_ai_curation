@@ -140,7 +140,7 @@ docker compose --env-file ~/.agr_ai_curation/.env \
 
 Use the repo paths in this directory only when you are:
 
-- maintaining the shipped core package from source,
+- maintaining the shipped supervisor or specialist packages from source,
 - updating templates under `_examples/`, or
 - testing loader/runtime changes from a repository checkout.
 
