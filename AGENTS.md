@@ -10,6 +10,10 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 - Runtime config + agent definitions: `config/`.
 - Local Symphony orchestration: `.symphony/`.
 - Persistent stores/services are orchestrated via `docker-compose*.yml`.
+- Docker-first layout:
+  - `docker-compose.yml` for local development stacks
+  - `docker-compose.test.yml` for isolated test runs
+  - `docker-compose.production.yml` for standalone / production-style deploys
 
 ## 2) Authoritative Docs
 
@@ -22,14 +26,18 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 
 ## 3) Test + Validation Commands
 
-- Backend unit tests:
-  - `docker compose exec backend pytest tests/unit/ -v`
-- Backend contract core tests:
-  - `docker compose exec backend pytest tests/contract/ -q`
-- Frontend tests:
-  - `docker compose exec frontend npm run test -- --run`
-- Frontend build:
-  - `docker compose exec frontend npm run build`
+- Most backend testing, especially in Symphony issue workspaces, should use `docker-compose.test.yml` rather than the long-running local dev stack.
+- Prefer `backend-unit-tests` for most day-to-day backend changes. Use `backend-contract-tests`, `backend-integration-tests`, `backend-persistence-tests`, or `backend-tests` when the ticket or acceptance criteria need the heavier end-to-end test image or broader stack coverage.
+- Local dev checkout with the main app stack running:
+  - Backend unit tests: `docker compose exec backend pytest tests/unit/ -v`
+  - Backend contract core tests: `docker compose exec backend pytest tests/contract/ -q`
+  - Frontend tests: `docker compose exec frontend npm run test -- --run`
+  - Frontend build: `docker compose exec frontend npm run build`
+- Symphony issue workspaces and isolated backend test runs:
+  - Backend unit tests: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests`
+  - Backend contract tests: `docker compose -f docker-compose.test.yml run --rm backend-contract-tests`
+  - Specific backend test file: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"`
+  - Syntax-only validation: `python3 -m py_compile backend/src/path/to/file.py`
 - LLM provider smoke (local evidence JSON):
   - `./scripts/testing/llm_provider_smoke_local.sh`
 - Agent PR gate (local):
@@ -50,6 +58,7 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 ## 5) Symphony Runtime Notes
 
 - Canonical Symphony orchestration sources live under `.symphony/`.
+- For dispatched Symphony runs, `.symphony/WORKFLOW.md` is the active execution contract. If this startup map and the workflow disagree for a Symphony workspace, follow `.symphony/WORKFLOW.md`.
 - `.symphony/` may be intentionally untracked in this repo/workspace; do not assume its absence from Git is accidental or PR-relevant.
 - The `.symphony/` tree is manually backed up every night, so local runtime changes may be preserved outside normal Git tracking.
 - Workspace-local runtime helpers are materialized by `scripts/utilities/symphony_ensure_workspace_runtime.sh`.

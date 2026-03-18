@@ -133,6 +133,11 @@ if [[ -d "${workspace_dir}/.git" ]]; then
 fi
 
 if [[ -n "${current_repo_norm}" && "${current_repo_norm}" == "${expected_repo_norm}" ]]; then
+  # Refresh the tracked main/ref outside the Codex turn sandbox so agents can
+  # compare against origin/<ref> without needing to write FETCH_HEAD themselves.
+  git -C "${workspace_dir}" fetch --quiet origin \
+    "${expected_ref}:refs/remotes/origin/${expected_ref}" >/dev/null 2>&1 || true
+
   status="ok"
   reason="match"
   print_summary "${expected_repo_norm}" "${current_repo_norm}"

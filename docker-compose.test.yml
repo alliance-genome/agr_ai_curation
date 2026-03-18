@@ -1,8 +1,13 @@
 # Docker Compose configuration for running tests
-# Usage: docker compose -f docker-compose.test.yml run --rm backend-tests
+# Usage: docker compose -f docker-compose.test.yml run --rm backend-unit-tests
 #
 # To build the image with caching:
-# docker compose -f docker-compose.test.yml build backend-tests
+# docker compose -f docker-compose.test.yml build backend-unit-tests backend-tests
+#
+# Service guidance:
+# - Prefer `backend-unit-tests` for most day-to-day backend validation.
+# - Use `backend-contract-tests`, `backend-integration-tests`, `backend-persistence-tests`,
+#   or `backend-tests` when the change needs heavier integration or end-to-end coverage.
 
 services:
   reranker-transformers-test:
