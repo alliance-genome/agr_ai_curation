@@ -206,7 +206,7 @@ print_stage_intro() {
   echo
   echo "  What you'll be asked:"
   echo
-  echo "    1. Package profile     (default core only; optionally add the alliance package)"
+  echo "    1. Package profile     (which agent packages to install)"
   local red='\033[0;31m'
   local reset='\033[0m'
   if ! supports_color; then red="" reset=""; fi
@@ -227,6 +227,29 @@ print_stage_intro() {
   else
     echo "  Published image tag: template defaults (${image_tag_note})"
   fi
+  echo
+
+  if [[ -t 0 ]]; then
+    read -r -p "  Press Enter to continue... "
+    printf "\n"
+  fi
+}
+
+print_package_profile_intro() {
+  echo
+  echo "  The platform ships two packages:"
+  echo
+  echo "    agr.core       The minimal runtime: supervisor agent, chat interface,"
+  echo "                   and the plugin system. Always installed."
+  echo
+  echo "    agr.alliance   Domain-specific agents for gene, allele, disease,"
+  echo "                   chemical, and phenotype curation, plus tools for the"
+  echo "                   Alliance REST API, SQL databases, and Weaviate search."
+  echo "                   Designed for Alliance MOD deployments."
+  echo
+  echo "  Choose \"core only\" for a lightweight install or if you plan to add"
+  echo "  your own custom packages later. Choose \"core + alliance\" if you are"
+  echo "  deploying for an Alliance community."
   echo
 }
 
@@ -264,6 +287,7 @@ main() {
   mkdir -p "$install_home_dir"
   resolve_image_tag_defaults
   print_stage_intro "$runtime_root_dir" "$data_root_dir"
+  print_package_profile_intro
   default_package_profile="$(load_existing_package_profile)"
   package_profile="$(resolve_package_profile "$default_package_profile")"
   package_profile_label="$(install_package_profile_label "$package_profile")"
