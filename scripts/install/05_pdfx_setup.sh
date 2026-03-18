@@ -76,7 +76,15 @@ resolve_clone_path() {
     if [[ -d "$clone_path" ]] && [[ -n "$(ls -A "$clone_path")" ]]; then
       log_warn "Clone path already exists and is not empty: ${clone_path}" >&2
       if prompt_yes_no "Wipe and re-clone?" "no" >&2; then
-        rm -rf "$clone_path"
+        rm -rf "$clone_path" 2>/dev/null || true
+        if [[ -d "$clone_path" ]] && [[ -n "$(ls -A "$clone_path" 2>/dev/null)" ]]; then
+          log_warn "Some files are owned by Docker and need elevated permissions to remove." >&2
+          sudo rm -rf "$clone_path"
+        fi
+        if [[ -d "$clone_path" ]] && [[ -n "$(ls -A "$clone_path" 2>/dev/null)" ]]; then
+          log_error "Failed to remove ${clone_path}. Please remove it manually and re-run." >&2
+          continue
+        fi
       else
         if prompt_yes_no "Reuse existing directory as-is? (only the .env will be regenerated)" "yes" >&2; then
           PDFX_SKIP_CLONE="true"
