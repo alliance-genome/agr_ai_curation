@@ -402,6 +402,14 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     )
     monkeypatch.setattr(
         supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda: [
+            {"tool_name": "ask_gene_specialist", "requires_document": False},
+            {"tool_name": "ask_pdf_specialist", "requires_document": True},
+        ],
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
         "get_prompt",
         lambda _name: SimpleNamespace(content="Base prompt", version=7),
     )
@@ -432,10 +440,62 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
 
     created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
 
-    assert "No PDF document is currently loaded." in created.instructions
+    assert "Only these specialist tools are currently installed" in created.instructions
+    assert "ask_gene_specialist" in created.instructions
+    assert "No PDF document is currently loaded" in created.instructions
+    assert "ask_pdf_specialist" in created.instructions
     assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
     assert captured_pending["name"] == "Query Supervisor"
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
+
+
+def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):
+    captured_langfuse = {}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_agent_config",
+        lambda _name: SimpleNamespace(model="gpt-4o", temperature=None, reasoning=None),
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_model_for_agent",
+        lambda model, provider_override=None: model,
+    )
+    monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
+    monkeypatch.setattr(
+        supervisor_agent,
+        "get_prompt",
+        lambda _name: SimpleNamespace(content="Base prompt", version=11),
+    )
+    monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.log_agent_config",
+        lambda **kwargs: captured_langfuse.update(kwargs),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                fn,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "Agent",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
+
+    assert "CORE-ONLY MODE" in created.instructions
+    assert "No domain specialist tools are currently installed" in created.instructions
+    assert [getattr(tool, "name", "") for tool in created.tools] == ["export_to_file"]
+    assert captured_langfuse["metadata"]["specialist_count"] == 1
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):
@@ -454,8 +514,13 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
     monkeypatch.setattr(
         supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda: [{"tool_name": "ask_pdf_specialist", "requires_document": True}],
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
         "_create_dynamic_specialist_tools",
-        lambda **kwargs: captured_dynamic.update(kwargs) or [],
+        lambda **kwargs: captured_dynamic.update(kwargs) or [SimpleNamespace(name="ask_pdf_specialist")],
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -489,6 +554,6 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
         enable_guardrails=True,
     )
 
-    assert "**DOCUMENT CONTEXT**" in created.instructions
+    assert "DOCUMENT CONTEXT: A PDF document is loaded." in created.instructions
     assert created.input_guardrails == ["safety"]
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
