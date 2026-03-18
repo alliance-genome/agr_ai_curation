@@ -61,6 +61,9 @@ def test_alliance_package_mirrors_shipped_agent_files():
 def test_alliance_package_manifest_exports_all_shipped_agent_assets():
     manifest = load_package_manifest(ALLIANCE_PACKAGE_DIR / "package.yaml")
 
+    assert manifest.package_id == "agr.alliance"
+    assert manifest.display_name == "AGR Alliance Package"
+
     expected_exports = set()
     for agent_dir in _iter_shipped_agent_dirs(CONFIG_AGENTS_DIR):
         agent_name = agent_dir.name

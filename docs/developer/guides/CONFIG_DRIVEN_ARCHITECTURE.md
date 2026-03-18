@@ -120,7 +120,7 @@ agr_ai_curation/
 │   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
 │   └── src/models/sql/                  # Database models
 └── scripts/
-    └── deploy_alliance.sh               # Repo-local core-package sync helper
+    └── deploy_alliance.sh               # Repo-local agr.alliance sync helper
 ```
 
 ---

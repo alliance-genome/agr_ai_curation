@@ -418,7 +418,7 @@ test_custom_repo_install_reports_manual_review() {
   prepare_source_repo "$source_repo"
 
   mkdir -p "${source_repo}/config/agents"
-  cp -a "${repo_root}/packages/core/agents/gene" "${source_repo}/config/agents/gene"
+  cp -a "${repo_root}/packages/alliance/agents/gene" "${source_repo}/config/agents/gene"
   printf '\n# local override\n' >>"${source_repo}/config/agents/gene/prompt.yaml"
 
   mkdir -p "${source_repo}/config/agents/custom_local"
@@ -470,7 +470,7 @@ EOF
 
   assert_contains 'MIGRATION_STATUS=manual_review_required' "$dry_run_output"
   assert_contains 'custom agents preserved: 1' "$dry_run_output"
-  assert_contains 'modified shipped agents preserved: 1' "$dry_run_output"
+  assert_contains 'modified shipped agr.alliance agents preserved: 1' "$dry_run_output"
   assert_contains 'custom tool files preserved: 1' "$dry_run_output"
   assert_contains 'extra non-package dirs preserved: 1' "$dry_run_output"
   assert_dir_not_exists "${install_home}/migration/legacy_local"
@@ -490,7 +490,7 @@ EOF
   assert_file_exists "${install_home}/migration/legacy_local/package.yaml.template"
   assert_file_exists "${install_home}/migration/legacy_local/tools/bindings.yaml.template"
   assert_file_exists "${install_home}/migration/legacy_local/agents/custom/custom_local/agent.yaml"
-  assert_file_exists "${install_home}/migration/legacy_local/agents/modified_core/gene/prompt.yaml"
+  assert_file_exists "${install_home}/migration/legacy_local/agents/modified_alliance/gene/prompt.yaml"
   assert_file_exists "${install_home}/migration/legacy_local/python/src/legacy_local/custom_tools/my_tool.py"
   assert_file_exists "${install_home}/migration/legacy_local/packages/local_notes/README.txt"
   assert_contains 'legacy_local' "${install_home}/migration/legacy_local/README.md"

@@ -21,7 +21,7 @@ install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 declare -a extra_package_dirs=()
 declare -a non_package_extra_dirs=()
 declare -a custom_agent_dirs=()
-declare -a modified_core_agent_dirs=()
+declare -a modified_alliance_agent_dirs=()
 declare -a custom_tool_files=()
 declare -a custom_tool_dirs=()
 modified_core_package=0
@@ -30,6 +30,10 @@ helper_canonical_core_dir_cache=""
 canonical_core_dir_cache=""
 helper_canonical_core_dir_temp_root=""
 canonical_core_dir_temp_root=""
+helper_canonical_alliance_dir_cache=""
+canonical_alliance_dir_cache=""
+helper_canonical_alliance_dir_temp_root=""
+canonical_alliance_dir_temp_root=""
 
 usage() {
   cat <<'EOF'
@@ -281,6 +285,37 @@ resolve_helper_canonical_core_dir() {
   printf '%s\n' "$helper_canonical_core_dir_cache"
 }
 
+resolve_helper_canonical_alliance_dir() {
+  local baseline_commit=""
+  local head_commit=""
+
+  if [[ -n "$helper_canonical_alliance_dir_cache" ]]; then
+    printf '%s\n' "$helper_canonical_alliance_dir_cache"
+    return 0
+  fi
+
+  helper_canonical_alliance_dir_cache="${helper_repo_root}/packages/alliance"
+
+  if command -v git >/dev/null 2>&1 && git -C "$helper_repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    baseline_commit="$(resolve_git_baseline_commit "$helper_repo_root")" || baseline_commit=""
+    if [[ -z "$baseline_commit" ]] && repo_has_live_git_path_customizations "$helper_repo_root" "packages/alliance"; then
+      head_commit="$(git -C "$helper_repo_root" rev-parse --verify HEAD 2>/dev/null)" || head_commit=""
+      baseline_commit="$head_commit"
+    fi
+    if [[ -n "$baseline_commit" ]]; then
+      helper_canonical_alliance_dir_temp_root="$(mktemp -d)"
+      if git -C "$helper_repo_root" archive "$baseline_commit" packages/alliance | tar -x -C "$helper_canonical_alliance_dir_temp_root"; then
+        helper_canonical_alliance_dir_cache="${helper_canonical_alliance_dir_temp_root}/packages/alliance"
+      else
+        rm -rf "$helper_canonical_alliance_dir_temp_root"
+        helper_canonical_alliance_dir_temp_root=""
+      fi
+    fi
+  fi
+
+  printf '%s\n' "$helper_canonical_alliance_dir_cache"
+}
+
 resolve_canonical_core_dir() {
   local baseline_commit=""
   local helper_canonical_core_dir=""
@@ -313,10 +348,43 @@ resolve_canonical_core_dir() {
   printf '%s\n' "$canonical_core_dir_cache"
 }
 
+resolve_canonical_alliance_dir() {
+  local baseline_commit=""
+  local helper_canonical_alliance_dir=""
+
+  if [[ -n "$canonical_alliance_dir_cache" ]]; then
+    printf '%s\n' "$canonical_alliance_dir_cache"
+    return 0
+  fi
+
+  helper_canonical_alliance_dir="$(resolve_helper_canonical_alliance_dir)"
+  canonical_alliance_dir_cache="$helper_canonical_alliance_dir"
+
+  if command -v git >/dev/null 2>&1 && git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    baseline_commit="$(resolve_git_baseline_commit "$source_repo")" || baseline_commit=""
+    if [[ -n "$baseline_commit" ]]; then
+      if repo_has_git_path_customizations "$source_repo" "packages/alliance"; then
+        canonical_alliance_dir_temp_root="$(mktemp -d)"
+        if git -C "$source_repo" archive "$baseline_commit" packages/alliance | tar -x -C "$canonical_alliance_dir_temp_root"; then
+          canonical_alliance_dir_cache="${canonical_alliance_dir_temp_root}/packages/alliance"
+        else
+          rm -rf "$canonical_alliance_dir_temp_root"
+          canonical_alliance_dir_temp_root=""
+        fi
+      else
+        canonical_alliance_dir_cache="${source_repo}/packages/alliance"
+      fi
+    fi
+  fi
+
+  printf '%s\n' "$canonical_alliance_dir_cache"
+}
+
 record_source_scan() {
   local packages_dir="${source_repo}/packages"
   local source_core_dir="${packages_dir}/core"
   local canonical_core_dir
+  local canonical_alliance_dir
   local baseline_agents_dir=""
   local config_agents_dir="${source_repo}/config/agents"
   local tools_dir="${source_repo}/backend/tools/custom"
@@ -327,7 +395,8 @@ record_source_scan() {
   fi
 
   canonical_core_dir="$(resolve_canonical_core_dir)"
-  baseline_agents_dir="${canonical_core_dir}/agents"
+  canonical_alliance_dir="$(resolve_canonical_alliance_dir)"
+  baseline_agents_dir="${canonical_alliance_dir}/agents"
   if ! agent_dirs_match "$source_core_dir" "$canonical_core_dir"; then
     modified_core_package=1
     if [[ -z "$source_baseline_commit" ]]; then
@@ -368,7 +437,7 @@ record_source_scan() {
       fi
 
       if ! agent_dirs_match "$agent_dir" "$baseline_dir"; then
-        modified_core_agent_dirs+=("$agent_dir")
+        modified_alliance_agent_dirs+=("$agent_dir")
       fi
     done
   fi
@@ -396,7 +465,7 @@ has_custom_code() {
   [[ "$modified_core_package" -eq 1 ]] \
     || [[ "${#non_package_extra_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_agent_dirs[@]}" -gt 0 ]] \
-    || [[ "${#modified_core_agent_dirs[@]}" -gt 0 ]] \
+    || [[ "${#modified_alliance_agent_dirs[@]}" -gt 0 ]] \
     || [[ "${#custom_tool_files[@]}" -gt 0 ]]
 }
 
@@ -620,7 +689,7 @@ write_legacy_local_readme() {
   for agent_dir in "${custom_agent_dirs[@]}"; do
     custom_agent_names+=("$(basename "$agent_dir")")
   done
-  for agent_dir in "${modified_core_agent_dirs[@]}"; do
+  for agent_dir in "${modified_alliance_agent_dirs[@]}"; do
     modified_agent_names+=("$(basename "$agent_dir")")
   done
   for path in "${non_package_extra_dirs[@]}"; do
@@ -676,7 +745,7 @@ Next steps:
 2. Decide which custom agents should become package-owned runtime bundles.
 3. Fill in `package.yaml.template` and, when custom tools are present, `tools/bindings.yaml.template`.
 4. Move the completed package into `runtime/packages/` only after the manifest and bindings are valid.
-5. If you changed shipped agent bundles or package-local core files, reconcile those changes manually against the canonical `runtime/packages/core`.
+5. If you changed shipped `agr.alliance` agent bundles or package-local core files, reconcile those changes manually against the canonical `runtime/packages/alliance` and `runtime/packages/core`.
 EOF
 }
 
@@ -733,7 +802,7 @@ EOF
     cat >>"$template_path" <<'EOF'
 
 # No brand-new custom agent bundles were detected.
-# Modified shipped agents were preserved under agents/modified_core/ for manual review.
+# Modified shipped agr.alliance agents were preserved under agents/modified_alliance/ for manual review.
 EOF
   fi
 }
@@ -771,7 +840,7 @@ create_legacy_local_scaffold() {
     printf '  - shipped core baseline unresolved: %s\n' "$core_baseline_unresolved"
     printf '  - modified shipped core package: %s\n' "$modified_core_package"
     printf '  - custom agents: %s\n' "${#custom_agent_dirs[@]}"
-    printf '  - modified shipped agents: %s\n' "${#modified_core_agent_dirs[@]}"
+    printf '  - modified shipped agr.alliance agents: %s\n' "${#modified_alliance_agent_dirs[@]}"
     printf '  - custom tool files: %s\n' "${#custom_tool_files[@]}"
     printf '  - extra non-package dirs: %s\n' "${#non_package_extra_dirs[@]}"
     return 0
@@ -781,7 +850,7 @@ create_legacy_local_scaffold() {
   backup_existing_path "$scaffold_dir"
   mkdir -p \
     "${scaffold_dir}/agents/custom" \
-    "${scaffold_dir}/agents/modified_core" \
+    "${scaffold_dir}/agents/modified_alliance" \
     "${scaffold_dir}/python/src/legacy_local" \
     "${scaffold_dir}/requirements"
 
@@ -797,8 +866,8 @@ create_legacy_local_scaffold() {
     copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/custom/$(basename "$agent_dir")"
   done
 
-  for agent_dir in "${modified_core_agent_dirs[@]}"; do
-    copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/modified_core/$(basename "$agent_dir")"
+  for agent_dir in "${modified_alliance_agent_dirs[@]}"; do
+    copy_tree_exact "$agent_dir" "${scaffold_dir}/agents/modified_alliance/$(basename "$agent_dir")"
   done
 
   if [[ "${#custom_tool_files[@]}" -gt 0 || "${#custom_tool_dirs[@]}" -gt 0 ]]; then
@@ -850,7 +919,7 @@ print_summary() {
   printf '  - shipped core baseline unresolved: %s\n' "$core_baseline_unresolved"
   printf '  - modified shipped core package preserved: %s\n' "$modified_core_package"
   printf '  - custom agents preserved: %s\n' "${#custom_agent_dirs[@]}"
-  printf '  - modified shipped agents preserved: %s\n' "${#modified_core_agent_dirs[@]}"
+  printf '  - modified shipped agr.alliance agents preserved: %s\n' "${#modified_alliance_agent_dirs[@]}"
   printf '  - custom tool files preserved: %s\n' "${#custom_tool_files[@]}"
   printf '  - extra non-package dirs preserved: %s\n' "${#non_package_extra_dirs[@]}"
   printf '  - next step: %s\n' "$next_step"
@@ -858,7 +927,7 @@ print_summary() {
 }
 
 main() {
-  trap '[[ -n "$helper_canonical_core_dir_temp_root" ]] && rm -rf "$helper_canonical_core_dir_temp_root"; [[ -n "$canonical_core_dir_temp_root" ]] && rm -rf "$canonical_core_dir_temp_root"' EXIT
+  trap '[[ -n "$helper_canonical_core_dir_temp_root" ]] && rm -rf "$helper_canonical_core_dir_temp_root"; [[ -n "$canonical_core_dir_temp_root" ]] && rm -rf "$canonical_core_dir_temp_root"; [[ -n "$helper_canonical_alliance_dir_temp_root" ]] && rm -rf "$helper_canonical_alliance_dir_temp_root"; [[ -n "$canonical_alliance_dir_temp_root" ]] && rm -rf "$canonical_alliance_dir_temp_root"' EXIT
 
   parse_args "$@"
 

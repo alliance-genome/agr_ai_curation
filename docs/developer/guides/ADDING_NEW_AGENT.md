@@ -232,7 +232,7 @@ class MyAgentEnvelope(BaseModel):
 
 The `output_schema` value in `agent.yaml` must match the class name exactly.
 Runtime schema discovery resolves it from the installed bundle (or from the
-shipped core-package source when you are working in a source checkout).
+shipped `agr.alliance` package source when you are working in a source checkout).
 
 #### Schema Rules
 
