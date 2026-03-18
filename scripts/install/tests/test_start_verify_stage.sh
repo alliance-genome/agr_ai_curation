@@ -39,7 +39,7 @@ assert_not_exists() {
 run_core_config() {
   local home_dir="$1"
   local input_text="$2"
-  HOME="$home_dir" bash "$core_config_script" <<<"$input_text"
+  printf '\n%s' "$input_text" | HOME="$home_dir" bash "$core_config_script"
 }
 
 run_auth_setup() {

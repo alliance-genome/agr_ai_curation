@@ -14,6 +14,7 @@ skip_pdfx_setup=0
 skip_start_verify=0
 from_stage=0
 image_tag=""
+package_profile=""
 
 print_usage() {
   cat <<USAGE
@@ -22,6 +23,7 @@ Usage: scripts/install/install.sh [options]
 Options:
   --from-stage N       Start from stage N (1-6), skipping all earlier stages
   --image-tag TAG      Override backend/frontend/trace-review image tags in Stage 2
+  --package-profile P  Package profile for Stage 2: core-only (default) or core-plus-alliance
   --skip-preflight     Skip Stage 1 (01_preflight.sh)
   --skip-core-config   Skip Stage 2 (02_core_config.sh)
   --skip-auth-setup    Skip Stage 3 (03_auth_setup.sh)
@@ -33,6 +35,7 @@ Options:
 Examples:
   scripts/install/install.sh                  # Run all stages
   scripts/install/install.sh --image-tag v0.3.0  # Pin all published app images to one tag
+  scripts/install/install.sh --package-profile core-plus-alliance
   scripts/install/install.sh --from-stage 5   # Re-run from PDF extraction onward
   scripts/install/install.sh --from-stage 6   # Just start & verify
 USAGE
@@ -102,6 +105,19 @@ parse_args() {
         fi
         image_tag="$1"
         ;;
+      --package-profile)
+        shift
+        if [[ -z "${1:-}" ]]; then
+          log_error "--package-profile requires a value: core-only or core-plus-alliance"
+          print_usage
+          exit 1
+        fi
+        if ! package_profile="$(normalize_install_package_profile "$1")"; then
+          log_error "Unsupported package profile: $1"
+          print_usage
+          exit 1
+        fi
+        ;;
       -h|--help)
         print_usage
         exit 0
@@ -123,6 +139,7 @@ print_welcome() {
   local bold='\033[1m'
   local dim='\033[2m'
   local reset='\033[0m'
+  local package_profile_label=""
 
   if ! supports_color; then
     cyan="" green="" yellow="" bold="" dim="" reset=""
@@ -164,6 +181,11 @@ BANNER
     printf "${yellow}  Published image tag override: %s${reset}\n" "$image_tag"
     printf "\n"
   fi
+  if [[ -n "$package_profile" ]]; then
+    package_profile_label="$(install_package_profile_label "$package_profile")"
+    printf "${yellow}  Package profile override: %s${reset}\n" "$package_profile_label"
+    printf "\n"
+  fi
   if (( from_stage > 1 )); then
     local red='\033[1;31m'
     if ! supports_color; then red=""; fi
@@ -197,8 +219,14 @@ main() {
   if [[ -n "$image_tag" ]]; then
     export INSTALL_IMAGE_TAG="$image_tag"
   fi
+  if [[ -n "$package_profile" ]]; then
+    export INSTALL_PACKAGE_PROFILE="$package_profile"
+  fi
   if (( from_stage > 0 )); then
     apply_from_stage
+  fi
+  if [[ -n "$package_profile" ]] && (( skip_core_config == 1 )); then
+    log_warn "Package profile selection only applies when Stage 2 runs; this invocation skips Stage 2."
   fi
   print_welcome
 

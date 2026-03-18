@@ -9,7 +9,9 @@ source "${repo_root}/scripts/install/lib/common.sh"
 install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
 env_template_path="${repo_root}/scripts/install/lib/templates/env.standalone"
 env_output_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
+package_profile_state_path="${INSTALL_PACKAGE_PROFILE_STATE_PATH:-${install_home_dir}/.install_package_profile.env}"
 image_tag_override="${INSTALL_IMAGE_TAG:-}"
+package_profile_override="${INSTALL_PACKAGE_PROFILE:-}"
 resolved_image_tag=""
 image_tag_note=""
 
@@ -39,11 +41,8 @@ seed_runtime_layout() {
   local pdf_storage_dir="$4"
   local file_outputs_dir="$5"
   local weaviate_data_dir="$6"
-  local core_package_source_dir="$7"
-  local core_package_target_dir="$8"
-  local config_source_dir="$9"
+  local config_source_dir="$7"
 
-  require_directory_exists "$core_package_source_dir"
   require_directory_exists "$config_source_dir"
 
   mkdir -p \
@@ -63,10 +62,6 @@ seed_runtime_layout() {
 
   chmod 0755 "$runtime_config_dir"
 
-  require_non_empty "core_package_target_dir" "$core_package_target_dir"
-  rm -rf "$core_package_target_dir"
-  cp -a "$core_package_source_dir" "$core_package_target_dir"
-
   # Published runtime containers run as non-root users, so the mutable
   # host-mounted directories need write access regardless of the installer
   # user's UID/GID on the host.
@@ -75,6 +70,111 @@ seed_runtime_layout() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir"
+}
+
+seed_runtime_package_dir() {
+  local package_source_dir="$1"
+  local package_target_dir="$2"
+
+  require_directory_exists "$package_source_dir"
+  require_non_empty "package_target_dir" "$package_target_dir"
+
+  rm -rf "$package_target_dir"
+  cp -a "$package_source_dir" "$package_target_dir"
+}
+
+seed_runtime_packages() {
+  local runtime_packages_dir="$1"
+  local core_package_source_dir="$2"
+  local alliance_package_source_dir="$3"
+  local package_profile="$4"
+  local core_package_target_dir="${runtime_packages_dir}/core"
+  local alliance_package_target_dir="${runtime_packages_dir}/alliance"
+
+  seed_runtime_package_dir "$core_package_source_dir" "$core_package_target_dir"
+
+  if install_package_profile_includes_alliance "$package_profile"; then
+    seed_runtime_package_dir "$alliance_package_source_dir" "$alliance_package_target_dir"
+  else
+    rm -rf "$alliance_package_target_dir"
+  fi
+}
+
+load_existing_package_profile() {
+  local existing_profile=""
+
+  if [[ ! -f "$package_profile_state_path" ]]; then
+    printf 'core-only\n'
+    return 0
+  fi
+
+  existing_profile="$(awk -F= '/^INSTALL_PACKAGE_PROFILE=/{print $2; exit}' "$package_profile_state_path")"
+  if existing_profile="$(normalize_install_package_profile "$existing_profile" 2>/dev/null)"; then
+    printf '%s\n' "$existing_profile"
+    return 0
+  fi
+
+  printf 'core-only\n'
+}
+
+prompt_package_profile() {
+  local default_profile="$1"
+  local response=""
+  local default_choice="1"
+
+  if [[ "$default_profile" == "core-plus-alliance" ]]; then
+    default_choice="2"
+  fi
+
+  while true; do
+    read -r -p "Package profile [1=core only, 2=core + alliance] (default ${default_choice}): " response
+    response="${response:-$default_choice}"
+
+    case "$response" in
+      1)
+        printf 'core-only\n'
+        return 0
+        ;;
+      2)
+        printf 'core-plus-alliance\n'
+        return 0
+        ;;
+      *)
+        log_warn "Please choose 1 (core only) or 2 (core + alliance)." >&2
+        ;;
+    esac
+  done
+}
+
+resolve_package_profile() {
+  local default_profile="$1"
+  local normalized_profile=""
+
+  if [[ -n "$package_profile_override" ]]; then
+    if ! normalized_profile="$(normalize_install_package_profile "$package_profile_override")"; then
+      log_error "Unsupported package profile override: ${package_profile_override}"
+      return 1
+    fi
+    printf '%s\n' "$normalized_profile"
+    return 0
+  fi
+
+  prompt_package_profile "$default_profile"
+}
+
+write_package_profile_state() {
+  local package_profile="$1"
+  local package_ids="agr.core"
+
+  if install_package_profile_includes_alliance "$package_profile"; then
+    package_ids="${package_ids},agr.alliance"
+  fi
+
+  cat >"$package_profile_state_path" <<STATE
+INSTALL_PACKAGE_PROFILE=${package_profile}
+INSTALL_PACKAGE_IDS=${package_ids}
+STATE
+  chmod 600 "$package_profile_state_path"
 }
 
 resolve_image_tag_defaults() {
@@ -106,13 +206,15 @@ print_stage_intro() {
   echo
   echo "  What you'll be asked:"
   echo
-  echo "    1. OpenAI API key      (REQUIRED - used for embeddings and default models)"
-  echo "    2. Groq API key        (optional - adds Groq as an LLM provider)"
-  echo "    3. Anthropic API key   (recommended - powers the in-app Claude help agent)"
-  echo "    4. Gemini API key      (optional - adds Google Gemini models)"
+  echo "    1. Package profile     (default core only; optionally add the alliance package)"
+  echo "    2. OpenAI API key      (REQUIRED - used for embeddings and default models)"
+  echo "    3. Groq API key        (optional - adds Groq as an LLM provider)"
+  echo "    4. Anthropic API key   (recommended - powers the in-app Claude help agent)"
+  echo "    5. Gemini API key      (optional - adds Google Gemini models)"
   echo
   echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"
   echo "  is generated automatically. You don't need to prepare anything for those."
+  echo "  You can re-run Stage 2 later to change the package profile and reseed bundled packages."
   echo
   echo "  Config location: ${install_home_dir}/.env"
   echo "  Runtime directory: ${runtime_root_dir}"
@@ -137,8 +239,11 @@ main() {
   local pdf_storage_dir
   local file_outputs_dir
   local weaviate_data_dir
+  local package_profile
+  local package_profile_label
+  local default_package_profile
   local core_package_source_dir
-  local core_package_target_dir
+  local alliance_package_source_dir
   local config_source_dir
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
@@ -150,11 +255,14 @@ main() {
   file_outputs_dir="$(install_file_outputs_dir "$install_home_dir")"
   weaviate_data_dir="$(install_weaviate_data_dir "$install_home_dir")"
   core_package_source_dir="${repo_root}/packages/core"
-  core_package_target_dir="${runtime_packages_dir}/core"
+  alliance_package_source_dir="${repo_root}/packages/alliance"
   config_source_dir="${repo_root}/config"
 
   mkdir -p "$install_home_dir"
   resolve_image_tag_defaults
+  default_package_profile="$(load_existing_package_profile)"
+  package_profile="$(resolve_package_profile "$default_package_profile")"
+  package_profile_label="$(install_package_profile_label "$package_profile")"
   seed_runtime_layout \
     "$runtime_config_dir" \
     "$runtime_packages_dir" \
@@ -162,9 +270,12 @@ main() {
     "$pdf_storage_dir" \
     "$file_outputs_dir" \
     "$weaviate_data_dir" \
-    "$core_package_source_dir" \
-    "$core_package_target_dir" \
     "$config_source_dir"
+  seed_runtime_packages \
+    "$runtime_packages_dir" \
+    "$core_package_source_dir" \
+    "$alliance_package_source_dir" \
+    "$package_profile"
 
   if [[ -f "$env_output_path" ]]; then
     backup_file_with_timestamp "$env_output_path"
@@ -260,9 +371,17 @@ main() {
   fi
 
   chmod 600 "$env_output_path"
+  write_package_profile_state "$package_profile"
   log_success "Generated core config at ${env_output_path}"
   log_success "Seeded runtime config into ${runtime_config_dir}"
-  log_success "Seeded bundled core package into ${core_package_target_dir}"
+  log_success "Selected package profile: ${package_profile_label}"
+  log_success "Package profile state saved to ${package_profile_state_path}"
+  log_success "Seeded bundled core package into ${runtime_packages_dir}/core"
+  if install_package_profile_includes_alliance "$package_profile"; then
+    log_success "Seeded bundled alliance package into ${runtime_packages_dir}/alliance"
+  else
+    log_info "Alliance package not selected; runtime packages remain core only"
+  fi
 }
 
 main "$@"

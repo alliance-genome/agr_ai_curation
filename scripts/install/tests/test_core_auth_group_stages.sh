@@ -49,11 +49,35 @@ assert_glob_exists() {
   fi
 }
 
+assert_not_exists() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    echo "Did not expect path to exist: $path" >&2
+    exit 1
+  fi
+}
+
 run_core_config() {
   local home_dir="$1"
   local input_text="$2"
 
-  HOME="$home_dir" bash "$core_config_script" <<<"$input_text"
+  printf '\n%s' "$input_text" | HOME="$home_dir" bash "$core_config_script"
+}
+
+run_core_config_with_profile_choice() {
+  local home_dir="$1"
+  local profile_choice="$2"
+  local input_text="$3"
+
+  printf '%s\n%s' "$profile_choice" "$input_text" | HOME="$home_dir" bash "$core_config_script"
+}
+
+run_core_config_with_profile_override() {
+  local home_dir="$1"
+  local package_profile="$2"
+  local input_text="$3"
+
+  printf '%s' "$input_text" | HOME="$home_dir" INSTALL_PACKAGE_PROFILE="$package_profile" bash "$core_config_script"
 }
 
 run_auth_setup() {
@@ -149,6 +173,7 @@ test_core_config_generates_env_and_backups() {
   trap 'rm -rf "$temp_home"' RETURN
 
   local env_file="${temp_home}/.agr_ai_curation/.env"
+  local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
   local runtime_config_dir="${temp_home}/.agr_ai_curation/runtime/config"
   local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
   local runtime_state_dir="${temp_home}/.agr_ai_curation/runtime/state"
@@ -256,6 +281,9 @@ test_core_config_generates_env_and_backups() {
     exit 1
   }
   cmp "${repo_root}/packages/core/package.yaml" "${runtime_packages_dir}/core/package.yaml"
+  assert_not_exists "${runtime_packages_dir}/alliance"
+  assert_contains '^INSTALL_PACKAGE_PROFILE=core-only$' "$package_profile_state"
+  assert_contains '^INSTALL_PACKAGE_IDS=agr.core$' "$package_profile_state"
 
   local init_public_key
   local public_key
@@ -270,6 +298,29 @@ test_core_config_generates_env_and_backups() {
 
   assert_contains '^OPENAI_API_KEY=sk-openai-second$' "$env_file"
   assert_glob_exists "${env_file}.bak.*"
+}
+
+test_core_config_seeds_alliance_profile_when_selected() {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$temp_home"' RETURN
+
+  local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
+  local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
+
+  run_core_config_with_profile_choice "$temp_home" "2" $'sk-openai-alliance\n\n\n\n'
+
+  [[ -f "${runtime_packages_dir}/core/package.yaml" ]] || {
+    echo "Expected core package manifest for core + alliance profile" >&2
+    exit 1
+  }
+  [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
+    echo "Expected alliance package manifest for core + alliance profile" >&2
+    exit 1
+  }
+  cmp "${repo_root}/packages/alliance/package.yaml" "${runtime_packages_dir}/alliance/package.yaml"
+  assert_contains '^INSTALL_PACKAGE_PROFILE=core-plus-alliance$' "$package_profile_state"
+  assert_contains '^INSTALL_PACKAGE_IDS=agr.core,agr.alliance$' "$package_profile_state"
 }
 
 test_auth_setup_dev_and_oidc() {
@@ -439,7 +490,7 @@ test_orchestrator_skip_flags() {
     --image-tag release-20260313 \
     --skip-preflight \
     --skip-group-setup \
-    --skip-pdfx-setup >"$output_path" <<< $'sk-orchestrator\n\n\n\n1\n'
+    --skip-pdfx-setup >"$output_path" <<< $'\nsk-orchestrator\n\n\n\n1\n'
 
   local env_file="${temp_home}/.agr_ai_curation/.env"
   [[ -f "$env_file" ]] || {
@@ -465,10 +516,46 @@ test_orchestrator_skip_flags() {
     echo "Expected orchestrator to seed the bundled core package" >&2
     exit 1
   }
+  assert_not_exists "${temp_home}/.agr_ai_curation/runtime/packages/alliance"
   assert_contains 'Completed Stage 6 - Start and verify services' "$output_path"
 }
 
+test_orchestrator_can_add_alliance_later_with_package_profile_flag() {
+  local temp_home
+  local output_path
+  temp_home="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$output_path"' RETURN
+
+  local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
+  local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
+
+  run_core_config "$temp_home" $'sk-openai-initial\n\n\n\n'
+  assert_not_exists "${runtime_packages_dir}/alliance"
+
+  HOME="$temp_home" \
+  bash "$orchestrator_script" \
+    --from-stage 2 \
+    --package-profile core-plus-alliance \
+    --skip-auth-setup \
+    --skip-group-setup \
+    --skip-pdfx-setup \
+    --skip-start-verify >"$output_path" <<< $'sk-openai-updated\n\n\n\n'
+
+  [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
+    echo "Expected rerun installer path to add the alliance package" >&2
+    cat "$output_path" >&2
+    exit 1
+  }
+  assert_contains '^OPENAI_API_KEY=sk-openai-updated$' "${temp_home}/.agr_ai_curation/.env"
+  assert_contains '^INSTALL_PACKAGE_PROFILE=core-plus-alliance$' "$package_profile_state"
+  assert_contains '^INSTALL_PACKAGE_IDS=agr.core,agr.alliance$' "$package_profile_state"
+  assert_contains 'Package profile override: core + alliance' "$output_path"
+  assert_contains 'Completed Stage 2 - Core config' "$output_path"
+}
+
 test_core_config_generates_env_and_backups
+test_core_config_seeds_alliance_profile_when_selected
 test_auth_setup_dev_and_oidc
 test_group_setup_defaults_to_runtime_config_path
 test_group_setup_modes_and_backup
@@ -476,5 +563,6 @@ test_group_setup_mode_one_handles_slash_group_claim
 test_group_setup_rejects_invalid_custom_group_id
 test_group_setup_escapes_yaml_double_quotes
 test_orchestrator_skip_flags
+test_orchestrator_can_add_alliance_later_with_package_profile_flag
 
 echo "core/auth/group installer stage checks passed"
