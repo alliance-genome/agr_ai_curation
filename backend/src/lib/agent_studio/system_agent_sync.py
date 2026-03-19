@@ -124,7 +124,6 @@ def sync_system_agents(
 
     for agent in sorted(agent_defs.values(), key=lambda item: item.folder_name):
         agent_key = canonical_system_agent_key(agent)
-        discovered_keys.add(agent_key)
 
         instructions = _get_active_system_prompt(
             db,
@@ -138,6 +137,7 @@ def sync_system_agents(
             )
             continue
 
+        discovered_keys.add(agent_key)
         values = _build_system_agent_values(agent, instructions=instructions)
         row = existing_rows.get(agent_key)
 
