@@ -1,16 +1,21 @@
 # Agents Directory
 
-This repo directory is the source-development mirror of the shipped
-`agr.core` (Alliance Core) supervisor bundle plus the shipped `agr.alliance`
-(Alliance Defaults) specialist catalog. Public or organization-specific
-customization for a standard install should happen through runtime packages under
-`~/.agr_ai_curation/runtime/packages/` plus deployment overrides under
-`~/.agr_ai_curation/runtime/config/`, not by editing this checkout in place.
+This repo directory is the source-development override layer for the shipped
+core/runtime bundles. The canonical shipped specialist catalog lives under
+`packages/alliance/agents/`; `config/agents/` is reserved for core-owned bundles
+such as `supervisor` and `chat_output`, plus deployment-specific overrides that
+should win over package defaults.
+
+Public or organization-specific customization for a standard install should
+happen through runtime packages under `~/.agr_ai_curation/runtime/packages/`
+plus deployment overrides under `~/.agr_ai_curation/runtime/config/`, not by
+editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
 for the installed runtime layout. If you are maintaining the shipped packages
 in this repository, keep `config/agents/supervisor/` aligned with
-`packages/core/agents/supervisor/` and the specialist bundles aligned with
+`packages/core/agents/supervisor/`, keep `config/agents/chat_output/` aligned
+with its canonical shipped source, and keep Alliance specialist bundles under
 `packages/alliance/agents/`.
 
 ## Package-first authoring layout
@@ -193,9 +198,11 @@ file when that field is missing.
 
 ## Loading and override behavior
 
-- Agent bundles are discovered from loaded runtime packages.
-- Bundle names must be unique across packages. Duplicate bundle names are
-  startup errors; agent bundles do not have an automatic override winner.
+- Agent bundles are discovered from loaded runtime packages first, then from
+  `config/agents/` as an override layer.
+- Bundle names must be unique across packages. When a bundle exists in both a
+  package and `config/agents/`, the `config/agents/` copy overrides the package
+  copy by folder name.
 - Tools referenced by `agent.yaml` must exist in the merged runtime tool
   registry, usually via package `tools/bindings.yaml` exports.
 - Provider, model, and tool-policy defaults can be overridden by runtime config

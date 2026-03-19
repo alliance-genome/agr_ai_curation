@@ -1,10 +1,11 @@
 """
-Registry Builder - Builds AGENT_REGISTRY from YAML configurations.
+Registry Builder - Builds AGENT_REGISTRY from resolved YAML configurations.
 
-This module provides the bridge between config-driven agent definitions
+This module provides the bridge between layered agent definitions
 and AGENT_REGISTRY metadata used by catalog_service.py.
 
-YAML files (config/agents/*/agent.yaml) are the source of truth.
+Runtime packages are the primary source of truth, with `config/agents/`
+acting as the override layer.
 This module builds the registry dynamically at startup.
 """
 
@@ -900,8 +901,9 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
     """
     Build AGENT_REGISTRY from YAML configurations.
 
-    Loads all agent definitions from config/agents/*/agent.yaml and
-    converts them to AGENT_REGISTRY metadata entries.
+    Loads all resolved agent definitions from runtime packages plus
+    `config/agents/` overrides and converts them to AGENT_REGISTRY metadata
+    entries.
 
     Returns:
         Dictionary mapping agent_id to registry entry

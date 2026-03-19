@@ -56,7 +56,38 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
     report = module.build_agent_runtime_report(strict_mode=False)
     assert report["status"] == "unhealthy"
     assert any("Unknown model_id 'unknown-model'" in msg for msg in report["errors"])
-    assert any("Unknown tool_ids: missing_tool" in msg for msg in report["errors"])
+    assert any("Unknown tool_ids: missing_tool" in msg for msg in report["warnings"])
+    assert report["summary"]["disabled_agent_count"] == 1
+    assert report["agents"][0]["disabled"] is True
+
+
+def test_build_agent_runtime_report_unknown_tool_only_warns_and_disables(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["missing_tool"])
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": {"search_document"},
+            "agr_db_query_tool_ids": {"agr_curation_query"},
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+
+    assert report["status"] == "degraded"
+    assert report["errors"] == []
+    assert any("Unknown tool_ids: missing_tool" in msg for msg in report["warnings"])
+    assert any("Disabled: references tools from uninstalled package(s)." in msg for msg in report["warnings"])
+    assert report["agents"][0]["disabled"] is True
 
 
 def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
@@ -97,7 +128,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
     monkeypatch.setattr(
         module,
         "_load_expected_system_agent_keys",
-        lambda: (set(), "Failed to load expected system agents from config: boom"),
+        lambda: (set(), "Failed to load expected system agents from layered sources: boom"),
     )
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
@@ -116,7 +147,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
     assert report["status"] == "degraded"
     assert report["errors"] == []
     assert report["summary"]["missing_system_agent_count"] == 0
-    assert any("Failed to load expected system agents from config: boom" in msg for msg in report["warnings"])
+    assert any("Failed to load expected system agents from layered sources: boom" in msg for msg in report["warnings"])
 
 
 def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatch):
@@ -146,6 +177,16 @@ def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatc
         "allowing core-only runtime bootstrap" in msg
         for msg in report["warnings"]
     )
+
+
+def test_allow_unseeded_core_only_runtime_accepts_chat_output_core_bundle():
+    import src.lib.agent_studio.runtime_validation as module
+
+    assert module._allow_unseeded_core_only_runtime(
+        expected_system_agent_keys={"supervisor", "chat_output"},
+        actual_system_agent_keys=set(),
+        agent_count=0,
+    ) is True
 
 
 def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monkeypatch):
@@ -273,3 +314,41 @@ def test_validate_and_cache_agent_runtime_contracts_raises_on_error(monkeypatch)
 
     with pytest.raises(RuntimeError, match="Agent runtime validation failed"):
         module.validate_and_cache_agent_runtime_contracts(strict_mode=True)
+
+
+def test_validate_and_cache_agent_runtime_contracts_disables_missing_tool_agents(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    disable_calls = []
+    monkeypatch.setattr(
+        module,
+        "validate_agent_runtime_contracts",
+        lambda strict_mode=None: (
+            True,
+            {
+                "status": "degraded",
+                "strict_mode": False,
+                "validated_at": "2026-02-25T00:00:00+00:00",
+                "errors": [],
+                "warnings": ["gene: Unknown tool_ids: missing_tool"],
+                "agents": [
+                    {
+                        "agent_key": "gene",
+                        "disabled": True,
+                        "disable_reason": "references tools from uninstalled package(s).",
+                    }
+                ],
+                "summary": {"disabled_agent_count": 1},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_disable_agents_with_missing_tools",
+        lambda report: disable_calls.append(report),
+    )
+
+    report = module.validate_and_cache_agent_runtime_contracts(strict_mode=False)
+
+    assert report["status"] == "degraded"
+    assert len(disable_calls) == 1

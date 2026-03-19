@@ -288,6 +288,17 @@ async def lifespan(app: FastAPI):
                     counts["group_rules"],
                 )
 
+            from src.lib.agent_studio.system_agent_sync import sync_system_agents
+            agent_sync_counts = sync_system_agents(db=db)
+            logger.info(
+                "System agents synced from YAML: discovered=%s inserted=%s updated=%s reactivated=%s deactivated=%s",
+                agent_sync_counts["discovered"],
+                agent_sync_counts["inserted"],
+                agent_sync_counts["updated"],
+                agent_sync_counts["reactivated"],
+                agent_sync_counts["deactivated"],
+            )
+
             # Initialize prompt cache from database
             init_prompt_cache(db)
             logger.info("Prompt cache initialized")

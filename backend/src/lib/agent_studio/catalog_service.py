@@ -49,7 +49,7 @@ def get_prompt_key_for_agent(registry_agent_id: str) -> str:
     if registry_agent_id == "task_input":
         return "task_input"
 
-    # Canonical key is the folder name in config/agents/*.
+    # Canonical key is the resolved agent bundle folder name.
     by_folder = get_agent_by_folder(registry_agent_id)
     if by_folder:
         return by_folder.folder_name
@@ -108,8 +108,8 @@ def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[Agent
     )
 
 
-# Agent metadata registry - built dynamically from YAML configurations.
-# Source of truth: config/agents/*/agent.yaml
+# Agent metadata registry - built dynamically from layered YAML configurations.
+# Source of truth: runtime packages plus config/agents overrides
 # Factory functions: discovered via convention (create_{folder}_agent)
 AGENT_REGISTRY = build_agent_registry()
 

@@ -276,12 +276,18 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
 
     result = prompt_loader.load_prompts(db=db, force_reload=True)
 
-    assert result == {"base_prompts": 1, "group_rules": 2}
+    assert result == {"base_prompts": 2, "group_rules": 2}
     assert db.commit.called
     assert any(
         call["agent_name"] == "supervisor"
         and call["prompt_type"] == "system"
-        and call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
+        and call["source_file"] == "config/agents/supervisor/prompt.yaml"
+        for call in captured_calls
+    )
+    assert any(
+        call["agent_name"] == "chat_output"
+        and call["prompt_type"] == "system"
+        and call["source_file"] == "config/agents/chat_output/prompt.yaml"
         for call in captured_calls
     )
     assert {

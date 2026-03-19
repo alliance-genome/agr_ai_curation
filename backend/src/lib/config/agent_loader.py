@@ -2,7 +2,8 @@
 Agent Definition Loader for Config-Driven Architecture.
 
 This module discovers and loads agent definitions from installed runtime
-packages. Each exported agent bundle contains:
+packages plus the repo/runtime override layer under `config/agents/`. Each
+resolved agent bundle contains:
 - agent.yaml: Agent metadata and configuration
 - prompt.yaml: Base prompt template
 - schema.py: Pydantic output schema (optional)
@@ -11,7 +12,7 @@ packages. Each exported agent bundle contains:
 Usage:
     from src.lib.config import load_agent_definitions, get_agent_definition
 
-    # Load all agents at startup
+    # Load all agents from packages plus config overrides at startup
     agents = load_agent_definitions()
 
     # Get a specific agent
@@ -199,7 +200,8 @@ def load_agent_definitions(
     initialization is complete.
 
     Args:
-        agents_path: Optional search path. When omitted, scan installed packages.
+        agents_path: Optional search path. When omitted, scan runtime packages
+            plus `config/agents/` overrides when present.
         force_reload: Force reload even if already initialized
 
     Returns:

@@ -77,6 +77,16 @@ class TestLifespan:
         """Mock all initialization subsystems for lifespan tests."""
         with patch("main.SessionLocal") as mock_session, \
              patch("src.lib.config.prompt_loader.load_prompts", return_value={"base_prompts": 0, "group_rules": 0}), \
+             patch(
+                 "src.lib.agent_studio.system_agent_sync.sync_system_agents",
+                 return_value={
+                     "inserted": 0,
+                     "updated": 0,
+                     "reactivated": 0,
+                     "deactivated": 0,
+                     "discovered": 0,
+                 },
+             ), \
              patch("src.lib.prompts.cache.initialize"), \
              patch("src.lib.config.groups_loader.load_groups", return_value={}), \
              patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas") as mock_validate_schemas, \
@@ -354,6 +364,16 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
          ), \
          patch("src.lib.prompts.cache.initialize"), \
          patch("src.lib.config.groups_loader.load_groups", return_value={}), \
+         patch(
+             "src.lib.agent_studio.system_agent_sync.sync_system_agents",
+             return_value={
+                 "inserted": 0,
+                 "updated": 0,
+                 "reactivated": 0,
+                 "deactivated": 0,
+                 "discovered": 2,
+             },
+         ), \
          patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas"), \
          patch("src.lib.agent_studio.runtime_validation._fetch_active_agents", lambda: []), \
          patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):

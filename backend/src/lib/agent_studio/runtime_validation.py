@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from copy import deepcopy
@@ -15,6 +16,7 @@ from src.models.sql.database import SessionLocal
 
 _startup_report: Optional[Dict[str, Any]] = None
 _REASONING_LEVEL_PATTERN = re.compile(r"^(minimal|low|medium|high)$")
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -84,7 +86,7 @@ def _normalize_tool_ids(raw_tool_ids: Any) -> Tuple[List[str], Optional[str]]:
 
 
 def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
-    """Load expected system-agent keys from config/agents definitions."""
+    """Load expected system-agent keys from layered runtime agent definitions."""
     try:
         from src.lib.config.agent_loader import load_agent_definitions
 
@@ -99,7 +101,7 @@ def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
                 expected_keys.add(agent.folder_name)
         return expected_keys, None
     except Exception as exc:
-        return set(), f"Failed to load expected system agents from config: {exc}"
+        return set(), f"Failed to load expected system agents from layered sources: {exc}"
 
 
 def _allow_unseeded_core_only_runtime(
@@ -112,8 +114,46 @@ def _allow_unseeded_core_only_runtime(
     return (
         agent_count == 0
         and not actual_system_agent_keys
-        and expected_system_agent_keys == {"supervisor"}
+        and expected_system_agent_keys in (
+            {"supervisor"},
+            {"supervisor", "chat_output"},
+        )
     )
+
+
+def _disable_agents_with_missing_tools(report: Dict[str, Any]) -> None:
+    """Best-effort deactivate agents that reference unavailable tools."""
+    disable_reasons = {
+        str(agent.get("agent_key") or "").strip(): str(agent.get("disable_reason") or "").strip()
+        for agent in report.get("agents", [])
+        if agent.get("disabled") and str(agent.get("agent_key") or "").strip()
+    }
+    if not disable_reasons:
+        return
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(DBAgent)
+            .filter(DBAgent.agent_key.in_(sorted(disable_reasons)))
+            .all()
+        )
+        for row in rows:
+            row.is_active = False
+            row.supervisor_enabled = False
+            logger.warning(
+                "Agent '%s' disabled: %s",
+                row.agent_key,
+                disable_reasons.get(str(row.agent_key), "missing runtime tool dependencies"),
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to deactivate agent rows with missing runtime tool dependencies"
+        )
+    finally:
+        db.close()
 
 
 def build_agent_runtime_report(
@@ -223,12 +263,14 @@ def build_agent_runtime_report(
 
     unhealthy_agent_count = 0
     degraded_agent_count = 0
+    disabled_agent_count = 0
     missing_tool_candidates = 0
     critical_missing_tool_candidates = 0
 
     for row in agents:
         row_errors: List[str] = []
         row_warnings: List[str] = []
+        disable_reason: Optional[str] = None
         raw_tool_ids, tool_shape_error = _normalize_tool_ids(getattr(row, "tool_ids", []))
         canonical_tool_ids: List[str] = []
 
@@ -243,8 +285,15 @@ def build_agent_runtime_report(
                 if canonical_id and canonical_id not in tool_bindings:
                     unknown_tool_ids.append(tool_id)
             if unknown_tool_ids:
-                row_errors.append(
+                row_warnings.append(
                     "Unknown tool_ids: " + ", ".join(sorted(set(unknown_tool_ids)))
+                )
+                disable_reason = (
+                    "references tools from uninstalled package(s). Install the "
+                    "required package and restart to enable."
+                )
+                row_warnings.append(
+                    "Disabled: " + disable_reason
                 )
 
         model_id = str(getattr(row, "model_id", "") or "").strip()
@@ -312,6 +361,8 @@ def build_agent_runtime_report(
             unhealthy_agent_count += 1
         elif row_warnings:
             degraded_agent_count += 1
+        if disable_reason:
+            disabled_agent_count += 1
 
         for msg in row_errors:
             errors.append(f"{row.agent_key}: {msg}")
@@ -328,6 +379,8 @@ def build_agent_runtime_report(
                 "tool_ids": canonical_tool_ids,
                 "errors": row_errors,
                 "warnings": row_warnings,
+                "disabled": bool(disable_reason),
+                "disable_reason": disable_reason,
                 "missing_tool_backfill_candidate": missing_tool_candidate,
                 "critical_missing_tool_backfill_candidate": critical_missing_tool_candidate,
                 "suggested_tool_ids": suggested_tool_ids,
@@ -351,6 +404,7 @@ def build_agent_runtime_report(
             "agent_count": len(agent_payload),
             "unhealthy_agent_count": unhealthy_agent_count,
             "degraded_agent_count": degraded_agent_count,
+            "disabled_agent_count": disabled_agent_count,
             "missing_tool_backfill_candidates": missing_tool_candidates,
             "critical_missing_tool_backfill_candidates": critical_missing_tool_candidates,
             "missing_system_agent_count": missing_system_agent_count,
@@ -375,6 +429,7 @@ def validate_and_cache_agent_runtime_contracts(
     global _startup_report
 
     is_valid, report = validate_agent_runtime_contracts(strict_mode=strict_mode)
+    _disable_agents_with_missing_tools(report)
     _startup_report = deepcopy(report)
     if not is_valid:
         joined = "; ".join(report.get("errors", []))

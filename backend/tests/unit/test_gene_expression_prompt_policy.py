@@ -2,14 +2,25 @@ from pathlib import Path
 
 import yaml
 
+from src.lib.config.agent_sources import resolve_agent_config_sources
+
 
 def _repo_root() -> Path:
     # backend/tests/unit/<this_file>.py -> repo root is parents[3]
     return Path(__file__).resolve().parents[3]
 
 
+def _load_gene_expression_source():
+    return next(
+        source
+        for source in resolve_agent_config_sources(_repo_root() / "packages")
+        if source.folder_name == "gene_expression"
+    )
+
+
 def test_gene_expression_prompt_includes_daniela_policy_gates():
-    prompt_path = _repo_root() / "config" / "agents" / "gene_expression" / "prompt.yaml"
+    prompt_path = _load_gene_expression_source().prompt_yaml
+    assert prompt_path is not None
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")
 
@@ -24,13 +35,10 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
 
 
 def test_gene_expression_wb_overlay_includes_wormbase_examples():
-    wb_path = (
-        _repo_root()
-        / "config"
-        / "agents"
-        / "gene_expression"
-        / "group_rules"
-        / "wb.yaml"
+    wb_path = next(
+        path
+        for path in _load_gene_expression_source().group_rule_files
+        if path.stem == "wb"
     )
     data = yaml.safe_load(wb_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")

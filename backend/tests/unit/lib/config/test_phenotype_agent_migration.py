@@ -1,26 +1,47 @@
-"""Regression tests for the phenotype agent seed migration helper."""
+"""Regression tests for optional system-agent seed migrations."""
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sys
 import types
 
+import pytest
 import yaml
 
 from ..packages import find_repo_root
 
 
 REPO_ROOT = find_repo_root(Path(__file__))
-MIGRATION_PATH = (
-    REPO_ROOT
-    / "backend"
-    / "alembic"
-    / "versions"
-    / "c4d5e6f7a8b9_add_phenotype_system_agent.py"
+MIGRATION_SPECS = (
+    (
+        "phenotype_extractor",
+        REPO_ROOT / "backend" / "alembic" / "versions" / "c4d5e6f7a8b9_add_phenotype_system_agent.py",
+        "_load_phenotype_spec",
+    ),
+    (
+        "allele_extractor",
+        REPO_ROOT / "backend" / "alembic" / "versions" / "d5e6f7a8b9c0_add_allele_extractor_system_agent.py",
+        "_load_agent_spec",
+    ),
+    (
+        "disease_extractor",
+        REPO_ROOT / "backend" / "alembic" / "versions" / "e6f7a8b9c0d1_add_disease_extractor_system_agent.py",
+        "_load_agent_spec",
+    ),
+    (
+        "chemical_extractor",
+        REPO_ROOT / "backend" / "alembic" / "versions" / "f7a8b9c0d1e2_add_chemical_extractor_system_agent.py",
+        "_load_agent_spec",
+    ),
+    (
+        "gene_extractor",
+        REPO_ROOT / "backend" / "alembic" / "versions" / "08b9c0d1e2f3_add_gene_extractor_system_agent.py",
+        "_load_agent_spec",
+    ),
 )
 
 
-def _load_migration_module(monkeypatch):
+def _load_migration_module(monkeypatch, *, module_name: str, migration_path: Path):
     dummy_alembic = types.ModuleType("alembic")
     dummy_alembic.op = object()
     monkeypatch.setitem(sys.modules, "alembic", dummy_alembic)
@@ -36,7 +57,7 @@ def _load_migration_module(monkeypatch):
     dummy_postgresql.insert = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "sqlalchemy.dialects.postgresql", dummy_postgresql)
 
-    spec = spec_from_file_location("phenotype_agent_migration_test", MIGRATION_PATH)
+    spec = spec_from_file_location(module_name, migration_path)
     assert spec is not None
     assert spec.loader is not None
 
@@ -76,70 +97,88 @@ def _write_agent_bundle(agent_dir: Path, *, name: str, prompt: str) -> None:
     )
 
 
-def _clear_runtime_env(monkeypatch) -> None:
-    for env_var in ("AGR_RUNTIME_ROOT", "AGR_RUNTIME_PACKAGES_DIR"):
-        monkeypatch.delenv(env_var, raising=False)
-
-
-def test_load_phenotype_spec_prefers_runtime_package_bundle(tmp_path, monkeypatch):
-    _clear_runtime_env(monkeypatch)
-
-    runtime_root = tmp_path / "runtime"
-    repo_root = tmp_path / "repo"
-    _write_agent_bundle(
-        runtime_root / "packages" / "core" / "agents" / "phenotype_extractor",
-        name="Runtime Bundle",
-        prompt="runtime prompt",
-    )
-    _write_agent_bundle(
-        repo_root / "config" / "agents" / "phenotype_extractor",
-        name="Repo Config Bundle",
-        prompt="repo config prompt",
+def _make_source(agent_dir: Path, *, folder_name: str):
+    return types.SimpleNamespace(
+        folder_name=folder_name,
+        agent_yaml=agent_dir / "agent.yaml",
+        prompt_yaml=agent_dir / "prompt.yaml",
+        source_file_display=lambda path: f"packages/alliance/agents/{folder_name}/{path.name}",
     )
 
-    module = _load_migration_module(monkeypatch)
-    monkeypatch.setattr(module, "_repo_root", lambda: repo_root)
-    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
 
-    spec, prompt = module._load_phenotype_spec()
-
-    assert spec["name"] == "Runtime Bundle"
-    assert prompt == "runtime prompt"
-
-
-def test_load_phenotype_spec_falls_back_to_repo_core_bundle(tmp_path, monkeypatch):
-    _clear_runtime_env(monkeypatch)
-
-    repo_root = tmp_path / "repo"
+def test_load_phenotype_spec_reads_resolved_bundle(tmp_path, monkeypatch):
+    agent_dir = tmp_path / "packages" / "alliance" / "agents" / "phenotype_extractor"
     _write_agent_bundle(
-        repo_root / "packages" / "core" / "agents" / "phenotype_extractor",
-        name="Repo Core Bundle",
-        prompt="repo core prompt",
+        agent_dir,
+        name="Phenotype Bundle",
+        prompt="phenotype prompt",
     )
 
-    module = _load_migration_module(monkeypatch)
-    monkeypatch.setattr(module, "_repo_root", lambda: repo_root)
-
-    spec, prompt = module._load_phenotype_spec()
-
-    assert spec["name"] == "Repo Core Bundle"
-    assert prompt == "repo core prompt"
-
-
-def test_load_phenotype_spec_falls_back_to_repo_config_bundle(tmp_path, monkeypatch):
-    _clear_runtime_env(monkeypatch)
-
-    repo_root = tmp_path / "repo"
-    _write_agent_bundle(
-        repo_root / "config" / "agents" / "phenotype_extractor",
-        name="Repo Config Bundle",
-        prompt="repo config prompt",
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="phenotype_agent_migration_test",
+        migration_path=MIGRATION_SPECS[0][1],
+    )
+    monkeypatch.setattr(
+        module,
+        "resolve_agent_config_sources",
+        lambda: (_make_source(agent_dir, folder_name="phenotype_extractor"),),
     )
 
-    module = _load_migration_module(monkeypatch)
-    monkeypatch.setattr(module, "_repo_root", lambda: repo_root)
+    spec, prompt, source_file = module._load_phenotype_spec()
 
-    spec, prompt = module._load_phenotype_spec()
+    assert spec["name"] == "Phenotype Bundle"
+    assert prompt == "phenotype prompt"
+    assert source_file == "packages/alliance/agents/phenotype_extractor/prompt.yaml"
 
-    assert spec["name"] == "Repo Config Bundle"
-    assert prompt == "repo config prompt"
+
+@pytest.mark.parametrize(
+    ("module_name", "migration_path", "loader_name"),
+    MIGRATION_SPECS,
+)
+def test_optional_system_agent_spec_loader_returns_none_when_bundle_missing(
+    monkeypatch,
+    module_name,
+    migration_path,
+    loader_name,
+):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name=f"{module_name}_missing_bundle_test",
+        migration_path=migration_path,
+    )
+    monkeypatch.setattr(module, "resolve_agent_config_sources", lambda: ())
+
+    assert getattr(module, loader_name)() is None
+
+
+@pytest.mark.parametrize(
+    ("module_name", "migration_path", "loader_name"),
+    MIGRATION_SPECS,
+)
+def test_optional_system_agent_upgrade_noops_when_bundle_missing(
+    monkeypatch,
+    module_name,
+    migration_path,
+    loader_name,
+):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name=f"{module_name}_upgrade_skip_test",
+        migration_path=migration_path,
+    )
+    monkeypatch.setattr(module, "resolve_agent_config_sources", lambda: ())
+
+    bind_calls = []
+    module.op = types.SimpleNamespace(
+        get_bind=lambda: bind_calls.append("get_bind") or object()
+    )
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError(f"{loader_name} missing-bundle skip should not touch the database")
+
+    monkeypatch.setattr(module, "_prompt_overrides_column_name", _unexpected)
+
+    module.upgrade()
+
+    assert bind_calls == []
