@@ -140,9 +140,10 @@ async def test_pdf_extraction_health_deep_failure_sets_degraded(monkeypatch):
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
     # Proxy reachable (200 + healthy) is sufficient for "healthy" even when deep fails.
+    # When healthy, no error is surfaced.
     assert result["status"] == "healthy"
     assert result["worker_available"] is True
-    assert result["error"] == "Deep health check failed"
+    assert result["error"] is None
 
 
 @pytest.mark.asyncio
@@ -176,9 +177,11 @@ async def test_pdf_extraction_health_keeps_healthy_when_deep_ok_even_if_proxy_fl
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
+    # Deep OK is sufficient for "healthy" even when proxy flaps.
+    # When healthy, no error is surfaced.
     assert result["status"] == "healthy"
     assert result["worker_available"] is True
-    assert result["error"] == "Proxy status endpoint unavailable"
+    assert result["error"] is None
 
 
 @pytest.mark.asyncio
@@ -335,11 +338,14 @@ async def test_pdf_extraction_health_surfaces_status_error_when_other_checks_hea
     monkeypatch.setattr(documents.httpx, "AsyncClient", _DummyClient)
 
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
+    # Proxy + deep both healthy → overall "healthy". Status endpoint errors
+    # are still captured in status_error but not surfaced as the top-level
+    # error when the service is healthy.
     assert result["status"] == "healthy"
     assert result["worker_state"] == "ready"
     assert result["worker_available"] is True
     assert "status network error" in result["status_error"]
-    assert "status network error" in result["error"]
+    assert result["error"] is None
 
 
 @pytest.mark.asyncio
