@@ -25,6 +25,16 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // React core must be in its own chunk so the JSX runtime is
+          // always resolved correctly by every other vendor chunk.
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/scheduler/')
+          ) {
+            return 'react-vendor'
+          }
+
           if (
             id.includes('node_modules/@emotion/') ||
             id.includes('node_modules/@mui/material') ||
