@@ -17,8 +17,6 @@ from src.lib.config.connections_loader import (
     _check_postgres_health,
     _redact_url_credentials,
     sanitize_error_message,
-    check_service_health,
-    check_all_health,
     get_connection_status,
     load_connections,
     reset_cache,
@@ -593,7 +591,7 @@ class TestGetConnectionStatusRedaction:
         # The real protection is the display_url property which is tested above
         for password in common_test_passwords:
             # Only check if it looks like an unredacted password (not preceded by ***)
-            if password in status_str and f":***@" not in status_str:
+            if password in status_str and ":***@" not in status_str:
                 # This might be a false positive if "password" is in a description
                 # but it's a good sanity check
                 pass  # Allow in descriptions, but the key test is display_url
