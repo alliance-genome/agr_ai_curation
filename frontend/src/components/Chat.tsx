@@ -87,6 +87,10 @@ interface StoredChatData {
   messages: SerializedMessage[]
 }
 
+function shouldShowCurationDbWarning(status?: string | null): boolean {
+  return status !== 'connected' && status !== 'not_configured'
+}
+
 // Helper to load messages from localStorage with session validation
 function loadMessagesFromStorage(sessionId?: string | null): Message[] {
   try {
@@ -156,7 +160,7 @@ function Chat({
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
   const [weaviateConnected, setWeaviateConnected] = useState(true)
-  const [curationDbConnected, setCurationDbConnected] = useState(true)
+  const [showCurationDbWarning, setShowCurationDbWarning] = useState(false)
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | null>(null)
   const [isResetting, setIsResetting] = useState(false)
   const [isUnloadingPDF, setIsUnloadingPDF] = useState(false)
@@ -679,10 +683,10 @@ function Chat({
         const response = await fetch('/health')
         const data = await response.json()
         setWeaviateConnected(data?.services?.weaviate === 'connected')
-        setCurationDbConnected(data?.services?.curation_db === 'connected')
+        setShowCurationDbWarning(shouldShowCurationDbWarning(data?.services?.curation_db))
       } catch {
         setWeaviateConnected(false)
-        setCurationDbConnected(false)
+        setShowCurationDbWarning(true)
       }
     }
     checkHealth()
@@ -1318,7 +1322,7 @@ function Chat({
         </div>
       )}
 
-      {!curationDbConnected && (
+      {showCurationDbWarning && (
         <div className="weaviate-warning">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style={{ marginRight: '8px' }}>
             <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>

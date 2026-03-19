@@ -10,6 +10,41 @@ vi.mock('@/contexts/AuthContext', () => ({
   }),
 }))
 
+const CURATION_DB_WARNING =
+  'Curation database connection lost - all database queries unavailable'
+
+function mockChatFetch(options?: {
+  curationDbStatus?: string
+  rejectHealth?: boolean
+}) {
+  const { curationDbStatus = 'connected', rejectHealth = false } = options ?? {}
+
+  vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input)
+
+    if (url === '/health') {
+      if (rejectHealth) {
+        throw new Error('health fetch failed')
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          services: {
+            weaviate: 'connected',
+            curation_db: curationDbStatus,
+          },
+        }),
+      } as Response
+    }
+
+    return {
+      ok: true,
+      json: async () => ({}),
+    } as Response
+  })
+}
+
 function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
   const sendMessage = props?.sendMessage ?? vi.fn().mockResolvedValue(undefined)
   const mergedProps: ComponentProps<typeof Chat> = {
@@ -35,10 +70,7 @@ describe('Chat persistence', () => {
   beforeEach(() => {
     localStorage.clear()
     Element.prototype.scrollIntoView = vi.fn()
-    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({}),
-    } as Response)
+    mockChatFetch()
   })
 
   it('persists pending chat data on unmount and restores it on remount', async () => {
@@ -147,4 +179,29 @@ describe('Chat persistence', () => {
 
     window.removeEventListener('pdf-overlay-update', listener as EventListener)
   })
+
+  it('does not show the curation DB outage warning when the service is not configured', async () => {
+    mockChatFetch({ curationDbStatus: 'not_configured' })
+
+    renderChat()
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/health')
+    })
+
+    expect(screen.queryByText(CURATION_DB_WARNING)).not.toBeInTheDocument()
+  })
+
+  it.each(['disconnected', 'error'])(
+    'shows the curation DB outage warning when /health reports %s',
+    async (curationDbStatus) => {
+      mockChatFetch({ curationDbStatus })
+
+      renderChat()
+
+      await waitFor(() => {
+        expect(screen.getByText(CURATION_DB_WARNING)).toBeInTheDocument()
+      })
+    }
+  )
 })
