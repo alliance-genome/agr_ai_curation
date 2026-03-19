@@ -10,14 +10,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.lib.config.connections_loader import (
     ConnectionDefinition,
+    CredentialsConfig,
     HealthCheck,
     _check_http_health,
     _check_redis_health,
     _check_postgres_health,
     _redact_url_credentials,
     sanitize_error_message,
-    check_service_health,
-    check_all_health,
     get_connection_status,
     load_connections,
     reset_cache,
@@ -260,8 +259,69 @@ class TestCheckPostgresHealth:
         assert error == "Neither asyncpg nor psycopg2 installed"
 
     @pytest.mark.asyncio
-    async def test_connection_failure_returns_false(self, sample_postgres_connection):
-        """Should return (False, error) when connection fails."""
+    async def test_returns_none_when_optional_service_is_not_configured(self, monkeypatch):
+        """Optional Postgres services should report not configured, not failed."""
+        conn = ConnectionDefinition(
+            service_id="curation_db",
+            description="Optional curation DB",
+            url="",
+            required=False,
+            timeout_seconds=5.0,
+            health_check=HealthCheck(
+                endpoint=None,
+                method="CONNECT",
+                expected_status=200,
+                headers={},
+            ),
+            credentials=CredentialsConfig(source="env"),
+            is_healthy=None,
+            last_error=None,
+        )
+
+        mock_resolver = MagicMock()
+        mock_resolver.get_connection_url.return_value = None
+        monkeypatch.setattr(
+            "src.lib.database.curation_resolver.get_curation_resolver",
+            lambda: mock_resolver,
+        )
+
+        is_healthy, error = await _check_postgres_health(conn)
+
+        assert is_healthy is None
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_optional_configured_broken_service_returns_false(self):
+        """Optional configured Postgres services should still surface failures."""
+        import sys
+        from types import SimpleNamespace
+
+        optional_conn = ConnectionDefinition(
+            service_id="curation_db",
+            description="Optional curation DB",
+            url="postgresql://127.0.0.1:5432/curation",
+            required=False,
+            timeout_seconds=5.0,
+            health_check=HealthCheck(
+                endpoint=None,
+                method="CONNECT",
+                expected_status=200,
+                headers={},
+            ),
+            is_healthy=None,
+            last_error=None,
+        )
+
+        mock_asyncpg = SimpleNamespace(connect=AsyncMock(side_effect=Exception("connection refused")))
+        with patch.dict(sys.modules, {"asyncpg": mock_asyncpg}):
+            is_healthy, error = await _check_postgres_health(optional_conn)
+
+        assert is_healthy is False
+        assert "connection refused" in error
+
+    @pytest.mark.asyncio
+    async def test_required_configured_broken_service_returns_false(self, sample_postgres_connection):
+        """Required configured Postgres services should report unhealthy on failure."""
         import sys
         from types import SimpleNamespace
 
@@ -271,7 +331,6 @@ class TestCheckPostgresHealth:
 
         assert is_healthy is False
         assert "connection refused" in error
-
 
 class TestCheckServiceHealth:
     """Tests for check_service_health function."""
@@ -307,6 +366,44 @@ class TestCheckServiceHealth:
         assert conn is not None
         # is_healthy should have been set to a boolean
         assert conn.is_healthy is True or conn.is_healthy is False
+
+    @pytest.mark.asyncio
+    async def test_optional_unconfigured_service_updates_status_to_none(self):
+        """Optional unconfigured services should remain non-degrading in cached status."""
+        import src.lib.config.connections_loader as connections_loader
+
+        connections_loader._connection_registry = {
+            "curation_db": ConnectionDefinition(
+                service_id="curation_db",
+                description="Optional curation DB",
+                url="",
+                required=False,
+                timeout_seconds=5.0,
+                health_check=HealthCheck(
+                    endpoint=None,
+                    method="CONNECT",
+                    expected_status=200,
+                    headers={},
+                ),
+                credentials=CredentialsConfig(source="env"),
+                is_healthy=None,
+                last_error=None,
+            )
+        }
+        connections_loader._initialized = True
+
+        with patch.object(
+            connections_loader,
+            "_check_postgres_health",
+            new=AsyncMock(return_value=(None, None)),
+        ):
+            result = await connections_loader.check_service_health("curation_db")
+
+        conn = connections_loader.get_connection("curation_db")
+        assert result is None
+        assert conn is not None
+        assert conn.is_healthy is None
+        assert conn.last_error is None
 
 
 class TestCheckAllHealth:
@@ -494,7 +591,7 @@ class TestGetConnectionStatusRedaction:
         # The real protection is the display_url property which is tested above
         for password in common_test_passwords:
             # Only check if it looks like an unredacted password (not preceded by ***)
-            if password in status_str and f":***@" not in status_str:
+            if password in status_str and ":***@" not in status_str:
                 # This might be a false positive if "password" is in a description
                 # but it's a good sanity check
                 pass  # Allow in descriptions, but the key test is display_url

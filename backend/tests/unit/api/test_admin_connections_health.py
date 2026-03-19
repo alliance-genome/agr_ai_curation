@@ -18,7 +18,41 @@ def test_check_all_connections_requires_initialized(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_check_all_connections_reports_degraded_when_optional_service_fails(monkeypatch):
+def test_check_all_connections_stays_healthy_when_optional_service_is_not_configured(monkeypatch):
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
+
+    async def _check_all_health():
+        return {
+            "postgres": {
+                "service_id": "postgres",
+                "description": "Postgres",
+                "url": "postgres://***@db:5432/app",
+                "required": True,
+                "is_healthy": True,
+                "last_error": None,
+            },
+            "curation_db": {
+                "service_id": "curation_db",
+                "description": "Curation DB",
+                "url": "",
+                "required": False,
+                "is_healthy": None,
+                "last_error": None,
+            },
+        }
+
+    monkeypatch.setattr("src.lib.config.connections_loader.check_all_health", _check_all_health)
+
+    result = asyncio.run(admin_connections.check_all_connections())
+    assert result.status == "healthy"
+    assert result.total_services == 2
+    assert result.healthy_count == 1
+    assert result.unhealthy_count == 0
+    assert result.unknown_count == 1
+    assert result.required_healthy is True
+
+
+def test_check_all_connections_reports_degraded_when_optional_service_is_configured_but_fails(monkeypatch):
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
 
     async def _check_all_health():
