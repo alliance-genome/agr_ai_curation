@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   buildRenderedTextSearchIndex,
@@ -27,6 +27,10 @@ const createRenderedPage = (pageNumber: number, parts: string[]): HTMLElement =>
   document.body.appendChild(pageElement)
   return pageElement
 }
+
+afterEach(() => {
+  document.body.querySelectorAll('.page').forEach((page) => page.remove())
+})
 
 describe('normalizeSearchSnippet', () => {
   it('collapses whitespace and zero-width characters', () => {
