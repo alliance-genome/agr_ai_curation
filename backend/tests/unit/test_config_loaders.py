@@ -10,15 +10,17 @@ from pathlib import Path
 import pytest
 
 
-# Path to config/agents (runtime location for all agents)
-# This is what agent_loader.py uses in production.
-# In Docker, backend is mounted at /app/backend, so parent is /app
+# Path to config/agents (repo override layer for core/local bundles).
+# In Docker, backend is mounted at /app/backend, so parent is /app.
 CONFIG_AGENTS_PATH = Path(__file__).parent.parent.parent.parent / "config" / "agents"
 
-# Legacy path alias for the shipped Alliance catalog mirror
-# Note: config/agents/ mirrors the `agr.alliance` package catalog in this repo.
-# Tests should use CONFIG_AGENTS_PATH since that's what runtime actually uses.
-ALLIANCE_AGENTS_PATH = CONFIG_AGENTS_PATH  # Alias for backwards compatibility
+# Path to the shipped Alliance specialist package-owned bundles.
+ALLIANCE_AGENTS_PATH = (
+    Path(__file__).parent.parent.parent.parent
+    / "packages"
+    / "alliance"
+    / "agents"
+)
 
 
 class TestAgentLoader:
@@ -1868,17 +1870,8 @@ content: Test content for {folder_name}
                 assert agent_name == expected_agent_name, f"Failed for {folder_name}"
 
     def test_real_agent_folder_names(self):
-        """Verify actual agent folder names in config/agents/ directory.
-
-        These should all be valid AGENT_REGISTRY keys.
-        """
-        expected_agents = {
-            "gene", "gene_extractor", "allele", "allele_extractor", "disease", "disease_extractor", "chemical", "chemical_extractor",
-            "gene_expression", "phenotype_extractor", "gene_ontology", "go_annotations",
-            "orthologs", "ontology_mapping",
-            "csv_formatter", "json_formatter", "tsv_formatter",
-            "chat_output", "pdf", "supervisor"
-        }
+        """Verify the repo override layer only keeps core/override bundles."""
+        expected_agents = {"chat_output", "supervisor"}
 
         actual_folders = set()
         for folder in CONFIG_AGENTS_PATH.iterdir():

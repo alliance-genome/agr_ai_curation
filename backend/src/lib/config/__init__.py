@@ -2,10 +2,10 @@
 Config-driven architecture loaders.
 
 This package provides dynamic discovery and loading of:
-- Agent definitions from config/agents/*/agent.yaml
-- Prompts from config/agents/*/prompt.yaml
-- Schemas from config/agents/*/schema.py
-- Group rules from config/agents/*/group_rules/*.yaml
+- Agent definitions from runtime packages plus `config/agents/*/agent.yaml` overrides
+- Prompts from runtime packages plus `config/agents/*/prompt.yaml` overrides
+- Schemas from runtime packages plus `config/agents/*/schema.py` overrides
+- Group rules from runtime packages plus `config/agents/*/group_rules/*.yaml` overrides
 - Group definitions from config/groups.yaml
 
 YAML files are the source of truth. Database is a runtime cache.

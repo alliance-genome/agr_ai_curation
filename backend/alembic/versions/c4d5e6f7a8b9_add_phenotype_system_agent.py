@@ -19,6 +19,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.dialects.postgresql import insert
 import yaml
 
+from src.lib.config.agent_sources import resolve_agent_config_sources
+
 
 # revision identifiers, used by Alembic.
 revision = "c4d5e6f7a8b9"
@@ -33,25 +35,6 @@ _AGENT_ID = "phenotype_extractor"
 _CREATED_BY = "alembic:c4d5e6f7a8b9"
 
 
-def _repo_root() -> Path:
-    # backend/alembic/versions/<this_file>.py -> repo root is parents[3]
-    return Path(__file__).resolve().parents[3]
-
-
-def _candidate_agent_dirs() -> list[Path]:
-    repo_root = _repo_root()
-    runtime_root = Path(os.environ.get("AGR_RUNTIME_ROOT", "/runtime"))
-    runtime_packages_dir = Path(
-        os.environ.get("AGR_RUNTIME_PACKAGES_DIR", str(runtime_root / "packages"))
-    )
-
-    return [
-        runtime_packages_dir / "core" / "agents" / _AGENT_KEY,
-        repo_root / "packages" / "core" / "agents" / _AGENT_KEY,
-        repo_root / "config" / "agents" / _AGENT_KEY,
-    ]
-
-
 def _resolve_model_name(raw_model: Any) -> str:
     model = str(raw_model or "gpt-4o")
     match = _MODEL_ENV_PATTERN.match(model)
@@ -62,26 +45,23 @@ def _resolve_model_name(raw_model: Any) -> str:
     return os.environ.get(env_var, default)
 
 
-def _load_phenotype_spec() -> Tuple[Dict[str, Any], str]:
-    agent_yaml = None
-    prompt_yaml = None
-    searched_dirs: list[str] = []
+def _load_phenotype_spec() -> Tuple[Dict[str, Any], str, str] | None:
+    source = next(
+        (
+            item
+            for item in resolve_agent_config_sources()
+            if item.folder_name == _AGENT_KEY
+        ),
+        None,
+    )
+    if source is None:
+        return None
 
-    for agent_dir in _candidate_agent_dirs():
-        searched_dirs.append(str(agent_dir))
-        candidate_agent_yaml = agent_dir / "agent.yaml"
-        candidate_prompt_yaml = agent_dir / "prompt.yaml"
-        if candidate_agent_yaml.exists() and candidate_prompt_yaml.exists():
-            agent_yaml = candidate_agent_yaml
-            prompt_yaml = candidate_prompt_yaml
-            break
+    agent_yaml = source.agent_yaml if source is not None else None
+    prompt_yaml = source.prompt_yaml if source is not None else None
 
     if agent_yaml is None or prompt_yaml is None:
-        searched = ", ".join(searched_dirs)
-        raise RuntimeError(
-            "Missing phenotype agent bundle. Checked: "
-            f"{searched}"
-        )
+        raise RuntimeError(f"Missing phenotype agent bundle for '{_AGENT_KEY}'.")
 
     with agent_yaml.open("r", encoding="utf-8") as handle:
         agent_data = yaml.safe_load(handle) or {}
@@ -120,7 +100,7 @@ def _load_phenotype_spec() -> Tuple[Dict[str, Any], str]:
         ),
     }
 
-    return spec, prompt_content
+    return spec, prompt_content, source.source_file_display(prompt_yaml)
 
 
 def _active_system_prompt(connection: sa.Connection, agent_name: str) -> str | None:
@@ -143,7 +123,12 @@ def _active_system_prompt(connection: sa.Connection, agent_name: str) -> str | N
     return str(content)
 
 
-def _seed_prompt_template(connection: sa.Connection, agent_name: str, content: str) -> str:
+def _seed_prompt_template(
+    connection: sa.Connection,
+    agent_name: str,
+    content: str,
+    source_file: str,
+) -> str:
     next_version = connection.execute(
         sa.text(
             """
@@ -191,7 +176,7 @@ def _seed_prompt_template(connection: sa.Connection, agent_name: str, content: s
             "content": content,
             "version": int(next_version),
             "created_by": _CREATED_BY,
-            "source_file": f"config/agents/{_AGENT_KEY}/prompt.yaml",
+            "source_file": source_file,
         },
     )
 
@@ -244,13 +229,22 @@ def _agents_table(prompt_overrides_column: str) -> sa.Table:
 
 
 def upgrade() -> None:
+    loaded_spec = _load_phenotype_spec()
+    if loaded_spec is None:
+        return
+
     connection = op.get_bind()
-    spec, prompt_content = _load_phenotype_spec()
+    spec, prompt_content, prompt_source_file = loaded_spec
     prompt_overrides_column = _prompt_overrides_column_name(connection)
 
     instructions = _active_system_prompt(connection, _AGENT_KEY)
     if instructions is None:
-        instructions = _seed_prompt_template(connection, _AGENT_KEY, prompt_content)
+        instructions = _seed_prompt_template(
+            connection,
+            _AGENT_KEY,
+            prompt_content,
+            prompt_source_file,
+        )
 
     agents = _agents_table(prompt_overrides_column)
     connection.execute(

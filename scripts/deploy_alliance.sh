@@ -2,9 +2,9 @@
 # =============================================================================
 # DEPLOY ALLIANCE CONTENT
 # =============================================================================
-# Deploys Alliance-specific content to the package-owned and mirror directories.
+# Deploys Alliance-specific content to the package-owned source tree.
 # This script copies organization-specific agents and tools to the runtime
-# locations where the loaders expect them.
+# locations where the package-aware loaders expect them.
 #
 # Usage:
 #   ./scripts/deploy_alliance.sh           # Deploy all Alliance content
@@ -12,7 +12,7 @@
 #   ./scripts/deploy_alliance.sh --dry-run # Show what would be copied
 #
 # What gets deployed:
-#   alliance_agents/*       -> packages/alliance/agents/ and config/agents/
+#   alliance_agents/*       -> packages/alliance/agents/
 #   alliance_config/*.yaml  -> config/
 #   backend/tools/alliance_tools/*  -> backend/tools/custom/
 #
@@ -118,13 +118,6 @@ check_prerequisites() {
         log_warn "Alliance tools directory not found: $ALLIANCE_TOOLS"
     fi
 
-    if [ ! -d "$CONFIG_AGENTS" ]; then
-        log_warn "Config agents directory not found, creating: $CONFIG_AGENTS"
-        if [ "$DRY_RUN" = false ]; then
-            mkdir -p "$CONFIG_AGENTS"
-        fi
-    fi
-
     if [ ! -d "$PACKAGE_ALLIANCE_AGENTS" ]; then
         log_warn "Alliance package agents directory not found, creating: $PACKAGE_ALLIANCE_AGENTS"
         if [ "$DRY_RUN" = false ]; then
@@ -185,7 +178,7 @@ clean_existing() {
     log_success "Clean complete"
 }
 
-# Copy Alliance agents to both the package-owned source tree and config/agents
+# Copy Alliance agents into the package-owned source tree only.
 deploy_agents() {
     log_info "Deploying Alliance agents..."
 
@@ -204,21 +197,18 @@ deploy_agents() {
         config_target_dir="${CONFIG_AGENTS}/${agent_name}"
 
         log_verbose "Copying: $agent_name -> $package_target_dir"
-        log_verbose "Copying: $agent_name -> $config_target_dir"
 
         if [ "$DRY_RUN" = false ]; then
             # Use rsync for smart copying (only updates changed files)
             rsync -a --delete "$agent_dir" "$package_target_dir/"
-            rsync -a --delete "$agent_dir" "$config_target_dir/"
         else
             echo "  Would copy: $agent_dir -> $package_target_dir"
-            echo "  Would copy: $agent_dir -> $config_target_dir"
         fi
 
         count=$((count + 1))
     done
 
-    log_success "Deployed $count agents into packages/alliance/agents and config/agents"
+    log_success "Deployed $count agents into packages/alliance/agents"
 }
 
 # Copy Alliance config files to config/
@@ -326,16 +316,8 @@ verify_deployment() {
             errors=$((errors + 1))
         fi
 
-        # Check repo-mirror agent.yaml exists
-        if [ ! -f "$config_target_dir/agent.yaml" ]; then
-            log_error "Missing agent.yaml: $config_target_dir"
-            errors=$((errors + 1))
-        fi
-
-        # Check repo-mirror prompt.yaml exists
-        if [ ! -f "$config_target_dir/prompt.yaml" ]; then
-            log_error "Missing prompt.yaml: $config_target_dir"
-            errors=$((errors + 1))
+        if [ -d "$config_target_dir" ]; then
+            log_warn "Legacy config mirror still present (not deployed by this script): $config_target_dir"
         fi
     done
 
@@ -361,9 +343,9 @@ print_summary() {
 
     # Count deployed agents
     local agent_count=0
-    for agent_dir in "$CONFIG_AGENTS"/*/; do
+    for agent_dir in "$PACKAGE_ALLIANCE_AGENTS"/*/; do
         agent_name=$(basename "$agent_dir")
-        if [[ "$agent_name" != _* ]] && [[ "$agent_name" != "supervisor" ]]; then
+        if [[ "$agent_name" != _* ]]; then
             agent_count=$((agent_count + 1))
         fi
     done

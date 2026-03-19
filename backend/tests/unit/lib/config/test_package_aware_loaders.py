@@ -80,7 +80,7 @@ def test_load_prompts_defaults_to_runtime_packages_and_tracks_package_paths(monk
         for call in captured_calls
     )
     assert any(
-        call["source_file"] == "packages/agr.core/agents/supervisor/prompt.yaml"
+        call["source_file"] == "config/agents/supervisor/prompt.yaml"
         and call["prompt_type"] == "system"
         for call in captured_calls
     )
@@ -176,6 +176,23 @@ def test_get_default_agent_search_path_prefers_env_override(monkeypatch):
     assert agent_sources.get_default_agent_search_path() == Path("/tmp/custom-agents")
 
 
+def test_get_default_agent_search_paths_layers_repo_config_over_runtime_packages(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    packages_dir = repo_root / "packages"
+    config_agents_dir = repo_root / "config" / "agents"
+    packages_dir.mkdir(parents=True)
+    config_agents_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: repo_root)
+
+    assert agent_sources.get_default_agent_search_paths() == (
+        packages_dir.resolve(strict=False),
+        config_agents_dir.resolve(strict=False),
+    )
+
+
 def test_fallback_packages_dir_ignores_env_override(monkeypatch, tmp_path):
     runtime_packages_dir = tmp_path / "runtime-packages"
     fallback_project_root = tmp_path / "repo"
@@ -236,6 +253,93 @@ def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, m
 
     with pytest.raises(FileNotFoundError, match=match):
         prompt_loader.load_prompts(db=db, force_reload=True)
+
+
+def test_resolve_agent_config_sources_allows_config_override_layer(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "demo_core"
+    overrides_dir = tmp_path / "config-agents"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "demo.core",
+            "display_name": "Demo Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/demo_core",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "gene"}],
+        },
+    )
+    (package_dir / "agents" / "gene").mkdir(parents=True)
+    (package_dir / "agents" / "gene" / "agent.yaml").write_text(
+        "agent_id: gene_validation\nname: Package Gene\n",
+        encoding="utf-8",
+    )
+    (package_dir / "agents" / "gene" / "prompt.yaml").write_text(
+        "content: Package prompt\n",
+        encoding="utf-8",
+    )
+
+    (overrides_dir / "gene").mkdir(parents=True)
+    (overrides_dir / "gene" / "agent.yaml").write_text(
+        "agent_id: gene_validation\nname: Override Gene\n",
+        encoding="utf-8",
+    )
+    (overrides_dir / "gene" / "prompt.yaml").write_text(
+        "content: Override prompt\n",
+        encoding="utf-8",
+    )
+    (overrides_dir / "custom_local").mkdir(parents=True)
+    (overrides_dir / "custom_local" / "agent.yaml").write_text(
+        "agent_id: custom_local\nname: Custom Local\n",
+        encoding="utf-8",
+    )
+
+    sources = agent_sources.resolve_agent_config_sources((packages_dir, overrides_dir))
+
+    assert {source.folder_name for source in sources} == {"custom_local", "gene"}
+    gene_source = next(source for source in sources if source.folder_name == "gene")
+    assert gene_source.package_id is None
+    assert gene_source.agent_dir == (overrides_dir / "gene")
+
+
+def test_resolve_agent_config_sources_rejects_duplicate_bundles_within_packages_root(tmp_path):
+    packages_dir = tmp_path / "packages"
+
+    for package_name, package_id in (
+        ("demo_alpha", "demo.alpha"),
+        ("demo_beta", "demo.beta"),
+    ):
+        package_dir = packages_dir / package_name
+        _write_package_manifest(
+            package_dir,
+            {
+                "package_id": package_id,
+                "display_name": package_name,
+                "version": "1.0.0",
+                "package_api_version": "1.0.0",
+                "min_runtime_version": "1.0.0",
+                "max_runtime_version": "2.0.0",
+                "python_package_root": f"python/src/{package_name}",
+                "requirements_file": "requirements/runtime.txt",
+                "agent_bundles": [{"name": "gene"}],
+            },
+        )
+        (package_dir / "agents" / "gene").mkdir(parents=True)
+        (package_dir / "agents" / "gene" / "agent.yaml").write_text(
+            "agent_id: gene_validation\nname: Gene\n",
+            encoding="utf-8",
+        )
+        (package_dir / "agents" / "gene" / "prompt.yaml").write_text(
+            "content: Gene prompt\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match=r"Duplicate agent bundle 'gene' discovered in "):
+        agent_sources.resolve_agent_config_sources(packages_dir)
 
 
 def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatch):

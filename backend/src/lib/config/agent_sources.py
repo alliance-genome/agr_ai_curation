@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from src.lib.packages import ExportKind, LoadedPackage, PackageExport, load_package_registry
 from src.lib.packages.paths import get_runtime_packages_dir
+
+logger = logging.getLogger(__name__)
 
 
 def _find_project_root() -> Path | None:
@@ -55,16 +59,51 @@ def get_default_agent_search_path() -> Path:
     return _get_fallback_packages_dir()
 
 
-def _resolve_search_path(search_path: Path | None) -> tuple[Path, bool]:
-    """Resolve the configured search path and whether it is the implicit default."""
+def get_default_agent_search_paths() -> tuple[Path, ...]:
+    """Return the default layered agent search paths."""
+    env_path = _get_env_agent_search_path()
+    if env_path is not None:
+        return (env_path.expanduser().resolve(strict=False),)
+
+    search_paths = [
+        _get_fallback_packages_dir().expanduser().resolve(strict=False),
+    ]
+    project_root = _find_project_root()
+    if project_root is not None:
+        repo_agents_dir = (project_root / "config" / "agents").expanduser().resolve(strict=False)
+        if repo_agents_dir.exists() and repo_agents_dir not in search_paths:
+            search_paths.append(repo_agents_dir)
+
+    return tuple(search_paths)
+
+
+def _resolve_search_paths(
+    search_path: Path | os.PathLike[str] | Sequence[Path | os.PathLike[str]] | None,
+) -> tuple[tuple[Path, ...], bool]:
+    """Resolve the configured search paths and whether they are the implicit defaults."""
     if search_path is not None:
-        return search_path.expanduser().resolve(strict=False), False
+        if isinstance(search_path, (str, os.PathLike)):
+            return (Path(search_path).expanduser().resolve(strict=False),), False
+
+        resolved = tuple(
+            Path(path).expanduser().resolve(strict=False)
+            for path in search_path
+        )
+        if not resolved:
+            raise ValueError("search_path sequence must not be empty")
+        return resolved, False
 
     env_path = _get_env_agent_search_path()
     if env_path is not None:
-        return env_path.expanduser().resolve(strict=False), False
+        return (env_path.expanduser().resolve(strict=False),), False
 
-    return _get_fallback_packages_dir().expanduser().resolve(strict=False), True
+    return get_default_agent_search_paths(), True
+
+
+def _resolve_search_path(search_path: Path | os.PathLike[str] | None) -> tuple[Path, bool]:
+    """Backward-compatible single-path resolver used by older tests/callers."""
+    resolved_paths, used_default_search_paths = _resolve_search_paths(search_path)
+    return resolved_paths[0], used_default_search_paths
 
 
 @dataclass(frozen=True)
@@ -247,11 +286,12 @@ def _resolve_legacy_agent_sources(agents_path: Path) -> tuple[AgentConfigSource,
     )
 
 
-def resolve_agent_config_sources(
-    search_path: Path | None = None,
+def _resolve_agent_config_sources_for_path(
+    resolved_path: Path,
+    *,
+    used_default_search_path: bool,
 ) -> tuple[AgentConfigSource, ...]:
-    """Resolve agent config bundles from a packages root, one package, or a legacy agents dir."""
-    resolved_path, used_default_search_path = _resolve_search_path(search_path)
+    """Resolve agent config bundles from one packages root, package dir, or legacy agents dir."""
     if not resolved_path.exists():
         raise FileNotFoundError(f"Agent source path not found: {resolved_path}")
 
@@ -298,12 +338,43 @@ def resolve_agent_config_sources(
 
     owners: dict[str, AgentConfigSource] = {}
     for source in sources:
-        if source.folder_name in owners:
-            existing = owners[source.folder_name]
+        existing = owners.get(source.folder_name)
+        if existing is not None:
             raise ValueError(
                 f"Duplicate agent bundle '{source.folder_name}' discovered in "
-                f"{existing.package_id or existing.agent_dir} and {source.package_id or source.agent_dir}"
+                f"{existing.package_id or existing.agent_dir} and "
+                f"{source.package_id or source.agent_dir}"
             )
         owners[source.folder_name] = source
 
-    return tuple(sorted(sources, key=lambda item: item.folder_name))
+    return tuple(sorted(owners.values(), key=lambda item: item.folder_name))
+
+
+def resolve_agent_config_sources(
+    search_path: Path | os.PathLike[str] | Sequence[Path | os.PathLike[str]] | None = None,
+) -> tuple[AgentConfigSource, ...]:
+    """Resolve agent config bundles from layered package and override sources.
+
+    Later search paths override earlier ones by folder name. Duplicate bundle
+    names within a single search path remain hard failures.
+    """
+    resolved_paths, used_default_search_paths = _resolve_search_paths(search_path)
+
+    owners: dict[str, AgentConfigSource] = {}
+    for index, resolved_path in enumerate(resolved_paths):
+        sources = _resolve_agent_config_sources_for_path(
+            resolved_path,
+            used_default_search_path=bool(used_default_search_paths and index == 0),
+        )
+        for source in sources:
+            existing = owners.get(source.folder_name)
+            if existing is not None:
+                logger.info(
+                    "Agent bundle override: '%s' from %s overrides %s",
+                    source.folder_name,
+                    source.package_id or source.agent_dir,
+                    existing.package_id or existing.agent_dir,
+                )
+            owners[source.folder_name] = source
+
+    return tuple(sorted(owners.values(), key=lambda item: item.folder_name))

@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.dialects.postgresql import insert
 import yaml
 
+from src.lib.config.agent_sources import resolve_agent_config_sources
 
 # revision identifiers, used by Alembic.
 revision = "v4w5x6y7z8a9"
@@ -46,16 +47,10 @@ def _resolve_model_name(raw_model: Any) -> str:
 
 
 def _load_agent_yaml_specs() -> List[Dict[str, Any]]:
-    config_dir = _repo_root() / "config" / "agents"
     specs: List[Dict[str, Any]] = []
-    if not config_dir.exists():
-        return specs
-
-    for agent_dir in sorted(config_dir.iterdir()):
-        if not agent_dir.is_dir() or agent_dir.name.startswith("_"):
-            continue
-        agent_yaml = agent_dir / "agent.yaml"
-        if not agent_yaml.exists():
+    for source in resolve_agent_config_sources():
+        agent_yaml = source.agent_yaml
+        if agent_yaml is None or not agent_yaml.exists():
             continue
 
         with agent_yaml.open("r", encoding="utf-8") as handle:
@@ -68,9 +63,9 @@ def _load_agent_yaml_specs() -> List[Dict[str, Any]]:
 
         specs.append(
             {
-                "folder_name": agent_dir.name,
-                "agent_id": str(data.get("agent_id", agent_dir.name)),
-                "name": str(data.get("name", agent_dir.name.replace("_", " ").title())),
+                "folder_name": source.folder_name,
+                "agent_id": str(data.get("agent_id", source.folder_name)),
+                "name": str(data.get("name", source.folder_name.replace("_", " ").title())),
                 "description": str(data.get("description", "")),
                 "category": data.get("category"),
                 "tools": list(data.get("tools", []) or []),
@@ -86,7 +81,7 @@ def _load_agent_yaml_specs() -> List[Dict[str, Any]]:
                 "supervisor_batchable": batchable,
                 "supervisor_batching_entity": routing_cfg.get(
                     "batching_entity",
-                    f"{agent_dir.name}s" if batchable else None,
+                    f"{source.folder_name}s" if batchable else None,
                 ),
             }
         )
@@ -141,8 +136,16 @@ def _active_system_prompt(connection: sa.Connection, folder_name: str, agent_id:
 
 
 def _system_prompt_from_yaml(folder_name: str) -> tuple[str, str]:
-    prompt_yaml = _repo_root() / "config" / "agents" / folder_name / "prompt.yaml"
-    if not prompt_yaml.exists():
+    source = next(
+        (
+            item
+            for item in resolve_agent_config_sources()
+            if item.folder_name == folder_name
+        ),
+        None,
+    )
+    prompt_yaml = source.prompt_yaml if source is not None else None
+    if prompt_yaml is None or not prompt_yaml.exists():
         raise RuntimeError(
             f"Missing prompt.yaml for agent '{folder_name}' at {prompt_yaml}."
         )
@@ -156,7 +159,7 @@ def _system_prompt_from_yaml(folder_name: str) -> tuple[str, str]:
             f"Missing non-empty 'content' in {prompt_yaml} for agent '{folder_name}'."
         )
 
-    return str(content), str(prompt_yaml.relative_to(_repo_root()))
+    return str(content), source.source_file_display(prompt_yaml)
 
 
 def _canonical_system_agent_key(spec: Dict[str, Any]) -> str:
