@@ -172,7 +172,7 @@ test_pdfx_setup_handles_port_conflict() {
 
   local main_env="${temp_home}/.agr_ai_curation/.env"
 
-  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:8511$' "$main_env"
+  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:8511$' "$main_env"
   assert_contains '^PDF_EXTRACTION_METHODS=grobid$' "$main_env"
   assert_contains '^PDF_EXTRACTION_MERGE=false$' "$main_env"
 }
