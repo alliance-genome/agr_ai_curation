@@ -21,14 +21,30 @@ import {
 
 import {
   ApplyHighlightsEvent,
+  dispatchClearSnippetLocalization,
+  ClearSnippetLocalizationEvent,
   ClearHighlightsEvent,
+  dispatchSnippetLocalizationResult,
   HighlightSettingsChangedEvent,
+  LocateSnippetEvent,
   PDFViewerDocumentChangedEvent,
+  SnippetLocalizationResultDetail,
   onApplyHighlights,
+  onClearSnippetLocalization,
   onClearHighlights,
   onHighlightSettingsChanged,
+  onLocateSnippet,
   onPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
+import {
+  buildRenderedTextSearchIndex,
+  createRangeForRenderedTextMatch,
+  findRenderedTextMatches,
+  getRenderedTextLayerReferences,
+  groupClientRectsByPage,
+  PageRelativeRect,
+  normalizeSearchSnippet,
+} from '@/components/pdfViewer/textLocalization'
 
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
 const SESSION_STORAGE_KEY = 'pdf-viewer-session'
@@ -112,6 +128,11 @@ interface UploadDialogState {
   documentId?: string
 }
 
+interface SnippetLocalizationOverlay {
+  requestId: string
+  rects: PageRelativeRect[]
+}
+
 const DEFAULT_SETTINGS: HighlightSettings = {
   highlightColor: '#1565c0',
   highlightOpacity: 0.65,
@@ -135,6 +156,27 @@ const uniqueTerms = (terms: string[]): string[] => {
     seen.add(key)
     return true
   })
+}
+
+const clampSnippetMatchIndex = (matchIndex: number | undefined, matchCount: number): number => {
+  if (matchCount <= 0) {
+    return 0
+  }
+
+  if (typeof matchIndex !== 'number' || Number.isNaN(matchIndex)) {
+    return 0
+  }
+
+  return Math.max(0, Math.min(matchCount - 1, Math.trunc(matchIndex)))
+}
+
+const summarizeMatchedExcerpt = (excerpt: string): string => {
+  const normalizedExcerpt = normalizeSearchSnippet(excerpt)
+  if (normalizedExcerpt.length <= 160) {
+    return normalizedExcerpt
+  }
+
+  return `${normalizedExcerpt.slice(0, 157)}...`
 }
 
 const loadStoredSettings = (): HighlightSettings => {
@@ -201,7 +243,7 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }
 
-const getInvalidBboxFields = (bbox: OverlayDocItem['bbox']): string[] => {
+const getInvalidBboxFields = (bbox: NonNullable<OverlayDocItem['bbox']>): string[] => {
   const invalidFields: string[] = []
   const left = Number(bbox.left)
   const top = Number(bbox.top)
@@ -321,6 +363,8 @@ export function PdfViewer() {
   const cleanupRefs = useRef<(() => void)[]>([])
   const uploadAbortRef = useRef<AbortController | null>(null)
   const highlightTermsRef = useRef<string[]>([])
+  const snippetLocalizationRequestRef = useRef<{ matchIndex?: number, requestId: string, snippet: string } | null>(null)
+  const snippetLocalizationTimeoutRef = useRef<number | null>(null)
   const settingsRef = useRef<HighlightSettings>(DEFAULT_SETTINGS)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
   const loadStartRef = useRef<number | null>(null)
@@ -340,6 +384,7 @@ export function PdfViewer() {
   const [uploadInFlight, setUploadInFlight] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [dropError, setDropError] = useState<string | null>(null)
+  const [snippetLocalizationOverlay, setSnippetLocalizationOverlay] = useState<SnippetLocalizationOverlay | null>(null)
   const [uploadDialog, setUploadDialog] = useState<UploadDialogState>({
     open: false,
     dismissedToBackground: false,
@@ -658,6 +703,204 @@ export function PdfViewer() {
     })
   }, [])
 
+  const clearPendingSnippetLocalization = useCallback(() => {
+    if (snippetLocalizationTimeoutRef.current !== null) {
+      window.clearTimeout(snippetLocalizationTimeoutRef.current)
+      snippetLocalizationTimeoutRef.current = null
+    }
+  }, [])
+
+  const resetSnippetLocalization = useCallback((
+    reason: ClearSnippetLocalizationEvent['detail']['reason'],
+    options?: {
+      notify?: boolean
+      preserveRequest?: boolean
+    },
+  ) => {
+    clearPendingSnippetLocalization()
+    if (!options?.preserveRequest) {
+      snippetLocalizationRequestRef.current = null
+    }
+    setSnippetLocalizationOverlay(null)
+
+    if (options?.notify) {
+      dispatchClearSnippetLocalization(reason)
+    }
+  }, [clearPendingSnippetLocalization])
+
+  const localizeSnippet = useCallback((request: LocateSnippetEvent['detail']) => {
+    const finishWithResult = (
+      detail: Omit<SnippetLocalizationResultDetail, 'requestId' | 'snippet'>,
+      rects?: PageRelativeRect[],
+    ) => {
+      if (snippetLocalizationRequestRef.current?.requestId !== request.requestId) {
+        return
+      }
+
+      setSnippetLocalizationOverlay(
+        rects && rects.length > 0
+          ? {
+            requestId: request.requestId,
+            rects,
+          }
+          : null,
+      )
+
+      dispatchSnippetLocalizationResult({
+        ...detail,
+        requestId: request.requestId,
+        snippet: request.snippet,
+      })
+    }
+
+    const normalizedSnippet = normalizeSearchSnippet(request.snippet)
+    const totalPageCount = activeDocument?.pageCount ?? 0
+    const iframeDoc = iframeRef.current?.contentWindow?.document
+
+    if (!normalizedSnippet) {
+      finishWithResult({
+        durationMs: 0,
+        matchCount: 0,
+        matches: [],
+        reason: 'Snippet is empty after whitespace normalization.',
+        renderedPageCount: 0,
+        renderedPages: [],
+        selectedMatch: null,
+        selectedMatchIndex: null,
+        status: 'empty-query',
+        totalPageCount,
+      })
+      return
+    }
+
+    if (!activeDocument || status !== 'ready' || !iframeDoc) {
+      finishWithResult({
+        durationMs: 0,
+        matchCount: 0,
+        matches: [],
+        reason: activeDocument
+          ? 'Viewer is still initializing the PDF.js text layer.'
+          : 'Load a document before running the sentence-localization probe.',
+        renderedPageCount: 0,
+        renderedPages: [],
+        selectedMatch: null,
+        selectedMatchIndex: null,
+        status: 'not-ready',
+        totalPageCount,
+      })
+      return
+    }
+
+    const measurementStart = performance.now()
+    const textLayers = getRenderedTextLayerReferences(iframeDoc)
+    const renderedPages = Array.from(new Set(textLayers.map((layer) => layer.pageNumber))).sort((left, right) => left - right)
+    const renderedPageCount = renderedPages.length
+
+    if (textLayers.length === 0) {
+      finishWithResult({
+        durationMs: performance.now() - measurementStart,
+        matchCount: 0,
+        matches: [],
+        reason: 'No rendered text layers are available yet. Scroll the PDF so PDF.js renders the target page text.',
+        renderedPageCount,
+        renderedPages,
+        selectedMatch: null,
+        selectedMatchIndex: null,
+        status: 'not-ready',
+        totalPageCount,
+      })
+      return
+    }
+
+    const index = buildRenderedTextSearchIndex(textLayers)
+    const matches = findRenderedTextMatches(index, normalizedSnippet)
+    const matchDetails = matches.map((match, index) => {
+      const range = createRangeForRenderedTextMatch(match)
+      const rects = groupClientRectsByPage(textLayers, range.getClientRects())
+
+      return {
+        rects,
+        summary: {
+          crossPage: match.pages.length > 1,
+          excerpt: summarizeMatchedExcerpt(match.excerpt),
+          index,
+          pages: match.pages,
+          rectCount: rects.length,
+        },
+      }
+    })
+    const durationMs = performance.now() - measurementStart
+
+    if (matchDetails.length === 0) {
+      const partialCoverage = totalPageCount > 0 && renderedPageCount < totalPageCount
+      finishWithResult({
+        durationMs,
+        matchCount: 0,
+        matches: [],
+        reason: partialCoverage
+          ? `Snippet was not found in the ${renderedPageCount}/${totalPageCount} pages with rendered text layers. Scroll farther or fall back to stored bbox/text content.`
+          : 'Snippet was not found in the currently rendered text layer.',
+        renderedPageCount,
+        renderedPages,
+        selectedMatch: null,
+        selectedMatchIndex: null,
+        status: partialCoverage ? 'not-ready' : 'not-found',
+        totalPageCount,
+      })
+      return
+    }
+
+    const selectedMatchIndex = clampSnippetMatchIndex(request.matchIndex, matchDetails.length)
+    const selectedMatch = matchDetails[selectedMatchIndex]
+
+    if (selectedMatch.rects.length === 0) {
+      finishWithResult({
+        durationMs,
+        matchCount: matchDetails.length,
+        matches: matchDetails.map((match) => match.summary),
+        reason: 'Rendered text matched the snippet, but PDF.js did not return visible client rects for that selection.',
+        renderedPageCount,
+        renderedPages,
+        selectedMatch: selectedMatch.summary,
+        selectedMatchIndex,
+        status: 'not-ready',
+        totalPageCount,
+      })
+      return
+    }
+
+    finishWithResult(
+      {
+        durationMs,
+        matchCount: matchDetails.length,
+        matches: matchDetails.map((match) => match.summary),
+        reason: renderedPageCount < totalPageCount
+          ? `Match found in rendered pages ${selectedMatch.summary.pages.join(', ')} before the full document text layer was available.`
+          : undefined,
+        renderedPageCount,
+        renderedPages,
+        selectedMatch: selectedMatch.summary,
+        selectedMatchIndex,
+        status: 'success',
+        totalPageCount,
+      },
+      selectedMatch.rects,
+    )
+  }, [activeDocument, status])
+
+  const scheduleSnippetLocalization = useCallback(() => {
+    const request = snippetLocalizationRequestRef.current
+    if (!request) {
+      return
+    }
+
+    clearPendingSnippetLocalization()
+    snippetLocalizationTimeoutRef.current = window.setTimeout(() => {
+      snippetLocalizationTimeoutRef.current = null
+      localizeSnippet(request)
+    }, 75)
+  }, [clearPendingSnippetLocalization, localizeSnippet])
+
   const applyHighlights = useCallback((specificTextLayer?: HTMLElement) => {
     const iframeWindow = iframeRef.current?.contentWindow as any
     const iframeDoc = iframeWindow?.document as Document | undefined
@@ -741,6 +984,7 @@ export function PdfViewer() {
           // pdf.js may emit the event before glyphs settle; delay slightly as in legacy viewer
           window.setTimeout(() => {
             applyHighlights(textLayer)
+            scheduleSnippetLocalization()
             setOverlayRenderKey((prev) => prev + 1)
           }, 50)
         }
@@ -764,6 +1008,7 @@ export function PdfViewer() {
         if (highlightTermsRef.current.length) {
           applyHighlights()
         }
+        scheduleSnippetLocalization()
         setOverlayRenderKey((prev) => prev + 1)
       }
 
@@ -780,6 +1025,7 @@ export function PdfViewer() {
           // Clamp to reasonable values (10% to 500%) to prevent extreme zoom bugs
           const newZoomLevel = Math.round(Math.max(10, Math.min(500, event.scale * 100)))
           updateViewerState({ zoomLevel: newZoomLevel })
+          scheduleSnippetLocalization()
           setOverlayRenderKey((prev) => prev + 1)
         }
       }
@@ -820,7 +1066,7 @@ export function PdfViewer() {
 
       pdfAppRef.current = pdfApp
     },
-    [applyHighlights, updateViewerState, setOverlayRenderKey],
+    [applyHighlights, scheduleSnippetLocalization, updateViewerState, setOverlayRenderKey],
   )
 
   const initialisePdfApplication = useCallback(() => {
@@ -888,6 +1134,7 @@ export function PdfViewer() {
   const beginDocumentLoad = useCallback((document: ViewerDocument) => {
     console.debug('[PDF DEBUG] beginDocumentLoad invoked', document)
     loadStartRef.current = performance.now()
+    resetSnippetLocalization('document-change', { notify: true })
     setStatus('loading')
     setError(null)
     setTelemetry((prev) => ({
@@ -901,7 +1148,7 @@ export function PdfViewer() {
     setOverlays([])
     setOverlayRenderKey((prev) => prev + 1)
     persistSession(document, viewerStateRef.current)
-  }, [])
+  }, [resetSnippetLocalization])
 
   useEffect(() => {
     const storedSettings = loadStoredSettings()
@@ -950,6 +1197,21 @@ export function PdfViewer() {
       clearAllHighlights()
     })
 
+    const unregisterLocateSnippet = onLocateSnippet((event: LocateSnippetEvent) => {
+      clearPendingSnippetLocalization()
+      snippetLocalizationRequestRef.current = {
+        matchIndex: event.detail.matchIndex,
+        requestId: event.detail.requestId,
+        snippet: event.detail.snippet,
+      }
+      setSnippetLocalizationOverlay(null)
+      localizeSnippet(event.detail)
+    })
+
+    const unregisterClearSnippet = onClearSnippetLocalization((event: ClearSnippetLocalizationEvent) => {
+      resetSnippetLocalization(event.detail.reason)
+    })
+
     const unregisterSettings = onHighlightSettingsChanged((event: HighlightSettingsChangedEvent) => {
       const nextSettings: HighlightSettings = {
         highlightColor: event.detail?.color ?? settingsRef.current.highlightColor,
@@ -976,6 +1238,7 @@ export function PdfViewer() {
       // If document is being unloaded (active=false), clear the viewer
       if (!detail?.active || !detail.document) {
         console.debug('[PDF DEBUG] Document unloaded via chat-document-changed event')
+        resetSnippetLocalization('document-change', { notify: true })
         setActiveDocument(null)
         setStatus('idle')
         setError(null)
@@ -995,10 +1258,20 @@ export function PdfViewer() {
       unregisterDocument()
       unregisterHighlights()
       unregisterClear()
+      unregisterLocateSnippet()
+      unregisterClearSnippet()
       unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
-  }, [applyHighlights, beginDocumentLoad, clearAllHighlights, signalLoadComplete])
+  }, [
+    applyHighlights,
+    beginDocumentLoad,
+    clearAllHighlights,
+    clearPendingSnippetLocalization,
+    localizeSnippet,
+    resetSnippetLocalization,
+    signalLoadComplete,
+  ])
 
   useEffect(() => {
     return () => {
@@ -1010,10 +1283,11 @@ export function PdfViewer() {
         }
       })
       cleanupRefs.current = []
+      clearPendingSnippetLocalization()
       uploadAbortRef.current?.abort()
       uploadAbortRef.current = null
     }
-  }, [])
+  }, [clearPendingSnippetLocalization])
 
   useEffect(() => {
     if (!iframeRef.current) {
@@ -1241,6 +1515,65 @@ export function PdfViewer() {
   // Re-render overlays when the active document changes so stale rectangles from
   // the previous PDF are cleared even if the overlay payload did not change.
   }, [activeDocument?.documentId, overlays, status, overlayRenderKey])
+
+  useEffect(() => {
+    const iframeDoc = iframeRef.current?.contentWindow?.document
+    if (!iframeDoc) {
+      return
+    }
+
+    const existingProbeLayers = iframeDoc.querySelectorAll('.snippet-localization-layer')
+    existingProbeLayers.forEach((node) => node.remove())
+
+    if (status !== 'ready' || !snippetLocalizationOverlay || snippetLocalizationOverlay.rects.length === 0) {
+      return
+    }
+
+    const layersByPage = new Map<number, HTMLElement>()
+
+    snippetLocalizationOverlay.rects.forEach((rect) => {
+      const pageElement = iframeDoc.querySelector<HTMLElement>(`.page[data-page-number="${rect.pageNumber}"]`)
+      if (!pageElement) {
+        return
+      }
+
+      let layer = layersByPage.get(rect.pageNumber)
+      if (!layer) {
+        layer = iframeDoc.createElement('div')
+        layer.className = 'snippet-localization-layer'
+        layer.dataset.requestId = snippetLocalizationOverlay.requestId
+        layer.style.position = 'absolute'
+        layer.style.inset = '0'
+        layer.style.pointerEvents = 'none'
+        layer.style.zIndex = '6'
+        pageElement.appendChild(layer)
+        layersByPage.set(rect.pageNumber, layer)
+      }
+
+      const overlayRect = iframeDoc.createElement('div')
+      overlayRect.className = 'snippet-localization-rect'
+      overlayRect.style.position = 'absolute'
+      overlayRect.style.left = `${rect.left}px`
+      overlayRect.style.top = `${rect.top}px`
+      overlayRect.style.width = `${rect.width}px`
+      overlayRect.style.height = `${rect.height}px`
+      overlayRect.style.background = 'rgba(237, 108, 2, 0.2)'
+      overlayRect.style.border = '2px solid rgba(230, 81, 0, 0.9)'
+      overlayRect.style.borderRadius = '4px'
+      overlayRect.style.boxShadow = '0 0 0 1px rgba(255, 255, 255, 0.45)'
+      layer.appendChild(overlayRect)
+    })
+
+    return () => {
+      const docCleanup = iframeRef.current?.contentWindow?.document
+      if (!docCleanup) {
+        return
+      }
+
+      const probeLayers = docCleanup.querySelectorAll('.snippet-localization-layer')
+      probeLayers.forEach((node) => node.remove())
+    }
+  }, [activeDocument?.documentId, overlayRenderKey, snippetLocalizationOverlay, status])
 
   useEffect(() => {
     if (!activeDocument) return

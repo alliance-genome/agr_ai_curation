@@ -38,6 +38,7 @@ Start here for new developers:
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
+| [PDF_TEXT_LOCALIZATION_SPIKE.md](guides/PDF_TEXT_LOCALIZATION_SPIKE.md) | Findings from the PDF.js sentence-level rendered-text localization spike (`ALL-94`) |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 
 ### API Reference

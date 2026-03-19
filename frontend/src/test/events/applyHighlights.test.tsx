@@ -2,9 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   dispatchApplyHighlights,
+  dispatchClearSnippetLocalization,
   dispatchClearHighlights,
+  dispatchLocateSnippet,
+  dispatchSnippetLocalizationResult,
+  onClearSnippetLocalization,
   onApplyHighlights,
   onClearHighlights,
+  onLocateSnippet,
+  onSnippetLocalizationResult,
 } from '@/components/pdfViewer/pdfEvents'
 
 describe('highlight event contracts', () => {
@@ -51,5 +57,83 @@ describe('highlight event contracts', () => {
 
     expect(highlightHandler).not.toHaveBeenCalled()
     expect(clearHandler).not.toHaveBeenCalled()
+  })
+
+  it('dispatches and listens for snippet localization events', () => {
+    const locateHandler = vi.fn()
+    const resultHandler = vi.fn()
+    const clearHandler = vi.fn()
+
+    const stopLocate = onLocateSnippet((event) => locateHandler(event.detail))
+    const stopResult = onSnippetLocalizationResult((event) => resultHandler(event.detail))
+    const stopClear = onClearSnippetLocalization((event) => clearHandler(event.detail))
+
+    dispatchLocateSnippet('request-1', 'Exact sentence match', 2)
+    dispatchSnippetLocalizationResult({
+      requestId: 'request-1',
+      snippet: 'Exact sentence match',
+      status: 'success',
+      durationMs: 18.4,
+      renderedPages: [1, 2],
+      renderedPageCount: 2,
+      totalPageCount: 5,
+      matchCount: 1,
+      selectedMatchIndex: 0,
+      selectedMatch: {
+        index: 0,
+        excerpt: 'Exact sentence match',
+        pages: [1, 2],
+        rectCount: 3,
+        crossPage: true,
+      },
+      matches: [
+        {
+          index: 0,
+          excerpt: 'Exact sentence match',
+          pages: [1, 2],
+          rectCount: 3,
+          crossPage: true,
+        },
+      ],
+    })
+    dispatchClearSnippetLocalization('user-action')
+
+    expect(locateHandler).toHaveBeenCalledWith({
+      requestId: 'request-1',
+      snippet: 'Exact sentence match',
+      matchIndex: 2,
+    })
+    expect(resultHandler).toHaveBeenCalledWith({
+      requestId: 'request-1',
+      snippet: 'Exact sentence match',
+      status: 'success',
+      durationMs: 18.4,
+      renderedPages: [1, 2],
+      renderedPageCount: 2,
+      totalPageCount: 5,
+      matchCount: 1,
+      selectedMatchIndex: 0,
+      selectedMatch: {
+        index: 0,
+        excerpt: 'Exact sentence match',
+        pages: [1, 2],
+        rectCount: 3,
+        crossPage: true,
+      },
+      matches: [
+        {
+          index: 0,
+          excerpt: 'Exact sentence match',
+          pages: [1, 2],
+          rectCount: 3,
+          crossPage: true,
+        },
+      ],
+    })
+    expect(clearHandler).toHaveBeenCalledWith({ reason: 'user-action' })
+
+    stopLocate()
+    stopResult()
+    stopClear()
   })
 })
