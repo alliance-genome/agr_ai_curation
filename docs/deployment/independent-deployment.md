@@ -206,6 +206,46 @@ docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.y
 On a generic third-party install, `/health` should not be degraded just because
 `curation_db` is unset.
 
+## PDF extraction service
+
+The PDF extraction service (`agr_pdf_extraction_service`) runs in its own
+Docker Compose stack, separate from the main AI Curation stack.  Because
+the backend runs inside a Docker container, service URLs that use
+`localhost` will not work — `localhost` inside a container refers to the
+container itself, not the host machine.
+
+The installer (Stage 5) writes the correct URL automatically:
+
+```
+PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:<port>
+```
+
+`host.docker.internal` resolves to the host machine from inside any
+container because the production Compose file includes:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+If you configured the PDF extraction URL manually or are upgrading from an
+older install, verify that `~/.agr_ai_curation/.env` uses
+`host.docker.internal` rather than `localhost`:
+
+```bash
+# Wrong — unreachable from inside the backend container
+PDF_EXTRACTION_SERVICE_URL=http://localhost:5000
+
+# Correct
+PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:5000
+```
+
+After changing the URL, restart the backend:
+
+```bash
+docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+```
+
 ## Authentication (OIDC)
 
 OIDC authentication is implemented and supported for independent deployments.

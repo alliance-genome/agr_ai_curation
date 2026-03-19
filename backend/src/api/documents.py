@@ -779,7 +779,7 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
         worker_available = worker_state in {"ready", "busy"}
         auth_ok = not auth_header_error
         proxy_status = str((payload or {}).get("status", "")).strip().lower()
-        proxy_ok = response.status_code == 200 and proxy_status in {"healthy", "degraded"}
+        proxy_ok = response.status_code == 200 and proxy_status in {"healthy", "degraded", "ok"}
         deep_ok = deep_response.status_code == 200 and str((deep_payload or {}).get("status", "")).strip().lower() == "healthy"
 
         # Deep health validates auth contract + downstream extract roundtrip and is
@@ -791,14 +791,13 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
         error_message = None
         if auth_header_error:
             error_message = auth_header_error
-        elif not worker_available:
-            error_message = f"Worker {worker_state or 'unknown'}"
-        elif not deep_ok:
-            error_message = "Deep health check failed"
-        elif not proxy_ok:
-            error_message = "Proxy status endpoint unavailable"
-        elif status_error:
-            error_message = status_error
+        elif status == "degraded":
+            if not proxy_ok and not deep_ok:
+                error_message = "All connection attempts failed"
+            elif not worker_available:
+                error_message = f"Worker {worker_state or 'unknown'}"
+            elif status_error:
+                error_message = status_error
 
         return {
             "status": status,

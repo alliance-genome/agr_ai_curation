@@ -296,7 +296,10 @@ EOF
   chmod 600 "$pdfx_env_path"
 
   backup_file_with_timestamp "$env_output_path"
-  upsert_env_var "$env_output_path" "PDF_EXTRACTION_SERVICE_URL" "http://localhost:${pdfx_port}"
+  # Use host.docker.internal so the backend container can reach the PDF
+  # extraction service running on the host.  Plain "localhost" resolves to
+  # the container itself and will fail with "unreachable".
+  upsert_env_var "$env_output_path" "PDF_EXTRACTION_SERVICE_URL" "http://host.docker.internal:${pdfx_port}"
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_METHODS" "$methods"
   upsert_env_var "$env_output_path" "PDF_EXTRACTION_MERGE" "$merge_enabled"
   chmod 600 "$env_output_path"
