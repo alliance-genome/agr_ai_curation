@@ -9,9 +9,10 @@ Usage:
 Behavior:
   - Verifies the workspace Git origin matches the expected source repository.
   - If mismatched (or not a Git repo), reseeds the workspace from expected repo/ref.
+  - Verifies required Symphony-managed runtime files can be materialized.
   - Emits machine-parsable summary lines:
       GUARD_REPO_STATUS=ok|reseeded|error
-      GUARD_REPO_REASON=<match|missing_git|origin_mismatch|clone_failed|missing_expected_repo|invalid_workspace_path|unknown>
+      GUARD_REPO_REASON=<match|missing_git|origin_mismatch|clone_failed|missing_expected_repo|invalid_workspace_path|runtime_missing_required|runtime_sync_failed|runtime_sync_missing|unknown>
       GUARD_REPO_EXPECTED=<normalized expected>
       GUARD_REPO_ACTUAL=<normalized actual or none>
 USAGE
@@ -86,6 +87,46 @@ print_summary() {
   echo "GUARD_REPO_ACTUAL=${actual_norm:-none}"
 }
 
+run_runtime_sync() {
+  local helper=""
+
+  if [[ -n "${source_root}" && -f "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+    helper="${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  elif [[ -f "${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+    helper="${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  fi
+
+  if [[ -z "${helper}" ]]; then
+    status="error"
+    reason="runtime_sync_missing"
+    echo "SYNC_ENV_STATUS=missing_required"
+    echo "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_ensure_workspace_runtime.sh"
+    return 5
+  fi
+
+  local output rc
+  set +e
+  output="$(bash "${helper}" --workspace-dir "${workspace_dir}" 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}"
+  fi
+
+  if [[ "${rc}" -ne 0 ]]; then
+    status="error"
+    if [[ "${output}" == *"SYNC_ENV_STATUS=missing_required"* ]]; then
+      reason="runtime_missing_required"
+    else
+      reason="runtime_sync_failed"
+    fi
+    return "${rc}"
+  fi
+
+  return 0
+}
+
 ensure_outside_workspace() {
   local cwd
   cwd="$(pwd -P 2>/dev/null || pwd)"
@@ -138,6 +179,11 @@ if [[ -n "${current_repo_norm}" && "${current_repo_norm}" == "${expected_repo_no
   git -C "${workspace_dir}" fetch --quiet origin \
     "${expected_ref}:refs/remotes/origin/${expected_ref}" >/dev/null 2>&1 || true
 
+  if ! run_runtime_sync; then
+    print_summary "${expected_repo_norm}" "${current_repo_norm}"
+    exit 5
+  fi
+
   status="ok"
   reason="match"
   print_summary "${expected_repo_norm}" "${current_repo_norm}"
@@ -181,8 +227,9 @@ clone_output="$(git clone --depth 1 --branch "${expected_ref}" "${expected_repo}
   exit 4
 }
 
-if [[ -n "${source_root}" && -f "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
-  bash "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" --workspace-dir "${workspace_dir}" >/dev/null 2>&1 || true
+if ! run_runtime_sync; then
+  print_summary "${expected_repo_norm}" "${current_repo_norm}"
+  exit 5
 fi
 
 status="reseeded"

@@ -20,6 +20,7 @@ make_source_root() {
   local source_root="$1"
   mkdir -p \
     "${source_root}/.git/hooks" \
+    "${source_root}/.symphony" \
     "${source_root}/scripts/lib" \
     "${source_root}/scripts/utilities"
 
@@ -32,6 +33,24 @@ EOF
 exit 0
 EOF
   chmod +x "${source_root}/.git/hooks/pre-commit" "${source_root}/.git/hooks/pre-push"
+
+  cat > "${source_root}/.symphony/WORKFLOW.md" <<'EOF'
+workflow-v1
+EOF
+  cat > "${source_root}/.symphony/github_pat_env.sh" <<'EOF'
+github-pat-env-v1
+EOF
+  cat > "${source_root}/.symphony/with_github_pat.sh" <<'EOF'
+#!/usr/bin/env bash
+echo with-github-pat-v1
+EOF
+  cat > "${source_root}/.symphony/configure_github_pat_git.sh" <<'EOF'
+#!/usr/bin/env bash
+echo configure-github-pat-git-v1
+EOF
+  chmod +x \
+    "${source_root}/.symphony/with_github_pat.sh" \
+    "${source_root}/.symphony/configure_github_pat_git.sh"
 
   cat > "${source_root}/scripts/lib/local_db_tunnel_common.sh" <<'EOF'
 common-v1
@@ -86,11 +105,19 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=15" "${output}"
+  assert_contains "SYNC_ENV_COPIED=19" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
     echo "Expected default mode to preserve existing docker-compose.yml" >&2
+    exit 1
+  }
+  [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "workflow-v1" ]] || {
+    echo "Expected default mode to seed .symphony/WORKFLOW.md" >&2
+    exit 1
+  }
+  [[ "$(bash "${workspace}/.symphony/with_github_pat.sh")" == "with-github-pat-v1" ]] || {
+    echo "Expected default mode to seed .symphony/with_github_pat.sh" >&2
     exit 1
   }
 }
@@ -100,7 +127,7 @@ test_refresh_managed_overwrites_existing_files() {
   temp_root="$(mktemp -d)"
   workspace="${temp_root}/workspace"
   source_root="${temp_root}/source"
-  mkdir -p "${workspace}/scripts/utilities"
+  mkdir -p "${workspace}/scripts/utilities" "${workspace}/.symphony"
   make_source_root "${source_root}"
 
   cat > "${workspace}/docker-compose.yml" <<'EOF'
@@ -111,6 +138,9 @@ EOF
 echo stale-helper
 EOF
   chmod +x "${workspace}/scripts/utilities/symphony_wait_for_claude_review.sh"
+  cat > "${workspace}/.symphony/WORKFLOW.md" <<'EOF'
+stale-workflow
+EOF
 
   output="$(
     SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
@@ -119,14 +149,18 @@ EOF
   )"
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
-  assert_contains "SYNC_ENV_REFRESHED=2" "${output}"
-  assert_contains "SYNC_ENV_COPIED=14" "${output}"
+  assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
+  assert_contains "SYNC_ENV_COPIED=17" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
     echo "Expected refresh mode to overwrite docker-compose.yml" >&2
     exit 1
   }
   [[ "$(bash "${workspace}/scripts/utilities/symphony_wait_for_claude_review.sh")" == "symphony_wait_for_claude_review.sh" ]] || {
     echo "Expected refresh mode to overwrite managed helper content" >&2
+    exit 1
+  }
+  [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "workflow-v1" ]] || {
+    echo "Expected refresh mode to overwrite .symphony/WORKFLOW.md" >&2
     exit 1
   }
 }

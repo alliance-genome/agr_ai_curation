@@ -108,6 +108,7 @@ ensure_one() {
 # Required files for core Symphony runtime lanes in this repo.
 ensure_one "${hooks_source}/pre-commit" ".git/hooks/pre-commit" "0755" "required"
 ensure_one "${hooks_source}/pre-push" ".git/hooks/pre-push" "0755" "required"
+ensure_one "${local_source_root}/.symphony/WORKFLOW.md" ".symphony/WORKFLOW.md" "0644" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_pre_merge_cleanup.sh" "scripts/utilities/symphony_pre_merge_cleanup.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_prepare_docker_config.sh" "scripts/utilities/symphony_prepare_docker_config.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_guard_workspace_repo.sh" "scripts/utilities/symphony_guard_workspace_repo.sh" "0755" "required"
@@ -124,6 +125,9 @@ ensure_one "${local_source_root}/scripts/lib/local_db_tunnel_common.sh" "scripts
 
 # Helpful but not strictly required for every lane.
 ensure_one "${local_source_root}/docker-compose.yml" "docker-compose.yml" "0644" "optional"
+ensure_one "${local_source_root}/.symphony/with_github_pat.sh" ".symphony/with_github_pat.sh" "0755" "optional"
+ensure_one "${local_source_root}/.symphony/github_pat_env.sh" ".symphony/github_pat_env.sh" "0644" "optional"
+ensure_one "${local_source_root}/.symphony/configure_github_pat_git.sh" ".symphony/configure_github_pat_git.sh" "0755" "optional"
 ensure_one "${local_source_root}/scripts/utilities/check_services.sh" "scripts/utilities/check_services.sh" "0755" "optional"
 ensure_one "${local_source_root}/scripts/utilities/ensure_postgres_db_exists.sh" "scripts/utilities/ensure_postgres_db_exists.sh" "0755" "optional"
 
