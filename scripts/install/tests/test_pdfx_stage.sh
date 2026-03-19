@@ -146,7 +146,7 @@ test_pdfx_setup_clones_and_generates_env() {
   assert_contains '^PDFX_DEFAULT_MERGE=true$' "$pdfx_env"
   assert_contains '^PDFX_GPU_ENABLED=true$' "$pdfx_env"
 
-  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://localhost:5000$' "$main_env"
+  assert_contains '^PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:5000$' "$main_env"
   assert_contains '^PDF_EXTRACTION_METHODS=grobid,docling,marker$' "$main_env"
   assert_contains '^PDF_EXTRACTION_MERGE=true$' "$main_env"
   assert_contains "^INSTALL_PDFX_CLONE_PATH=${clone_path}$" "$pdfx_state"
