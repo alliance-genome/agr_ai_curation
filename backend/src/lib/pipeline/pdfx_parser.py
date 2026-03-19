@@ -162,6 +162,10 @@ class PDFXParser:
         except aiohttp.ClientError as exc:
             raise PDFParsingError(f"Network error calling PDF extraction service: {exc}") from exc
 
+        # The live parser currently rebuilds elements from downloaded markdown.
+        # Page markers survive this path, but bbox provenance is not synthesized
+        # from markdown, so downstream localization is page-only unless another
+        # structured pipeline injects provenance metadata.
         cleaned_elements = markdown_to_pipeline_elements(merged_markdown)
         if not cleaned_elements:
             raise PDFParsingError("PDF extraction produced no usable elements")
@@ -506,7 +510,7 @@ def _build_progress_message(payload: Dict[str, Any]) -> str:
 
 
 def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
-    """Convert merged markdown output into pipeline element dictionaries."""
+    """Convert merged markdown output into pipeline elements without bbox synthesis."""
     normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.split("\n")
     elements: List[Dict[str, Any]] = []

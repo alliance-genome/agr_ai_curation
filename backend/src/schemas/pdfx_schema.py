@@ -244,7 +244,7 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
 
 
 def build_pipeline_elements(elements: List[NormalizedElement]) -> List[Dict[str, Any]]:
-    """Create pipeline-ready dictionaries from normalized elements."""
+    """Create pipeline-ready dictionaries while preserving upstream metadata."""
 
     pipeline_elements: List[Dict[str, Any]] = []
 
