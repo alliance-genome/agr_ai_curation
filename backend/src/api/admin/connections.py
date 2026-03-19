@@ -183,20 +183,25 @@ async def check_all_connections() -> ConnectionsHealthResponse:
     unhealthy = sum(1 for s in status_dict.values() if s.get("is_healthy") is False)
     unknown = sum(1 for s in status_dict.values() if s.get("is_healthy") is None)
 
-    # Check if all required services are healthy
+    # Required services must be explicitly healthy. Optional services that are
+    # intentionally unconfigured report None and should not degrade overall health.
     required_healthy = all(
         s.get("is_healthy") is True
         for s in status_dict.values()
         if s.get("required")
     )
+    optional_unhealthy = any(
+        s.get("required") is False and s.get("is_healthy") is False
+        for s in status_dict.values()
+    )
 
     # Determine overall status
-    if unhealthy == 0 and unknown == 0:
-        overall_status = "healthy"
-    elif required_healthy:
-        overall_status = "degraded"  # Some optional services unhealthy
+    if not required_healthy:
+        overall_status = "unhealthy"  # Required services are down or unconfigured
+    elif optional_unhealthy:
+        overall_status = "degraded"  # Optional configured services are down
     else:
-        overall_status = "unhealthy"  # Required services are down
+        overall_status = "healthy"
 
     # Build response
     services = {

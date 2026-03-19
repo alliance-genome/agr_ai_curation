@@ -442,7 +442,7 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
 
 def update_health_status(
     service_id: str,
-    is_healthy: bool,
+    is_healthy: Optional[bool],
     error_message: Optional[str] = None
 ) -> None:
     """
@@ -450,7 +450,8 @@ def update_health_status(
 
     Args:
         service_id: The service identifier
-        is_healthy: Whether the service is healthy
+        is_healthy: Whether the service is healthy. None means intentionally
+            not configured.
         error_message: Error message if not healthy
     """
     if not _initialized:
@@ -474,7 +475,7 @@ def reset_cache() -> None:
     _initialized = False
 
 
-async def check_service_health(service_id: str) -> bool:
+async def check_service_health(service_id: str) -> Optional[bool]:
     """
     Check health of a specific service by its service ID.
 
@@ -487,7 +488,8 @@ async def check_service_health(service_id: str) -> bool:
         service_id: The service identifier (e.g., "weaviate", "redis")
 
     Returns:
-        True if service is healthy, False otherwise
+        True if service is healthy, False if unhealthy, None if intentionally
+        not configured.
 
     Side effects:
         Updates the connection's is_healthy and last_error fields
@@ -501,7 +503,7 @@ async def check_service_health(service_id: str) -> bool:
         return False
 
     health = conn.health_check
-    is_healthy = False
+    is_healthy: Optional[bool] = False
     error_message = None
 
     try:
@@ -598,7 +600,7 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
             await client.aclose()
 
 
-async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
+async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[bool], Optional[str]]:
     """Check Postgres health via connection test.
 
     For services with credentials config but no URL (e.g., curation_db using AWS
@@ -615,7 +617,9 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[bool, Opti
             pass
 
     if not url:
-        return False, "No connection URL configured"
+        if conn.required:
+            return False, "No connection URL configured"
+        return None, None
 
     try:
         import asyncpg
