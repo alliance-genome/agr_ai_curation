@@ -132,9 +132,11 @@ def sync_system_agents(
             agent_id=agent.agent_id,
         ) or _load_prompt_content_from_source(source_by_folder.get(agent.folder_name))
         if not instructions:
-            raise RuntimeError(
-                f"Missing system prompt content for agent '{agent.folder_name}'."
+            logger.warning(
+                "Skipping system agent '%s': no prompt content available from DB or prompt.yaml.",
+                agent.folder_name,
             )
+            continue
 
         values = _build_system_agent_values(agent, instructions=instructions)
         row = existing_rows.get(agent_key)
@@ -153,6 +155,11 @@ def sync_system_agents(
         was_active = bool(row.is_active)
         metadata_changed = False
         for field_name, field_value in values.items():
+            # Don't force re-enable agents that were programmatically disabled
+            # (e.g. by runtime validation due to missing tool dependencies).
+            # Only new inserts get is_active=True automatically.
+            if field_name == "is_active" and not was_active:
+                continue
             if getattr(row, field_name) != field_value:
                 setattr(row, field_name, field_value)
                 metadata_changed = True

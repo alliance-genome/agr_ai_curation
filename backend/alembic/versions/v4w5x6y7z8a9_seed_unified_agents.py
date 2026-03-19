@@ -144,7 +144,7 @@ def _system_prompt_from_yaml(folder_name: str) -> tuple[str, str]:
         ),
         None,
     )
-    prompt_yaml = source.prompt_yaml if source is not None else None
+    prompt_yaml = source.prompt_yaml if source else None
     if prompt_yaml is None or not prompt_yaml.exists():
         raise RuntimeError(
             f"Missing prompt.yaml for agent '{folder_name}' at {prompt_yaml}."

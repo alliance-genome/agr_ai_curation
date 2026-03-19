@@ -57,8 +57,8 @@ def _load_phenotype_spec() -> Tuple[Dict[str, Any], str, str] | None:
     if source is None:
         return None
 
-    agent_yaml = source.agent_yaml if source is not None else None
-    prompt_yaml = source.prompt_yaml if source is not None else None
+    agent_yaml = source.agent_yaml
+    prompt_yaml = source.prompt_yaml
 
     if agent_yaml is None or prompt_yaml is None:
         raise RuntimeError(f"Missing phenotype agent bundle for '{_AGENT_KEY}'.")
@@ -231,6 +231,7 @@ def _agents_table(prompt_overrides_column: str) -> sa.Table:
 def upgrade() -> None:
     loaded_spec = _load_phenotype_spec()
     if loaded_spec is None:
+        print(f"[alembic] Skipping {_AGENT_KEY} seed — agent bundle not installed")
         return
 
     connection = op.get_bind()
