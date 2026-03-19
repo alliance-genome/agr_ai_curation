@@ -135,7 +135,7 @@ class TestAgentDocumentationCoverage:
         monkeypatch,
         tmp_path,
     ):
-        """Core-only installs should expose only task_input plus supervisor metadata."""
+        """Core-only installs should expose task_input plus core system agents."""
         runtime_packages_dir = tmp_path / "runtime-packages"
         shutil.copytree(REPO_ROOT / "packages" / "core", runtime_packages_dir / "agr.core")
 
@@ -144,9 +144,14 @@ class TestAgentDocumentationCoverage:
 
         registry = build_agent_registry()
 
-        assert set(registry.keys()) == {"task_input", "supervisor"}
+        assert set(registry.keys()) == {
+            "task_input",
+            "supervisor",
+            "chat_output",
+            "chat_output_formatter",
+        }
+        assert registry["chat_output"] == registry["chat_output_formatter"]
         assert "pdf_extraction" not in registry
         assert "gene" not in registry
-        assert "chat_output" not in registry
 
         agent_loader.reset_cache()
