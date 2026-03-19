@@ -184,8 +184,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           build-args: ${{ matrix.build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.artifact_id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact_id }}
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
