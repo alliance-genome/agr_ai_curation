@@ -64,6 +64,21 @@ def test_evidence_anchor_schema_excludes_bbox_fields():
         )
 
 
+def test_evidence_anchor_accepts_minimal_required_fields_and_defaults():
+    """Evidence anchors allow omission of all optional locator metadata."""
+
+    anchor = EvidenceAnchor(
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.UNRESOLVED,
+        supports_decision=EvidenceSupportsDecision.NEUTRAL,
+    )
+
+    assert anchor.snippet_text is None
+    assert anchor.sentence_text is None
+    assert anchor.viewer_search_text is None
+    assert anchor.chunk_ids == []
+
+
 def test_evidence_anchor_rejects_incomplete_or_reversed_offsets():
     """Markdown offsets must be complete and monotonic."""
 
@@ -132,6 +147,21 @@ def test_submission_payload_requires_a_payload_variant():
     assert payload.mode is SubmissionMode.EXPORT
     assert payload.target_system is SubmissionTargetSystem.FILE_EXPORT
     assert payload.filename == "disease-export.xml"
+
+
+def test_submission_payload_allows_dual_payload_representations():
+    """Submission contracts may carry both JSON and text payload variants."""
+
+    payload = SubmissionPayloadContract(
+        mode=SubmissionMode.PREVIEW,
+        target_system=SubmissionTargetSystem.FILE_EXPORT,
+        adapter_key="disease",
+        payload_json={"preview": True},
+        payload_text='{"preview": true}',
+    )
+
+    assert payload.payload_json == {"preview": True}
+    assert payload.payload_text == '{"preview": true}'
 
 
 def test_submission_target_system_rejects_direct_database_target():

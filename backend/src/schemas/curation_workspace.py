@@ -227,7 +227,7 @@ class SubmissionPayloadContract(BaseModel):
 
     @model_validator(mode="after")
     def validate_payload_variant(self) -> "SubmissionPayloadContract":
-        """Require at least one payload representation."""
+        """Require at least one payload representation while allowing dual formats."""
 
         if self.payload_json is None and self.payload_text is None:
             raise ValueError("Submission payloads must provide payload_json or payload_text")

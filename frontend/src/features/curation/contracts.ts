@@ -94,6 +94,8 @@ export type SubmissionTargetSystem = (typeof SUBMISSION_TARGET_SYSTEMS)[number]
 
 export type SubmissionPayloadJson = Record<string, unknown> | Array<unknown>
 
+// This mirrors the backend contract shape. The "at least one payload variant"
+// invariant is enforced by backend validation, not by TypeScript at runtime.
 export interface SubmissionPayloadContract {
   mode: SubmissionMode
   target_system: SubmissionTargetSystem
