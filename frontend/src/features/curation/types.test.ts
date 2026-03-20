@@ -143,7 +143,7 @@ describe('curation workspace substrate types', () => {
             session_id: 'session-1',
             adapter_key: 'disease',
             mode: 'preview',
-            target_system: 'file_export',
+            target_key: 'review_export_bundle',
             status: 'preview_ready',
             readiness: [
               {
@@ -155,7 +155,7 @@ describe('curation workspace substrate types', () => {
             ],
             payload: {
               mode: 'preview',
-              target_system: 'file_export',
+              target_key: 'review_export_bundle',
               adapter_key: 'disease',
               candidate_ids: ['candidate-1'],
               payload_json: { ok: true },

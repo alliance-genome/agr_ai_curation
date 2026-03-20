@@ -4,7 +4,6 @@ export {
   EVIDENCE_SUPPORTS_DECISIONS,
   FIELD_VALIDATION_STATUSES,
   SUBMISSION_MODES,
-  SUBMISSION_TARGET_SYSTEMS,
 } from './contracts'
 
 export type {
@@ -18,7 +17,7 @@ export type {
   SubmissionMode,
   SubmissionPayloadContract,
   SubmissionPayloadJson,
-  SubmissionTargetSystem,
+  SubmissionTargetKey,
   ValidationCandidateMatch,
 } from './contracts'
 
@@ -27,7 +26,7 @@ import type {
   FieldValidationResult,
   SubmissionMode,
   SubmissionPayloadContract,
-  SubmissionTargetSystem,
+  SubmissionTargetKey,
 } from './contracts'
 
 export const CURATION_SESSION_STATUSES = [
@@ -420,7 +419,7 @@ export interface CurationSubmissionRecord {
   session_id: string
   adapter_key: string
   mode: SubmissionMode
-  target_system: SubmissionTargetSystem
+  target_key: SubmissionTargetKey
   status: CurationSubmissionStatus
   readiness: CurationCandidateSubmissionReadiness[]
   payload?: SubmissionPayloadContract | null
@@ -760,7 +759,7 @@ export interface CurationSessionValidationResponse {
 export interface CurationSubmissionPreviewRequest {
   session_id: string
   mode: SubmissionMode
-  target_system: SubmissionTargetSystem
+  target_key: SubmissionTargetKey
   candidate_ids?: string[]
   include_payload?: boolean
 }
@@ -772,7 +771,7 @@ export interface CurationSubmissionPreviewResponse {
 
 export interface CurationSubmissionExecuteRequest {
   session_id: string
-  target_system: SubmissionTargetSystem
+  target_key: SubmissionTargetKey
   candidate_ids?: string[]
   mode?: SubmissionMode
 }

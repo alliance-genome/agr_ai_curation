@@ -19,7 +19,6 @@ from src.schemas.curation_workspace import (
     FieldValidationStatus,
     SubmissionMode,
     SubmissionPayloadContract,
-    SubmissionTargetSystem,
 )
 
 
@@ -30,16 +29,16 @@ def make_anchor_payload() -> dict:
         "anchor_kind": EvidenceAnchorKind.SNIPPET,
         "locator_quality": EvidenceLocatorQuality.EXACT_QUOTE,
         "supports_decision": EvidenceSupportsDecision.SUPPORTS,
-        "snippet_text": "Disease association was observed in treated animals.",
-        "sentence_text": "Disease association was observed in treated animals.",
-        "normalized_text": "disease association was observed in treated animals",
-        "viewer_search_text": "Disease association was observed in treated animals",
+        "snippet_text": "Observed response was recorded in treated samples.",
+        "sentence_text": "Observed response was recorded in treated samples.",
+        "normalized_text": "observed response was recorded in treated samples",
+        "viewer_search_text": "Observed response was recorded in treated samples",
         "pdfx_markdown_offset_start": 120,
         "pdfx_markdown_offset_end": 177,
         "page_number": 3,
         "page_label": "3",
         "section_title": "Results",
-        "subsection_title": "Disease association",
+        "subsection_title": "Observed response",
         "figure_reference": "Fig. 2",
         "chunk_ids": ["chunk-1", "chunk-2"],
     }
@@ -142,7 +141,7 @@ def make_workspace_response_payload() -> dict:
                     "session_id": "session-1",
                     "adapter_key": "disease",
                     "mode": SubmissionMode.PREVIEW,
-                    "target_system": SubmissionTargetSystem.FILE_EXPORT,
+                    "target_key": "review_export_bundle",
                     "status": CurationSubmissionStatus.PREVIEW_READY,
                     "readiness": [
                         {
@@ -154,7 +153,7 @@ def make_workspace_response_payload() -> dict:
                     ],
                     "payload": {
                         "mode": SubmissionMode.PREVIEW,
-                        "target_system": SubmissionTargetSystem.FILE_EXPORT,
+                        "target_key": "review_export_bundle",
                         "adapter_key": "disease",
                         "candidate_ids": ["candidate-1"],
                         "payload_json": {"ok": True},
@@ -364,22 +363,22 @@ def test_field_validation_result_supports_required_statuses():
 
     result = FieldValidationResult(
         status=FieldValidationStatus.AMBIGUOUS,
-        resolver="agr_db",
+        resolver="reference_resolver",
         candidate_matches=[
             {
-                "label": "APOE",
-                "identifier": "HGNC:613",
-                "matched_value": "apoE",
+                "label": "Candidate Alpha",
+                "identifier": "CURIE:1234",
+                "matched_value": "candidate alpha",
                 "score": 0.82,
             }
         ],
-        warnings=["Matched against a synonym"],
+        warnings=["Matched against an alternate label"],
     )
 
     assert result.status is FieldValidationStatus.AMBIGUOUS
-    assert result.resolver == "agr_db"
-    assert result.candidate_matches[0].identifier == "HGNC:613"
-    assert result.warnings == ["Matched against a synonym"]
+    assert result.resolver == "reference_resolver"
+    assert result.candidate_matches[0].identifier == "CURIE:1234"
+    assert result.warnings == ["Matched against an alternate label"]
 
 
 def test_submission_payload_requires_a_payload_variant():
@@ -388,23 +387,23 @@ def test_submission_payload_requires_a_payload_variant():
     with pytest.raises(ValidationError):
         SubmissionPayloadContract(
             mode=SubmissionMode.PREVIEW,
-            target_system=SubmissionTargetSystem.ALLIANCE_CURATION_API,
-            adapter_key="disease",
+            target_key="partner_preview",
+            adapter_key="workspace_adapter",
         )
 
     payload = SubmissionPayloadContract(
         mode=SubmissionMode.EXPORT,
-        target_system=SubmissionTargetSystem.FILE_EXPORT,
-        adapter_key="disease",
+        target_key="review_export_bundle",
+        adapter_key="workspace_adapter",
         candidate_ids=["candidate-1"],
         payload_text="<collection></collection>",
         content_type="application/xml",
-        filename="disease-export.xml",
+        filename="curation-export.xml",
     )
 
     assert payload.mode is SubmissionMode.EXPORT
-    assert payload.target_system is SubmissionTargetSystem.FILE_EXPORT
-    assert payload.filename == "disease-export.xml"
+    assert payload.target_key == "review_export_bundle"
+    assert payload.filename == "curation-export.xml"
 
 
 def test_submission_payload_allows_dual_payload_representations():
@@ -412,8 +411,8 @@ def test_submission_payload_allows_dual_payload_representations():
 
     payload = SubmissionPayloadContract(
         mode=SubmissionMode.PREVIEW,
-        target_system=SubmissionTargetSystem.FILE_EXPORT,
-        adapter_key="disease",
+        target_key="partner_preview",
+        adapter_key="workspace_adapter",
         payload_json={"preview": True},
         payload_text='{"preview": true}',
     )
@@ -422,14 +421,27 @@ def test_submission_payload_allows_dual_payload_representations():
     assert payload.payload_text == '{"preview": true}'
 
 
-def test_submission_target_system_rejects_direct_database_target():
-    """Raw direct database writes are not valid submission targets."""
+def test_submission_payload_accepts_adapter_owned_target_keys():
+    """Shared submission contracts allow adapter-owned integration keys."""
+
+    payload = SubmissionPayloadContract(
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key="partner_submission_api",
+        adapter_key="workspace_adapter",
+        payload_json={"records": 1},
+    )
+
+    assert payload.target_key == "partner_submission_api"
+
+
+def test_submission_target_key_rejects_blank_values():
+    """Blank submission target keys are not valid shared substrate values."""
 
     with pytest.raises(ValidationError):
         SubmissionPayloadContract(
             mode=SubmissionMode.DIRECT_SUBMIT,
-            target_system="direct_database",
-            adapter_key="disease",
+            target_key="   ",
+            adapter_key="workspace_adapter",
             payload_json={},
         )
 
