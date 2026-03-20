@@ -1,3 +1,5 @@
+// Shared curation workspace contracts stay project-agnostic. Concrete domain
+// behavior and downstream integration identifiers belong behind adapters.
 export const EVIDENCE_ANCHOR_KINDS = [
   'snippet',
   'sentence',
@@ -82,15 +84,7 @@ export const SUBMISSION_MODES = [
 
 export type SubmissionMode = (typeof SUBMISSION_MODES)[number]
 
-export const SUBMISSION_TARGET_SYSTEMS = [
-  'alliance_curation_api',
-  'abc_api',
-  'bulk_ingest',
-  'file_export',
-  'file_upload',
-] as const
-
-export type SubmissionTargetSystem = (typeof SUBMISSION_TARGET_SYSTEMS)[number]
+export type SubmissionTargetKey = string
 
 export type SubmissionPayloadJson = Record<string, unknown> | Array<unknown>
 
@@ -98,7 +92,7 @@ export type SubmissionPayloadJson = Record<string, unknown> | Array<unknown>
 // invariant is enforced by backend validation, not by TypeScript at runtime.
 export interface SubmissionPayloadContract {
   mode: SubmissionMode
-  target_system: SubmissionTargetSystem
+  target_key: SubmissionTargetKey
   adapter_key: string
   candidate_ids: string[]
   payload_json?: SubmissionPayloadJson | null
@@ -111,10 +105,10 @@ export interface SubmissionPayloadContract {
 export interface SubmissionDomainAdapter {
   adapter_key: string
   supported_submission_modes: SubmissionMode[]
-  supported_target_systems: SubmissionTargetSystem[]
+  supported_target_keys: SubmissionTargetKey[]
   build_submission_payload(args: {
     mode: SubmissionMode
-    target_system: SubmissionTargetSystem
+    target_key: SubmissionTargetKey
     payload_context: Record<string, unknown>
   }): SubmissionPayloadContract
 }

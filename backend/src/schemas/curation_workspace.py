@@ -1,11 +1,16 @@
-"""Shared curation workspace contracts for evidence, validation, and submission."""
+"""Shared curation workspace contracts for evidence, validation, and submission.
+
+These substrate contracts are intentionally project-agnostic. Concrete domain
+behavior and downstream integration identifiers belong behind adapter-owned
+interfaces rather than in the shared workspace substrate.
+"""
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Annotated, Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -182,24 +187,20 @@ class SubmissionMode(str, Enum):
     DIRECT_SUBMIT = "direct_submit"
 
 
-class SubmissionTargetSystem(str, Enum):
-    """Supported submission or export targets."""
-
-    ALLIANCE_CURATION_API = "alliance_curation_api"
-    ABC_API = "abc_api"
-    BULK_INGEST = "bulk_ingest"
-    FILE_EXPORT = "file_export"
-    FILE_UPLOAD = "file_upload"
+# Adapter-owned key for a submission destination or integration target.
+SubmissionTargetKey = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class SubmissionPayloadContract(BaseModel):
-    """Transport-agnostic submission payload emitted by a domain adapter."""
+    """Transport-agnostic submission payload emitted by an adapter."""
 
     model_config = ConfigDict(extra='forbid')
 
     mode: SubmissionMode = Field(description="Requested submission mode")
-    target_system: SubmissionTargetSystem = Field(description="Destination target for the payload")
-    adapter_key: str = Field(description="Domain adapter key that produced the payload")
+    target_key: SubmissionTargetKey = Field(
+        description="Adapter-owned key naming the downstream destination for this payload"
+    )
+    adapter_key: str = Field(description="Adapter-owned key that produced the payload")
     candidate_ids: list[str] = Field(
         default_factory=list,
         description="Candidate identifiers included in this payload",
@@ -237,17 +238,17 @@ class SubmissionPayloadContract(BaseModel):
 
 @runtime_checkable
 class SubmissionDomainAdapter(Protocol):
-    """Domain adapter contract for building reusable submission payloads."""
+    """Adapter contract for building reusable submission payloads."""
 
     adapter_key: str
     supported_submission_modes: Sequence[SubmissionMode]
-    supported_target_systems: Sequence[SubmissionTargetSystem]
+    supported_target_keys: Sequence[SubmissionTargetKey]
 
     def build_submission_payload(
         self,
         *,
         mode: SubmissionMode,
-        target_system: SubmissionTargetSystem,
+        target_key: SubmissionTargetKey,
         payload_context: Mapping[str, Any],
     ) -> SubmissionPayloadContract:
         """Build a submission payload for preview, export, or direct submission."""
@@ -263,6 +264,6 @@ __all__ = [
     "SubmissionDomainAdapter",
     "SubmissionMode",
     "SubmissionPayloadContract",
-    "SubmissionTargetSystem",
+    "SubmissionTargetKey",
     "ValidationCandidateMatch",
 ]

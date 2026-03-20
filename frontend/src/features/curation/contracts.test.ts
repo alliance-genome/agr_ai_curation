@@ -4,8 +4,8 @@ import {
   EVIDENCE_LOCATOR_QUALITIES,
   FIELD_VALIDATION_STATUSES,
   SUBMISSION_MODES,
-  SUBMISSION_TARGET_SYSTEMS,
   type SubmissionDomainAdapter,
+  type SubmissionTargetKey,
 } from './contracts'
 
 describe('curation contracts', () => {
@@ -34,25 +34,18 @@ describe('curation contracts', () => {
       'export',
       'direct_submit',
     ])
-
-    expect(SUBMISSION_TARGET_SYSTEMS).toEqual([
-      'alliance_curation_api',
-      'abc_api',
-      'bulk_ingest',
-      'file_export',
-      'file_upload',
-    ])
   })
 
-  it('mirrors the backend submission adapter naming surface', () => {
+  it('uses adapter-owned submission target keys instead of shared integration enums', () => {
+    const targetKey: SubmissionTargetKey = 'partner_submission_api'
     const adapter: SubmissionDomainAdapter = {
-      adapter_key: 'disease',
+      adapter_key: 'workspace_adapter',
       supported_submission_modes: ['preview', 'export'],
-      supported_target_systems: ['alliance_curation_api', 'file_export'],
-      build_submission_payload: ({ mode, target_system, payload_context }) => ({
+      supported_target_keys: [targetKey, 'review_export_bundle'],
+      build_submission_payload: ({ mode, target_key, payload_context }) => ({
         mode,
-        target_system,
-        adapter_key: 'disease',
+        target_key,
+        adapter_key: 'workspace_adapter',
         candidate_ids: [String(payload_context.candidate_id ?? 'candidate-1')],
         payload_json: { ok: true },
         warnings: [],
@@ -61,12 +54,13 @@ describe('curation contracts', () => {
 
     const payload = adapter.build_submission_payload({
       mode: 'preview',
-      target_system: 'alliance_curation_api',
+      target_key: targetKey,
       payload_context: { candidate_id: 'candidate-1' },
     })
 
-    expect(adapter.adapter_key).toBe('disease')
-    expect(payload.target_system).toBe('alliance_curation_api')
-    expect(payload.adapter_key).toBe('disease')
+    expect(adapter.adapter_key).toBe('workspace_adapter')
+    expect(adapter.supported_target_keys).toContain(targetKey)
+    expect(payload.target_key).toBe(targetKey)
+    expect(payload.adapter_key).toBe('workspace_adapter')
   })
 })
