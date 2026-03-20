@@ -10,18 +10,20 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.models.chunk import ChunkBoundingBox
+
+def _strip_required_string(value: str) -> str:
+    """Normalize required string values while rejecting blanks."""
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Value must not be empty or whitespace only")
+    return stripped
 
 
 def _strip_optional_string(value: Optional[str]) -> Optional[str]:
     """Normalize optional string values while rejecting blank strings."""
     if value is None:
         return None
-
-    stripped = value.strip()
-    if not stripped:
-        raise ValueError("Value must not be empty or whitespace only")
-    return stripped
+    return _strip_required_string(value)
 
 
 def _normalize_string_list(values: List[str]) -> List[str]:
@@ -30,9 +32,7 @@ def _normalize_string_list(values: List[str]) -> List[str]:
     seen: set[str] = set()
 
     for raw_value in values:
-        stripped = raw_value.strip()
-        if not stripped:
-            raise ValueError("List values must not be empty or whitespace only")
+        stripped = _strip_required_string(raw_value)
         if stripped not in seen:
             normalized.append(stripped)
             seen.add(stripped)
@@ -50,18 +50,22 @@ class EvidenceAnchorKind(str, Enum):
 
     CHUNK = "chunk"
     DOC_ITEM = "doc_item"
-    BBOX = "bbox"
-    SENTENCE = "sentence"
     SNIPPET = "snippet"
+    SENTENCE = "sentence"
+    SECTION = "section"
+    PAGE = "page"
+    DOCUMENT = "document"
 
 
 class EvidenceLocatorQuality(str, Enum):
     """How precisely the evidence was localized in the source document."""
 
-    EXACT = "exact"
-    APPROXIMATE = "approximate"
-    DEGRADED = "degraded"
-    UNKNOWN = "unknown"
+    EXACT_QUOTE = "exact_quote"
+    NORMALIZED_QUOTE = "normalized_quote"
+    SECTION_ONLY = "section_only"
+    PAGE_ONLY = "page_only"
+    DOCUMENT_ONLY = "document_only"
+    UNRESOLVED = "unresolved"
 
 
 class EvidenceDecisionSupport(str, Enum):
@@ -73,7 +77,7 @@ class EvidenceDecisionSupport(str, Enum):
 
 
 class EvidenceAnchor(BaseModel):
-    """Reusable evidence reference shared across review and submission phases."""
+    """Reusable text-first evidence reference shared across review and submission."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -83,76 +87,155 @@ class EvidenceAnchor(BaseModel):
     )
     locator_quality: EvidenceLocatorQuality = Field(
         ...,
-        description="Quality of the evidence location",
+        description="Quality of the resolved anchor location",
     )
     supports_decision: EvidenceDecisionSupport = Field(
         ...,
         description="Whether the anchor supports, contradicts, or only contextualizes a decision",
     )
-    document_id: Optional[str] = Field(
+    document_id: str = Field(
+        ...,
+        description="Workspace document identifier for the cited paper",
+    )
+    chunk_id: Optional[str] = Field(
         default=None,
-        description="Workspace document identifier when the evidence is PDF-backed",
+        description="Chunk identifier when the anchor resolves to a stored document chunk",
+    )
+    doc_item_ids: List[str] = Field(
+        default_factory=list,
+        description="PDFX doc-item identifiers that contributed to the anchor",
     )
     page_number: Optional[int] = Field(
         default=None,
         ge=1,
-        description="1-indexed page number when known",
+        description="1-indexed PDF page number when known",
     )
-    chunk_id: Optional[str] = Field(
+    section_title: Optional[str] = Field(
         default=None,
-        description="Chunk identifier for chunk-backed anchors",
+        description="Best available section heading for viewer fallback",
     )
-    doc_item_ids: List[str] = Field(
+    section_path: List[str] = Field(
         default_factory=list,
-        description="PDFX doc-item or element identifiers used to localize the evidence",
+        description="Normalized section breadcrumb when hierarchical headings are available",
     )
-    bbox: Optional[ChunkBoundingBox] = Field(
+    figure_reference: Optional[str] = Field(
         default=None,
-        description="Page-level bounding box when direct PDF localization is available",
+        description="Figure or panel reference associated with the anchor when available",
     )
-    snippet: Optional[str] = Field(
+    snippet_text: Optional[str] = Field(
         default=None,
-        description="Short evidence excerpt for hover cards and previews",
+        description="Short evidence excerpt retained for cards, hover previews, and export",
     )
-    sentence: Optional[str] = Field(
+    sentence_text: Optional[str] = Field(
         default=None,
-        description="Sentence-level evidence text when available",
+        description="Sentence-level evidence text when the extraction preserved it",
+    )
+    normalized_text: Optional[str] = Field(
+        default=None,
+        description="Normalized quote string derived from PDFX markdown matching",
+    )
+    viewer_search_text: Optional[str] = Field(
+        default=None,
+        description="Preferred string for PDF text-layer search and highlight attempts",
+    )
+    pdfx_markdown_start_offset: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Inclusive start offset into the normalized PDFX markdown when known",
+    )
+    pdfx_markdown_end_offset: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Exclusive end offset into the normalized PDFX markdown when known",
     )
 
-    @field_validator("document_id", "chunk_id", "snippet", "sentence")
+    @field_validator("document_id")
+    @classmethod
+    def validate_document_id(cls, value: str) -> str:
+        """Reject blank document identifiers."""
+        return _strip_required_string(value)
+
+    @field_validator(
+        "chunk_id",
+        "section_title",
+        "figure_reference",
+        "snippet_text",
+        "sentence_text",
+        "normalized_text",
+        "viewer_search_text",
+    )
     @classmethod
     def validate_optional_strings(cls, value: Optional[str]) -> Optional[str]:
         """Reject blank optional string values."""
         return _strip_optional_string(value)
 
-    @field_validator("doc_item_ids")
+    @field_validator("doc_item_ids", "section_path")
     @classmethod
-    def validate_doc_item_ids(cls, value: List[str]) -> List[str]:
-        """Reject blank doc-item identifiers and collapse duplicates."""
+    def validate_string_lists(cls, value: List[str]) -> List[str]:
+        """Reject blank list values and collapse duplicates."""
         return _normalize_string_list(value)
 
     @model_validator(mode="after")
     def validate_locator_fields(self) -> "EvidenceAnchor":
-        """Ensure the primary anchor kind has the required supporting fields."""
-        if not any([self.chunk_id, self.doc_item_ids, self.bbox, self.snippet, self.sentence]):
+        """Ensure the anchor has a coherent text-first locator contract."""
+        if (self.pdfx_markdown_start_offset is None) != (
+            self.pdfx_markdown_end_offset is None
+        ):
             raise ValueError(
-                "EvidenceAnchor requires at least one locator field: chunk_id, doc_item_ids, bbox, snippet, or sentence"
+                "pdfx_markdown_start_offset and pdfx_markdown_end_offset must be provided together"
             )
 
-        if self.bbox is not None and self.page_number is None:
-            raise ValueError("page_number is required when bbox is provided")
+        if (
+            self.pdfx_markdown_start_offset is not None
+            and self.pdfx_markdown_end_offset is not None
+            and self.pdfx_markdown_end_offset <= self.pdfx_markdown_start_offset
+        ):
+            raise ValueError(
+                "pdfx_markdown_end_offset must be greater than pdfx_markdown_start_offset"
+            )
 
         required_by_kind = {
             EvidenceAnchorKind.CHUNK: bool(self.chunk_id),
             EvidenceAnchorKind.DOC_ITEM: bool(self.doc_item_ids),
-            EvidenceAnchorKind.BBOX: self.bbox is not None,
-            EvidenceAnchorKind.SENTENCE: self.sentence is not None,
-            EvidenceAnchorKind.SNIPPET: self.snippet is not None,
+            EvidenceAnchorKind.SNIPPET: bool(self.snippet_text),
+            EvidenceAnchorKind.SENTENCE: bool(self.sentence_text),
+            EvidenceAnchorKind.SECTION: bool(self.section_title or self.section_path),
+            EvidenceAnchorKind.PAGE: self.page_number is not None,
+            EvidenceAnchorKind.DOCUMENT: bool(self.document_id),
         }
         if not required_by_kind[self.anchor_kind]:
             raise ValueError(
                 f"anchor_kind '{self.anchor_kind.value}' requires its matching locator field to be populated"
             )
+
+        if self.locator_quality in {
+            EvidenceLocatorQuality.EXACT_QUOTE,
+            EvidenceLocatorQuality.NORMALIZED_QUOTE,
+        } and not any(
+            [
+                bool(self.snippet_text),
+                bool(self.sentence_text),
+                bool(self.normalized_text),
+                bool(self.viewer_search_text),
+                self.pdfx_markdown_start_offset is not None,
+            ]
+        ):
+            raise ValueError(
+                "quote-based locator_quality requires quote text or PDFX markdown offsets"
+            )
+
+        if self.locator_quality == EvidenceLocatorQuality.SECTION_ONLY and not (
+            self.section_title or self.section_path
+        ):
+            raise ValueError(
+                "section_only locator_quality requires section_title or section_path"
+            )
+
+        if (
+            self.locator_quality == EvidenceLocatorQuality.PAGE_ONLY
+            and self.page_number is None
+        ):
+            raise ValueError("page_only locator_quality requires page_number")
 
         return self
 
@@ -165,10 +248,13 @@ class EvidenceAnchor(BaseModel):
 class FieldValidationStatus(str, Enum):
     """Shared validation lifecycle states for curated field values."""
 
-    PENDING = "pending"
-    VALID = "valid"
+    VALIDATED = "validated"
     AMBIGUOUS = "ambiguous"
-    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+    INVALID_FORMAT = "invalid_format"
+    CONFLICT = "conflict"
+    SKIPPED = "skipped"
+    OVERRIDDEN = "overridden"
 
 
 class FieldValidationCandidateMatch(BaseModel):
@@ -242,9 +328,14 @@ class FieldValidationResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_status_requirements(self) -> "FieldValidationResult":
-        """Enforce the minimal metadata required for resolved statuses."""
-        if self.status != FieldValidationStatus.PENDING and self.resolver is None:
-            raise ValueError("resolver is required once validation has run")
+        """Enforce the minimal metadata required for shared validation statuses."""
+        if self.status not in {
+            FieldValidationStatus.SKIPPED,
+            FieldValidationStatus.OVERRIDDEN,
+        } and self.resolver is None:
+            raise ValueError(
+                "resolver is required for validated, ambiguous, not_found, invalid_format, and conflict statuses"
+            )
 
         if self.status == FieldValidationStatus.AMBIGUOUS and not self.candidate_matches:
             raise ValueError("ambiguous validation results must include candidate_matches")
@@ -261,7 +352,8 @@ class SubmissionMode(str, Enum):
     """Submission execution mode."""
 
     PREVIEW = "preview"
-    SUBMIT = "submit"
+    EXPORT = "export"
+    DIRECT_SUBMIT = "direct_submit"
 
 
 class SubmissionTargetSystem(str, Enum):
@@ -269,6 +361,8 @@ class SubmissionTargetSystem(str, Enum):
 
     ALLIANCE_CURATION_API = "alliance_curation_api"
     ABC_API = "abc_api"
+    INGEST_BULK_SUBMISSION = "ingest_bulk_submission"
+    FILE_EXPORT_UPLOAD = "file_export_upload"
 
 
 class SubmissionDomainAdapterContract(BaseModel):
@@ -290,30 +384,42 @@ class SubmissionDomainAdapterContract(BaseModel):
         default=None,
         description="Optional adapter contract version",
     )
+    target_schema: Optional[str] = Field(
+        default=None,
+        description="Target schema or export shape produced by the domain adapter",
+    )
     payload: Dict[str, Any] = Field(
         default_factory=dict,
         description="Domain-specific payload passed through to the adapter implementation",
     )
 
-    @field_validator("domain", "adapter_name", "adapter_version")
+    @field_validator("domain", "adapter_name")
     @classmethod
-    def validate_adapter_strings(cls, value: Optional[str]) -> Optional[str]:
+    def validate_required_adapter_strings(cls, value: str) -> str:
         """Reject blank adapter identifiers."""
+        return _strip_required_string(value)
+
+    @field_validator("adapter_version", "target_schema")
+    @classmethod
+    def validate_optional_adapter_strings(
+        cls, value: Optional[str]
+    ) -> Optional[str]:
+        """Reject blank optional adapter metadata."""
         return _strip_optional_string(value)
 
 
 class SubmissionPayload(BaseModel):
-    """Submission request contract shared by preview and submit workflows."""
+    """Submission request contract shared by preview, export, and submit flows."""
 
     model_config = ConfigDict(extra="forbid")
 
     mode: SubmissionMode = Field(
         ...,
-        description="Whether the payload is being previewed or submitted",
+        description="Whether the payload is being previewed, exported, or submitted",
     )
     target_system: SubmissionTargetSystem = Field(
         ...,
-        description="External system that will receive the adapted payload",
+        description="External target system or submission surface for the adapted payload",
     )
     domain_adapter: SubmissionDomainAdapterContract = Field(
         ...,
@@ -321,9 +427,13 @@ class SubmissionPayload(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_submit_payload(self) -> "SubmissionPayload":
-        """Require a concrete adapter payload for live submissions."""
-        if self.mode == SubmissionMode.SUBMIT and not self.domain_adapter.payload:
-            raise ValueError("domain_adapter.payload must be populated when mode='submit'")
+    def validate_payload_requirements(self) -> "SubmissionPayload":
+        """Require a concrete adapter payload for export and direct-submit flows."""
+        if self.mode in {
+            SubmissionMode.EXPORT,
+            SubmissionMode.DIRECT_SUBMIT,
+        } and not self.domain_adapter.payload:
+            raise ValueError(
+                "domain_adapter.payload must be populated when mode is 'export' or 'direct_submit'"
+            )
         return self
-
