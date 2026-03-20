@@ -4,6 +4,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas.curation_workspace import (
+    CurationCandidateStatus,
+    CurationSessionListRequest,
+    CurationSessionSortField,
+    CurationSessionStatus,
+    CurationSortDirection,
+    CurationSubmissionStatus,
+    CurationWorkspaceResponse,
     EvidenceAnchor,
     EvidenceAnchorKind,
     EvidenceLocatorQuality,
@@ -35,6 +42,257 @@ def make_anchor_payload() -> dict:
         "subsection_title": "Disease association",
         "figure_reference": "Fig. 2",
         "chunk_ids": ["chunk-1", "chunk-2"],
+    }
+
+
+def make_workspace_response_payload() -> dict:
+    """Build a representative workspace payload spanning the new substrate contracts."""
+
+    return {
+        "workspace": {
+            "session": {
+                "session_id": "session-1",
+                "status": CurationSessionStatus.IN_PROGRESS,
+                "adapter": {
+                    "adapter_key": "disease",
+                    "profile_key": "primary",
+                    "display_label": "Disease",
+                    "profile_label": "Primary",
+                    "color_token": "teal",
+                    "metadata": {},
+                },
+                "document": {
+                    "document_id": "document-1",
+                    "title": "Shared workspace contract paper",
+                    "pmid": "123456",
+                    "citation_label": "PMID:123456",
+                    "pdf_url": "/api/documents/document-1/pdf",
+                    "viewer_url": "/documents/document-1/viewer",
+                },
+                "flow_run_id": "flow-run-1",
+                "progress": {
+                    "total_candidates": 2,
+                    "reviewed_candidates": 1,
+                    "pending_candidates": 1,
+                    "accepted_candidates": 1,
+                    "rejected_candidates": 0,
+                    "manual_candidates": 0,
+                },
+                "validation": {
+                    "state": "completed",
+                    "counts": {
+                        "validated": 4,
+                        "ambiguous": 1,
+                        "not_found": 0,
+                        "invalid_format": 0,
+                        "conflict": 0,
+                        "skipped": 0,
+                        "overridden": 0,
+                    },
+                    "last_validated_at": "2026-03-20T22:10:00Z",
+                    "stale_field_keys": [],
+                    "warnings": [],
+                },
+                "evidence": {
+                    "total_anchor_count": 3,
+                    "resolved_anchor_count": 3,
+                    "viewer_highlightable_anchor_count": 2,
+                    "quality_counts": {
+                        "exact_quote": 2,
+                        "normalized_quote": 1,
+                        "section_only": 0,
+                        "page_only": 0,
+                        "document_only": 0,
+                        "unresolved": 0,
+                    },
+                    "degraded": False,
+                    "warnings": [],
+                },
+                "current_candidate_id": "candidate-1",
+                "assigned_curator": {
+                    "actor_id": "user-1",
+                    "display_name": "Curator One",
+                },
+                "created_by": {
+                    "actor_id": "user-1",
+                    "display_name": "Curator One",
+                },
+                "prepared_at": "2026-03-20T22:00:00Z",
+                "last_worked_at": "2026-03-20T22:15:00Z",
+                "notes": "Ready for review",
+                "warnings": [],
+                "tags": ["priority"],
+                "session_version": 2,
+                "extraction_results": [
+                    {
+                        "extraction_result_id": "extract-1",
+                        "document_id": "document-1",
+                        "adapter_key": "disease",
+                        "profile_key": "primary",
+                        "agent_key": "curation_prep",
+                        "source_kind": "chat",
+                        "candidate_count": 2,
+                        "payload_json": {"ok": True},
+                        "created_at": "2026-03-20T21:55:00Z",
+                        "metadata": {},
+                    }
+                ],
+                "latest_submission": {
+                    "submission_id": "submission-1",
+                    "session_id": "session-1",
+                    "adapter_key": "disease",
+                    "mode": SubmissionMode.PREVIEW,
+                    "target_system": SubmissionTargetSystem.FILE_EXPORT,
+                    "status": CurationSubmissionStatus.PREVIEW_READY,
+                    "readiness": [
+                        {
+                            "candidate_id": "candidate-1",
+                            "ready": True,
+                            "blocking_reasons": [],
+                            "warnings": [],
+                        }
+                    ],
+                    "payload": {
+                        "mode": SubmissionMode.PREVIEW,
+                        "target_system": SubmissionTargetSystem.FILE_EXPORT,
+                        "adapter_key": "disease",
+                        "candidate_ids": ["candidate-1"],
+                        "payload_json": {"ok": True},
+                        "warnings": [],
+                    },
+                    "requested_at": "2026-03-20T22:18:00Z",
+                    "validation_errors": [],
+                    "warnings": [],
+                },
+            },
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "session_id": "session-1",
+                    "source": "extracted",
+                    "status": CurationCandidateStatus.ACCEPTED,
+                    "order": 0,
+                    "adapter_key": "disease",
+                    "display_label": "APOE association",
+                    "confidence": 0.92,
+                    "unresolved_ambiguities": [],
+                    "draft": {
+                        "draft_id": "draft-1",
+                        "candidate_id": "candidate-1",
+                        "adapter_key": "disease",
+                        "version": 3,
+                        "fields": [
+                            {
+                                "field_key": "gene_symbol",
+                                "label": "Gene symbol",
+                                "value": "APOE",
+                                "seed_value": "APOE",
+                                "order": 0,
+                                "required": True,
+                                "read_only": False,
+                                "dirty": False,
+                                "stale_validation": False,
+                                "evidence_anchor_ids": ["anchor-1"],
+                                "validation_result": {
+                                    "status": FieldValidationStatus.VALIDATED,
+                                    "resolver": "agr_db",
+                                    "candidate_matches": [],
+                                    "warnings": [],
+                                },
+                                "metadata": {},
+                            }
+                        ],
+                        "created_at": "2026-03-20T22:01:00Z",
+                        "updated_at": "2026-03-20T22:12:00Z",
+                        "metadata": {},
+                    },
+                    "evidence_anchors": [
+                        {
+                            "anchor_id": "anchor-1",
+                            "candidate_id": "candidate-1",
+                            "source": "extracted",
+                            "field_keys": ["gene_symbol"],
+                            "field_group_keys": ["primary"],
+                            "is_primary": True,
+                            "anchor": {
+                                "anchor_kind": EvidenceAnchorKind.SNIPPET,
+                                "locator_quality": EvidenceLocatorQuality.EXACT_QUOTE,
+                                "supports_decision": EvidenceSupportsDecision.SUPPORTS,
+                                "snippet_text": "APOE was linked to the phenotype.",
+                                "chunk_ids": ["chunk-1"],
+                            },
+                            "created_at": "2026-03-20T22:02:00Z",
+                            "updated_at": "2026-03-20T22:02:00Z",
+                            "warnings": [],
+                        }
+                    ],
+                    "validation": {
+                        "state": "completed",
+                        "counts": {
+                            "validated": 1,
+                            "ambiguous": 0,
+                            "not_found": 0,
+                            "invalid_format": 0,
+                            "conflict": 0,
+                            "skipped": 0,
+                            "overridden": 0,
+                        },
+                        "stale_field_keys": [],
+                        "warnings": [],
+                    },
+                    "evidence_summary": {
+                        "total_anchor_count": 1,
+                        "resolved_anchor_count": 1,
+                        "viewer_highlightable_anchor_count": 1,
+                        "quality_counts": {
+                            "exact_quote": 1,
+                            "normalized_quote": 0,
+                            "section_only": 0,
+                            "page_only": 0,
+                            "document_only": 0,
+                            "unresolved": 0,
+                        },
+                        "degraded": False,
+                        "warnings": [],
+                    },
+                    "created_at": "2026-03-20T22:01:00Z",
+                    "updated_at": "2026-03-20T22:12:00Z",
+                    "metadata": {},
+                }
+            ],
+            "active_candidate_id": "candidate-1",
+            "queue_context": {
+                "filters": {
+                    "statuses": [CurationSessionStatus.IN_PROGRESS],
+                    "search": "APOE",
+                },
+                "sort_by": CurationSessionSortField.PREPARED_AT,
+                "sort_direction": CurationSortDirection.DESC,
+                "position": 1,
+                "total_sessions": 3,
+                "next_session_id": "session-2",
+            },
+            "action_log": [
+                {
+                    "action_id": "action-1",
+                    "session_id": "session-1",
+                    "candidate_id": "candidate-1",
+                    "action_type": "candidate_accepted",
+                    "actor_type": "user",
+                    "actor": {
+                        "actor_id": "user-1",
+                        "display_name": "Curator One",
+                    },
+                    "occurred_at": "2026-03-20T22:12:00Z",
+                    "previous_candidate_status": CurationCandidateStatus.PENDING,
+                    "new_candidate_status": CurationCandidateStatus.ACCEPTED,
+                    "changed_field_keys": [],
+                    "evidence_anchor_ids": ["anchor-1"],
+                    "metadata": {},
+                }
+            ],
+            "submission_history": [],
+        }
     }
 
 
@@ -174,3 +432,47 @@ def test_submission_target_system_rejects_direct_database_target():
             adapter_key="disease",
             payload_json={},
         )
+
+
+def test_curation_session_status_exposes_required_lifecycle_values():
+    """Review-session lifecycle enums expose the expected stable contract values."""
+
+    assert [status.value for status in CurationSessionStatus] == [
+        "new",
+        "in_progress",
+        "paused",
+        "ready_for_submission",
+        "submitted",
+        "rejected",
+    ]
+
+
+def test_workspace_response_accepts_representative_workspace_contract():
+    """Workspace response models compose session, draft, evidence, and submission shells."""
+
+    workspace = CurationWorkspaceResponse(**make_workspace_response_payload())
+
+    assert workspace.workspace.session.status is CurationSessionStatus.IN_PROGRESS
+    assert workspace.workspace.candidates[0].status is CurationCandidateStatus.ACCEPTED
+    assert workspace.workspace.session.latest_submission is not None
+    assert (
+        workspace.workspace.session.latest_submission.status
+        is CurationSubmissionStatus.PREVIEW_READY
+    )
+    assert workspace.workspace.candidates[0].draft.fields[0].field_key == "gene_symbol"
+    assert (
+        workspace.workspace.candidates[0].evidence_anchors[0].anchor.locator_quality
+        is EvidenceLocatorQuality.EXACT_QUOTE
+    )
+    assert workspace.workspace.queue_context.next_session_id == "session-2"
+
+
+def test_session_list_request_defaults_match_inventory_contract():
+    """Inventory list requests default to prepared-at descending pagination."""
+
+    request = CurationSessionListRequest()
+
+    assert request.sort_by is CurationSessionSortField.PREPARED_AT
+    assert request.sort_direction is CurationSortDirection.DESC
+    assert request.page == 1
+    assert request.page_size == 25
