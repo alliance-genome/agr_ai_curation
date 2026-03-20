@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { debug } from '@/utils/env'
+import { debug, getEnvFlag } from '@/utils/env'
 import {
   Alert,
   Box,
@@ -33,6 +33,15 @@ import {
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
 const SESSION_STORAGE_KEY = 'pdf-viewer-session'
 const SETTINGS_STORAGE_KEY = 'pdf-viewer-settings'
+const PDFJS_FIND_STATE_FOUND = 0
+const PDFJS_FIND_STATE_NOT_FOUND = 1
+const PDFJS_FIND_STATE_WRAPPED = 2
+const PDFJS_FIND_STATE_PENDING = 3
+const PDFJS_FIND_TIMEOUT_MS = 3500
+const PDFJS_FIND_RESULT_SETTLE_MS = 75
+const EVIDENCE_SPIKE_EVENT_NAME = 'pdf-viewer-evidence-spike'
+const EVIDENCE_SPIKE_RESULT_EVENT_NAME = 'pdf-viewer-evidence-spike-result'
+const EVIDENCE_SPIKE_FRAGMENT_WORDS = 24
 
 interface HighlightSettings {
   highlightColor: string
@@ -86,6 +95,56 @@ export interface OverlayPayload {
   docItems: OverlayDocItem[]
 }
 
+type PdfEvidenceSpikeCandidateReason =
+  | 'raw'
+  | 'whitespace-normalized'
+  | 'ascii-normalized'
+  | 'first-sentence'
+  | 'leading-fragment'
+  | 'trailing-fragment'
+  | 'section-title'
+  | 'section-path'
+
+type PdfEvidenceSpikeStatus =
+  | 'matched'
+  | 'section-fallback'
+  | 'page-fallback'
+  | 'not-found'
+  | 'viewer-not-ready'
+
+type PdfEvidenceSpikeStrategy =
+  | PdfEvidenceSpikeCandidateReason
+  | 'page-hint'
+  | 'document'
+
+export interface PdfEvidenceSpikeInput {
+  quote: string
+  pageNumber?: number | null
+  pageNumbers?: number[]
+  sectionTitle?: string | null
+  sectionPath?: string[] | null
+}
+
+export interface PdfEvidenceSpikeCandidate {
+  query: string
+  reason: PdfEvidenceSpikeCandidateReason
+}
+
+export interface PdfEvidenceSpikeResult {
+  status: PdfEvidenceSpikeStatus
+  strategy: PdfEvidenceSpikeStrategy
+  documentId: string | null
+  quote: string
+  pageHints: number[]
+  sectionTitle: string | null
+  matchedQuery: string | null
+  matchedPage: number | null
+  matchesTotal: number
+  currentMatch: number
+  attemptedQueries: string[]
+  note: string
+}
+
 export type OverlayDocItemDropReason = 'missing-page' | 'missing-bbox' | 'invalid-bbox'
 
 export interface OverlayDocItemDropDiagnostic {
@@ -125,6 +184,13 @@ const DEFAULT_STATE: ViewerState = {
   lastInteraction: new Date().toISOString(),
 }
 
+declare global {
+  interface Window {
+    __pdfViewerEvidenceSpike?: (input: PdfEvidenceSpikeInput) => Promise<PdfEvidenceSpikeResult>
+    __pdfViewerEvidenceSpikeLastResult?: PdfEvidenceSpikeResult | null
+  }
+}
+
 const uniqueTerms = (terms: string[]): string[] => {
   const seen = new Set<string>()
   return terms.filter((term) => {
@@ -135,6 +201,290 @@ const uniqueTerms = (terms: string[]): string[] => {
     seen.add(key)
     return true
   })
+}
+
+const uniqueEvidenceSpikeCandidates = (candidates: PdfEvidenceSpikeCandidate[]): PdfEvidenceSpikeCandidate[] => {
+  const seen = new Set<string>()
+  return candidates.filter((candidate) => {
+    const key = candidate.query.trim().toLowerCase()
+    if (!key || seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
+export const normalizeEvidenceSpikeText = (value: string): string => {
+  return value
+    .normalize('NFKC')
+    .replace(/\u00ad/g, '')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/[ \t\f\v\r]+/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/([([{])\s+/g, '$1')
+    .replace(/\s+([)\]}])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const splitEvidenceSpikeWords = (value: string): string[] => {
+  const normalized = normalizeEvidenceSpikeText(value)
+  return normalized.length > 0 ? normalized.split(/\s+/).filter(Boolean) : []
+}
+
+const extractEvidenceSpikeSentence = (value: string): string | null => {
+  const normalized = normalizeEvidenceSpikeText(value)
+  const match = normalized.match(/^(.{40,}?[.!?])(?:\s|$)/)
+  return match?.[1]?.trim() ?? null
+}
+
+export const normalizeEvidenceSpikePageHints = (input: Pick<PdfEvidenceSpikeInput, 'pageNumber' | 'pageNumbers'>): number[] => {
+  const rawHints = [
+    ...(Array.isArray(input.pageNumbers) ? input.pageNumbers : []),
+    input.pageNumber,
+  ]
+
+  const seen = new Set<number>()
+  return rawHints.reduce<number[]>((acc, value) => {
+    const page = Number(value)
+    if (!Number.isInteger(page) || page <= 0 || seen.has(page)) {
+      return acc
+    }
+    seen.add(page)
+    acc.push(page)
+    return acc
+  }, [])
+}
+
+export const buildEvidenceSpikeQuoteCandidates = (quote: string): PdfEvidenceSpikeCandidate[] => {
+  const trimmed = quote.trim()
+  if (!trimmed) {
+    return []
+  }
+
+  const whitespaceNormalized = trimmed.replace(/\s+/g, ' ').trim()
+  const asciiNormalized = normalizeEvidenceSpikeText(trimmed)
+  const firstSentence = extractEvidenceSpikeSentence(trimmed)
+  const words = splitEvidenceSpikeWords(trimmed)
+
+  const candidates: PdfEvidenceSpikeCandidate[] = [
+    { query: trimmed, reason: 'raw' },
+    { query: whitespaceNormalized, reason: 'whitespace-normalized' },
+    { query: asciiNormalized, reason: 'ascii-normalized' },
+  ]
+
+  if (firstSentence) {
+    candidates.push({ query: firstSentence, reason: 'first-sentence' })
+  }
+
+  if (words.length > EVIDENCE_SPIKE_FRAGMENT_WORDS + 6) {
+    candidates.push({
+      query: words.slice(0, EVIDENCE_SPIKE_FRAGMENT_WORDS).join(' '),
+      reason: 'leading-fragment',
+    })
+    candidates.push({
+      query: words.slice(-EVIDENCE_SPIKE_FRAGMENT_WORDS).join(' '),
+      reason: 'trailing-fragment',
+    })
+  }
+
+  return uniqueEvidenceSpikeCandidates(candidates)
+}
+
+export const buildEvidenceSpikeSectionCandidates = (
+  sectionTitle?: string | null,
+  sectionPath?: string[] | null,
+): PdfEvidenceSpikeCandidate[] => {
+  const candidates: PdfEvidenceSpikeCandidate[] = []
+
+  const normalizedTitle = normalizeEvidenceSpikeText(sectionTitle ?? '')
+  if (normalizedTitle) {
+    candidates.push({ query: normalizedTitle, reason: 'section-title' })
+  }
+
+  for (const segment of sectionPath ?? []) {
+    const normalizedSegment = normalizeEvidenceSpikeText(segment)
+    if (!normalizedSegment || normalizedSegment === normalizedTitle) {
+      continue
+    }
+    candidates.push({ query: normalizedSegment, reason: 'section-path' })
+  }
+
+  return uniqueEvidenceSpikeCandidates(candidates)
+}
+
+const publishEvidenceSpikeResult = (result: PdfEvidenceSpikeResult) => {
+  window.__pdfViewerEvidenceSpikeLastResult = result
+  window.dispatchEvent(
+    new CustomEvent<PdfEvidenceSpikeResult>(EVIDENCE_SPIKE_RESULT_EVENT_NAME, {
+      detail: result,
+    }),
+  )
+}
+
+const getSelectedEvidenceSpikePage = (pdfApp: any): number | null => {
+  const pageIdx = pdfApp?.findController?.selected?.pageIdx
+  return typeof pageIdx === 'number' && pageIdx >= 0 ? pageIdx + 1 : null
+}
+
+const setEvidenceSpikePage = (pdfApp: any, pageNumber: number): boolean => {
+  const normalizedPage = Math.max(1, Math.floor(pageNumber))
+
+  try {
+    if (pdfApp?.pdfViewer) {
+      pdfApp.pdfViewer.currentPageNumber = normalizedPage
+      return true
+    }
+    if (typeof pdfApp?.page === 'number') {
+      pdfApp.page = normalizedPage
+      return true
+    }
+  } catch (error) {
+    console.warn('Unable to set PDF viewer page for evidence spike', error)
+  }
+
+  return false
+}
+
+interface PdfEvidenceSpikeFindOutcome extends Pick<PdfEvidenceSpikeResult, 'matchedPage' | 'matchesTotal' | 'currentMatch'> {
+  found: boolean
+  matchState: number | null
+}
+
+const isSuccessfulEvidenceSpikeFindState = (state: number | null | undefined): boolean => {
+  return state === PDFJS_FIND_STATE_FOUND || state === PDFJS_FIND_STATE_WRAPPED
+}
+
+const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<PdfEvidenceSpikeFindOutcome> => {
+  const eventBus = pdfApp?.eventBus
+
+  if (!eventBus?.on || !eventBus?.off) {
+    return Promise.resolve({
+      matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+      matchesTotal: 0,
+      currentMatch: 0,
+      found: false,
+      matchState: null,
+    })
+  }
+
+  return new Promise((resolve) => {
+    let latestCurrent = 0
+    let latestTotal = 0
+    let latestState: number | null = null
+    let settleTimeoutId: number | null = null
+
+    const finish = (detail?: { currentMatch?: number; matchesTotal?: number; matchedPage?: number | null; matchState?: number | null }) => {
+      const matchState = detail?.matchState ?? latestState
+      const found = isSuccessfulEvidenceSpikeFindState(matchState)
+      const resolvedCurrent = detail?.currentMatch ?? latestCurrent
+      const resolvedTotal = detail?.matchesTotal ?? latestTotal
+
+      window.clearTimeout(timeoutId)
+      if (settleTimeoutId !== null) {
+        window.clearTimeout(settleTimeoutId)
+      }
+      eventBus.off('updatefindmatchescount', handleCount)
+      eventBus.off('updatefindcontrolstate', handleState)
+      resolve({
+        matchedPage: detail?.matchedPage ?? getSelectedEvidenceSpikePage(pdfApp),
+        matchesTotal: found && resolvedTotal === 0 ? 1 : resolvedTotal,
+        currentMatch: found && resolvedCurrent === 0 ? 1 : resolvedCurrent,
+        found,
+        matchState,
+      })
+    }
+
+    const handleCount = (event: any) => {
+      if (event?.source !== pdfApp?.findController) {
+        return
+      }
+      latestCurrent = event?.matchesCount?.current ?? latestCurrent
+      latestTotal = event?.matchesCount?.total ?? latestTotal
+
+      if (settleTimeoutId !== null && isSuccessfulEvidenceSpikeFindState(latestState) && latestTotal > 0) {
+        finish()
+      }
+    }
+
+    const handleState = (event: any) => {
+      if (event?.source !== pdfApp?.findController || event?.rawQuery !== query) {
+        return
+      }
+      latestState = typeof event?.state === 'number' ? event.state : latestState
+      latestCurrent = event?.matchesCount?.current ?? latestCurrent
+      latestTotal = event?.matchesCount?.total ?? latestTotal
+      if (latestState === PDFJS_FIND_STATE_PENDING) {
+        return
+      }
+
+      if (isSuccessfulEvidenceSpikeFindState(latestState)) {
+        if (settleTimeoutId !== null) {
+          window.clearTimeout(settleTimeoutId)
+        }
+        // PDF.js can report FOUND/WRAPPED before match counts settle. Give count
+        // events a brief window to arrive before finalizing the outcome.
+        settleTimeoutId = window.setTimeout(() => {
+          finish({
+            currentMatch: latestCurrent,
+            matchesTotal: latestTotal,
+            matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+            matchState: latestState,
+          })
+        }, PDFJS_FIND_RESULT_SETTLE_MS)
+        return
+      }
+
+      if (latestState === PDFJS_FIND_STATE_NOT_FOUND) {
+        finish({
+          currentMatch: latestCurrent,
+          matchesTotal: latestTotal,
+          matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+          matchState: latestState,
+        })
+        return
+      }
+
+      finish({
+        currentMatch: latestCurrent,
+        matchesTotal: latestTotal,
+        matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+        matchState: latestState,
+      })
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      finish({
+        currentMatch: latestCurrent,
+        matchesTotal: latestTotal,
+        matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+      })
+    }, PDFJS_FIND_TIMEOUT_MS)
+
+    eventBus.on('updatefindmatchescount', handleCount)
+    eventBus.on('updatefindcontrolstate', handleState)
+  })
+}
+
+const dispatchEvidenceSpikeFind = async (pdfApp: any, candidate: PdfEvidenceSpikeCandidate) => {
+  const resultPromise = waitForEvidenceSpikeFindResult(pdfApp, candidate.query)
+  pdfApp.eventBus.dispatch('find', {
+    source: 'pdf-evidence-spike',
+    type: '',
+    query: candidate.query,
+    caseSensitive: false,
+    entireWord: false,
+    highlightAll: true,
+    findPrevious: false,
+    matchDiacritics: false,
+  })
+
+  return resultPromise
 }
 
 const loadStoredSettings = (): HighlightSettings => {
@@ -201,7 +551,7 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }
 
-const getInvalidBboxFields = (bbox: OverlayDocItem['bbox']): string[] => {
+const getInvalidBboxFields = (bbox: NonNullable<OverlayDocItem['bbox']>): string[] => {
   const invalidFields: string[] = []
   const left = Number(bbox.left)
   const top = Number(bbox.top)
@@ -658,6 +1008,137 @@ export function PdfViewer() {
     })
   }, [])
 
+  const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
+    const quote = input.quote?.trim() ?? ''
+    const pageHints = normalizeEvidenceSpikePageHints(input)
+    const sectionTitle = normalizeEvidenceSpikeText(input.sectionTitle ?? '') || null
+    const sectionPath = Array.isArray(input.sectionPath)
+      ? input.sectionPath.map((segment) => normalizeEvidenceSpikeText(segment)).filter(Boolean)
+      : []
+    const attemptedQueries: string[] = []
+    const baseResult = {
+      documentId: activeDocument?.documentId ?? null,
+      quote,
+      pageHints,
+      sectionTitle,
+      attemptedQueries,
+    }
+    const iframeWindow = iframeRef.current?.contentWindow as any
+    const pdfApp = pdfAppRef.current ?? iframeWindow?.PDFViewerApplication ?? null
+
+    if (pdfApp && pdfAppRef.current !== pdfApp) {
+      pdfAppRef.current = pdfApp
+    }
+
+    if (!pdfApp?.eventBus || !pdfApp?.findController || !pdfApp?.pdfViewer) {
+      const result: PdfEvidenceSpikeResult = {
+        ...baseResult,
+        status: 'viewer-not-ready',
+        strategy: 'document',
+        matchedQuery: null,
+        matchedPage: null,
+        matchesTotal: 0,
+        currentMatch: 0,
+        note: 'The PDF viewer is not ready yet. Load a PDF and wait for the iframe viewer to finish initialising.',
+      }
+      publishEvidenceSpikeResult(result)
+      return result
+    }
+
+    if (!quote) {
+      const result: PdfEvidenceSpikeResult = {
+        ...baseResult,
+        status: 'not-found',
+        strategy: 'document',
+        matchedQuery: null,
+        matchedPage: null,
+        matchesTotal: 0,
+        currentMatch: 0,
+        note: 'A non-empty PDFX markdown quote is required before the prototype can search the PDF text layer.',
+      }
+      publishEvidenceSpikeResult(result)
+      return result
+    }
+
+    highlightTermsRef.current = []
+    setHighlightTerms([])
+    clearAllHighlights()
+
+    const startPage = pageHints[0] ?? viewerStateRef.current.currentPage ?? 1
+    setEvidenceSpikePage(pdfApp, startPage)
+
+    const quoteCandidates = buildEvidenceSpikeQuoteCandidates(quote)
+    for (const candidate of quoteCandidates) {
+      attemptedQueries.push(candidate.query)
+      const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
+      if (outcome.found || outcome.matchesTotal > 0) {
+        const result: PdfEvidenceSpikeResult = {
+          ...baseResult,
+          status: 'matched',
+          strategy: candidate.reason,
+          matchedQuery: candidate.query,
+          matchedPage: outcome.matchedPage,
+          matchesTotal: outcome.matchesTotal,
+          currentMatch: outcome.currentMatch,
+          note: candidate.reason.includes('fragment')
+            ? 'Resolved with a shortened quote fragment after the full PDFX quote did not produce a direct text-layer match.'
+            : 'Resolved with a quote-derived search candidate in the PDF.js text layer.',
+        }
+        publishEvidenceSpikeResult(result)
+        return result
+      }
+    }
+
+    const sectionCandidates = buildEvidenceSpikeSectionCandidates(sectionTitle, sectionPath)
+    for (const candidate of sectionCandidates) {
+      attemptedQueries.push(candidate.query)
+      const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
+      if (outcome.found || outcome.matchesTotal > 0) {
+        const result: PdfEvidenceSpikeResult = {
+          ...baseResult,
+          status: 'section-fallback',
+          strategy: candidate.reason,
+          matchedQuery: candidate.query,
+          matchedPage: outcome.matchedPage,
+          matchesTotal: outcome.matchesTotal,
+          currentMatch: outcome.currentMatch,
+          note: 'The quote itself did not match, but section metadata located a relevant page in the PDF viewer.',
+        }
+        publishEvidenceSpikeResult(result)
+        return result
+      }
+    }
+
+    if (pageHints.length > 0) {
+      setEvidenceSpikePage(pdfApp, pageHints[0])
+      const result: PdfEvidenceSpikeResult = {
+        ...baseResult,
+        status: 'page-fallback',
+        strategy: 'page-hint',
+        matchedQuery: null,
+        matchedPage: pageHints[0],
+        matchesTotal: 0,
+        currentMatch: 0,
+        note: 'Quote and section search candidates did not resolve, so the prototype navigated to the hinted page as the fallback.',
+      }
+      publishEvidenceSpikeResult(result)
+      return result
+    }
+
+    const result: PdfEvidenceSpikeResult = {
+      ...baseResult,
+      status: 'not-found',
+      strategy: 'document',
+      matchedQuery: null,
+      matchedPage: null,
+      matchesTotal: 0,
+      currentMatch: 0,
+      note: 'Neither the PDFX quote nor the available section metadata produced a text-layer match in the current PDF.',
+    }
+    publishEvidenceSpikeResult(result)
+    return result
+  }, [activeDocument?.documentId, clearAllHighlights])
+
   const applyHighlights = useCallback((specificTextLayer?: HTMLElement) => {
     const iframeWindow = iframeRef.current?.contentWindow as any
     const iframeDoc = iframeWindow?.document as Document | undefined
@@ -1077,6 +1558,33 @@ export function PdfViewer() {
       applyHighlights()
     }
   }, [status, applyHighlights])
+
+  useEffect(() => {
+    const evidenceSpikeEnabled = getEnvFlag(['VITE_DEV_MODE', 'DEV_MODE', 'VITE_DEBUG', 'DEBUG'], false)
+    if (!evidenceSpikeEnabled) {
+      return
+    }
+
+    const handleEvidenceSpike = (event: Event) => {
+      const detail = (event as CustomEvent<PdfEvidenceSpikeInput>).detail
+      if (!detail) {
+        return
+      }
+      void executeEvidenceSpike(detail)
+    }
+
+    window.__pdfViewerEvidenceSpike = executeEvidenceSpike
+    window.__pdfViewerEvidenceSpikeLastResult = null
+    window.addEventListener(EVIDENCE_SPIKE_EVENT_NAME, handleEvidenceSpike)
+
+    return () => {
+      if (window.__pdfViewerEvidenceSpike === executeEvidenceSpike) {
+        delete window.__pdfViewerEvidenceSpike
+      }
+      delete window.__pdfViewerEvidenceSpikeLastResult
+      window.removeEventListener(EVIDENCE_SPIKE_EVENT_NAME, handleEvidenceSpike)
+    }
+  }, [executeEvidenceSpike])
 
   useEffect(() => {
     const iframeDoc = iframeRef.current?.contentWindow?.document
