@@ -136,7 +136,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         PDFDocument(
             id=document_alpha_id,
             filename="test_cw_alpha.pdf",
-            title="Alpha curation paper",
+            title="Alpha 100% curation paper",
             file_path=f"{document_alpha_id}/alpha.pdf",
             file_hash=_hash("a"),
             file_size=4096,
@@ -145,7 +145,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         PDFDocument(
             id=document_beta_id,
             filename="test_cw_beta.pdf",
-            title="Beta gene paper",
+            title="Beta_gene paper",
             file_path=f"{document_beta_id}/beta.pdf",
             file_hash=_hash("b"),
             file_size=4096,
@@ -154,7 +154,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         PDFDocument(
             id=document_gamma_id,
             filename="test_cw_gamma.pdf",
-            title="Gamma submission paper",
+            title="BetaXgene submission paper",
             file_path=f"{document_gamma_id}/gamma.pdf",
             file_hash=_hash("c"),
             file_size=4096,
@@ -591,11 +591,34 @@ def test_get_review_session_returns_detail_payload(
     payload = response.json()
 
     assert payload["session_id"] == seeded_review_sessions["session_beta_id"]
-    assert payload["document"]["title"] == "Beta gene paper"
+    assert payload["document"]["title"] == "Beta_gene paper"
     assert payload["assigned_curator"]["actor_id"] == seeded_review_sessions["other_user_auth_sub"]
     assert payload["extraction_results"][0]["domain_key"] == "gene"
     assert payload["latest_submission"]["status"] == "preview_ready"
     assert payload["latest_submission"]["payload"]["payload_json"] == {"ok": True}
+
+
+def test_list_review_sessions_search_escapes_like_wildcards(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    percent_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={"search": "100%"},
+    )
+    assert percent_response.status_code == 200, percent_response.text
+    assert [session["session_id"] for session in percent_response.json()["sessions"]] == [
+        seeded_review_sessions["session_alpha_id"]
+    ]
+
+    underscore_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={"search": "Beta_gene"},
+    )
+    assert underscore_response.status_code == 200, underscore_response.text
+    assert [session["session_id"] for session in underscore_response.json()["sessions"]] == [
+        seeded_review_sessions["session_beta_id"]
+    ]
 
 
 def test_patch_review_session_updates_status_and_notes(

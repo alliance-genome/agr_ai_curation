@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from math import ceil
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -110,6 +110,8 @@ EVIDENCE_COUNT_SORT_ORDER = (
     .scalar_subquery()
 )
 
+LIKE_ESCAPE_CHAR = "\\"
+
 
 def _viewer_url(file_path: str | None) -> str | None:
     if not file_path:
@@ -134,6 +136,13 @@ def _ordered_clause(expression: Any, direction: CurationSortDirection, *, nulls_
     if nulls_last:
         ordered = ordered.nulls_last()
     return ordered
+
+
+def _escape_like_pattern(value: str) -> str:
+    escaped = value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
+    escaped = escaped.replace("%", f"{LIKE_ESCAPE_CHAR}%")
+    escaped = escaped.replace("_", f"{LIKE_ESCAPE_CHAR}_")
+    return escaped
 
 
 def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
@@ -189,29 +198,99 @@ def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
         statement = statement.where(exists(domain_exists))
 
     if filters.search:
-        search_term = f"%{filters.search.strip()}%"
+        search_value = filters.search.strip()
+        if not search_value:
+            return statement
+
+        search_term = f"%{_escape_like_pattern(search_value)}%"
         candidate_search = (
             select(CurationCandidate.id)
             .where(CurationCandidate.session_id == ReviewSessionModel.id)
             .where(
                 or_(
-                    CurationCandidate.display_label.ilike(search_term),
-                    CurationCandidate.secondary_label.ilike(search_term),
+                    CurationCandidate.display_label.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                    CurationCandidate.secondary_label.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
                 )
             )
         )
         statement = statement.where(
             or_(
-                func.cast(ReviewSessionModel.id, String).ilike(search_term),
-                func.cast(ReviewSessionModel.document_id, String).ilike(search_term),
-                func.coalesce(PDFDocument.title, PDFDocument.filename).ilike(search_term),
-                PDFDocument.filename.ilike(search_term),
-                ReviewSessionModel.flow_run_id.ilike(search_term),
+                func.cast(ReviewSessionModel.id, String).ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                func.cast(ReviewSessionModel.document_id, String).ilike(
+                    search_term,
+                    escape=LIKE_ESCAPE_CHAR,
+                ),
+                func.coalesce(PDFDocument.title, PDFDocument.filename).ilike(
+                    search_term,
+                    escape=LIKE_ESCAPE_CHAR,
+                ),
+                PDFDocument.filename.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                ReviewSessionModel.flow_run_id.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
                 exists(candidate_search),
             )
         )
 
     return statement
+
+
+def _sort_order_clauses(
+    sort_by: CurationSessionSortField,
+    sort_direction: CurationSortDirection,
+) -> tuple[Any, ...]:
+    if sort_by == CurationSessionSortField.PREPARED_AT:
+        return (
+            _ordered_clause(ReviewSessionModel.prepared_at, sort_direction, nulls_last=True),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.LAST_WORKED_AT:
+        return (
+            _ordered_clause(ReviewSessionModel.last_worked_at, sort_direction, nulls_last=True),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.STATUS:
+        return (
+            _ordered_clause(STATUS_SORT_ORDER, sort_direction),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.DOCUMENT_TITLE:
+        return (
+            _ordered_clause(
+                func.lower(func.coalesce(PDFDocument.title, PDFDocument.filename)),
+                sort_direction,
+            ),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.CANDIDATE_COUNT:
+        return (
+            _ordered_clause(ReviewSessionModel.total_candidates, sort_direction),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.VALIDATION:
+        return (
+            _ordered_clause(VALIDATION_STATE_SORT_ORDER, sort_direction, nulls_last=True),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.EVIDENCE:
+        return (
+            _ordered_clause(EVIDENCE_COUNT_SORT_ORDER, sort_direction, nulls_last=True),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    if sort_by == CurationSessionSortField.CURATOR:
+        return (
+            _ordered_clause(
+                func.lower(func.coalesce(ReviewSessionModel.assigned_curator_id, "")),
+                sort_direction,
+            ),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
+    return (ReviewSessionModel.prepared_at.desc(), ReviewSessionModel.id.asc())
 
 
 def _filtered_session_id_select(filters: CurationSessionFilters) -> Any:
@@ -228,65 +307,33 @@ def _ordered_session_id_select(
     sort_by: CurationSessionSortField,
     sort_direction: CurationSortDirection,
 ) -> Any:
-    statement = _filtered_session_id_select(filters)
+    return _filtered_session_id_select(filters).order_by(
+        *_sort_order_clauses(sort_by, sort_direction)
+    )
 
-    if sort_by == CurationSessionSortField.PREPARED_AT:
-        statement = statement.order_by(
-            _ordered_clause(ReviewSessionModel.prepared_at, sort_direction, nulls_last=True),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.LAST_WORKED_AT:
-        statement = statement.order_by(
-            _ordered_clause(ReviewSessionModel.last_worked_at, sort_direction, nulls_last=True),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.STATUS:
-        statement = statement.order_by(
-            _ordered_clause(STATUS_SORT_ORDER, sort_direction),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.DOCUMENT_TITLE:
-        statement = statement.order_by(
-            _ordered_clause(
-                func.lower(func.coalesce(PDFDocument.title, PDFDocument.filename)),
-                sort_direction,
-            ),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.CANDIDATE_COUNT:
-        statement = statement.order_by(
-            _ordered_clause(ReviewSessionModel.total_candidates, sort_direction),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.VALIDATION:
-        statement = statement.order_by(
-            _ordered_clause(VALIDATION_STATE_SORT_ORDER, sort_direction, nulls_last=True),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.EVIDENCE:
-        statement = statement.order_by(
-            _ordered_clause(EVIDENCE_COUNT_SORT_ORDER, sort_direction, nulls_last=True),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    elif sort_by == CurationSessionSortField.CURATOR:
-        statement = statement.order_by(
-            _ordered_clause(
-                func.lower(func.coalesce(ReviewSessionModel.assigned_curator_id, "")),
-                sort_direction,
-            ),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
-    else:
-        statement = statement.order_by(ReviewSessionModel.prepared_at.desc(), ReviewSessionModel.id.asc())
 
-    return statement
+def _ordered_session_queue_subquery(
+    filters: CurationSessionFilters,
+    sort_by: CurationSessionSortField,
+    sort_direction: CurationSortDirection,
+) -> Any:
+    order_by = _sort_order_clauses(sort_by, sort_direction)
+    return (
+        _filtered_session_id_select(filters)
+        .add_columns(
+            func.row_number().over(order_by=order_by).label("position"),
+            func.count().over().label("total_sessions"),
+            func.cast(
+                func.lag(ReviewSessionModel.id).over(order_by=order_by),
+                String,
+            ).label("previous_session_id"),
+            func.cast(
+                func.lead(ReviewSessionModel.id).over(order_by=order_by),
+                String,
+            ).label("next_session_id"),
+        )
+        .subquery()
+    )
 
 
 def _load_documents(db: Session, document_ids: Iterable[UUID]) -> dict[UUID, PDFDocument]:
@@ -872,18 +919,68 @@ def get_session_stats(
 
 
 def get_next_session(db: Session, request: CurationNextSessionRequest) -> CurationNextSessionResponse:
-    ordered_ids = list(
-        db.scalars(
-            _ordered_session_id_select(
-                request.filters,
-                request.sort_by,
-                request.sort_direction,
-            )
-        ).all()
+    ordered_sessions = _ordered_session_queue_subquery(
+        request.filters,
+        request.sort_by,
+        request.sort_direction,
     )
-    session_id_strings = [str(session_id) for session_id in ordered_ids]
+    queue_row_select = select(
+        ordered_sessions.c.id,
+        ordered_sessions.c.position,
+        ordered_sessions.c.total_sessions,
+        ordered_sessions.c.previous_session_id,
+        ordered_sessions.c.next_session_id,
+    )
 
-    if not ordered_ids:
+    if request.current_session_id is None:
+        target_row = db.execute(
+            queue_row_select.order_by(
+                ordered_sessions.c.position.asc()
+                if request.direction == CurationQueueNavigationDirection.NEXT
+                else ordered_sessions.c.position.desc()
+            ).limit(1)
+        ).mappings().first()
+        if target_row is None:
+            return CurationNextSessionResponse(
+                session=None,
+                queue_context=CurationQueueContext(
+                    filters=request.filters,
+                    sort_by=request.sort_by,
+                    sort_direction=request.sort_direction,
+                    total_sessions=0,
+                ),
+            )
+    else:
+        normalized_current_session_id = _normalize_uuid(
+            request.current_session_id,
+            field_name="current_session_id",
+        )
+        current_row = db.execute(
+            queue_row_select.where(ordered_sessions.c.id == normalized_current_session_id)
+        ).mappings().first()
+        if current_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Current session is not part of the filtered queue",
+            )
+
+        target_position = current_row["position"] + (
+            1 if request.direction == CurationQueueNavigationDirection.NEXT else -1
+        )
+        if target_position < 1 or target_position > current_row["total_sessions"]:
+            return CurationNextSessionResponse(
+                session=None,
+                queue_context=_queue_context_from_row(
+                    request=request,
+                    row=current_row,
+                ),
+            )
+
+        target_row = db.execute(
+            queue_row_select.where(ordered_sessions.c.position == target_position)
+        ).mappings().first()
+
+    if target_row is None:
         return CurationNextSessionResponse(
             session=None,
             queue_context=CurationQueueContext(
@@ -894,58 +991,31 @@ def get_next_session(db: Session, request: CurationNextSessionRequest) -> Curati
             ),
         )
 
-    if request.current_session_id is None:
-        target_index = 0 if request.direction == CurationQueueNavigationDirection.NEXT else len(ordered_ids) - 1
-    else:
-        normalized_current_session_id = str(
-            _normalize_uuid(request.current_session_id, field_name="current_session_id")
-        )
-        if normalized_current_session_id not in session_id_strings:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Current session is not part of the filtered queue",
-            )
-        current_index = session_id_strings.index(normalized_current_session_id)
-        step = 1 if request.direction == CurationQueueNavigationDirection.NEXT else -1
-        target_index = current_index + step
-        if target_index < 0 or target_index >= len(ordered_ids):
-            return CurationNextSessionResponse(
-                session=None,
-                queue_context=_queue_context(
-                    request=request,
-                    session_ids=session_id_strings,
-                    active_index=current_index,
-                ),
-            )
-
-    session = _load_sessions_by_ids(db, [ordered_ids[target_index]], detailed=False)[0]
+    target_session_id = _normalize_uuid(target_row["id"], field_name="session_id")
+    session = _load_sessions_by_ids(db, [target_session_id], detailed=False)[0]
     document_map, user_map = _session_context_maps(db, [session])
     return CurationNextSessionResponse(
         session=_session_summary(session, document_map, user_map),
-        queue_context=_queue_context(
+        queue_context=_queue_context_from_row(
             request=request,
-            session_ids=session_id_strings,
-            active_index=target_index,
+            row=target_row,
         ),
     )
 
 
-def _queue_context(
+def _queue_context_from_row(
     *,
     request: CurationNextSessionRequest,
-    session_ids: Sequence[str],
-    active_index: int,
+    row: Mapping[str, Any],
 ) -> CurationQueueContext:
-    previous_session_id = session_ids[active_index - 1] if active_index > 0 else None
-    next_session_id = session_ids[active_index + 1] if active_index < len(session_ids) - 1 else None
     return CurationQueueContext(
         filters=request.filters,
         sort_by=request.sort_by,
         sort_direction=request.sort_direction,
-        position=active_index + 1,
-        total_sessions=len(session_ids),
-        previous_session_id=previous_session_id,
-        next_session_id=next_session_id,
+        position=row["position"],
+        total_sessions=row["total_sessions"],
+        previous_session_id=row["previous_session_id"],
+        next_session_id=row["next_session_id"],
     )
 
 
