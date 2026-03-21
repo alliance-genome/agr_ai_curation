@@ -13,7 +13,7 @@ import os
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs
+from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
@@ -536,6 +536,7 @@ app.include_router(batch.flow_validation_router, tags=["Batches"])
 
 # File output API endpoints (under /api/files)
 app.include_router(files.router, tags=["Files"])
+app.include_router(curation_workspace.router, tags=["Curation Workspace"])
 
 # Weaviate Control Panel endpoints (already have /weaviate prefix in router definitions)
 app.include_router(documents.router, tags=["Documents"])
