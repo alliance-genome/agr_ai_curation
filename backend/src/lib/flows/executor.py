@@ -822,6 +822,52 @@ def _persist_flow_extraction_candidates(
         )
 
 
+def _persist_flow_extraction_candidates_or_build_error(
+    *,
+    flow_name: str,
+    candidates: List[ExtractionEnvelopeCandidate],
+    document_id: Optional[str],
+    user_id: str,
+    session_id: str,
+    trace_id: Optional[str],
+) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """Persist flow extraction candidates and return a FLOW_ERROR payload on failure."""
+
+    try:
+        _persist_flow_extraction_candidates(
+            candidates=candidates,
+            document_id=document_id,
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
+    except Exception as exc:
+        failure_reason = f"Failed to persist extraction results for flow '{flow_name}'. {exc}"
+        logger.exception(
+            "[Flow Executor] Extraction persistence failed for flow '%s'",
+            flow_name,
+            extra={
+                "document_id": document_id,
+                "session_id": session_id,
+                "trace_id": trace_id,
+            },
+        )
+        return (
+            False,
+            failure_reason,
+            {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "extraction_persistence_failed",
+                    "message": failure_reason,
+                },
+            },
+        )
+
+    return True, None, None
+
+
 async def execute_flow(
     flow: CurationFlow,
     user_id: str,
@@ -1032,111 +1078,48 @@ async def execute_flow(
                 },
             }
             break
-        if event_type == "FILE_READY":
-            try:
-                _persist_flow_extraction_candidates(
+        if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+            persisted, failure_reason, flow_error_event = (
+                _persist_flow_extraction_candidates_or_build_error(
+                    flow_name=flow.name,
                     candidates=extraction_candidates,
                     document_id=document_id,
                     user_id=str(user_id),
                     session_id=session_id,
                     trace_id=trace_id,
                 )
-                extraction_persisted = True
-            except Exception as exc:
-                failure_reason = (
-                    f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
-                )
+            )
+            if not persisted:
                 flow_status = "failed"
-                logger.exception(
-                    "[Flow Executor] Extraction persistence failed for flow '%s'",
-                    flow.name,
-                    extra={
-                        "document_id": document_id,
-                        "session_id": session_id,
-                        "trace_id": trace_id,
-                    },
-                )
-                yield {
-                    "type": "FLOW_ERROR",
-                    "timestamp": _now_iso(),
-                    "details": {
-                        "reason": "extraction_persistence_failed",
-                        "message": failure_reason,
-                    },
-                }
+                if flow_error_event is not None:
+                    yield flow_error_event
                 break
+
+            extraction_persisted = True
             yield event
             logger.info(
-                "[Flow Executor] Output file produced - terminating flow '%s'", flow.name)
-            break
-        elif event_type == "CHAT_OUTPUT_READY":
-            try:
-                _persist_flow_extraction_candidates(
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=str(user_id),
-                    session_id=session_id,
-                    trace_id=trace_id,
-                )
-                extraction_persisted = True
-            except Exception as exc:
-                failure_reason = (
-                    f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
-                )
-                flow_status = "failed"
-                logger.exception(
-                    "[Flow Executor] Extraction persistence failed for flow '%s'",
-                    flow.name,
-                    extra={
-                        "document_id": document_id,
-                        "session_id": session_id,
-                        "trace_id": trace_id,
-                    },
-                )
-                yield {
-                    "type": "FLOW_ERROR",
-                    "timestamp": _now_iso(),
-                    "details": {
-                        "reason": "extraction_persistence_failed",
-                        "message": failure_reason,
-                    },
-                }
-                break
-            yield event
-            logger.info(
-                "[Flow Executor] Chat output produced - terminating flow '%s'", flow.name)
+                "[Flow Executor] %s produced - terminating flow '%s'",
+                "Output file" if event_type == "FILE_READY" else "Chat output",
+                flow.name,
+            )
             break
         yield event
 
     if flow_status != "failed" and not extraction_persisted:
-        try:
-            _persist_flow_extraction_candidates(
+        persisted, failure_reason, flow_error_event = (
+            _persist_flow_extraction_candidates_or_build_error(
+                flow_name=flow.name,
                 candidates=extraction_candidates,
                 document_id=document_id,
                 user_id=str(user_id),
                 session_id=session_id,
                 trace_id=trace_id,
             )
-        except Exception as exc:
-            failure_reason = f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
+        )
+        if not persisted:
             flow_status = "failed"
-            logger.exception(
-                "[Flow Executor] Extraction persistence failed for flow '%s'",
-                flow.name,
-                extra={
-                    "document_id": document_id,
-                    "session_id": session_id,
-                    "trace_id": trace_id,
-                },
-            )
-            yield {
-                "type": "FLOW_ERROR",
-                "timestamp": _now_iso(),
-                "details": {
-                    "reason": "extraction_persistence_failed",
-                    "message": failure_reason,
-                },
-            }
+            if flow_error_event is not None:
+                yield flow_error_event
 
     # Emit flow-specific completion event
     yield {
