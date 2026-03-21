@@ -62,6 +62,7 @@ EOF
     symphony_guard_workspace_repo.sh \
     symphony_human_review_prep.sh \
     symphony_ready_for_pr.sh \
+    symphony_claude_review_loop.sh \
     symphony_request_claude_rereview.sh \
     symphony_wait_for_claude_review.sh \
     symphony_claude_review_rounds.sh \
@@ -105,7 +106,7 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=19" "${output}"
+  assert_contains "SYNC_ENV_COPIED=20" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
@@ -150,7 +151,7 @@ EOF
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
-  assert_contains "SYNC_ENV_COPIED=17" "${output}"
+  assert_contains "SYNC_ENV_COPIED=18" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
     echo "Expected refresh mode to overwrite docker-compose.yml" >&2
     exit 1
