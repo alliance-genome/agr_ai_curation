@@ -1,5 +1,6 @@
 """Runtime-focused tests for supervisor agent helpers."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,47 @@ class _FakeSession:
 
     def close(self):
         self.closed = True
+
+
+class _PrepExtractionRecord:
+    def __init__(self, **overrides):
+        payload = {
+            "extraction_result_id": "extract-1",
+            "document_id": "document-1",
+            "adapter_key": None,
+            "profile_key": None,
+            "domain_key": "disease",
+            "agent_key": "disease_extractor",
+            "source_kind": "chat",
+            "origin_session_id": "session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-1",
+            "candidate_count": 1,
+            "conversation_summary": "Disease extraction kept APOE-related findings.",
+            "payload_json": {
+                "items": [{"label": "APOE", "entity_type": "gene"}],
+                "evidence_records": [
+                    {
+                        "snippet": "APOE was associated with the disease phenotype.",
+                        "page": 3,
+                        "section": "Results",
+                        "subsection": "Disease association",
+                        "figure_reference": "Fig. 2",
+                    }
+                ],
+                "run_summary": {"candidate_count": 1},
+            },
+            "created_at": "2026-03-21T00:00:00Z",
+            "metadata": {},
+        }
+        payload.update(overrides)
+        self._payload = payload
+        for key, value in payload.items():
+            setattr(self, key, value)
+
+    def model_dump(self, mode="python"):
+        return dict(self._payload)
 
 
 def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(monkeypatch):
@@ -444,6 +486,8 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert "ask_gene_specialist" in created.instructions
     assert "No PDF document is currently loaded" in created.instructions
     assert "ask_pdf_specialist" in created.instructions
+    assert supervisor_agent.CURATION_PREP_CONFIRMATION_QUESTION in created.instructions
+    assert any(getattr(tool, "name", "") == "prepare_for_curation" for tool in created.tools)
     assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
     assert captured_pending["name"] == "Query Supervisor"
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
@@ -494,8 +538,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
 
     assert "CORE-ONLY MODE" in created.instructions
     assert "No domain specialist tools are currently installed" in created.instructions
-    assert [getattr(tool, "name", "") for tool in created.tools] == ["export_to_file"]
-    assert captured_langfuse["metadata"]["specialist_count"] == 1
+    assert [getattr(tool, "name", "") for tool in created.tools] == [
+        "prepare_for_curation",
+        "export_to_file",
+    ]
+    assert captured_langfuse["metadata"]["specialist_count"] == 2
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):
@@ -557,3 +604,315 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
     assert "DOCUMENT CONTEXT: A PDF document is loaded." in created.instructions
     assert created.input_guardrails == ["safety"]
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
+
+
+def test_is_explicit_curation_prep_confirmation_rejects_not_ready():
+    assert supervisor_agent._is_explicit_curation_prep_confirmation("not ready") is False
+
+
+def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scope_confirmed():
+    matching_record = _PrepExtractionRecord(
+        extraction_result_id="extract-1",
+        adapter_key="disease",
+        domain_key="disease",
+    )
+    unscoped_record = _PrepExtractionRecord(
+        extraction_result_id="extract-2",
+        adapter_key=None,
+        profile_key=None,
+        domain_key=None,
+    )
+
+    scoped_results, notes = supervisor_agent._filter_extraction_results_for_scope(
+        [matching_record, unscoped_record],
+        {
+            "adapter_keys": ["disease"],
+            "profile_keys": [],
+            "domain_keys": ["disease"],
+        },
+    )
+
+    assert [record.extraction_result_id for record in scoped_results] == ["extract-1"]
+    assert notes == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_requires_prior_confirmation_prompt(monkeypatch):
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {"user": "Prepare the disease findings.", "assistant": "I can help with that."}
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results_for_origin_session",
+        lambda *_args, **_kwargs: pytest.fail("extraction lookup should not run without checkpoint"),
+    )
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, please prepare them.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "confirmation_required"
+    assert "Ready to prepare these for curation?" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-current")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {
+                    "user": "Prepare the disease findings for curation.",
+                    "assistant": "Ready to prepare these for curation?",
+                    "timestamp": "2026-03-21T00:10:00Z",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results_for_origin_session",
+        lambda *_args, **_kwargs: [_PrepExtractionRecord()],
+    )
+
+    async def _fake_run_curation_prep(agent_input, *, persistence_context):
+        captured["agent_input"] = agent_input
+        captured["persistence_context"] = persistence_context
+        return SimpleNamespace(
+            candidates=[{"candidate_id": "candidate-1"}],
+            run_metadata=SimpleNamespace(
+                warnings=["warning-1"],
+                processing_notes=["processing-note-1"],
+            ),
+        )
+
+    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _fake_run_curation_prep)
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, prepare the confirmed disease findings.",
+        scope_summary="Disease findings for APOE.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "prepared"
+    assert payload["candidate_count"] == 1
+    assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
+    assert payload["warnings"] == ["warning-1"]
+
+    agent_input = captured["agent_input"]
+    assert agent_input.scope_confirmation.confirmed is True
+    assert agent_input.scope_confirmation.domain_keys == ["disease"]
+    assert agent_input.adapter_metadata[0].adapter_key == "disease"
+    assert agent_input.conversation_history[-1].content == "Yes, prepare the confirmed disease findings."
+    assert agent_input.evidence_records[0].anchor.page_number == 3
+
+    persistence_context = captured["persistence_context"]
+    assert persistence_context.origin_session_id == "session-1"
+    assert persistence_context.trace_id == "trace-current"
+    assert persistence_context.user_id == "user-1"
+    assert persistence_context.source_kind.value == "chat"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
+    run_called = False
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {
+                    "user": "Prepare these findings.",
+                    "assistant": "Ready to prepare these for curation?",
+                    "timestamp": "2026-03-21T00:20:00Z",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results_for_origin_session",
+        lambda *_args, **_kwargs: [
+            _PrepExtractionRecord(domain_key="disease"),
+            _PrepExtractionRecord(
+                extraction_result_id="extract-2",
+                domain_key="gene_expression",
+                payload_json={"run_summary": {"candidate_count": 1}},
+            ),
+        ],
+    )
+
+    async def _unexpected_run(*_args, **_kwargs):
+        nonlocal run_called
+        run_called = True
+        return SimpleNamespace(candidates=[], run_metadata=SimpleNamespace(warnings=[], processing_notes=[]))
+
+    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _unexpected_run)
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, do it.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "scope_confirmation_required"
+    assert payload["available_scope"]["domain_keys"] == ["disease", "gene_expression"]
+    assert run_called is False
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-current")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: {"id": "document-2"}),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {
+                    "user": "Prepare the disease findings for curation.",
+                    "assistant": "Ready to prepare these for curation?",
+                    "timestamp": "2026-03-21T00:30:00Z",
+                }
+            ]
+        ),
+    )
+
+    def _fake_list_extraction_results(*_args, **kwargs):
+        captured["query_kwargs"] = kwargs
+        assert kwargs["document_id"] == "document-2"
+        return [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-2",
+                document_id="document-2",
+                adapter_key="disease",
+                domain_key="disease",
+            )
+        ]
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results_for_origin_session",
+        _fake_list_extraction_results,
+    )
+
+    async def _fake_run_curation_prep(agent_input, *, persistence_context):
+        captured["agent_input"] = agent_input
+        captured["persistence_context"] = persistence_context
+        return SimpleNamespace(
+            candidates=[{"candidate_id": "candidate-2"}],
+            run_metadata=SimpleNamespace(warnings=[], processing_notes=[]),
+        )
+
+    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _fake_run_curation_prep)
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, prepare the disease findings in the loaded document.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "prepared"
+    assert captured["query_kwargs"]["document_id"] == "document-2"
+    assert captured["agent_input"].extraction_results[0].document_id == "document-2"
+    assert captured["persistence_context"].document_id == "document-2"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_document_session(monkeypatch):
+    run_called = False
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {
+                    "user": "Prepare these findings.",
+                    "assistant": "Ready to prepare these for curation?",
+                    "timestamp": "2026-03-21T00:40:00Z",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results_for_origin_session",
+        lambda *_args, **_kwargs: [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-1",
+                document_id="document-1",
+                adapter_key="disease",
+                domain_key="disease",
+            ),
+            _PrepExtractionRecord(
+                extraction_result_id="extract-2",
+                document_id="document-2",
+                adapter_key="disease",
+                domain_key="disease",
+            ),
+        ],
+    )
+
+    async def _unexpected_run(*_args, **_kwargs):
+        nonlocal run_called
+        run_called = True
+        return SimpleNamespace(candidates=[], run_metadata=SimpleNamespace(warnings=[], processing_notes=[]))
+
+    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _unexpected_run)
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, prepare them.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "scope_confirmation_required"
+    assert payload["available_document_ids"] == ["document-1", "document-2"]
+    assert "multiple documents" in payload["message"]
+    assert run_called is False
