@@ -5,6 +5,7 @@ from .extraction_results import (
     build_extraction_envelope_candidate,
     build_safe_agent_key_map,
     persist_extraction_result,
+    persist_extraction_results,
     resolve_agent_key_from_tool_name,
 )
 from .models import (
@@ -33,5 +34,6 @@ __all__ = [
     "CurationSubmissionRecord",
     "CurationValidationSnapshot",
     "persist_extraction_result",
+    "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
 ]

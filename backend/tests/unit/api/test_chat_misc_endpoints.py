@@ -222,8 +222,8 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
     monkeypatch.setattr(
         chat,
-        "persist_extraction_result",
-        lambda _request: (_ for _ in ()).throw(RuntimeError("db unavailable")),
+        "persist_extraction_results",
+        lambda _requests: (_ for _ in ()).throw(RuntimeError("db unavailable")),
     )
 
     with pytest.raises(HTTPException) as exc:

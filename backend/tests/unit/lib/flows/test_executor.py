@@ -1091,8 +1091,8 @@ class TestExecuteFlowTermination:
             lambda *_args, **_kwargs: "run flow",
         )
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_result",
-            lambda request: persisted_requests.append(request),
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda requests: persisted_requests.extend(requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -1190,7 +1190,7 @@ class TestExecuteFlowTermination:
             raise RuntimeError("db unavailable")
 
         monkeypatch.setattr(
-            "src.lib.flows.executor.persist_extraction_result",
+            "src.lib.flows.executor.persist_extraction_results",
             _raise_persistence,
         )
 

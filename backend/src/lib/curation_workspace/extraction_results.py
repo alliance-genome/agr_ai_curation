@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -129,22 +129,7 @@ def persist_extraction_result(
     session = db or SessionLocal()
 
     try:
-        record = CurationExtractionResultRecordModel(
-            document_id=UUID(str(request.document_id)),
-            adapter_key=request.adapter_key,
-            profile_key=request.profile_key,
-            domain_key=request.domain_key,
-            agent_key=request.agent_key,
-            source_kind=request.source_kind,
-            origin_session_id=request.origin_session_id,
-            trace_id=request.trace_id,
-            flow_run_id=request.flow_run_id,
-            user_id=request.user_id,
-            candidate_count=request.candidate_count,
-            conversation_summary=request.conversation_summary,
-            payload_json=request.payload_json,
-            extraction_metadata=dict(request.metadata),
-        )
+        record = _build_extraction_result_record(request)
         session.add(record)
         session.commit()
         session.refresh(record)
@@ -152,6 +137,45 @@ def persist_extraction_result(
         return CurationExtractionPersistenceResponse(
             extraction_result=_record_to_schema(record)
         )
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        if owns_session:
+            session.close()
+
+
+def persist_extraction_results(
+    requests: Sequence[CurationExtractionPersistenceRequest],
+    *,
+    db: Optional[Session] = None,
+) -> list[CurationExtractionPersistenceResponse]:
+    """Persist extraction envelopes in one transaction."""
+
+    if not requests:
+        return []
+
+    owns_session = db is None
+    session = db or SessionLocal()
+    records: list[CurationExtractionResultRecordModel] = []
+
+    try:
+        for request in requests:
+            record = _build_extraction_result_record(request)
+            session.add(record)
+            records.append(record)
+
+        session.commit()
+
+        for record in records:
+            session.refresh(record)
+
+        return [
+            CurationExtractionPersistenceResponse(
+                extraction_result=_record_to_schema(record)
+            )
+            for record in records
+        ]
     except Exception:
         session.rollback()
         raise
@@ -226,10 +250,34 @@ def _record_to_schema(
     )
 
 
+def _build_extraction_result_record(
+    request: CurationExtractionPersistenceRequest,
+) -> CurationExtractionResultRecordModel:
+    """Construct an ORM extraction-result record from a validated request."""
+
+    return CurationExtractionResultRecordModel(
+        document_id=UUID(str(request.document_id)),
+        adapter_key=request.adapter_key,
+        profile_key=request.profile_key,
+        domain_key=request.domain_key,
+        agent_key=request.agent_key,
+        source_kind=request.source_kind,
+        origin_session_id=request.origin_session_id,
+        trace_id=request.trace_id,
+        flow_run_id=request.flow_run_id,
+        user_id=request.user_id,
+        candidate_count=request.candidate_count,
+        conversation_summary=request.conversation_summary,
+        payload_json=request.payload_json,
+        extraction_metadata=dict(request.metadata),
+    )
+
+
 __all__ = [
     "ExtractionEnvelopeCandidate",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
     "persist_extraction_result",
+    "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
 ]

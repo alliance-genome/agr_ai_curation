@@ -9,6 +9,7 @@ import pytest
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
     persist_extraction_result,
+    persist_extraction_results,
 )
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
@@ -40,6 +41,7 @@ class _FakeSession:
     def __init__(self, *, fail_commit: bool = False):
         self.fail_commit = fail_commit
         self.added = None
+        self.added_records = []
         self.commit_calls = 0
         self.refresh_calls = 0
         self.rollback_calls = 0
@@ -47,6 +49,7 @@ class _FakeSession:
 
     def add(self, record):
         self.added = record
+        self.added_records.append(record)
 
     def commit(self):
         self.commit_calls += 1
@@ -136,6 +139,60 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     with pytest.raises(RuntimeError, match="db write failed"):
         persist_extraction_result(request, db=session)
 
+    assert session.commit_calls == 1
+    assert session.rollback_calls == 1
+    assert session.refresh_calls == 0
+
+
+def test_persist_extraction_results_writes_all_records_in_one_commit():
+    session = _FakeSession()
+    requests = [
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            agent_key="gene-expression",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            payload_json=_sample_envelope_payload(),
+        ),
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            agent_key="pdf-extraction",
+            source_kind=CurationExtractionSourceKind.FLOW,
+            payload_json=_sample_envelope_payload(),
+        ),
+    ]
+
+    responses = persist_extraction_results(requests, db=session)
+
+    assert len(session.added_records) == 2
+    assert session.commit_calls == 1
+    assert session.refresh_calls == 2
+    assert session.rollback_calls == 0
+    assert len(responses) == 2
+    assert responses[0].extraction_result.agent_key == "gene-expression"
+    assert responses[1].extraction_result.agent_key == "pdf-extraction"
+
+
+def test_persist_extraction_results_rolls_back_batch_on_commit_error():
+    session = _FakeSession(fail_commit=True)
+    requests = [
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            agent_key="gene-expression",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            payload_json=_sample_envelope_payload(),
+        ),
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            agent_key="pdf-extraction",
+            source_kind=CurationExtractionSourceKind.FLOW,
+            payload_json=_sample_envelope_payload(),
+        ),
+    ]
+
+    with pytest.raises(RuntimeError, match="db write failed"):
+        persist_extraction_results(requests, db=session)
+
+    assert len(session.added_records) == 2
     assert session.commit_calls == 1
     assert session.rollback_calls == 1
     assert session.refresh_calls == 0

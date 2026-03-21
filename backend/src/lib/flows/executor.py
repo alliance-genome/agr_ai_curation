@@ -29,7 +29,7 @@ from agents import Agent, function_tool
 from src.lib.curation_workspace import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
-    persist_extraction_result,
+    persist_extraction_results,
 )
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
@@ -802,8 +802,8 @@ def _persist_flow_extraction_candidates(
     if not candidates or not document_id:
         return
 
-    for candidate in candidates:
-        persist_extraction_result(
+    persist_extraction_results(
+        [
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
                 adapter_key=candidate.adapter_key,
@@ -819,7 +819,9 @@ def _persist_flow_extraction_candidates(
                 payload_json=candidate.payload_json,
                 metadata=dict(candidate.metadata),
             )
-        )
+            for candidate in candidates
+        ]
+    )
 
 
 def _persist_flow_extraction_candidates_or_build_error(
