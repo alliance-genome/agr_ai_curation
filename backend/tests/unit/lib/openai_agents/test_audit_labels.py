@@ -59,6 +59,10 @@ def test_build_tool_start_friendly_name_for_internal_tool():
     assert build_tool_start_friendly_name("sql_query") == "Calling SQL Query..."
 
 
+def test_build_tool_start_friendly_name_for_curation_prep_tool():
+    assert build_tool_start_friendly_name("prepare_for_curation") == "Calling Curation Prep..."
+
+
 def test_build_tool_complete_friendly_name():
     assert build_tool_complete_friendly_name("ask_gene_specialist") == "Gene Validation Agent complete"
 

@@ -95,12 +95,20 @@ def build_extraction_envelope_candidate(
     candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
 
     if isinstance(payload, dict):
+        payload_adapter_key = payload.get("adapter_key")
         actor = payload.get("actor")
         destination = payload.get("destination")
+        if adapter_key is None and isinstance(payload_adapter_key, str):
+            adapter_key = payload_adapter_key.strip() or None
         if actor:
             envelope_metadata.setdefault("envelope_actor", actor)
         if destination:
             envelope_metadata.setdefault("envelope_destination", destination)
+            if adapter_key is None and isinstance(destination, str):
+                # Existing extraction envelopes expose their adapter/routing target via
+                # `destination`; persist that key here so downstream curation replay
+                # can use adapter-owned identifiers without inventing them later.
+                adapter_key = destination.strip() or None
             if domain_key is None and isinstance(destination, str):
                 domain_key = destination.strip() or None
 
@@ -179,6 +187,58 @@ def persist_extraction_results(
     except Exception:
         session.rollback()
         raise
+    finally:
+        if owns_session:
+            session.close()
+
+
+def list_extraction_results_for_origin_session(
+    origin_session_id: str,
+    *,
+    user_id: Optional[str] = None,
+    source_kind: Optional[str] = None,
+    document_id: Optional[str] = None,
+    exclude_agent_keys: Sequence[str] = (),
+    db: Optional[Session] = None,
+) -> list[CurationExtractionResultRecord]:
+    """Return persisted extraction results for one chat/flow session."""
+
+    owns_session = db is None
+    session = db or SessionLocal()
+
+    try:
+        query = session.query(CurationExtractionResultRecordModel).filter(
+            CurationExtractionResultRecordModel.origin_session_id == origin_session_id,
+        )
+
+        if user_id is not None:
+            query = query.filter(CurationExtractionResultRecordModel.user_id == user_id)
+
+        if source_kind is not None:
+            query = query.filter(CurationExtractionResultRecordModel.source_kind == source_kind)
+
+        if document_id is not None:
+            try:
+                document_uuid = UUID(str(document_id).strip())
+            except (AttributeError, TypeError, ValueError):
+                logger.warning(
+                    "Ignoring invalid document_id filter for extraction results: %r",
+                    document_id,
+                )
+                return []
+            query = query.filter(
+                CurationExtractionResultRecordModel.document_id == document_uuid
+            )
+
+        excluded = [str(agent_key).strip() for agent_key in exclude_agent_keys if str(agent_key).strip()]
+        if excluded:
+            query = query.filter(~CurationExtractionResultRecordModel.agent_key.in_(excluded))
+
+        records = query.order_by(
+            CurationExtractionResultRecordModel.created_at.asc(),
+            CurationExtractionResultRecordModel.id.asc(),
+        ).all()
+        return [_record_to_schema(record) for record in records]
     finally:
         if owns_session:
             session.close()
@@ -277,6 +337,7 @@ __all__ = [
     "ExtractionEnvelopeCandidate",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
+    "list_extraction_results_for_origin_session",
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
