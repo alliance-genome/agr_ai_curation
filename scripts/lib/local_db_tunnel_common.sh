@@ -337,6 +337,7 @@ local_db_tunnel_spawn_detached() {
   local log_file="$2"
   shift 2
 
+  mkdir -p "$(dirname "${pid_file}")" "$(dirname "${log_file}")"
   rm -f "${pid_file}"
 
   if command -v setsid >/dev/null 2>&1; then
@@ -345,6 +346,7 @@ local_db_tunnel_spawn_detached() {
       log_file="$2"
       shift 2
       umask 077
+      mkdir -p "$(dirname "${pid_file}")" "$(dirname "${log_file}")"
       exec </dev/null >>"${log_file}" 2>&1
       echo "$$" > "${pid_file}"
       exec "$@"
@@ -355,6 +357,7 @@ local_db_tunnel_spawn_detached() {
       log_file="$2"
       shift 2
       umask 077
+      mkdir -p "$(dirname "${pid_file}")" "$(dirname "${log_file}")"
       exec </dev/null >>"${log_file}" 2>&1
       echo "$$" > "${pid_file}"
       exec "$@"

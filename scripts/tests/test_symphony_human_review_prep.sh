@@ -14,6 +14,19 @@ assert_contains() {
   fi
 }
 
+assert_count() {
+  local expected="$1"
+  local pattern="$2"
+  local file="$3"
+  local actual
+
+  actual="$(rg -c --fixed-strings "$pattern" "$file" || true)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Expected ${expected} matches for '${pattern}' in ${file}, got ${actual}" >&2
+    exit 1
+  fi
+}
+
 make_workspace_tunnel_helpers() {
   local workspace="$1"
   mkdir -p "${workspace}/scripts/utilities"
@@ -115,8 +128,48 @@ printf 'docker|cwd=%s|CURATION_DB_URL=%s|LANGFUSE_LOCAL_DATABASE_URL=%s|LANGFUSE
   "${LANGFUSE_LOCAL_DATABASE_URL:-}" \
   "${LANGFUSE_LOCAL_ENCRYPTION_KEY:-}" \
   "$*" >> "${log_file}"
+if [[ -n "${STUB_DOCKER_FAIL_ONCE_MATCH:-}" && "$*" == *"${STUB_DOCKER_FAIL_ONCE_MATCH}"* ]]; then
+  count_file="${STUB_DOCKER_FAIL_ONCE_COUNT_FILE:?}"
+  count=0
+  if [[ -f "${count_file}" ]]; then
+    count="$(cat "${count_file}")"
+  fi
+  if [[ "${count}" == "0" ]]; then
+    echo "1" > "${count_file}"
+    echo "simulated docker failure for: $*" >&2
+    exit 1
+  fi
+fi
+if [[ "$*" == *"config --services"* ]]; then
+  printf '%s\n' postgres redis reranker-transformers weaviate backend frontend
+  exit 0
+fi
+if [[ "$*" == *" ps"* ]]; then
+  cat <<'PS'
+NAME                STATUS                SERVICE
+stub-backend-1      running(healthy)      backend
+stub-weaviate-1     running(unhealthy)    weaviate
+PS
+  exit 0
+fi
 if [[ "$*" == *"logs backend"* ]]; then
   echo 'sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column "mod_prompt_overrides" of relation "agents" does not exist'
+  exit 0
+fi
+if [[ "$*" == *"logs "* ]]; then
+  echo "stub logs for $*"
+  exit 0
+fi
+if [[ "$*" == *"port postgres-test 5432"* ]]; then
+  echo "127.0.0.1:15434"
+  exit 0
+fi
+if [[ "$*" == *"port weaviate-test 8080"* ]]; then
+  echo "127.0.0.1:18080"
+  exit 0
+fi
+if [[ "$*" == *"port weaviate-test 50051"* ]]; then
+  echo "127.0.0.1:15051"
 fi
 EOF
 
@@ -200,8 +253,13 @@ EOF
     > "${output}"
 
   assert_contains "compose_project=all49" "${output}"
+  assert_contains "compose_file=${workspace}/docker-compose.yml" "${output}"
   assert_contains "frontend_host_port=3049" "${output}"
   assert_contains "backend_host_port=8049" "${output}"
+  assert_contains "build_backend=1" "${output}"
+  assert_contains "build_frontend=1" "${output}"
+  assert_contains "dependency_services=postgres,redis,reranker-transformers,weaviate" "${output}"
+  assert_contains "dependency_start_status=ready" "${output}"
   assert_contains "tunnel_env_file=${workspace}/scripts/local_db_tunnel_env.sh" "${output}"
   assert_contains "backend_health={\"status\":\"healthy\",\"services\":{\"app\":\"running\",\"curation_db\":\"connected\"}}" "${output}"
   assert_contains "curation_db_health={\"status\":\"healthy\",\"service\":\"curation_db\"}" "${output}"
@@ -209,8 +267,10 @@ EOF
   assert_contains "review_frontend_url=http://192.168.86.44:3049/" "${output}"
   assert_contains "review_backend_url=http://192.168.86.44:8049/health" "${output}"
 
-  assert_contains "args=compose --env-file ${env_file} -p all49 up -d postgres backend frontend" "${docker_log}"
-  assert_contains "args=compose --env-file ${env_file} -p all49 up -d --force-recreate backend" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 build backend frontend" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d backend frontend" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --force-recreate backend" "${docker_log}"
   # Built from parts to avoid secret-scanner false positives on test fixture URIs
   _db_url="postgresql://""readonly:pw@host.docker.internal:6139/curation"
   assert_contains "CURATION_DB_URL=${_db_url}" "${docker_log}"
@@ -221,6 +281,62 @@ EOF
   unset SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS
   unset SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS
   unset SYMPHONY_REVIEW_PDF_HEALTH_ATTEMPTS SYMPHONY_REVIEW_PDF_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
+}
+
+test_review_prep_retries_dependency_start_once() {
+  local temp_root workspace stub_dir output docker_log old_path env_file fail_once_count
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/ALL-49"
+  stub_dir="${temp_root}/stubbin"
+  output="${temp_root}/output.txt"
+  docker_log="${temp_root}/docker.log"
+  env_file="${temp_root}/private.env"
+  fail_once_count="${temp_root}/docker-fail-once.count"
+
+  mkdir -p "${workspace}/scripts"
+  : > "${workspace}/docker-compose.yml"
+  cat > "${env_file}" <<'EOF'
+export OPENAI_API_KEY=test-openai
+export GROQ_API_KEY=test-groq
+export POSTGRES_PASSWORD=postgres
+EOF
+
+  make_workspace_tunnel_helpers "${workspace}"
+  make_stub_bin "${stub_dir}" "healthy"
+
+  old_path="${PATH}"
+  export PATH="${stub_dir}:${PATH}"
+  export DOCKER_STUB_LOG="${docker_log}"
+  export STUB_DOCKER_FAIL_ONCE_MATCH="up -d --wait postgres redis reranker-transformers weaviate"
+  export STUB_DOCKER_FAIL_ONCE_COUNT_FILE="${fail_once_count}"
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_DEPENDENCY_START_RETRY_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_PREP_REFRESH_MANAGED=0
+
+  "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
+    --workspace-dir "${workspace}" \
+    --env-file "${env_file}" \
+    > "${output}"
+
+  assert_contains "dependency_start_attempt_failed=1" "${output}"
+  assert_contains "dependency_start_retry_success_attempt=2" "${output}"
+  assert_contains "compose_ps_begin" "${output}"
+  assert_contains "service_logs_begin=weaviate" "${output}"
+  assert_count "2" "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
+
+  export PATH="${old_path}"
+  unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
+  unset STUB_DOCKER_FAIL_ONCE_MATCH STUB_DOCKER_FAIL_ONCE_COUNT_FILE
+  unset SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_DEPENDENCY_START_RETRY_SLEEP_SECONDS
   unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
 }
 
@@ -251,6 +367,8 @@ EOF
   export SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS=0
   export SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS=2
   export SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS=0
   export SYMPHONY_REVIEW_PREP_REFRESH_MANAGED=0
 
   if "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
@@ -268,6 +386,7 @@ EOF
   unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
   unset SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS
   unset SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS
   unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
 }
 
@@ -329,6 +448,7 @@ EOF
 }
 
 test_review_prep_happy_path
+test_review_prep_retries_dependency_start_once
 test_review_prep_reports_backend_root_cause
 test_review_prep_normalizes_langfuse_env_before_compose
 

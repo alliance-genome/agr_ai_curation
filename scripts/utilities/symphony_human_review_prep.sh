@@ -17,8 +17,10 @@ Options:
   --compose-project NAME   Docker Compose project name (default: derived from issue key)
   --review-host HOST       Host/IP to publish in review URLs
   --env-file PATH          Private env file (default: ~/.agr_ai_curation/.env when present)
-  --build-backend          Rebuild the backend image before review
-  --build-frontend         Rebuild the frontend image before review
+  --build-backend          Rebuild the backend image before review (default)
+  --build-frontend         Rebuild the frontend image before review (default)
+  --skip-build-backend     Skip backend image rebuild during review prep
+  --skip-build-frontend    Skip frontend image rebuild during review prep
   --skip-db-tunnel         Skip DB tunnel startup
   --skip-runtime-refresh   Skip managed workspace runtime refresh before prep
   -h, --help              Show this help
@@ -30,10 +32,12 @@ ISSUE_KEY="${ISSUE_KEY:-}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-}"
 REVIEW_HOST="${REVIEW_HOST:-${SYMPHONY_REVIEW_HOST:-}}"
 PRIVATE_ENV_FILE="${AGR_AI_CURATION_ENV_FILE:-${HOME}/.agr_ai_curation/.env}"
-BUILD_BACKEND=0
-BUILD_FRONTEND=0
+BUILD_BACKEND="${SYMPHONY_REVIEW_BUILD_BACKEND:-1}"
+BUILD_FRONTEND="${SYMPHONY_REVIEW_BUILD_FRONTEND:-1}"
 SKIP_DB_TUNNEL=0
 SKIP_RUNTIME_REFRESH="${SYMPHONY_REVIEW_PREP_REFRESH_MANAGED:-1}"
+DEPENDENCY_START_MAX_ATTEMPTS="${SYMPHONY_REVIEW_DEPENDENCY_START_MAX_ATTEMPTS:-2}"
+DEPENDENCY_START_RETRY_SLEEP="${SYMPHONY_REVIEW_DEPENDENCY_START_RETRY_SLEEP_SECONDS:-3}"
 FRONTEND_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS:-20}"
 FRONTEND_HEALTH_SLEEP="${SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS:-2}"
 BACKEND_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS:-30}"
@@ -73,6 +77,14 @@ while [[ $# -gt 0 ]]; do
       BUILD_FRONTEND=1
       shift
       ;;
+    --skip-build-backend)
+      BUILD_BACKEND=0
+      shift
+      ;;
+    --skip-build-frontend)
+      BUILD_FRONTEND=0
+      shift
+      ;;
     --skip-db-tunnel)
       SKIP_DB_TUNNEL=1
       shift
@@ -96,6 +108,7 @@ done
 WORKSPACE_DIR="$(cd "${WORKSPACE_DIR}" && pwd -P)"
 COMPOSE_FILE="${WORKSPACE_DIR}/docker-compose.yml"
 TUNNEL_ENV_FILE="${WORKSPACE_DIR}/scripts/local_db_tunnel_env.sh"
+REVIEW_DEPENDENCY_SERVICES=()
 
 if [[ ! -d "${WORKSPACE_DIR}" ]]; then
   echo "Workspace directory does not exist: ${WORKSPACE_DIR}" >&2
@@ -249,8 +262,80 @@ compose_run() {
   fi
   (
     cd "${WORKSPACE_DIR}"
-    DOCKER_CONFIG="${WORKSPACE_DOCKER_CONFIG}" docker compose "${args[@]}" -p "${COMPOSE_PROJECT}" "$@"
+    DOCKER_CONFIG="${WORKSPACE_DOCKER_CONFIG}" docker compose "${args[@]}" -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT}" "$@"
   )
+}
+
+compose_service_exists() {
+  local service="$1"
+  compose_run config --services 2>/dev/null | grep -Fx "${service}" >/dev/null 2>&1
+}
+
+resolve_review_dependency_services() {
+  local service
+  local candidates=(postgres redis reranker-transformers weaviate)
+  REVIEW_DEPENDENCY_SERVICES=()
+
+  for service in "${candidates[@]}"; do
+    if compose_service_exists "${service}"; then
+      REVIEW_DEPENDENCY_SERVICES+=("${service}")
+    fi
+  done
+}
+
+print_compose_ps_snapshot() {
+  echo "compose_ps_begin"
+  compose_run ps 2>&1 || true
+  echo "compose_ps_end"
+}
+
+print_service_logs_tail() {
+  local service="$1"
+  local tail_lines="${2:-80}"
+
+  echo "service_logs_begin=${service}"
+  compose_run logs --tail "${tail_lines}" "${service}" 2>&1 || true
+  echo "service_logs_end=${service}"
+}
+
+print_dependency_diagnostics() {
+  local service
+
+  log_step "Collecting dependency diagnostics"
+  print_compose_ps_snapshot
+  for service in "${REVIEW_DEPENDENCY_SERVICES[@]}"; do
+    print_service_logs_tail "${service}"
+  done
+}
+
+start_dependency_services() {
+  local attempt
+
+  if [[ ${#REVIEW_DEPENDENCY_SERVICES[@]} -eq 0 ]]; then
+    echo "dependency_services=none"
+    echo "dependency_start_status=skipped"
+    return 0
+  fi
+
+  echo "dependency_services=$(IFS=,; echo "${REVIEW_DEPENDENCY_SERVICES[*]}")"
+  for attempt in $(seq 1 "${DEPENDENCY_START_MAX_ATTEMPTS}"); do
+    if compose_run up -d --wait "${REVIEW_DEPENDENCY_SERVICES[@]}"; then
+      echo "dependency_start_status=ready"
+      if [[ "${attempt}" -gt 1 ]]; then
+        echo "dependency_start_retry_success_attempt=${attempt}"
+      fi
+      return 0
+    fi
+
+    echo "dependency_start_attempt_failed=${attempt}"
+    print_dependency_diagnostics
+    if [[ "${attempt}" -lt "${DEPENDENCY_START_MAX_ATTEMPTS}" ]]; then
+      sleep "${DEPENDENCY_START_RETRY_SLEEP}"
+    fi
+  done
+
+  echo "dependency_start_status=failed"
+  return 1
 }
 
 wait_for_url() {
@@ -335,9 +420,11 @@ fi
 
 DOCKER_CONFIG_HELPER="$(resolve_helper "scripts/utilities/symphony_prepare_docker_config.sh" || true)"
 WORKSPACE_DOCKER_CONFIG="$(prepare_docker_config "${DOCKER_CONFIG_HELPER}")"
+resolve_review_dependency_services
 
 log_step "Preparing Human Review stack for ${ISSUE_KEY}"
 echo "workspace_dir=${WORKSPACE_DIR}"
+echo "compose_file=${COMPOSE_FILE}"
 echo "compose_project=${COMPOSE_PROJECT}"
 echo "workspace_docker_config=${WORKSPACE_DOCKER_CONFIG}"
 echo "frontend_host_port=${FRONTEND_HOST_PORT}"
@@ -347,6 +434,9 @@ echo "redis_host_port=${REDIS_HOST_PORT}"
 echo "langfuse_host_port=${LANGFUSE_HOST_PORT}"
 echo "weaviate_http_host_port=${WEAVIATE_HTTP_HOST_PORT}"
 echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
+echo "build_backend=${BUILD_BACKEND}"
+echo "build_frontend=${BUILD_FRONTEND}"
+echo "dependency_start_max_attempts=${DEPENDENCY_START_MAX_ATTEMPTS}"
 echo "run_db_bootstrap_on_start=${RUN_DB_BOOTSTRAP_ON_START}"
 echo "run_db_migrations_on_start=${RUN_DB_MIGRATIONS_ON_START}"
 
@@ -364,18 +454,19 @@ if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
   fi
 fi
 
+log_step "Starting dependency services"
+start_dependency_services
+
+log_step "Building review services"
+if [[ "${BUILD_BACKEND}" -eq 1 || "${BUILD_FRONTEND}" -eq 1 ]]; then
+  build_targets=()
+  [[ "${BUILD_BACKEND}" -eq 1 ]] && build_targets+=(backend)
+  [[ "${BUILD_FRONTEND}" -eq 1 ]] && build_targets+=(frontend)
+  compose_run build "${build_targets[@]}"
+fi
+
 log_step "Starting Docker services"
-compose_run up -d postgres backend frontend
-
-if [[ "${BUILD_BACKEND}" -eq 1 ]]; then
-  log_step "Rebuilding backend"
-  compose_run up -d --build backend
-fi
-
-if [[ "${BUILD_FRONTEND}" -eq 1 ]]; then
-  log_step "Rebuilding frontend"
-  compose_run up -d --build frontend
-fi
+compose_run up -d backend frontend
 
 log_step "Force-recreating backend to pick up fresh tunnel/runtime env"
 compose_run up -d --force-recreate backend

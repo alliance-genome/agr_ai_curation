@@ -52,6 +52,14 @@ assert parsed.port == 22813, parsed
 PY"
 }
 
+assert_file_exists() {
+  local path="$1"
+  [[ -f "${path}" ]] || {
+    echo "Expected file to exist: ${path}" >&2
+    exit 1
+  }
+}
+
 test_forward_host_defaults_to_host_docker_internal() {
   unset CURATION_DB_TUNNEL_FORWARD_HOST || true
   assert_equals "host.docker.internal" "$(local_db_tunnel_forward_host)"
@@ -136,11 +144,33 @@ test_state_root_falls_back_when_xdg_runtime_dir_is_unusable() {
   unset XDG_RUNTIME_DIR
 }
 
+test_spawn_detached_creates_missing_parent_dirs() {
+  local temp_root pid_file log_file worker_pid
+  temp_root="$(mktemp -d)"
+  pid_file="${temp_root}/missing/state/worker.pid"
+  log_file="${temp_root}/missing/state/worker.log"
+
+  worker_pid="$(
+    local_db_tunnel_spawn_detached \
+      "${pid_file}" \
+      "${log_file}" \
+      bash -lc 'echo worker-started; sleep 5'
+  )"
+
+  sleep 0.2
+  assert_file_exists "${pid_file}"
+  assert_file_exists "${log_file}"
+  assert_contains "worker-started" "${log_file}"
+
+  kill "${worker_pid}" 2>/dev/null || true
+}
+
 test_forward_host_defaults_to_host_docker_internal
 test_bind_ip_override_wins
 test_docker_gateway_ip_uses_docker_bridge_when_available
 test_write_env_file_uses_container_forward_host
 test_state_dir_is_workspace_specific
 test_state_root_falls_back_when_xdg_runtime_dir_is_unusable
+test_spawn_detached_creates_missing_parent_dirs
 
 echo "local_db_tunnel_common tests passed"

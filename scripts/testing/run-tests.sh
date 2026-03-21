@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Script to build and run tests using Docker Compose
 # Follows Constitution requirement: Unified Docker Compose Standard
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -19,6 +19,21 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 # Parse command line arguments
 TEST_TYPE="${1:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="docker-compose.test.yml"
+TEST_STACK_ENV_FILE=".test-stack.env"
+SHOULD_CLEANUP=0
+
+cleanup_test_stack() {
+    if [[ "${SHOULD_CLEANUP}" != "1" ]]; then
+        return 0
+    fi
+
+    echo -e "${GREEN}Cleaning up test containers...${NC}"
+    docker compose -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
+    rm -f "${TEST_STACK_ENV_FILE}"
+}
+
+trap cleanup_test_stack EXIT
 
 # Ensure scripts in this folder are executable when checked out without +x.
 chmod +x "${SCRIPT_DIR}/prepare-test-stack.sh" "${SCRIPT_DIR}/load-home-test-env.sh" 2>/dev/null || true
@@ -36,7 +51,7 @@ if [ "$TEST_TYPE" = "build" ]; then
         echo -e "${YELLOW}First build - no cache available yet.${NC}"
     fi
 
-    docker compose -f docker-compose.test.yml build backend-tests
+    docker compose -f "${COMPOSE_FILE}" build backend-tests
     echo -e "${GREEN}✅ Build complete!${NC}"
     exit 0
 fi
@@ -48,26 +63,27 @@ if [ "$TEST_TYPE" = "prepare" ]; then
 fi
 
 echo -e "${GREEN}Running tests via Docker Compose...${NC}"
+SHOULD_CLEANUP=1
 
 case $TEST_TYPE in
   unit)
     echo -e "${YELLOW}Running unit tests...${NC}"
-    docker compose -f docker-compose.test.yml run --rm backend-unit-tests
+    docker compose -f "${COMPOSE_FILE}" run --rm backend-unit-tests
     ;;
   integration)
     echo -e "${YELLOW}Running integration tests with sample PDF...${NC}"
     "${SCRIPT_DIR}/prepare-test-stack.sh"
-    docker compose -f docker-compose.test.yml run --rm backend-integration-tests
+    docker compose -f "${COMPOSE_FILE}" run --rm backend-integration-tests
     ;;
   contract)
     echo -e "${YELLOW}Running contract tests...${NC}"
     "${SCRIPT_DIR}/prepare-test-stack.sh"
-    docker compose -f docker-compose.test.yml run --rm backend-contract-tests
+    docker compose -f "${COMPOSE_FILE}" run --rm backend-contract-tests
     ;;
   all)
     echo -e "${YELLOW}Running all tests...${NC}"
     "${SCRIPT_DIR}/prepare-test-stack.sh"
-    docker compose -f docker-compose.test.yml run --rm backend-tests
+    docker compose -f "${COMPOSE_FILE}" run --rm backend-tests
     ;;
   *)
     echo -e "${RED}Unknown test type: $TEST_TYPE${NC}"
@@ -82,10 +98,5 @@ case $TEST_TYPE in
     exit 1
     ;;
 esac
-
-# Cleanup
-echo -e "${GREEN}Cleaning up test containers...${NC}"
-docker compose -f docker-compose.test.yml down
-rm -f .test-stack.env
 
 echo -e "${GREEN}Tests completed!${NC}"

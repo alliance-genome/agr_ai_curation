@@ -227,8 +227,10 @@ Starts the SSM tunnel and `socat` forwarder in the background, writes
 
 One-command Human Review Prep for a Symphony workspace. It derives issue-specific
 ports, starts the local curation DB tunnel, prepares a workspace-local Docker
-config, brings up the review stack, force-recreates the backend so fresh tunnel
-env reaches the container, and prints review URLs plus health summaries.
+config, stages dependency startup with retry/diagnostics before bringing up the
+app services, rebuilds backend and frontend by default so the review stack
+reflects the workspace branch, force-recreates the backend so fresh tunnel env
+reaches the container, and prints review URLs plus health summaries.
 
 ```bash
 # Prepare the current workspace for local review
@@ -276,6 +278,8 @@ Default output:
 ### testing/run-tests.sh
 
 Docker Compose test runner following the Unified Docker Compose Standard.
+It now always tears down the isolated test stack on exit for non-`prepare`
+commands, even when the test command itself fails.
 
 ```bash
 # Run all tests
