@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
+from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401
 from src.schemas.models.base import (
     EvidenceRecord,
     MentionCandidate,

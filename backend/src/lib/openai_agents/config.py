@@ -321,6 +321,7 @@ def build_model_settings(
     tool_choice: Optional[str] = None,
     parallel_tool_calls: bool = True,
     verbosity: Optional[str] = None,
+    include_usage: Optional[bool] = None,
     provider_override: Optional[str] = None,
 ):
     """
@@ -344,6 +345,7 @@ def build_model_settings(
         tool_choice: Optional tool choice mode ("auto", "required", etc.)
         parallel_tool_calls: Whether to allow parallel tool calls (ignored for Gemini)
         verbosity: Optional verbosity level ("low", etc.) - fixes structured output + reasoning
+        include_usage: Whether to request usage accounting from the provider when supported
 
     Returns:
         ModelSettings instance
@@ -384,6 +386,7 @@ def build_model_settings(
         tool_choice=tool_choice,
         parallel_tool_calls=effective_parallel_tool_calls,
         verbosity=effective_verbosity,
+        include_usage=include_usage,
     )
 
 
