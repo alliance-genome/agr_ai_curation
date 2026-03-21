@@ -447,6 +447,8 @@ def execute_post_curation_pipeline(
             request,
             dependencies,
         )
+        if owns_session:
+            session.commit()
         return PostCurationPipelineResult(
             status=PipelineRunStatus.COMPLETED,
             execution_mode=PipelineExecutionMode.SYNC,
@@ -456,7 +458,7 @@ def execute_post_curation_pipeline(
             prep_extraction_result_id=prep_extraction_result_id,
         )
     except Exception:
-        if owns_session:
+        if owns_session and session.in_transaction():
             session.rollback()
         raise
     finally:
@@ -565,6 +567,7 @@ def _execute_pipeline_steps(
             candidates=prepared_candidates,
             session_validation_snapshot=validation_outcome.session_snapshot,
         ),
+        manage_transaction=False,
     )
     return persistence_result, str(prep_extraction_result.id)
 

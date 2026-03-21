@@ -1148,6 +1148,8 @@ def _actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
 def upsert_prepared_session(
     db: Session,
     request: PreparedSessionUpsertRequest,
+    *,
+    manage_transaction: bool = True,
 ) -> PreparedSessionUpsertResult:
     """Create or refresh an unreviewed session with deterministic pipeline output."""
 
@@ -1196,7 +1198,10 @@ def upsert_prepared_session(
         db.add(session_row)
         if validation_log_row is not None:
             db.add(validation_log_row)
-        db.commit()
+        if manage_transaction:
+            db.commit()
+        else:
+            db.flush()
 
         return PreparedSessionUpsertResult(
             session_id=str(session_row.id),
@@ -1204,7 +1209,8 @@ def upsert_prepared_session(
             candidate_ids=candidate_ids,
         )
     except Exception:
-        db.rollback()
+        if manage_transaction:
+            db.rollback()
         raise
 
 

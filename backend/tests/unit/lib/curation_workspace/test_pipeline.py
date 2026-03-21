@@ -497,6 +497,76 @@ def test_execute_post_curation_pipeline_requires_persisted_prep_result(db_sessio
         )
 
 
+def test_execute_post_curation_pipeline_with_owned_session_commits_results(db_session, monkeypatch):
+    document = _create_document(db_session)
+    prep_output = _make_prep_output()
+    _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    engine = db_session.get_bind()
+    session_factory = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    monkeypatch.setattr(module, "SessionLocal", session_factory)
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+    )
+
+    verification_session = session_factory()
+    try:
+        persisted_session = verification_session.scalars(
+            select(ReviewSessionModel).where(ReviewSessionModel.id == UUID(result.session_id))
+        ).one()
+        assert persisted_session.total_candidates == 1
+    finally:
+        verification_session.close()
+
+
+def test_execute_post_curation_pipeline_with_external_session_leaves_commit_to_caller(db_session):
+    document = _create_document(db_session)
+    prep_output = _make_prep_output()
+    _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+    )
+
+    pending_session = db_session.scalars(
+        select(ReviewSessionModel).where(ReviewSessionModel.id == UUID(result.session_id))
+    ).one()
+    assert pending_session.total_candidates == 1
+
+    db_session.rollback()
+
+    verification_session = sessionmaker(
+        bind=db_session.get_bind(),
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )()
+    try:
+        assert (
+            verification_session.scalars(
+                select(ReviewSessionModel).where(ReviewSessionModel.id == UUID(result.session_id))
+            ).first()
+            is None
+        )
+    finally:
+        verification_session.close()
+
+
 @pytest.mark.asyncio
 async def test_run_post_curation_pipeline_runs_sync_for_small_sets(monkeypatch):
     prep_output = _make_prep_output()
