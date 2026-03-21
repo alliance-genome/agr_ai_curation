@@ -1,6 +1,5 @@
 """Unit tests for chat misc/document/history endpoints and non-stream chat path."""
 
-import asyncio
 import json
 from types import SimpleNamespace
 from uuid import UUID
