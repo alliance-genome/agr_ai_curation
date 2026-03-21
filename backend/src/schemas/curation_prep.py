@@ -608,6 +608,93 @@ class CurationPrepAgentOutput(CurationPrepBaseModel):
     )
 
 
+class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
+    """Curator-facing summary shown before the prep agent is invoked."""
+
+    ready: bool = Field(description="Whether the current chat context can be prepared")
+    summary_text: NonEmptyString = Field(description="Confirmation text shown in the dialog")
+    candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description="Total candidate annotations discussed in the current chat context",
+    )
+    extraction_result_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of persisted extraction envelopes discovered for the session",
+    )
+    conversation_message_count: int = Field(
+        default=0,
+        ge=0,
+        description="Flattened user/assistant message count in the current chat history",
+    )
+    adapter_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Adapters discovered from persisted extraction results",
+    )
+    profile_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Profiles discovered from persisted extraction results",
+    )
+    domain_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Domains discovered from persisted extraction results",
+    )
+    blocking_reasons: list[str] = Field(
+        default_factory=list,
+        description="Reasons the prep run cannot start yet",
+    )
+
+
+class CurationPrepChatRunRequest(CurationPrepBaseModel):
+    """Confirmed prep request submitted from the chat UI."""
+
+    session_id: NonEmptyString = Field(description="Current chat session identifier")
+    adapter_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Confirmed adapters to include in the prep run",
+    )
+    profile_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Confirmed profiles to include in the prep run",
+    )
+    domain_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Confirmed domains to include in the prep run",
+    )
+
+
+class CurationPrepChatRunResponse(CurationPrepBaseModel):
+    """Result summary returned after the prep agent finishes."""
+
+    summary_text: NonEmptyString = Field(description="User-facing completion summary")
+    candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of candidates produced by the prep agent",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Warnings surfaced from the prep run metadata",
+    )
+    processing_notes: list[str] = Field(
+        default_factory=list,
+        description="Concise processing notes from the prep run metadata",
+    )
+    adapter_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Adapters that were in scope for the confirmed prep run",
+    )
+    profile_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Profiles that were in scope for the confirmed prep run",
+    )
+    domain_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Domains that were in scope for the confirmed prep run",
+    )
+
+
 __all__ = [
     "CurationPrepAdapterFieldHint",
     "CurationPrepAdapterMetadata",
@@ -616,6 +703,9 @@ __all__ = [
     "CurationPrepAmbiguity",
     "CurationPrepBaseModel",
     "CurationPrepCandidate",
+    "CurationPrepChatPreviewResponse",
+    "CurationPrepChatRunRequest",
+    "CurationPrepChatRunResponse",
     "CurationPrepConversationMessage",
     "CurationPrepConversationRole",
     "CurationPrepEvidenceRecord",
