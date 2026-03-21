@@ -2095,6 +2095,34 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
     return built
 
 
+def _merge_registry_required_params(
+    agent_id: str,
+    *,
+    required_params: List[str],
+    requires_document: bool,
+) -> tuple[List[str], bool]:
+    """Merge config-owned runtime requirements for shipped agents into DB metadata."""
+
+    registry_entry = AGENT_REGISTRY.get(agent_id) or {}
+    merged_required_params: List[str] = []
+    seen_params: set[str] = set()
+
+    for value in [*required_params, *(registry_entry.get("required_params", []) or [])]:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen_params:
+            continue
+        seen_params.add(normalized)
+        merged_required_params.append(normalized)
+
+    merged_requires_document = bool(
+        requires_document
+        or registry_entry.get("requires_document", False)
+        or "document_id" in merged_required_params
+    )
+
+    return merged_required_params, merged_requires_document
+
+
 def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Get metadata about a unified agent (display name, requirements, etc.).
 
@@ -2115,7 +2143,11 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     if db_agent is not None:
         tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
         required_params = _required_context_for_tool_ids(tool_ids)
-        requires_document = "document_id" in required_params
+        required_params, requires_document = _merge_registry_required_params(
+            agent_id,
+            required_params=required_params,
+            requires_document="document_id" in required_params,
+        )
         return {
             "agent_id": agent_id,
             "display_name": db_agent.name,

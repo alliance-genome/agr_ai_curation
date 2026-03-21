@@ -57,3 +57,12 @@ class TestEnhancedRegistry:
                 frontend = AGENT_REGISTRY[agent_id].get("frontend", {})
                 assert frontend.get("show_in_palette") is True, \
                     f"{agent_id} should be visible in palette"
+
+    def test_curation_prep_visible_in_palette(self):
+        """Curation prep should be placeable as an explicit flow step."""
+        from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
+
+        curation_prep = AGENT_REGISTRY.get("curation_prep")
+        assert curation_prep is not None
+        frontend = curation_prep.get("frontend", {})
+        assert frontend.get("show_in_palette") is True

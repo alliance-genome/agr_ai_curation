@@ -26,10 +26,13 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 from agents import Agent, function_tool
 
+from src.lib.context import get_current_trace_id
 from src.lib.curation_workspace import (
+    CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
     persist_extraction_results,
+    run_curation_prep,
 )
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
@@ -44,12 +47,24 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
+from src.schemas.curation_prep import (
+    CurationPrepAdapterMetadata,
+    CurationPrepAgentInput,
+    CurationPrepConversationMessage,
+    CurationPrepConversationRole,
+    CurationPrepScopeConfirmation,
+)
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
+    CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
 
 logger = logging.getLogger(__name__)
+
+CURATION_PREP_AGENT_ID = "curation_prep"
+_FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
+_FLOW_PREP_MAX_STEP_MESSAGES = 8
 
 
 def _now_iso() -> str:
@@ -60,6 +75,262 @@ def _now_iso() -> str:
 def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     return agent_id.replace("-", "_")
+
+
+def _ordered_unique_strings(values: List[Optional[str]]) -> List[str]:
+    """Return non-empty unique strings while preserving insertion order."""
+
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _stringify_tool_output(value: Any) -> str:
+    """Convert tool output to a stable text representation."""
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=True)
+    return str(value or "")
+
+
+def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW_CHARS) -> str:
+    """Generate a bounded preview string for accumulated flow context."""
+
+    text = _stringify_tool_output(value).strip()
+    if len(text) <= max_chars:
+        return text
+    overflow = len(text) - max_chars
+    return f"{text[:max_chars]}... [truncated {overflow} chars]"
+
+
+def _build_flow_conversation_summary(
+    flow: CurationFlow,
+    user_query: Optional[str],
+) -> str:
+    """Choose the best available summary string for flow persistence and prep context."""
+
+    for candidate in (user_query, get_task_instructions(flow)):
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return f"Run flow '{flow.name}'"
+
+
+def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
+    """Infer adapter_key from persisted envelope metadata when explicit adapter ownership is absent."""
+
+    for value in (candidate.adapter_key, candidate.domain_key):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _build_flow_curation_prep_conversation_history(
+    *,
+    flow: CurationFlow,
+    user_query: Optional[str],
+    completed_steps: List[Dict[str, Any]],
+    step_goal: Optional[str] = None,
+    custom_instructions: Optional[str] = None,
+    invocation_query: Optional[str] = None,
+) -> List[CurationPrepConversationMessage]:
+    """Convert accumulated flow context into the prep agent's conversation history."""
+
+    messages: List[CurationPrepConversationMessage] = [
+        CurationPrepConversationMessage(
+            role=CurationPrepConversationRole.SYSTEM,
+            content=(
+                f"Flow '{flow.name}' reached an explicit Curation Prep step. "
+                "Use the accumulated flow context and extraction envelopes to prepare candidates."
+            ),
+        )
+    ]
+
+    normalized_step_goal = str(step_goal or "").strip()
+    if normalized_step_goal:
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.SYSTEM,
+                content=f"Curation Prep step goal: {normalized_step_goal}",
+            )
+        )
+
+    normalized_custom_instructions = str(custom_instructions or "").strip()
+    if normalized_custom_instructions:
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.SYSTEM,
+                content=(
+                    "Flow-specific custom instructions for this Curation Prep step:\n"
+                    f"{normalized_custom_instructions}"
+                ),
+            )
+        )
+    normalized_invocation_query = str(invocation_query or "").strip()
+    if normalized_invocation_query:
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.SYSTEM,
+                content=(
+                    "Supervisor handoff for this Curation Prep step:\n"
+                    f"{normalized_invocation_query}"
+                ),
+            )
+        )
+
+    task_instructions = str(get_task_instructions(flow) or "").strip()
+    if task_instructions:
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.USER,
+                content=task_instructions,
+            )
+        )
+
+    normalized_user_query = str(user_query or "").strip()
+    if normalized_user_query and normalized_user_query != task_instructions:
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.USER,
+                content=normalized_user_query,
+            )
+        )
+
+    for step in completed_steps[-_FLOW_PREP_MAX_STEP_MESSAGES:]:
+        preview = str(step.get("output_preview") or "").strip()
+        if not preview:
+            continue
+        messages.append(
+            CurationPrepConversationMessage(
+                role=CurationPrepConversationRole.ASSISTANT,
+                content=(
+                    f"Flow step {step.get('step')} ({step.get('agent_name') or step.get('agent_id')}) "
+                    f"output:\n{preview}"
+                ),
+            )
+        )
+
+    return messages
+
+
+def _build_flow_curation_prep_input(
+    *,
+    flow: CurationFlow,
+    document_id: Optional[str],
+    user_id: Optional[str],
+    session_id: Optional[str],
+    flow_run_id: Optional[str],
+    user_query: Optional[str],
+    completed_steps: List[Dict[str, Any]],
+    trace_id: Optional[str],
+    step_goal: Optional[str] = None,
+    custom_instructions: Optional[str] = None,
+    invocation_query: Optional[str] = None,
+) -> CurationPrepAgentInput:
+    """Assemble a valid prep-agent input from accumulated flow context."""
+
+    normalized_document_id = str(document_id or "").strip()
+    if not normalized_document_id:
+        raise ValueError("Curation prep flow steps require a document_id context.")
+
+    flow_summary = _build_flow_conversation_summary(flow, user_query)
+    extraction_results: List[CurationExtractionResultRecord] = []
+
+    for index, step in enumerate(completed_steps, start=1):
+        candidate = step.get("candidate")
+        if not isinstance(candidate, ExtractionEnvelopeCandidate):
+            continue
+
+        extraction_results.append(
+            CurationExtractionResultRecord(
+                extraction_result_id=(
+                    f"{step.get('tool_name') or 'flow-step'}-{index}"
+                ),
+                document_id=normalized_document_id,
+                adapter_key=_resolve_flow_candidate_adapter_key(candidate),
+                profile_key=candidate.profile_key,
+                domain_key=candidate.domain_key,
+                agent_key=candidate.agent_key,
+                source_kind=CurationExtractionSourceKind.FLOW,
+                origin_session_id=session_id,
+                trace_id=trace_id,
+                flow_run_id=flow_run_id,
+                user_id=user_id,
+                candidate_count=candidate.candidate_count,
+                conversation_summary=candidate.conversation_summary or flow_summary,
+                payload_json=candidate.payload_json,
+                created_at=datetime.now(timezone.utc),
+                metadata=dict(candidate.metadata),
+            )
+        )
+
+    if not extraction_results:
+        raise ValueError(
+            "Curation prep flow steps require at least one upstream extraction envelope."
+        )
+
+    adapter_metadata: List[CurationPrepAdapterMetadata] = []
+    seen_adapters: Set[tuple[str, Optional[str]]] = set()
+    for record in extraction_results:
+        adapter_key = str(record.adapter_key or "").strip()
+        if not adapter_key:
+            continue
+        adapter_signature = (adapter_key, record.profile_key)
+        if adapter_signature in seen_adapters:
+            continue
+        seen_adapters.add(adapter_signature)
+        adapter_metadata.append(
+            CurationPrepAdapterMetadata(
+                adapter_key=adapter_key,
+                profile_key=record.profile_key,
+                required_field_keys=[],
+                field_hints=[],
+                notes=[
+                    "Adapter metadata was inferred from upstream flow extraction context. "
+                    "No adapter-owned field hints were available in the flow payload."
+                ],
+            )
+        )
+
+    if not adapter_metadata:
+        raise ValueError(
+            "Curation prep flow steps require upstream extraction envelopes with "
+            "an adapter or destination key."
+        )
+
+    adapter_keys = _ordered_unique_strings([record.adapter_key for record in extraction_results])
+    profile_keys = _ordered_unique_strings([record.profile_key for record in extraction_results])
+    domain_keys = _ordered_unique_strings([record.domain_key for record in extraction_results])
+
+    return CurationPrepAgentInput(
+        conversation_history=_build_flow_curation_prep_conversation_history(
+            flow=flow,
+            user_query=user_query,
+            completed_steps=completed_steps,
+            step_goal=step_goal,
+            custom_instructions=custom_instructions,
+            invocation_query=invocation_query,
+        ),
+        extraction_results=extraction_results,
+        evidence_records=[],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=adapter_keys,
+            profile_keys=profile_keys,
+            domain_keys=domain_keys,
+            notes=["Scope was inferred from the accumulated flow extraction context."],
+        ),
+        adapter_metadata=adapter_metadata,
+    )
 
 
 def _resolve_flow_agent_entry(
@@ -258,6 +529,9 @@ def get_all_agent_tools(
     flow: CurationFlow,
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    flow_run_id: Optional[str] = None,
+    user_query: Optional[str] = None,
     db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
@@ -283,6 +557,9 @@ def get_all_agent_tools(
         flow: The curation flow defining which agents are active
         document_id: For document-aware agents
         user_id: For tenant isolation (Cognito subject ID)
+        session_id: Session identifier for persisted flow-step context
+        flow_run_id: Optional batch/grouping identifier shared across flow executions
+        user_query: Optional user-provided flow context for prep-step assembly
         db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database agents
@@ -329,9 +606,18 @@ def get_all_agent_tools(
     # This ensures each step gets its own agent instance with its own custom_instructions
     step_num = 0
     ordered_tool_names: List[str] = []
-    execution_state = {"next_tool_index": 0}
+    execution_state = {"next_tool_index": 0, "completed_steps": []}
+    flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
-    def _wrap_with_step_order(tool_callable, tool_name: str, specialist_label: str):
+    def _wrap_with_step_order(
+        tool_callable,
+        *,
+        tool_name: str,
+        specialist_label: str,
+        agent_id: str,
+        agent_name: str,
+        step_number: int,
+    ):
         """Enforce strict flow step ordering at runtime."""
 
         # Always embed a user-facing specialist label in the wrapper description.
@@ -367,6 +653,32 @@ def get_all_agent_tools(
                 result = await tool_callable.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
             else:
                 result = await tool_callable(query=query)
+
+            result_text = _stringify_tool_output(result)
+            candidate = build_extraction_envelope_candidate(
+                result_text,
+                agent_key=agent_id,
+                conversation_summary=flow_conversation_summary,
+                metadata={
+                    "tool_name": tool_name,
+                    "flow_id": str(flow.id),
+                    "flow_name": flow.name,
+                    "step": step_number,
+                    "agent_name": agent_name,
+                    **({"document_name": document_name} if document_name else {}),
+                },
+            )
+            execution_state["completed_steps"].append(
+                {
+                    "step": step_number,
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,
+                    "tool_name": tool_name,
+                    "output": result_text,
+                    "output_preview": _truncate_tool_output(result_text),
+                    "candidate": candidate,
+                }
+            )
             execution_state["next_tool_index"] = next_idx + 1
             return result
 
@@ -411,36 +723,6 @@ def get_all_agent_tools(
             })
             continue
 
-        try:
-            agent = get_agent_by_id(agent_id, **context)
-        except Exception as e:
-            logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
-            unavailable_steps.append({
-                "step": step_num,
-                "agent_id": agent_id,
-                "agent_name": entry.get("name", agent_id),
-                "reason": str(e),
-            })
-            continue
-
-        # Prepend per-node custom instructions (step-specific, not agent-global)
-        custom_instr = data.get("custom_instructions")
-        if custom_instr and custom_instr.strip():
-            custom_instr = custom_instr.strip()
-            agent.instructions = (
-                "## CUSTOM INSTRUCTIONS (from flow configuration)\n\n"
-                "The following instructions were provided by the user for this specific flow step. "
-                "They take the HIGHEST PRIORITY and MUST be followed above all other guidelines. "
-                "Treat these as direct requirements from the curator.\n\n"
-                + custom_instr
-                + "\n\n---\n\n"
-                + (agent.instructions or "")
-            )
-            logger.info(
-                f"[Flow Executor] Prepended custom instructions to agent '{agent_id}' "
-                f"step {step_num} ({len(custom_instr)} chars)"
-            )
-
         # Generate tool name — unique per step when agent_id appears multiple times
         is_duplicate = agent_id_counts.get(agent_id, 0) > 1
         tool_agent_segment = _tool_safe_agent_id(agent_id)
@@ -454,14 +736,94 @@ def get_all_agent_tools(
             specialist_name = entry.get("name", agent_id)
             tool_description = entry.get("description") or f"Ask the {entry.get('name', agent_id)}"
 
-        raw_streaming_tool = _create_streaming_tool(
-            agent=agent,
-            tool_name=tool_name,
-            tool_description=tool_description,
-            specialist_name=specialist_name,
-        )
+        if agent_id == CURATION_PREP_AGENT_ID:
+            def _make_curation_prep_tool(
+                *,
+                current_step_goal: Optional[str],
+                current_custom_instructions: Optional[str],
+            ):
+                @function_tool(name_override=tool_name, description_override=tool_description)
+                async def _curation_prep_tool(query: str) -> str:
+                    prep_input = _build_flow_curation_prep_input(
+                        flow=flow,
+                        document_id=document_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        flow_run_id=flow_run_id,
+                        user_query=user_query,
+                        completed_steps=execution_state["completed_steps"],
+                        trace_id=get_current_trace_id(),
+                        step_goal=current_step_goal,
+                        custom_instructions=current_custom_instructions,
+                        invocation_query=query,
+                    )
+                    prep_output = await run_curation_prep(
+                        prep_input,
+                        persistence_context=CurationPrepPersistenceContext(
+                            document_id=document_id,
+                            source_kind=CurationExtractionSourceKind.FLOW,
+                            origin_session_id=session_id,
+                            trace_id=get_current_trace_id(),
+                            flow_run_id=flow_run_id,
+                            user_id=user_id,
+                            conversation_summary=flow_conversation_summary,
+                        ),
+                    )
+                    return json.dumps(prep_output.model_dump(mode="json"), ensure_ascii=True)
+
+                return _curation_prep_tool
+
+            raw_streaming_tool = _make_curation_prep_tool(
+                current_step_goal=data.get("step_goal"),
+                current_custom_instructions=data.get("custom_instructions"),
+            )
+        else:
+            try:
+                agent = get_agent_by_id(agent_id, **context)
+            except Exception as e:
+                logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
+                unavailable_steps.append({
+                    "step": step_num,
+                    "agent_id": agent_id,
+                    "agent_name": entry.get("name", agent_id),
+                    "reason": str(e),
+                })
+                continue
+
+            # Prepend per-node custom instructions (step-specific, not agent-global)
+            custom_instr = data.get("custom_instructions")
+            if custom_instr and custom_instr.strip():
+                custom_instr = custom_instr.strip()
+                agent.instructions = (
+                    "## CUSTOM INSTRUCTIONS (from flow configuration)\n\n"
+                    "The following instructions were provided by the user for this specific flow step. "
+                    "They take the HIGHEST PRIORITY and MUST be followed above all other guidelines. "
+                    "Treat these as direct requirements from the curator.\n\n"
+                    + custom_instr
+                    + "\n\n---\n\n"
+                    + (agent.instructions or "")
+                )
+                logger.info(
+                    f"[Flow Executor] Prepended custom instructions to agent '{agent_id}' "
+                    f"step {step_num} ({len(custom_instr)} chars)"
+                )
+
+            raw_streaming_tool = _create_streaming_tool(
+                agent=agent,
+                tool_name=tool_name,
+                tool_description=tool_description,
+                specialist_name=specialist_name,
+            )
+
         ordered_tool_names.append(tool_name)
-        streaming_tool = _wrap_with_step_order(raw_streaming_tool, tool_name, specialist_name)
+        streaming_tool = _wrap_with_step_order(
+            raw_streaming_tool,
+            tool_name=tool_name,
+            specialist_label=specialist_name,
+            agent_id=agent_id,
+            agent_name=entry.get("name", agent_id),
+            step_number=step_num,
+        )
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
         all_tools.append(streaming_tool)
@@ -688,6 +1050,9 @@ def create_flow_supervisor(
     flow: CurationFlow,
     document_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    flow_run_id: Optional[str] = None,
+    user_query: Optional[str] = None,
     db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
@@ -702,6 +1067,9 @@ def create_flow_supervisor(
         flow: The CurationFlow defining the workflow
         document_id: Optional document for PDF-aware agents
         user_id: Cognito subject ID for Weaviate tenant isolation
+        session_id: Session identifier for persisted flow-step context
+        flow_run_id: Optional batch/grouping identifier shared across flow executions
+        user_query: Optional user-provided flow context for prep-step assembly
         db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database queries
@@ -731,6 +1099,9 @@ def create_flow_supervisor(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
+        session_id=session_id,
+        flow_run_id=flow_run_id,
+        user_query=user_query,
         db_user_id=db_user_id,
         document_name=document_name,
         active_groups=active_groups,
@@ -796,6 +1167,7 @@ def _persist_flow_extraction_candidates(
     user_id: str,
     session_id: str,
     trace_id: Optional[str],
+    flow_run_id: Optional[str],
 ) -> None:
     """Persist flow-produced extraction envelopes and propagate failures."""
 
@@ -806,13 +1178,14 @@ def _persist_flow_extraction_candidates(
         [
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
-                adapter_key=candidate.adapter_key,
+                adapter_key=_resolve_flow_candidate_adapter_key(candidate),
                 profile_key=candidate.profile_key,
                 domain_key=candidate.domain_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,
                 origin_session_id=session_id,
                 trace_id=trace_id,
+                flow_run_id=flow_run_id,
                 user_id=user_id,
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
@@ -832,6 +1205,7 @@ def _persist_flow_extraction_candidates_or_build_error(
     user_id: str,
     session_id: str,
     trace_id: Optional[str],
+    flow_run_id: Optional[str],
 ) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
     """Persist flow extraction candidates and return a FLOW_ERROR payload on failure."""
 
@@ -842,6 +1216,7 @@ def _persist_flow_extraction_candidates_or_build_error(
             user_id=user_id,
             session_id=session_id,
             trace_id=trace_id,
+            flow_run_id=flow_run_id,
         )
     except Exception as exc:
         failure_reason = f"Failed to persist extraction results for flow '{flow_name}'. {exc}"
@@ -879,6 +1254,7 @@ async def execute_flow(
     document_name: Optional[str] = None,
     user_query: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
+    flow_run_id: Optional[str] = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -896,6 +1272,7 @@ async def execute_flow(
         document_name: Optional name of the document for Langfuse metadata
         user_query: Optional user-provided query/context
         active_groups: Active group IDs for database queries
+        flow_run_id: Optional batch/grouping identifier shared across flow executions
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -923,6 +1300,9 @@ async def execute_flow(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
+        session_id=session_id,
+        flow_run_id=flow_run_id,
+        user_query=user_query,
         db_user_id=db_user_id,
         document_name=document_name,
         active_groups=active_groups,
@@ -949,6 +1329,7 @@ async def execute_flow(
             "flow_id": str(flow.id),
             "flow_name": flow.name,
             "total_steps": total_steps,
+            **({"flow_run_id": flow_run_id} if flow_run_id else {}),
         }
     }
 
@@ -985,7 +1366,7 @@ async def execute_flow(
     extraction_persisted = False
     flow_tool_metadata = getattr(supervisor, "_flow_tool_metadata", {}) or {}
     extraction_candidates: List[ExtractionEnvelopeCandidate] = []
-    conversation_summary = (user_query or "").strip() or f"Run flow '{flow.name}'"
+    conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
     async for event in run_agent_streamed(
         user_message=prompt,
@@ -1089,6 +1470,7 @@ async def execute_flow(
                     user_id=str(user_id),
                     session_id=session_id,
                     trace_id=trace_id,
+                    flow_run_id=flow_run_id,
                 )
             )
             if not persisted:
@@ -1116,6 +1498,7 @@ async def execute_flow(
                 user_id=str(user_id),
                 session_id=session_id,
                 trace_id=trace_id,
+                flow_run_id=flow_run_id,
             )
         )
         if not persisted:

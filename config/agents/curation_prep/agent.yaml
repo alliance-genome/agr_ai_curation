@@ -30,14 +30,15 @@ model_config:
   temperature: 0.1
   reasoning: "medium"
 
-requires_document: false
-required_params: []
+requires_document: true
+required_params:
+  - document_id
 
 batch_capabilities:
   - curation_prep
 
 frontend:
   icon: "CP"
-  show_in_palette: false
+  show_in_palette: true
 
 group_rules_enabled: false

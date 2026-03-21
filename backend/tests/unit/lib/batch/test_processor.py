@@ -200,6 +200,44 @@ def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatc
     assert published_events == []
 
 
+def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
+    captured = {}
+
+    async def _fake_execute_flow(**kwargs):
+        captured.update(kwargs)
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "download_url": "/api/weaviate/documents/download/file-1",
+                "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee",
+            },
+        }
+
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(publish_sync=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(processor, "_validate_file_ownership", lambda _file_id, _owner: True)
+
+    batch_id = str(uuid4())
+    result = asyncio.run(
+        processor._execute_flow_for_document(
+            flow=SimpleNamespace(name="Batch Flow"),
+            document_id=str(uuid4()),
+            cognito_sub="auth-sub",
+            batch_id=batch_id,
+            db_user_id=7,
+        )
+    )
+
+    assert result == "/api/weaviate/documents/download/file-1"
+    assert captured["flow_run_id"] == batch_id
+
+
 def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {

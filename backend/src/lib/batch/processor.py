@@ -307,6 +307,7 @@ async def _execute_flow_for_document(
             document_name=None,  # Will be fetched by DocumentContext
             user_query=None,  # Use task_instructions from flow
             active_groups=None,  # Default groups
+            flow_run_id=batch_id,
         ):
             event_type = event.get("type", "")
 

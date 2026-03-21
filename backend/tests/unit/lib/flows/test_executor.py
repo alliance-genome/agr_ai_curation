@@ -140,6 +140,12 @@ MOCK_REGISTRY = {
         "factory": lambda: None,
         "requires_document": False,
     },
+    "curation_prep": {
+        "name": "Curation Prep Agent",
+        "description": "Prepare curation candidates",
+        "factory": lambda: None,
+        "requires_document": True,
+    },
 }
 
 
@@ -159,6 +165,34 @@ def _metadata_from_registry(
         "requires_document": requires_document,
         "required_params": ["document_id", "user_id"] if requires_document else [],
     }
+
+
+def _make_curation_prep_output():
+    return SimpleNamespace(
+        model_dump=lambda mode="json": {
+            "candidates": [
+                {
+                    "adapter_key": "gene_expression",
+                    "profile_key": None,
+                    "extracted_fields": [],
+                    "evidence_references": [],
+                    "conversation_context_summary": "Prepared from flow context.",
+                    "confidence": 0.8,
+                    "unresolved_ambiguities": [],
+                }
+            ],
+            "run_metadata": {
+                "model_name": "gpt-5-mini",
+                "token_usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                },
+                "processing_notes": [],
+                "warnings": [],
+            },
+        }
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -498,6 +532,99 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ("ask_disease_specialist", "q3"),
         ]
 
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_prep_step_assembles_context_and_propagates_flow_run_id(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Curation prep steps should run via the service with accumulated flow context."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(
+                    {
+                        "actor": "gene_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.92,
+                        "reasoning": "matched",
+                        "items": [{"label": "unc-54"}],
+                        "raw_mentions": [{"mention": "unc-54"}],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {"candidate_count": 1},
+                    }
+                )
+
+            return _tool
+
+        captured = {}
+
+        async def _fake_run_curation_prep(agent_input, *, db=None, persistence_context=None):
+            captured["agent_input"] = agent_input
+            captured["persistence_context"] = persistence_context
+            captured["db"] = db
+            return _make_curation_prep_output()
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep)
+        monkeypatch.setattr("src.lib.flows.executor.get_current_trace_id", lambda: "trace-flow-1")
+
+        flow = _make_flow([
+            _task_input_node("Prepare the extracted gene-expression findings for review."),
+            _agent_node("n1", "gene", step_goal="Extract gene-expression findings"),
+            _agent_node(
+                "n2",
+                "curation_prep",
+                step_goal="Prepare candidates for the workspace",
+                custom_instructions="Prioritize experimentally supported findings only.",
+            ),
+        ])
+
+        tools, created_names = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            session_id="session-123",
+            flow_run_id="flow-run-123",
+            user_query="Focus on the confirmed findings.",
+        )
+
+        assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
+
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
+        prep_output = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+        )
+
+        assert "gene_expression" in prep_output
+        assert mock_get_agent.call_count == 1
+
+        agent_input = captured["agent_input"]
+        assert len(agent_input.extraction_results) == 1
+        assert agent_input.extraction_results[0].document_id == "doc-123"
+        assert agent_input.extraction_results[0].adapter_key == "gene_expression"
+        assert agent_input.extraction_results[0].flow_run_id == "flow-run-123"
+        assert agent_input.scope_confirmation.confirmed is True
+        assert agent_input.scope_confirmation.adapter_keys == ["gene_expression"]
+        assert len(agent_input.adapter_metadata) == 1
+        assert agent_input.adapter_metadata[0].adapter_key == "gene_expression"
+        history_texts = [message.content for message in agent_input.conversation_history]
+        assert any("Prepare the extracted gene-expression findings for review." in text for text in history_texts)
+        assert any("Focus on the confirmed findings." in text for text in history_texts)
+        assert any("Prioritize experimentally supported findings only." in text for text in history_texts)
+        assert any("prepare for review" in text for text in history_texts)
+
+        persistence_context = captured["persistence_context"]
+        assert persistence_context.document_id == "doc-123"
+        assert persistence_context.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
+        assert persistence_context.origin_session_id == "session-123"
+        assert persistence_context.flow_run_id == "flow-run-123"
+        assert persistence_context.user_id == "user-123"
+        assert persistence_context.trace_id == "trace-flow-1"
+
 
 # ===========================================================================
 # build_supervisor_instructions – custom instruction annotation & tool refs
@@ -656,6 +783,26 @@ class TestGetAllAgentToolsCreatedNames:
         assert len(tools) == 1
         assert "ask_gene_specialist" in created_names
         assert "ask_pdf_specialist" not in created_names
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_prep_skipped_without_doc(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Curation prep should follow normal flow document gating when no doc is loaded."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([
+            _agent_node("n1", "gene"),
+            _agent_node("n2", "curation_prep"),
+        ])
+
+        tools, created_names = get_all_agent_tools(flow)
+
+        assert len(tools) == 1
+        assert "ask_gene_specialist" in created_names
+        assert "ask_curation_prep_specialist" not in created_names
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1155,6 +1302,91 @@ class TestExecuteFlowTermination:
         assert persisted_request.candidate_count == 1
         assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
         assert persisted_request.metadata["flow_id"] == str(flow.id)
+
+    @pytest.mark.asyncio
+    async def test_persists_flow_run_id_on_flow_extraction_envelopes(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        persisted_requests = []
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_tool_metadata = {
+            "ask_gene_expression_specialist": {
+                "agent_id": "gene-expression",
+                "agent_name": "Gene Expression",
+                "step": 1,
+            }
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda requests: persisted_requests.extend(requests),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+                "internal": {
+                    "tool_output": json.dumps(
+                        {
+                            "actor": "gene_expression_specialist",
+                            "destination": "gene_expression",
+                            "confidence": 0.9,
+                            "reasoning": "done",
+                            "items": [{"label": "notch"}],
+                            "raw_mentions": [],
+                            "exclusions": [],
+                            "ambiguities": [],
+                            "run_summary": {
+                                "candidate_count": 1,
+                                "kept_count": 1,
+                                "excluded_count": 0,
+                                "ambiguous_count": 0,
+                                "warnings": [],
+                            },
+                        }
+                    )
+                },
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+                user_query="Extract findings",
+                flow_run_id="batch-123",
+            )
+        ]
+
+        assert "FLOW_FINISHED" in [event.get("type") for event in events]
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].flow_run_id == "batch-123"
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_extraction_persistence_fails(self, monkeypatch):

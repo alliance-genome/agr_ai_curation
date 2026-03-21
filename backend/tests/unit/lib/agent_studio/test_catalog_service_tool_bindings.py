@@ -175,6 +175,32 @@ def test_get_agent_metadata_derives_required_params_from_tool_bindings(monkeypat
     assert metadata["required_params"] == ["document_id", "user_id"]
 
 
+def test_get_agent_metadata_merges_registry_required_params_for_system_agents(monkeypatch):
+    fake_row = SimpleNamespace(
+        agent_key="curation_prep",
+        name="Curation Prep Agent",
+        description="Prepares curation candidates",
+        tool_ids=[],
+    )
+    monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _agent_id, _kwargs: fake_row)
+    monkeypatch.setattr(
+        catalog_service,
+        "AGENT_REGISTRY",
+        {
+            "curation_prep": {
+                "requires_document": True,
+                "required_params": ["document_id"],
+            }
+        },
+    )
+
+    metadata = catalog_service.get_agent_metadata("curation_prep")
+
+    assert metadata["display_name"] == "Curation Prep Agent"
+    assert metadata["requires_document"] is True
+    assert metadata["required_params"] == ["document_id"]
+
+
 def test_get_agent_metadata_db_lookup_prefers_db_user_id(monkeypatch):
     fake_row = SimpleNamespace(
         agent_key="pdf_extraction",
