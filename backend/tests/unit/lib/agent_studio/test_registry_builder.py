@@ -149,6 +149,7 @@ class TestAgentDocumentationCoverage:
             "supervisor",
             "chat_output",
             "chat_output_formatter",
+            "curation_prep",
         }
         assert registry["chat_output"] == registry["chat_output_formatter"]
         assert "pdf_extraction" not in registry

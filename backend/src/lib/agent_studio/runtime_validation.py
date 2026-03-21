@@ -117,6 +117,7 @@ def _allow_unseeded_core_only_runtime(
         and expected_system_agent_keys in (
             {"supervisor"},
             {"supervisor", "chat_output"},
+            {"supervisor", "chat_output", "curation_prep"},
         )
     )
 
