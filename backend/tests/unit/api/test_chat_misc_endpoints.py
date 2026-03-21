@@ -1,6 +1,6 @@
 """Unit tests for chat misc/document/history endpoints and non-stream chat path."""
 
-import asyncio
+import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -165,6 +165,76 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
         await chat.chat_endpoint(chat.ChatMessage(message="hello", session_id="session-1"), {"sub": "user-1", "cognito:groups": []})
     assert exc.value.status_code == 500
     assert "model exploded" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkeypatch):
+    add_calls = []
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(
+        chat,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
+    )
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)),
+    )
+    monkeypatch.setattr(
+        chat,
+        "get_supervisor_tool_agent_map",
+        lambda: {"ask_gene_expression_specialist": "gene-expression"},
+    )
+
+    async def _stream(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    monkeypatch.setattr(
+        chat,
+        "persist_extraction_results",
+        lambda _requests: (_ for _ in ()).throw(RuntimeError("db unavailable")),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1"),
+            {"sub": "user-1", "cognito:groups": []},
+        )
+
+    assert exc.value.status_code == 500
+    assert "db unavailable" in exc.value.detail
+    assert add_calls == []
 
 
 @pytest.mark.asyncio

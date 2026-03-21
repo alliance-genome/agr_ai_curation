@@ -367,7 +367,7 @@ describe('PromptWorkshop', () => {
       description: 'Add a tool that returns expanded GO relationships for a term.',
       opus_conversation: opusConversation,
     })
-  })
+  }, 15000) // Full workshop bootstrap plus dialog submission can exceed the default timeout under CI load.
 
   it('opens the provided initial custom agent id for editing', async () => {
     const existing = buildCustomAgent({ name: 'Cloned Agent' })
