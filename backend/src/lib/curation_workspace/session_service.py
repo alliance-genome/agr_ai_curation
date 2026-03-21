@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import String, asc, case, desc, exists, func, or_, select
+from sqlalchemy import String, asc, case, delete, desc, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
+    CurationDraft as DraftModel,
     CurationEvidenceRecord as EvidenceRecordModel,
     CurationExtractionResultRecord as ExtractionResultModel,
     CurationReviewSession as ReviewSessionModel,
@@ -28,7 +30,10 @@ from src.schemas.curation_workspace import (
     CurationActorRef,
     CurationActorType,
     CurationAdapterRef,
+    CurationCandidateSource,
+    CurationCandidateStatus,
     CurationDocumentRef,
+    CurationEvidenceSource,
     CurationEvidenceQualityCounts,
     CurationEvidenceSummary,
     CurationExtractionResultRecord,
@@ -53,8 +58,10 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateResponse,
     CurationSortDirection,
     CurationSubmissionRecord,
+    CurationValidationScope,
     CurationValidationSnapshotState,
     CurationValidationSummary,
+    FieldValidationResult,
     SubmissionPayloadContract,
 )
 
@@ -69,6 +76,113 @@ DETAIL_LOAD_OPTIONS = (
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.extraction_result),
     selectinload(ReviewSessionModel.submissions),
 )
+
+PREPARED_SESSION_LOAD_OPTIONS = (
+    selectinload(ReviewSessionModel.candidates),
+    selectinload(ReviewSessionModel.submissions),
+    selectinload(ReviewSessionModel.action_log_entries),
+)
+
+
+@dataclass(frozen=True)
+class PreparedDraftFieldInput:
+    """Deterministic draft-field payload ready for persistence."""
+
+    field_key: str
+    label: str
+    value: Any | None = None
+    seed_value: Any | None = None
+    field_type: str | None = None
+    group_key: str | None = None
+    group_label: str | None = None
+    order: int = 0
+    required: bool = False
+    read_only: bool = False
+    dirty: bool = False
+    stale_validation: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PreparedEvidenceRecordInput:
+    """Deterministic evidence-anchor payload ready for persistence."""
+
+    source: CurationEvidenceSource
+    field_keys: list[str] = field(default_factory=list)
+    field_group_keys: list[str] = field(default_factory=list)
+    is_primary: bool = False
+    anchor: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreparedValidationSnapshotInput:
+    """Validation snapshot payload produced by the deterministic pipeline."""
+
+    scope: CurationValidationScope
+    state: CurationValidationSnapshotState
+    summary: CurationValidationSummary
+    field_results: dict[str, FieldValidationResult] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    requested_at: datetime | None = None
+    completed_at: datetime | None = None
+    adapter_key: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedCandidateInput:
+    """Prepared candidate payload emitted by the deterministic pipeline."""
+
+    source: CurationCandidateSource
+    status: CurationCandidateStatus
+    order: int
+    adapter_key: str
+    profile_key: str | None = None
+    display_label: str | None = None
+    secondary_label: str | None = None
+    confidence: float | None = None
+    conversation_summary: str | None = None
+    unresolved_ambiguities: list[str] = field(default_factory=list)
+    extraction_result_id: str | None = None
+    normalized_payload: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    draft_fields: list[PreparedDraftFieldInput] = field(default_factory=list)
+    draft_title: str | None = None
+    draft_summary: str | None = None
+    draft_notes: str | None = None
+    draft_metadata: dict[str, Any] = field(default_factory=dict)
+    evidence_records: list[PreparedEvidenceRecordInput] = field(default_factory=list)
+    validation_snapshot: PreparedValidationSnapshotInput | None = None
+
+
+@dataclass(frozen=True)
+class PreparedSessionUpsertRequest:
+    """Session-level write payload for deterministic prep-session persistence."""
+
+    document_id: str
+    adapter_key: str
+    profile_key: str | None = None
+    review_session_id: str | UUID | None = None
+    flow_run_id: str | None = None
+    created_by_id: str | None = None
+    assigned_curator_id: str | None = None
+    notes: str | None = None
+    tags: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    prepared_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    status: CurationSessionStatus = CurationSessionStatus.NEW
+    candidates: list[PreparedCandidateInput] = field(default_factory=list)
+    session_validation_snapshot: PreparedValidationSnapshotInput | None = None
+    replace_existing_candidates: bool = True
+
+
+@dataclass(frozen=True)
+class PreparedSessionUpsertResult:
+    """Identifiers returned after deterministic session persistence."""
+
+    session_id: str
+    created: bool
+    candidate_ids: list[str] = field(default_factory=list)
 
 STATUS_SORT_ORDER = case(
     (ReviewSessionModel.status == CurationSessionStatus.NEW, 1),
@@ -1031,10 +1145,402 @@ def _actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
     return payload
 
 
+def upsert_prepared_session(
+    db: Session,
+    request: PreparedSessionUpsertRequest,
+) -> PreparedSessionUpsertResult:
+    """Create or refresh an unreviewed session with deterministic pipeline output."""
+
+    try:
+        session_row, created = _load_or_initialize_prepared_session(db, request)
+        _apply_prepared_session_metadata(session_row, request)
+
+        if not created and request.replace_existing_candidates:
+            _clear_prepared_session_children(db, session_row)
+
+        candidate_ids = _persist_prepared_candidates(
+            db,
+            session_row,
+            request.candidates,
+            prepared_at=request.prepared_at,
+        )
+
+        session_row.current_candidate_id = (
+            _normalize_uuid(candidate_ids[0], field_name="candidate_id")
+            if candidate_ids
+            else None
+        )
+        _apply_progress_counts(session_row, request.candidates)
+
+        validation_log_row = _persist_session_validation_snapshot(
+            db,
+            session_row,
+            request.session_validation_snapshot,
+        )
+
+        if created:
+            db.add(
+                SessionActionLogModel(
+                    session_id=session_row.id,
+                    action_type=CurationActionType.SESSION_CREATED,
+                    actor_type=CurationActorType.SYSTEM,
+                    occurred_at=request.prepared_at,
+                    new_session_status=session_row.status,
+                    message="Deterministic post-agent pipeline created the review session",
+                )
+            )
+
+        if not created:
+            session_row.session_version += 1
+
+        db.add(session_row)
+        if validation_log_row is not None:
+            db.add(validation_log_row)
+        db.commit()
+
+        return PreparedSessionUpsertResult(
+            session_id=str(session_row.id),
+            created=created,
+            candidate_ids=candidate_ids,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _load_or_initialize_prepared_session(
+    db: Session,
+    request: PreparedSessionUpsertRequest,
+) -> tuple[ReviewSessionModel, bool]:
+    if request.review_session_id is None:
+        session_row = ReviewSessionModel(
+            document_id=_normalize_uuid(request.document_id, field_name="document_id"),
+            adapter_key=request.adapter_key,
+            profile_key=request.profile_key,
+            prepared_at=request.prepared_at,
+            created_at=request.prepared_at,
+            updated_at=request.prepared_at,
+        )
+        db.add(session_row)
+        db.flush()
+        return session_row, True
+
+    session_id = _normalize_uuid(request.review_session_id, field_name="review_session_id")
+    session_row = db.scalars(
+        select(ReviewSessionModel)
+        .where(ReviewSessionModel.id == session_id)
+        .options(*PREPARED_SESSION_LOAD_OPTIONS)
+    ).first()
+
+    if session_row is None:
+        raise LookupError(f"Curation review session {session_id} not found")
+
+    if session_row.reviewed_candidates > 0 or session_row.submissions:
+        raise ValueError(
+            "Prepared-session updates require an unreviewed session without submissions"
+        )
+
+    if any(
+        action_log_entry.candidate_id is not None or action_log_entry.draft_id is not None
+        for action_log_entry in session_row.action_log_entries
+    ):
+        raise ValueError(
+            "Prepared-session updates cannot replace candidate data after candidate-level activity"
+        )
+
+    return session_row, False
+
+
+def _apply_prepared_session_metadata(
+    session_row: ReviewSessionModel,
+    request: PreparedSessionUpsertRequest,
+) -> None:
+    session_row.status = request.status
+    session_row.adapter_key = request.adapter_key
+    session_row.profile_key = request.profile_key
+    session_row.document_id = _normalize_uuid(request.document_id, field_name="document_id")
+    session_row.flow_run_id = request.flow_run_id
+    session_row.assigned_curator_id = request.assigned_curator_id
+    session_row.created_by_id = request.created_by_id
+    session_row.notes = request.notes
+    session_row.tags = list(request.tags)
+    session_row.warnings = list(request.warnings)
+    session_row.prepared_at = request.prepared_at
+    session_row.last_worked_at = None
+    session_row.paused_at = None
+    session_row.rejection_reason = None
+    session_row.updated_at = request.prepared_at
+    if request.status != CurationSessionStatus.SUBMITTED:
+        session_row.submitted_at = None
+
+
+def _clear_prepared_session_children(db: Session, session_row: ReviewSessionModel) -> None:
+    candidate_ids = [candidate.id for candidate in session_row.candidates]
+
+    db.execute(
+        delete(ValidationSnapshotModel).where(
+            ValidationSnapshotModel.session_id == session_row.id
+        )
+    )
+
+    if candidate_ids:
+        db.execute(
+            delete(SessionActionLogModel).where(
+                SessionActionLogModel.session_id == session_row.id,
+                SessionActionLogModel.candidate_id.in_(candidate_ids),
+            )
+        )
+        db.execute(
+            delete(EvidenceRecordModel).where(
+                EvidenceRecordModel.candidate_id.in_(candidate_ids)
+            )
+        )
+        db.execute(
+            delete(DraftModel).where(DraftModel.candidate_id.in_(candidate_ids))
+        )
+        db.execute(
+            delete(CurationCandidate).where(CurationCandidate.id.in_(candidate_ids))
+        )
+
+    session_row.candidates = []
+    session_row.validation_snapshots = []
+    session_row.current_candidate_id = None
+
+
+def _persist_prepared_candidates(
+    db: Session,
+    session_row: ReviewSessionModel,
+    candidates: Sequence[PreparedCandidateInput],
+    *,
+    prepared_at: datetime,
+) -> list[str]:
+    candidate_ids: list[str] = []
+
+    for candidate_input in sorted(candidates, key=lambda item: item.order):
+        candidate_row = CurationCandidate(
+            session_id=session_row.id,
+            source=candidate_input.source,
+            status=candidate_input.status,
+            order=candidate_input.order,
+            adapter_key=candidate_input.adapter_key,
+            profile_key=candidate_input.profile_key,
+            display_label=candidate_input.display_label,
+            secondary_label=candidate_input.secondary_label,
+            confidence=candidate_input.confidence,
+            conversation_summary=candidate_input.conversation_summary,
+            unresolved_ambiguities=list(candidate_input.unresolved_ambiguities),
+            extraction_result_id=(
+                _normalize_uuid(
+                    candidate_input.extraction_result_id,
+                    field_name="extraction_result_id",
+                )
+                if candidate_input.extraction_result_id is not None
+                else None
+            ),
+            normalized_payload=dict(candidate_input.normalized_payload),
+            candidate_metadata=dict(candidate_input.metadata),
+            created_at=prepared_at,
+            updated_at=prepared_at,
+        )
+        db.add(candidate_row)
+        db.flush()
+
+        evidence_anchor_ids_by_field = _persist_candidate_evidence_records(
+            db,
+            candidate_row,
+            candidate_input.evidence_records,
+            created_at=prepared_at,
+        )
+
+        draft_row = DraftModel(
+            candidate_id=candidate_row.id,
+            adapter_key=candidate_input.adapter_key,
+            title=candidate_input.draft_title,
+            summary=candidate_input.draft_summary,
+            fields=[
+                _draft_field_payload(
+                    field_input,
+                    evidence_anchor_ids_by_field=evidence_anchor_ids_by_field,
+                    field_results=(
+                        candidate_input.validation_snapshot.field_results
+                        if candidate_input.validation_snapshot is not None
+                        else {}
+                    ),
+                )
+                for field_input in candidate_input.draft_fields
+            ],
+            notes=candidate_input.draft_notes,
+            draft_metadata=dict(candidate_input.draft_metadata),
+            created_at=prepared_at,
+            updated_at=prepared_at,
+        )
+        db.add(draft_row)
+
+        if candidate_input.validation_snapshot is not None:
+            db.add(
+                _validation_snapshot_row(
+                    session_row=session_row,
+                    candidate_id=candidate_row.id,
+                    snapshot=candidate_input.validation_snapshot,
+                )
+            )
+
+        candidate_ids.append(str(candidate_row.id))
+
+    return candidate_ids
+
+
+def _persist_candidate_evidence_records(
+    db: Session,
+    candidate_row: CurationCandidate,
+    evidence_records: Sequence[PreparedEvidenceRecordInput],
+    *,
+    created_at: datetime,
+) -> dict[str, list[str]]:
+    evidence_anchor_ids_by_field: dict[str, list[str]] = {}
+
+    for evidence_input in evidence_records:
+        evidence_row = EvidenceRecordModel(
+            candidate_id=candidate_row.id,
+            source=evidence_input.source,
+            field_keys=list(evidence_input.field_keys),
+            field_group_keys=list(evidence_input.field_group_keys),
+            is_primary=evidence_input.is_primary,
+            anchor=dict(evidence_input.anchor),
+            warnings=list(evidence_input.warnings),
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        db.add(evidence_row)
+        db.flush()
+
+        anchor_id = str(evidence_row.id)
+        for field_key in evidence_input.field_keys:
+            evidence_anchor_ids_by_field.setdefault(field_key, []).append(anchor_id)
+
+    return evidence_anchor_ids_by_field
+
+
+def _draft_field_payload(
+    field_input: PreparedDraftFieldInput,
+    *,
+    evidence_anchor_ids_by_field: Mapping[str, Sequence[str]],
+    field_results: Mapping[str, FieldValidationResult],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "field_key": field_input.field_key,
+        "label": field_input.label,
+        "value": field_input.value,
+        "seed_value": field_input.seed_value,
+        "field_type": field_input.field_type,
+        "group_key": field_input.group_key,
+        "group_label": field_input.group_label,
+        "order": field_input.order,
+        "required": field_input.required,
+        "read_only": field_input.read_only,
+        "dirty": field_input.dirty,
+        "stale_validation": field_input.stale_validation,
+        "evidence_anchor_ids": list(
+            evidence_anchor_ids_by_field.get(field_input.field_key, [])
+        ),
+        "metadata": dict(field_input.metadata),
+    }
+
+    validation_result = field_results.get(field_input.field_key)
+    if validation_result is not None:
+        payload["validation_result"] = validation_result.model_dump(mode="json")
+
+    return payload
+
+
+def _validation_snapshot_row(
+    *,
+    session_row: ReviewSessionModel,
+    candidate_id: UUID | None,
+    snapshot: PreparedValidationSnapshotInput,
+) -> ValidationSnapshotModel:
+    return ValidationSnapshotModel(
+        scope=snapshot.scope,
+        session_id=session_row.id,
+        candidate_id=candidate_id,
+        adapter_key=snapshot.adapter_key or session_row.adapter_key,
+        state=snapshot.state,
+        field_results={
+            field_key: result.model_dump(mode="json")
+            for field_key, result in snapshot.field_results.items()
+        },
+        summary=snapshot.summary.model_dump(mode="json"),
+        warnings=list(snapshot.warnings),
+        requested_at=snapshot.requested_at,
+        completed_at=snapshot.completed_at,
+    )
+
+
+def _persist_session_validation_snapshot(
+    db: Session,
+    session_row: ReviewSessionModel,
+    snapshot: PreparedValidationSnapshotInput | None,
+) -> SessionActionLogModel | None:
+    if snapshot is None:
+        return None
+
+    db.add(
+        _validation_snapshot_row(
+            session_row=session_row,
+            candidate_id=None,
+            snapshot=snapshot,
+        )
+    )
+    return SessionActionLogModel(
+        session_id=session_row.id,
+        action_type=CurationActionType.VALIDATION_COMPLETED,
+        actor_type=CurationActorType.SYSTEM,
+        occurred_at=snapshot.completed_at or snapshot.requested_at or session_row.prepared_at,
+        message="Deterministic post-agent validation completed",
+        action_metadata={
+            "validation_state": snapshot.state.value,
+            "validation_scope": snapshot.scope.value,
+        },
+    )
+
+
+def _apply_progress_counts(
+    session_row: ReviewSessionModel,
+    candidates: Sequence[PreparedCandidateInput],
+) -> None:
+    total_candidates = len(candidates)
+    pending_candidates = sum(
+        1 for candidate in candidates if candidate.status == CurationCandidateStatus.PENDING
+    )
+    accepted_candidates = sum(
+        1 for candidate in candidates if candidate.status == CurationCandidateStatus.ACCEPTED
+    )
+    rejected_candidates = sum(
+        1 for candidate in candidates if candidate.status == CurationCandidateStatus.REJECTED
+    )
+    manual_candidates = sum(
+        1 for candidate in candidates if candidate.source == CurationCandidateSource.MANUAL
+    )
+
+    session_row.total_candidates = total_candidates
+    session_row.pending_candidates = pending_candidates
+    session_row.accepted_candidates = accepted_candidates
+    session_row.rejected_candidates = rejected_candidates
+    session_row.manual_candidates = manual_candidates
+    session_row.reviewed_candidates = total_candidates - pending_candidates
+
+
 __all__ = [
     "get_next_session",
     "get_session_detail",
     "get_session_stats",
     "list_sessions",
+    "PreparedCandidateInput",
+    "PreparedDraftFieldInput",
+    "PreparedEvidenceRecordInput",
+    "PreparedSessionUpsertRequest",
+    "PreparedSessionUpsertResult",
+    "PreparedValidationSnapshotInput",
+    "upsert_prepared_session",
     "update_session",
 ]

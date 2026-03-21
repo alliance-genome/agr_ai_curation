@@ -23,6 +23,20 @@ from .models import (
     CurationSubmissionRecord,
     CurationValidationSnapshot,
 )
+from .pipeline import (
+    DEFAULT_ASYNC_CANDIDATE_THRESHOLD,
+    AsyncioPipelineTaskScheduler,
+    DeterministicStructuralValidationService,
+    PassthroughCandidateNormalizer,
+    PassthroughEvidenceAnchorResolver,
+    PipelineExecutionMode,
+    PipelineRunStatus,
+    PostCurationPipelineDependencies,
+    PostCurationPipelineRequest,
+    PostCurationPipelineResult,
+    execute_post_curation_pipeline,
+    run_post_curation_pipeline,
+)
 
 __all__ = [
     "CurationActionLogEntry",
@@ -31,6 +45,8 @@ __all__ = [
     "CurationDraft",
     "CurationEvidenceRecord",
     "ExtractionEnvelopeCandidate",
+    "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
+    "AsyncioPipelineTaskScheduler",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
     "CurationExtractionResultRecord",
@@ -38,8 +54,18 @@ __all__ = [
     "CurationSavedView",
     "CurationSubmissionRecord",
     "CurationValidationSnapshot",
+    "DeterministicStructuralValidationService",
+    "PassthroughCandidateNormalizer",
+    "PassthroughEvidenceAnchorResolver",
+    "PipelineExecutionMode",
+    "PipelineRunStatus",
+    "PostCurationPipelineDependencies",
+    "PostCurationPipelineRequest",
+    "PostCurationPipelineResult",
+    "execute_post_curation_pipeline",
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
+    "run_post_curation_pipeline",
     "run_curation_prep",
 ]
