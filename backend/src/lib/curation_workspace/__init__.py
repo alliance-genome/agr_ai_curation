@@ -1,5 +1,9 @@
 """Curation workspace persistence models."""
 
+from .curation_prep_service import (
+    CurationPrepPersistenceContext,
+    run_curation_prep,
+)
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
@@ -23,6 +27,7 @@ from .models import (
 __all__ = [
     "CurationActionLogEntry",
     "CurationCandidate",
+    "CurationPrepPersistenceContext",
     "CurationDraft",
     "CurationEvidenceRecord",
     "ExtractionEnvelopeCandidate",
@@ -36,4 +41,5 @@ __all__ = [
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
+    "run_curation_prep",
 ]

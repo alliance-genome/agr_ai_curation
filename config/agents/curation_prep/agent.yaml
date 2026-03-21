@@ -1,0 +1,43 @@
+# =============================================================================
+# AGENT DEFINITION: curation_prep
+# =============================================================================
+# Bridges conversational / flow context into structured curation candidates.
+# This agent is invoked explicitly by downstream orchestration and is not
+# supervisor-routable.
+# =============================================================================
+
+agent_id: curation_prep
+
+name: "Curation Prep Agent"
+
+description: >
+  Reads conversation context, extraction envelopes, evidence records, and
+  adapter metadata to propose structured curation prep candidates for the
+  deterministic curation workspace pipeline.
+
+category: "Curation"
+subcategory: "Preparation"
+
+supervisor_routing:
+  enabled: false
+
+tools: []
+
+output_schema: CurationPrepAgentOutput
+
+model_config:
+  model: "${AGENT_CURATION_PREP_MODEL:-gpt-5-mini}"
+  temperature: 0.1
+  reasoning: "medium"
+
+requires_document: false
+required_params: []
+
+batch_capabilities:
+  - curation_prep
+
+frontend:
+  icon: "CP"
+  show_in_palette: false
+
+group_rules_enabled: false

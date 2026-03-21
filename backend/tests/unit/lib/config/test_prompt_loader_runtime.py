@@ -276,7 +276,7 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
 
     result = prompt_loader.load_prompts(db=db, force_reload=True)
 
-    assert result == {"base_prompts": 2, "group_rules": 2}
+    assert result == {"base_prompts": 3, "group_rules": 2}
     assert db.commit.called
     assert any(
         call["agent_name"] == "supervisor"
@@ -288,6 +288,12 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
         call["agent_name"] == "chat_output"
         and call["prompt_type"] == "system"
         and call["source_file"] == "config/agents/chat_output/prompt.yaml"
+        for call in captured_calls
+    )
+    assert any(
+        call["agent_name"] == "curation_prep"
+        and call["prompt_type"] == "system"
+        and call["source_file"] == "config/agents/curation_prep/prompt.yaml"
         for call in captured_calls
     )
     assert {

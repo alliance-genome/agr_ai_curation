@@ -801,6 +801,21 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Output is optimized for interactive reading, not file export",
         ],
     },
+    "curation_prep": {
+        "summary": "Transforms conversation and extraction context into structured curation-prep candidates for the deterministic workspace pipeline.",
+        "capabilities": [
+            {
+                "name": "Candidate proposal synthesis",
+                "description": "Combines conversation scope, extraction envelopes, evidence records, and adapter metadata into structured candidate payloads",
+                "example_query": "Prepare the confirmed disease findings for curation workspace review",
+                "example_result": "Returns one or more structured curation-prep candidates with extracted fields, evidence references, and ambiguity notes",
+            },
+        ],
+        "limitations": [
+            "Runs only when explicitly invoked by downstream curation workspace actions",
+            "Does not validate, normalize, or submit candidates; downstream deterministic services own those steps",
+        ],
+    },
     "csv_output_formatter": {
         "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
         "capabilities": [
