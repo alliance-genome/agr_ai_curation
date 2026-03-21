@@ -545,6 +545,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             async def _tool(query: str) -> str:
                 return json.dumps(
                     {
+                        "adapter_key": "reference_adapter",
                         "actor": "gene_specialist",
                         "destination": "gene_expression",
                         "confidence": 0.92,
@@ -605,12 +606,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
         agent_input = captured["agent_input"]
         assert len(agent_input.extraction_results) == 1
         assert agent_input.extraction_results[0].document_id == "doc-123"
-        assert agent_input.extraction_results[0].adapter_key == "gene_expression"
+        assert agent_input.extraction_results[0].adapter_key == "reference_adapter"
+        assert agent_input.extraction_results[0].domain_key == "gene_expression"
         assert agent_input.extraction_results[0].flow_run_id == "flow-run-123"
         assert agent_input.scope_confirmation.confirmed is True
-        assert agent_input.scope_confirmation.adapter_keys == ["gene_expression"]
+        assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
+        assert agent_input.scope_confirmation.domain_keys == ["gene_expression"]
         assert len(agent_input.adapter_metadata) == 1
-        assert agent_input.adapter_metadata[0].adapter_key == "gene_expression"
+        assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
         history_texts = [message.content for message in agent_input.conversation_history]
         assert any("Prepare the extracted gene-expression findings for review." in text for text in history_texts)
         assert any("Focus on the confirmed findings." in text for text in history_texts)
@@ -1298,6 +1301,7 @@ class TestExecuteFlowTermination:
                 "internal": {
                     "tool_output": json.dumps(
                         {
+                            "adapter_key": "reference_adapter",
                             "actor": "gene_expression_specialist",
                             "destination": "gene_expression",
                             "confidence": 0.9,
@@ -1341,6 +1345,7 @@ class TestExecuteFlowTermination:
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"
+        assert persisted_request.adapter_key == "reference_adapter"
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert persisted_request.origin_session_id == "flow-session-1"
@@ -1394,6 +1399,7 @@ class TestExecuteFlowTermination:
                 "internal": {
                     "tool_output": json.dumps(
                         {
+                            "adapter_key": "reference_adapter",
                             "actor": "gene_expression_specialist",
                             "destination": "gene_expression",
                             "confidence": 0.9,
@@ -1482,6 +1488,7 @@ class TestExecuteFlowTermination:
                 "internal": {
                     "tool_output": json.dumps(
                         {
+                            "adapter_key": "reference_adapter",
                             "actor": "gene_expression_specialist",
                             "destination": "gene_expression",
                             "confidence": 0.9,

@@ -125,13 +125,10 @@ def _build_flow_conversation_summary(
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
-    """Infer adapter_key from persisted envelope metadata when explicit adapter ownership is absent."""
+    """Return the adapter-owned key already persisted on the extraction envelope."""
 
-    for value in (candidate.adapter_key, candidate.domain_key):
-        normalized = str(value or "").strip()
-        if normalized:
-            return normalized
-    return None
+    normalized = str(candidate.adapter_key or "").strip()
+    return normalized or None
 
 
 def _build_flow_curation_prep_conversation_history(
@@ -304,7 +301,7 @@ def _build_flow_curation_prep_input(
     if not adapter_metadata:
         raise ValueError(
             "Curation prep flow steps require upstream extraction envelopes with "
-            "an adapter or destination key."
+            "adapter ownership metadata."
         )
 
     adapter_keys = _ordered_unique_strings([record.adapter_key for record in extraction_results])
