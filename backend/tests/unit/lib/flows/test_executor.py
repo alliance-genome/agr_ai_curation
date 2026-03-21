@@ -1059,3 +1059,189 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_persists_extraction_envelopes_after_success(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        persisted_requests = []
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_tool_metadata = {
+            "ask_gene_expression_specialist": {
+                "agent_id": "gene-expression",
+                "agent_name": "Gene Expression",
+                "step": 1,
+            }
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_result",
+            lambda request: persisted_requests.append(request),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+                "internal": {
+                    "tool_output": json.dumps(
+                        {
+                            "actor": "gene_expression_specialist",
+                            "destination": "gene_expression",
+                            "confidence": 0.9,
+                            "reasoning": "done",
+                            "items": [{"label": "notch"}],
+                            "raw_mentions": [],
+                            "exclusions": [],
+                            "ambiguities": [],
+                            "run_summary": {
+                                "candidate_count": 1,
+                                "kept_count": 1,
+                                "excluded_count": 0,
+                                "ambiguous_count": 0,
+                                "warnings": [],
+                            },
+                        }
+                    )
+                },
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+                user_query="Extract findings",
+            )
+        ]
+
+        event_types = [event.get("type") for event in events]
+        assert "CHAT_OUTPUT_READY" in event_types
+        assert "FLOW_FINISHED" in event_types
+        assert len(persisted_requests) == 1
+        persisted_request = persisted_requests[0]
+        assert persisted_request.document_id == "doc-1"
+        assert persisted_request.agent_key == "gene-expression"
+        assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
+        assert persisted_request.origin_session_id == "flow-session-1"
+        assert persisted_request.flow_run_id is None
+        assert persisted_request.trace_id == "trace-1"
+        assert persisted_request.user_id == "u1"
+        assert persisted_request.candidate_count == 1
+        assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
+        assert persisted_request.metadata["flow_id"] == str(flow.id)
+
+    @pytest.mark.asyncio
+    async def test_marks_flow_failed_when_extraction_persistence_fails(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_tool_metadata = {
+            "ask_gene_expression_specialist": {
+                "agent_id": "gene-expression",
+                "agent_name": "Gene Expression",
+                "step": 1,
+            }
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        def _raise_persistence(_request):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_result",
+            _raise_persistence,
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+                "internal": {
+                    "tool_output": json.dumps(
+                        {
+                            "actor": "gene_expression_specialist",
+                            "destination": "gene_expression",
+                            "confidence": 0.9,
+                            "reasoning": "done",
+                            "items": [{"label": "notch"}],
+                            "raw_mentions": [],
+                            "exclusions": [],
+                            "ambiguities": [],
+                            "run_summary": {
+                                "candidate_count": 1,
+                                "kept_count": 1,
+                                "excluded_count": 0,
+                                "ambiguous_count": 0,
+                                "warnings": [],
+                            },
+                        }
+                    )
+                },
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+                user_query="Extract findings",
+            )
+        ]
+
+        event_types = [event.get("type") for event in events]
+        assert "CHAT_OUTPUT_READY" not in event_types
+        assert "FLOW_ERROR" in event_types
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert "db unavailable" in (flow_finished["data"]["failure_reason"] or "")

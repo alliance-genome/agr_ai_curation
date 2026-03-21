@@ -26,6 +26,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 from agents import Agent, function_tool
 
+from src.lib.curation_workspace import (
+    ExtractionEnvelopeCandidate,
+    build_extraction_envelope_candidate,
+    persist_extraction_result,
+)
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
@@ -39,6 +44,10 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
+from src.schemas.curation_workspace import (
+    CurationExtractionPersistenceRequest,
+    CurationExtractionSourceKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +473,49 @@ def get_all_agent_tools(
     return all_tools, created_tool_names
 
 
+def _build_flow_tool_metadata(
+    flow: CurationFlow,
+    *,
+    available_tools: Optional[Set[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Build exact flow tool-name metadata for backend-only bookkeeping."""
+
+    tool_metadata: Dict[str, Dict[str, Any]] = {}
+    agent_id_counts = _count_agent_ids(flow)
+    step_num = 0
+
+    for node in _get_ordered_executable_nodes(flow):
+        data = node.get("data", {})
+        agent_id = data.get("agent_id")
+        step_num += 1
+
+        if not agent_id:
+            continue
+
+        is_duplicate = agent_id_counts.get(agent_id, 0) > 1
+        tool_agent_segment = _tool_safe_agent_id(agent_id)
+        if is_duplicate:
+            tool_name = f"ask_{tool_agent_segment}_step{step_num}_specialist"
+        else:
+            tool_name = f"ask_{tool_agent_segment}_specialist"
+
+        if available_tools is not None and tool_name not in available_tools:
+            continue
+
+        agent_name = data.get("agent_display_name")
+        if not agent_name:
+            resolved_entry = _resolve_flow_agent_entry(agent_id)
+            agent_name = resolved_entry.get("name") if resolved_entry else None
+
+        tool_metadata[tool_name] = {
+            "agent_id": agent_id,
+            "agent_name": agent_name or agent_id,
+            "step": step_num,
+        }
+
+    return tool_metadata
+
+
 def build_supervisor_instructions(
     flow: CurationFlow,
     has_document: bool = False,
@@ -723,6 +775,11 @@ def create_flow_supervisor(
         model_settings=model_settings,
     )
     setattr(supervisor, "_flow_unavailable_steps", unavailable_steps)
+    setattr(
+        supervisor,
+        "_flow_tool_metadata",
+        _build_flow_tool_metadata(flow, available_tools=created_tool_names),
+    )
 
     logger.info(
         f"[Flow Executor] Created flow supervisor for '{flow.name}': "
@@ -730,6 +787,39 @@ def create_flow_supervisor(
     )
 
     return supervisor
+
+
+def _persist_flow_extraction_candidates(
+    *,
+    candidates: List[ExtractionEnvelopeCandidate],
+    document_id: Optional[str],
+    user_id: str,
+    session_id: str,
+    trace_id: Optional[str],
+) -> None:
+    """Persist flow-produced extraction envelopes and propagate failures."""
+
+    if not candidates or not document_id:
+        return
+
+    for candidate in candidates:
+        persist_extraction_result(
+            CurationExtractionPersistenceRequest(
+                document_id=document_id,
+                adapter_key=candidate.adapter_key,
+                profile_key=candidate.profile_key,
+                domain_key=candidate.domain_key,
+                agent_key=candidate.agent_key,
+                source_kind=CurationExtractionSourceKind.FLOW,
+                origin_session_id=session_id,
+                trace_id=trace_id,
+                user_id=user_id,
+                candidate_count=candidate.candidate_count,
+                conversation_summary=candidate.conversation_summary,
+                payload_json=candidate.payload_json,
+                metadata=dict(candidate.metadata),
+            )
+        )
 
 
 async def execute_flow(
@@ -843,6 +933,11 @@ async def execute_flow(
 
     flow_status = "completed"
     failure_reason: Optional[str] = None
+    trace_id: Optional[str] = None
+    extraction_persisted = False
+    flow_tool_metadata = getattr(supervisor, "_flow_tool_metadata", {}) or {}
+    extraction_candidates: List[ExtractionEnvelopeCandidate] = []
+    conversation_summary = (user_query or "").strip() or f"Run flow '{flow.name}'"
 
     async for event in run_agent_streamed(
         user_message=prompt,
@@ -855,14 +950,40 @@ async def execute_flow(
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
     ):
-        yield event
+        event_type = event.get("type")
+        event_data = event.get("data", {}) or {}
+
+        if event_type == "RUN_STARTED" and "trace_id" in event_data:
+            trace_id = event_data.get("trace_id")
+
+        if event_type == "TOOL_COMPLETE":
+            details = event.get("details", {}) or {}
+            internal_payload = event.get("internal", {}) or {}
+            tool_name = str(details.get("toolName") or "").strip()
+            tool_meta = flow_tool_metadata.get(tool_name, {})
+            if isinstance(internal_payload, dict):
+                candidate = build_extraction_envelope_candidate(
+                    internal_payload.get("tool_output"),
+                    agent_key=tool_meta.get("agent_id"),
+                    conversation_summary=conversation_summary,
+                    metadata={
+                        "tool_name": tool_name,
+                        "flow_id": str(flow.id),
+                        "flow_name": flow.name,
+                        "step": tool_meta.get("step"),
+                        "agent_name": tool_meta.get("agent_name"),
+                        **({"document_name": document_name} if document_name else {}),
+                    },
+                )
+                if candidate:
+                    extraction_candidates.append(candidate)
 
         # Terminate flow after output is produced
         # FILE_READY indicates a file output agent (CSV, TSV, JSON) completed
         # CHAT_OUTPUT_READY indicates chat output agent completed
         # This prevents the supervisor from looping back to call agents again
-        event_type = event.get("type")
         if event_type == "SPECIALIST_ERROR":
+            yield event
             details = event.get("details", {}) or {}
             failure_reason = (
                 details.get("error")
@@ -888,10 +1009,10 @@ async def execute_flow(
             }
             break
         if event_type == "RUN_ERROR":
-            data = event.get("data", {}) or {}
+            yield event
             failure_reason = (
-                data.get("message")
-                or data.get("error")
+                event_data.get("message")
+                or event_data.get("error")
                 or "Flow execution failed."
             )
             flow_status = "failed"
@@ -912,13 +1033,110 @@ async def execute_flow(
             }
             break
         if event_type == "FILE_READY":
+            try:
+                _persist_flow_extraction_candidates(
+                    candidates=extraction_candidates,
+                    document_id=document_id,
+                    user_id=str(user_id),
+                    session_id=session_id,
+                    trace_id=trace_id,
+                )
+                extraction_persisted = True
+            except Exception as exc:
+                failure_reason = (
+                    f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
+                )
+                flow_status = "failed"
+                logger.exception(
+                    "[Flow Executor] Extraction persistence failed for flow '%s'",
+                    flow.name,
+                    extra={
+                        "document_id": document_id,
+                        "session_id": session_id,
+                        "trace_id": trace_id,
+                    },
+                )
+                yield {
+                    "type": "FLOW_ERROR",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "reason": "extraction_persistence_failed",
+                        "message": failure_reason,
+                    },
+                }
+                break
+            yield event
             logger.info(
                 "[Flow Executor] Output file produced - terminating flow '%s'", flow.name)
             break
         elif event_type == "CHAT_OUTPUT_READY":
+            try:
+                _persist_flow_extraction_candidates(
+                    candidates=extraction_candidates,
+                    document_id=document_id,
+                    user_id=str(user_id),
+                    session_id=session_id,
+                    trace_id=trace_id,
+                )
+                extraction_persisted = True
+            except Exception as exc:
+                failure_reason = (
+                    f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
+                )
+                flow_status = "failed"
+                logger.exception(
+                    "[Flow Executor] Extraction persistence failed for flow '%s'",
+                    flow.name,
+                    extra={
+                        "document_id": document_id,
+                        "session_id": session_id,
+                        "trace_id": trace_id,
+                    },
+                )
+                yield {
+                    "type": "FLOW_ERROR",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "reason": "extraction_persistence_failed",
+                        "message": failure_reason,
+                    },
+                }
+                break
+            yield event
             logger.info(
                 "[Flow Executor] Chat output produced - terminating flow '%s'", flow.name)
             break
+        yield event
+
+    if flow_status != "failed" and not extraction_persisted:
+        try:
+            _persist_flow_extraction_candidates(
+                candidates=extraction_candidates,
+                document_id=document_id,
+                user_id=str(user_id),
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+        except Exception as exc:
+            failure_reason = f"Failed to persist extraction results for flow '{flow.name}'. {exc}"
+            flow_status = "failed"
+            logger.exception(
+                "[Flow Executor] Extraction persistence failed for flow '%s'",
+                flow.name,
+                extra={
+                    "document_id": document_id,
+                    "session_id": session_id,
+                    "trace_id": trace_id,
+                },
+            )
+            yield {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "extraction_persistence_failed",
+                    "message": failure_reason,
+                },
+            }
 
     # Emit flow-specific completion event
     yield {

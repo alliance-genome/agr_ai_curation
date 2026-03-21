@@ -24,11 +24,21 @@ from starlette.background import BackgroundTask
 
 from .auth import get_auth_dependency
 from ..lib.chat_state import document_state
+from ..lib.curation_workspace import (
+    ExtractionEnvelopeCandidate,
+    build_extraction_envelope_candidate,
+    persist_extraction_result,
+)
 from ..lib.weaviate_client.documents import get_document
 from ..lib.conversation_manager import conversation_manager, SessionAccessError
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
+from ..schemas.curation_workspace import (
+    CurationExtractionPersistenceRequest,
+    CurationExtractionSourceKind,
+)
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
 from ..lib.group_rules import get_groups_from_cognito
@@ -124,6 +134,72 @@ def _get_conversation_history_for_session(user_id: str, session_id: str) -> List
             messages.append({'role': 'assistant', 'content': exchange['assistant']})
 
     return messages
+
+
+def _build_extraction_candidate_from_tool_event(
+    event: Dict[str, Any],
+    *,
+    tool_agent_map: Dict[str, str],
+    conversation_summary: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[ExtractionEnvelopeCandidate]:
+    """Parse a backend-only tool-complete event into a persistable candidate."""
+
+    if event.get("type") != "TOOL_COMPLETE":
+        return None
+
+    details = event.get("details", {}) or {}
+    internal_payload = event.get("internal", {}) or {}
+    tool_name = str(details.get("toolName") or "").strip()
+    agent_key = tool_agent_map.get(tool_name)
+    if not agent_key or not isinstance(internal_payload, dict):
+        return None
+
+    candidate_metadata = dict(metadata or {})
+    candidate_metadata.setdefault("tool_name", tool_name)
+
+    return build_extraction_envelope_candidate(
+        internal_payload.get("tool_output"),
+        agent_key=agent_key,
+        conversation_summary=conversation_summary,
+        metadata=candidate_metadata,
+    )
+
+
+def _persist_extraction_candidates(
+    *,
+    candidates: List[ExtractionEnvelopeCandidate],
+    document_id: Optional[str],
+    user_id: str,
+    session_id: str,
+    trace_id: Optional[str],
+    source_kind: CurationExtractionSourceKind,
+    flow_run_id: Optional[str] = None,
+) -> None:
+    """Persist extraction candidates and propagate failures to the caller."""
+
+    if not candidates or not document_id:
+        return
+
+    for candidate in candidates:
+        persist_extraction_result(
+            CurationExtractionPersistenceRequest(
+                document_id=document_id,
+                adapter_key=candidate.adapter_key,
+                profile_key=candidate.profile_key,
+                domain_key=candidate.domain_key,
+                agent_key=candidate.agent_key,
+                source_kind=source_kind,
+                origin_session_id=session_id,
+                trace_id=trace_id,
+                flow_run_id=flow_run_id,
+                user_id=user_id,
+                candidate_count=candidate.candidate_count,
+                conversation_summary=candidate.conversation_summary,
+                payload_json=candidate.payload_json,
+                metadata=dict(candidate.metadata),
+            )
+        )
 
 
 _FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS = 2500
@@ -481,6 +557,15 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             cognito_groups,
             extra={"session_id": session_id, "user_id": user_id},
         )
+    try:
+        tool_agent_map = get_supervisor_tool_agent_map()
+    except Exception:
+        logger.warning(
+            "Failed to resolve supervisor tool map; extraction persistence disabled for chat run",
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        tool_agent_map = {}
 
     try:
         # Retrieve conversation history for multi-turn context
@@ -496,6 +581,9 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         # Collect full response from streaming generator
         full_response = ""
         error_message = None
+        trace_id = None
+        run_finished = False
+        extraction_candidates: List[ExtractionEnvelopeCandidate] = []
 
         async for event in run_agent_streamed(
             user_message=chat_message.message,
@@ -507,13 +595,27 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             active_groups=active_groups,
         ):
             event_type = event.get("type")
+            event_data = event.get("data", {}) or {}
+
+            if event_type == "RUN_STARTED" and "trace_id" in event_data:
+                trace_id = event_data.get("trace_id")
+
+            candidate = _build_extraction_candidate_from_tool_event(
+                event,
+                tool_agent_map=tool_agent_map,
+                conversation_summary=chat_message.message,
+                metadata={"document_name": document_name} if document_name else None,
+            )
+            if candidate:
+                extraction_candidates.append(candidate)
 
             if event_type == "RUN_FINISHED":
-                full_response = event.get("data", {}).get("response", "")
+                full_response = event_data.get("response", "")
+                run_finished = True
                 break
             elif event_type == "RUN_ERROR":
                 # Capture error and stop processing
-                error_message = event.get("data", {}).get("message", "Unknown error")
+                error_message = event_data.get("message", "Unknown error")
                 logger.error(
                     "Agent error during non-streaming chat: %s",
                     error_message,
@@ -524,6 +626,16 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         # If we got an error, raise it
         if error_message:
             raise HTTPException(status_code=500, detail=error_message)
+
+        if run_finished:
+            _persist_extraction_candidates(
+                candidates=extraction_candidates,
+                document_id=document_id,
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                source_kind=CurationExtractionSourceKind.CHAT,
+            )
 
         # Save to conversation history
         conversation_manager.add_exchange(user_id, session_id, chat_message.message, full_response)
@@ -587,6 +699,15 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
             session_id,
             extra={"session_id": session_id, "user_id": user_id},
         )
+    try:
+        tool_agent_map = get_supervisor_tool_agent_map()
+    except Exception:
+        logger.warning(
+            "Failed to resolve supervisor tool map; extraction persistence disabled for chat stream",
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        tool_agent_map = {}
 
     # Create local cancellation event (for immediate same-worker cancellation)
     stream_claim_token = str(uuid.uuid4())
@@ -624,6 +745,9 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         current_session_id = session_id
         full_response = ""
         trace_id = None  # Capture trace_id for error reporting
+        run_finished = False
+        pending_run_finished_event: Optional[Dict[str, Any]] = None
+        extraction_candidates: List[ExtractionEnvelopeCandidate] = []
 
         try:
             async for event in run_agent_streamed(
@@ -650,7 +774,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 # Runner sends: {type, data: {delta, trace_id, ...}}
                 # Audit events send: {type, timestamp, details}
                 event_type = event.get("type")
-                event_data = event.get("data", {})
+                event_data = event.get("data", {}) or {}
 
                 flat_event = {"type": event_type, "session_id": current_session_id, "sessionId": current_session_id}
                 flat_event.update(event_data)  # Merge all data fields to top level
@@ -671,13 +795,38 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
 
+                candidate = _build_extraction_candidate_from_tool_event(
+                    event,
+                    tool_agent_map=tool_agent_map,
+                    conversation_summary=chat_message.message,
+                    metadata={"document_name": document_name} if document_name else None,
+                )
+                if candidate:
+                    extraction_candidates.append(candidate)
+
                 # Capture response for history
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
+                    run_finished = True
+                    pending_run_finished_event = flat_event
+                    continue
 
                 yield f"data: {json.dumps(flat_event, default=str)}\n\n"
 
             # Save to conversation history
+            if run_finished:
+                _persist_extraction_candidates(
+                    candidates=extraction_candidates,
+                    document_id=document_id,
+                    user_id=user_id,
+                    session_id=current_session_id,
+                    trace_id=trace_id,
+                    source_kind=CurationExtractionSourceKind.CHAT,
+                )
+                if pending_run_finished_event:
+                    yield (
+                        f"data: {json.dumps(pending_run_finished_event, default=str)}\n\n"
+                    )
             if full_response:
                 conversation_manager.add_exchange(user_id, current_session_id, chat_message.message, full_response)
 

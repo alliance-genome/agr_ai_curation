@@ -195,6 +195,16 @@ def get_supervisor_agent_tools() -> List[str]:
     return [t["tool_name"] for t in tools]
 
 
+def get_supervisor_tool_agent_map() -> Dict[str, str]:
+    """Return the runtime mapping from supervisor tool names to agent keys."""
+
+    return {
+        str(spec["tool_name"]): str(spec["agent_key"])
+        for spec in _get_supervisor_specialist_specs()
+        if spec.get("tool_name") and spec.get("agent_key")
+    }
+
+
 def generate_routing_table() -> str:
     """
     Build supervisor routing table from unified agent records.
