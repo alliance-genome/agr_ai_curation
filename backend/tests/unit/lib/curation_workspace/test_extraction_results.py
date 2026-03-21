@@ -125,6 +125,7 @@ def test_build_extraction_envelope_candidate_parses_json_tool_output():
 
     assert candidate is not None
     assert candidate.agent_key == "gene-expression"
+    assert candidate.adapter_key == "gene_expression"
     assert candidate.candidate_count == 2
     assert candidate.domain_key == "gene_expression"
     assert candidate.payload_json["items"] == [{"label": "notch"}]

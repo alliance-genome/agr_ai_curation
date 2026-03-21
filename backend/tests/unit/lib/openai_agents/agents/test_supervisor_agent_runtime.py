@@ -60,7 +60,7 @@ class _PrepExtractionRecord:
         payload = {
             "extraction_result_id": "extract-1",
             "document_id": "document-1",
-            "adapter_key": None,
+            "adapter_key": "reference_adapter",
             "profile_key": None,
             "domain_key": "disease",
             "agent_key": "disease_extractor",
@@ -613,7 +613,7 @@ def test_is_explicit_curation_prep_confirmation_rejects_not_ready():
 def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scope_confirmed():
     matching_record = _PrepExtractionRecord(
         extraction_result_id="extract-1",
-        adapter_key="disease",
+        adapter_key="reference_adapter",
         domain_key="disease",
     )
     unscoped_record = _PrepExtractionRecord(
@@ -626,7 +626,7 @@ def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scop
     scoped_results, notes = supervisor_agent._filter_extraction_results_for_scope(
         [matching_record, unscoped_record],
         {
-            "adapter_keys": ["disease"],
+            "adapter_keys": ["reference_adapter"],
             "profile_keys": [],
             "domain_keys": ["disease"],
         },
@@ -721,13 +721,15 @@ async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
     payload = json.loads(response)
     assert payload["status"] == "prepared"
     assert payload["candidate_count"] == 1
+    assert payload["scope_confirmation"]["adapter_keys"] == ["reference_adapter"]
     assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
     assert payload["warnings"] == ["warning-1"]
 
     agent_input = captured["agent_input"]
     assert agent_input.scope_confirmation.confirmed is True
+    assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
     assert agent_input.scope_confirmation.domain_keys == ["disease"]
-    assert agent_input.adapter_metadata[0].adapter_key == "disease"
+    assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
     assert agent_input.conversation_history[-1].content == "Yes, prepare the confirmed disease findings."
     assert agent_input.evidence_records[0].anchor.page_number == 3
 
@@ -766,9 +768,10 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
         supervisor_agent,
         "list_extraction_results_for_origin_session",
         lambda *_args, **_kwargs: [
-            _PrepExtractionRecord(domain_key="disease"),
+            _PrepExtractionRecord(adapter_key="reference_adapter", domain_key="disease"),
             _PrepExtractionRecord(
                 extraction_result_id="extract-2",
+                adapter_key="reference_adapter",
                 domain_key="gene_expression",
                 payload_json={"run_summary": {"candidate_count": 1}},
             ),
@@ -790,6 +793,34 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
     assert payload["status"] == "scope_confirmation_required"
     assert payload["available_scope"]["domain_keys"] == ["disease", "gene_expression"]
     assert run_called is False
+
+
+def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
+    records = [
+        _PrepExtractionRecord(
+            payload_json={
+                "custom_candidates": [
+                    {
+                        "label": "APOE disease association",
+                        "evidence": [
+                            {
+                                "snippet": "APOE was associated with disease severity.",
+                                "page": 7,
+                                "section": "Results",
+                            }
+                        ],
+                    }
+                ],
+                "run_summary": {"candidate_count": 1},
+            }
+        )
+    ]
+
+    evidence_records = supervisor_agent._build_prep_evidence_records(records)
+
+    assert len(evidence_records) == 1
+    assert evidence_records[0]["anchor"]["snippet_text"] == "APOE was associated with disease severity."
+    assert evidence_records[0]["anchor"]["page_number"] == 7
 
 
 @pytest.mark.asyncio

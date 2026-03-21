@@ -183,23 +183,50 @@ def _resolve_confirmed_scope(
         "domain_keys": _normalize_scope_values(domain_keys),
     }
 
-    if not confirmed_scope["adapter_keys"] and len(available_scope["adapter_keys"]) == 1:
-        confirmed_scope["adapter_keys"] = list(available_scope["adapter_keys"])
-    if not confirmed_scope["profile_keys"] and len(available_scope["profile_keys"]) == 1:
-        confirmed_scope["profile_keys"] = list(available_scope["profile_keys"])
-    if not confirmed_scope["domain_keys"] and len(available_scope["domain_keys"]) == 1:
-        confirmed_scope["domain_keys"] = list(available_scope["domain_keys"])
-
-    if not any(confirmed_scope.values()):
-        return None, available_scope
-
     if len(available_scope["adapter_keys"]) > 1 and not confirmed_scope["adapter_keys"]:
         return None, available_scope
-    if (
-        len(available_scope["domain_keys"]) > 1
-        and not confirmed_scope["domain_keys"]
-        and not confirmed_scope["adapter_keys"]
-    ):
+    if not confirmed_scope["adapter_keys"] and len(available_scope["adapter_keys"]) == 1:
+        confirmed_scope["adapter_keys"] = list(available_scope["adapter_keys"])
+
+    scoped_without_domain = [
+        record
+        for record in extraction_results
+        if _record_matches_scope(
+            record,
+            {
+                "adapter_keys": confirmed_scope["adapter_keys"],
+                "profile_keys": confirmed_scope["profile_keys"],
+                "domain_keys": [],
+            },
+        )
+    ]
+    narrowed_scope = _available_scope_from_extraction_results(scoped_without_domain)
+
+    if len(narrowed_scope["profile_keys"]) > 1 and not confirmed_scope["profile_keys"]:
+        return None, narrowed_scope
+    if not confirmed_scope["profile_keys"] and len(narrowed_scope["profile_keys"]) == 1:
+        confirmed_scope["profile_keys"] = list(narrowed_scope["profile_keys"])
+
+    scoped_with_adapter_profile = [
+        record
+        for record in extraction_results
+        if _record_matches_scope(
+            record,
+            {
+                "adapter_keys": confirmed_scope["adapter_keys"],
+                "profile_keys": confirmed_scope["profile_keys"],
+                "domain_keys": [],
+            },
+        )
+    ]
+    fully_narrowed_scope = _available_scope_from_extraction_results(scoped_with_adapter_profile)
+
+    if len(fully_narrowed_scope["domain_keys"]) > 1 and not confirmed_scope["domain_keys"]:
+        return None, fully_narrowed_scope
+    if not confirmed_scope["domain_keys"] and len(fully_narrowed_scope["domain_keys"]) == 1:
+        confirmed_scope["domain_keys"] = list(fully_narrowed_scope["domain_keys"])
+
+    if not any(confirmed_scope.values()):
         return None, available_scope
 
     return confirmed_scope, available_scope
@@ -253,32 +280,21 @@ def _filter_extraction_results_for_scope(
 def _collect_evidence_payloads(payload: Any) -> list[dict[str, Any]]:
     """Collect evidence payloads from persisted extraction envelopes."""
 
-    if not isinstance(payload, dict):
-        return []
-
     collected: list[dict[str, Any]] = []
-    for key in ("evidence_records", "evidence"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            collected.extend(item for item in value if isinstance(item, dict))
+    if isinstance(payload, dict):
+        for key in ("evidence_records", "evidence"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                collected.extend(item for item in value if isinstance(item, dict))
 
-    for nested_key in (
-        "items",
-        "raw_mentions",
-        "exclusions",
-        "ambiguities",
-        "annotations",
-        "genes",
-        "alleles",
-        "diseases",
-        "chemicals",
-        "phenotypes",
-    ):
-        nested_items = payload.get(nested_key)
-        if not isinstance(nested_items, list):
-            continue
-        for nested_item in nested_items:
-            collected.extend(_collect_evidence_payloads(nested_item))
+        for key, value in payload.items():
+            if key in {"evidence_records", "evidence"}:
+                continue
+            if isinstance(value, (dict, list)):
+                collected.extend(_collect_evidence_payloads(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            collected.extend(_collect_evidence_payloads(item))
 
     return collected
 
@@ -413,27 +429,18 @@ def _build_adapter_metadata(
 ) -> list[dict[str, Any]]:
     """Build the lightest valid adapter metadata from confirmed scope."""
 
-    metadata_targets = (
-        confirmed_scope["adapter_keys"]
-        or confirmed_scope["domain_keys"]
-        or confirmed_scope["profile_keys"]
-    )
-    inferred_from_scope = not confirmed_scope["adapter_keys"]
+    metadata_targets = list(confirmed_scope["adapter_keys"])
     profile_key = confirmed_scope["profile_keys"][0] if len(confirmed_scope["profile_keys"]) == 1 else None
 
     adapter_metadata: list[dict[str, Any]] = []
-    for target in metadata_targets:
+    for adapter_key in metadata_targets:
         notes: list[str] = []
-        if inferred_from_scope:
-            notes.append(
-                "Adapter key inferred from confirmed scope because persisted extraction context did not expose an adapter key."
-            )
         if scope_summary:
             notes.append(f"Confirmed scope summary: {scope_summary}")
 
         adapter_metadata.append(
             {
-                "adapter_key": target,
+                "adapter_key": adapter_key,
                 "profile_key": profile_key,
                 "required_field_keys": [],
                 "field_hints": [],
@@ -570,6 +577,20 @@ async def _dispatch_curation_prep_from_chat_context(
             "The confirmed scope did not match any persisted extraction results in this chat session.",
             available_scope=available_scope,
         )
+
+    resolved_adapter_keys = _unique_scope_values(
+        [
+            *confirmed_scope["adapter_keys"],
+            *(getattr(record, "adapter_key", None) for record in scoped_extraction_results),
+        ]
+    )
+    if not resolved_adapter_keys:
+        return _tool_response(
+            "scope_confirmation_required",
+            "The persisted extraction context is missing adapter ownership, so curation prep cannot safely run yet.",
+            available_scope=available_scope,
+        )
+    confirmed_scope["adapter_keys"] = resolved_adapter_keys
 
     normalized_scope_summary = str(scope_summary or "").strip() or None
     scope_notes = [

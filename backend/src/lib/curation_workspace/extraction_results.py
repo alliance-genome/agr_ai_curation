@@ -95,12 +95,20 @@ def build_extraction_envelope_candidate(
     candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
 
     if isinstance(payload, dict):
+        payload_adapter_key = payload.get("adapter_key")
         actor = payload.get("actor")
         destination = payload.get("destination")
+        if adapter_key is None and isinstance(payload_adapter_key, str):
+            adapter_key = payload_adapter_key.strip() or None
         if actor:
             envelope_metadata.setdefault("envelope_actor", actor)
         if destination:
             envelope_metadata.setdefault("envelope_destination", destination)
+            if adapter_key is None and isinstance(destination, str):
+                # Existing extraction envelopes expose their adapter/routing target via
+                # `destination`; persist that key here so downstream curation replay
+                # can use adapter-owned identifiers without inventing them later.
+                adapter_key = destination.strip() or None
             if domain_key is None and isinstance(destination, str):
                 domain_key = destination.strip() or None
 
