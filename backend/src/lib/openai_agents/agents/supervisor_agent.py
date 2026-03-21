@@ -42,10 +42,12 @@ from src.lib.context import (
 )
 from src.lib.chat_state import document_state
 from src.lib.conversation_manager import conversation_manager
-from src.lib.curation_workspace import (
+from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
-    list_extraction_results_for_origin_session,
     run_curation_prep,
+)
+from src.lib.curation_workspace.extraction_results import (
+    list_extraction_results_for_origin_session,
 )
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts

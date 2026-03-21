@@ -210,8 +210,16 @@ def list_extraction_results_for_origin_session(
             query = query.filter(CurationExtractionResultRecordModel.source_kind == source_kind)
 
         if document_id is not None:
+            try:
+                document_uuid = UUID(str(document_id).strip())
+            except (AttributeError, TypeError, ValueError):
+                logger.warning(
+                    "Ignoring invalid document_id filter for extraction results: %r",
+                    document_id,
+                )
+                return []
             query = query.filter(
-                CurationExtractionResultRecordModel.document_id == UUID(str(document_id))
+                CurationExtractionResultRecordModel.document_id == document_uuid
             )
 
         excluded = [str(agent_key).strip() for agent_key in exclude_agent_keys if str(agent_key).strip()]
