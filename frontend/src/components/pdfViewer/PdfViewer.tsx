@@ -29,6 +29,8 @@ import {
   onHighlightSettingsChanged,
   onPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
+import type { EvidenceAnchor, EvidenceLocatorQuality } from '@/features/curation/contracts'
+import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
 const SESSION_STORAGE_KEY = 'pdf-viewer-session'
@@ -99,6 +101,7 @@ type PdfEvidenceSpikeCandidateReason =
   | 'raw'
   | 'whitespace-normalized'
   | 'ascii-normalized'
+  | 'search-text'
   | 'first-sentence'
   | 'leading-fragment'
   | 'trailing-fragment'
@@ -109,6 +112,7 @@ type PdfEvidenceSpikeStatus =
   | 'matched'
   | 'section-fallback'
   | 'page-fallback'
+  | 'document-fallback'
   | 'not-found'
   | 'viewer-not-ready'
 
@@ -130,9 +134,12 @@ export interface PdfEvidenceSpikeCandidate {
   reason: PdfEvidenceSpikeCandidateReason
 }
 
-export interface PdfEvidenceSpikeResult {
+export interface PdfViewerNavigationResult {
   status: PdfEvidenceSpikeStatus
   strategy: PdfEvidenceSpikeStrategy
+  locatorQuality: EvidenceLocatorQuality
+  degraded: boolean
+  mode: EvidenceNavigationCommand['mode']
   documentId: string | null
   quote: string
   pageHints: number[]
@@ -144,6 +151,8 @@ export interface PdfEvidenceSpikeResult {
   attemptedQueries: string[]
   note: string
 }
+
+export type PdfEvidenceSpikeResult = PdfViewerNavigationResult
 
 export type OverlayDocItemDropReason = 'missing-page' | 'missing-bbox' | 'invalid-bbox'
 
@@ -169,6 +178,12 @@ interface UploadDialogState {
   progress: number
   message: string
   documentId?: string
+}
+
+export interface PdfViewerProps {
+  pendingNavigation?: EvidenceNavigationCommand | null
+  onNavigationComplete?: () => void
+  onNavigationStateChange?: (result: PdfViewerNavigationResult | null) => void
 }
 
 const DEFAULT_SETTINGS: HighlightSettings = {
@@ -261,22 +276,39 @@ export const normalizeEvidenceSpikePageHints = (input: Pick<PdfEvidenceSpikeInpu
   }, [])
 }
 
-export const buildEvidenceSpikeQuoteCandidates = (quote: string): PdfEvidenceSpikeCandidate[] => {
+export const buildEvidenceSpikeQuoteCandidates = (
+  quote: string,
+  options?: {
+    searchText?: string | null
+    normalizedText?: string | null
+  },
+): PdfEvidenceSpikeCandidate[] => {
   const trimmed = quote.trim()
-  if (!trimmed) {
+  const trimmedSearchText = options?.searchText?.trim() ?? ''
+  const trimmedNormalizedText = options?.normalizedText?.trim() ?? ''
+  const baseQuote = trimmed || trimmedSearchText || trimmedNormalizedText
+
+  if (!baseQuote) {
     return []
   }
 
-  const whitespaceNormalized = trimmed.replace(/\s+/g, ' ').trim()
-  const asciiNormalized = normalizeEvidenceSpikeText(trimmed)
-  const firstSentence = extractEvidenceSpikeSentence(trimmed)
-  const words = splitEvidenceSpikeWords(trimmed)
+  const whitespaceNormalized = baseQuote.replace(/\s+/g, ' ').trim()
+  const asciiNormalized = normalizeEvidenceSpikeText(baseQuote)
+  const normalizedCandidate = normalizeEvidenceSpikeText(trimmedNormalizedText) || asciiNormalized
+  const normalizedSearchText = normalizeEvidenceSpikeText(trimmedSearchText)
+  const fragmentSource = trimmed || baseQuote
+  const firstSentence = extractEvidenceSpikeSentence(fragmentSource)
+  const words = splitEvidenceSpikeWords(fragmentSource)
 
   const candidates: PdfEvidenceSpikeCandidate[] = [
-    { query: trimmed, reason: 'raw' },
+    { query: baseQuote, reason: 'raw' },
     { query: whitespaceNormalized, reason: 'whitespace-normalized' },
-    { query: asciiNormalized, reason: 'ascii-normalized' },
+    { query: normalizedCandidate, reason: 'ascii-normalized' },
   ]
+
+  if (normalizedSearchText) {
+    candidates.push({ query: normalizedSearchText, reason: 'search-text' })
+  }
 
   if (firstSentence) {
     candidates.push({ query: firstSentence, reason: 'first-sentence' })
@@ -349,6 +381,90 @@ const setEvidenceSpikePage = (pdfApp: any, pageNumber: number): boolean => {
   }
 
   return false
+}
+
+const clearPdfJsFindHighlights = (pdfApp: any): void => {
+  try {
+    pdfApp?.eventBus?.dispatch?.('findbarclose', {
+      source: 'pdf-evidence-navigation',
+    })
+  } catch (error) {
+    console.warn('Unable to clear PDF.js find highlights', error)
+  }
+}
+
+const isDegradedLocatorQuality = (quality: EvidenceLocatorQuality): boolean => {
+  return quality === 'section_only'
+    || quality === 'page_only'
+    || quality === 'document_only'
+    || quality === 'unresolved'
+}
+
+const resolveQuoteMatchLocatorQuality = (
+  anchorQuality: EvidenceLocatorQuality,
+  candidateReason: PdfEvidenceSpikeCandidateReason,
+): EvidenceLocatorQuality => {
+  if (anchorQuality === 'exact_quote' || anchorQuality === 'normalized_quote') {
+    return anchorQuality
+  }
+
+  return candidateReason === 'raw' ? 'exact_quote' : 'normalized_quote'
+}
+
+const buildEvidenceSpikeAnchor = (input: PdfEvidenceSpikeInput): EvidenceAnchor => {
+  const rawQuote = input.quote?.trim() ?? ''
+  return {
+    anchor_kind: 'snippet',
+    locator_quality: 'unresolved',
+    supports_decision: 'neutral',
+    snippet_text: rawQuote || null,
+    normalized_text: rawQuote ? normalizeEvidenceSpikeText(rawQuote) : null,
+    viewer_search_text: rawQuote || null,
+    page_number: input.pageNumber ?? null,
+    section_title: input.sectionTitle ?? null,
+    chunk_ids: [],
+  }
+}
+
+const buildNavigationCommandKey = (command: EvidenceNavigationCommand): string => {
+  return JSON.stringify({
+    anchorKind: command.anchor.anchor_kind,
+    locatorQuality: command.anchor.locator_quality,
+    searchText: command.searchText ?? null,
+    pageNumber: command.pageNumber ?? null,
+    sectionTitle: command.sectionTitle ?? null,
+    mode: command.mode,
+    chunkIds: command.anchor.chunk_ids,
+  })
+}
+
+const getNavigationBadgeColor = (
+  result: PdfViewerNavigationResult,
+): 'error' | 'warning' | 'success' => {
+  if (result.locatorQuality === 'unresolved') {
+    return 'error'
+  }
+
+  return result.degraded ? 'warning' : 'success'
+}
+
+const formatLocatorQualityLabel = (quality: EvidenceLocatorQuality): string => {
+  switch (quality) {
+    case 'exact_quote':
+      return 'Exact quote'
+    case 'normalized_quote':
+      return 'Approximate quote'
+    case 'section_only':
+      return 'Section fallback'
+    case 'page_only':
+      return 'Page fallback'
+    case 'document_only':
+      return 'Document only'
+    case 'unresolved':
+      return 'Unresolved'
+    default:
+      return quality
+  }
 }
 
 interface PdfEvidenceSpikeFindOutcome extends Pick<PdfEvidenceSpikeResult, 'matchedPage' | 'matchesTotal' | 'currentMatch'> {
@@ -665,7 +781,11 @@ export const reduceOverlayUpdate = (
   ]
 }
 
-export function PdfViewer() {
+export function PdfViewer({
+  pendingNavigation = null,
+  onNavigationComplete,
+  onNavigationStateChange,
+}: PdfViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
@@ -674,6 +794,7 @@ export function PdfViewer() {
   const settingsRef = useRef<HighlightSettings>(DEFAULT_SETTINGS)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
   const loadStartRef = useRef<number | null>(null)
+  const handledNavigationKeyRef = useRef<string | null>(null)
 
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
@@ -700,6 +821,12 @@ export function PdfViewer() {
   })
   const [overlays, setOverlays] = useState<OverlayPayload[]>([])
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
+  const [navigationResult, setNavigationResult] = useState<PdfViewerNavigationResult | null>(null)
+
+  const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
+    setNavigationResult(result)
+    onNavigationStateChange?.(result)
+  }, [onNavigationStateChange])
 
   const logOverlayNormalizationDiagnostics = useCallback(
     (detail: OverlayPayload, inspection: OverlayDocItemInspection) => {
@@ -1008,13 +1135,37 @@ export function PdfViewer() {
     })
   }, [])
 
-  const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
-    const quote = input.quote?.trim() ?? ''
-    const pageHints = normalizeEvidenceSpikePageHints(input)
-    const sectionTitle = normalizeEvidenceSpikeText(input.sectionTitle ?? '') || null
-    const sectionPath = Array.isArray(input.sectionPath)
-      ? input.sectionPath.map((segment) => normalizeEvidenceSpikeText(segment)).filter(Boolean)
-      : []
+  const executeEvidenceNavigation = useCallback(async (
+    command: EvidenceNavigationCommand,
+    options?: {
+      pageHints?: number[]
+      sectionPath?: string[]
+    },
+  ): Promise<PdfViewerNavigationResult> => {
+    const anchor = command.anchor
+    const quote = (
+      anchor.snippet_text
+      ?? anchor.sentence_text
+      ?? command.searchText
+      ?? anchor.viewer_search_text
+      ?? ''
+    ).trim()
+    const searchText = (
+      command.searchText
+      ?? anchor.viewer_search_text
+      ?? ''
+    ).trim()
+    const pageHints = normalizeEvidenceSpikePageHints({
+      pageNumbers: options?.pageHints,
+      pageNumber: command.pageNumber ?? anchor.page_number ?? null,
+    })
+    const sectionTitle = normalizeEvidenceSpikeText(command.sectionTitle ?? anchor.section_title ?? '') || null
+    const sectionPath = [
+      anchor.subsection_title,
+      ...(options?.sectionPath ?? []),
+    ]
+      .map((segment) => normalizeEvidenceSpikeText(segment ?? ''))
+      .filter(Boolean)
     const attemptedQueries: string[] = []
     const baseResult = {
       documentId: activeDocument?.documentId ?? null,
@@ -1022,6 +1173,7 @@ export function PdfViewer() {
       pageHints,
       sectionTitle,
       attemptedQueries,
+      mode: command.mode,
     }
     const iframeWindow = iframeRef.current?.contentWindow as any
     const pdfApp = pdfAppRef.current ?? iframeWindow?.PDFViewerApplication ?? null
@@ -1031,51 +1183,44 @@ export function PdfViewer() {
     }
 
     if (!pdfApp?.eventBus || !pdfApp?.findController || !pdfApp?.pdfViewer) {
-      const result: PdfEvidenceSpikeResult = {
+      return {
         ...baseResult,
         status: 'viewer-not-ready',
         strategy: 'document',
+        locatorQuality: anchor.locator_quality,
+        degraded: isDegradedLocatorQuality(anchor.locator_quality),
         matchedQuery: null,
         matchedPage: null,
         matchesTotal: 0,
         currentMatch: 0,
         note: 'The PDF viewer is not ready yet. Load a PDF and wait for the iframe viewer to finish initialising.',
       }
-      publishEvidenceSpikeResult(result)
-      return result
     }
 
-    if (!quote) {
-      const result: PdfEvidenceSpikeResult = {
-        ...baseResult,
-        status: 'not-found',
-        strategy: 'document',
-        matchedQuery: null,
-        matchedPage: null,
-        matchesTotal: 0,
-        currentMatch: 0,
-        note: 'A non-empty PDFX markdown quote is required before the prototype can search the PDF text layer.',
-      }
-      publishEvidenceSpikeResult(result)
-      return result
-    }
+    clearPdfJsFindHighlights(pdfApp)
 
-    highlightTermsRef.current = []
-    setHighlightTerms([])
-    clearAllHighlights()
+    const quoteCandidates = searchText
+      ? buildEvidenceSpikeQuoteCandidates(searchText, {
+          searchText,
+          normalizedText: anchor.normalized_text ?? null,
+        })
+      : []
+    const preferredPage = pageHints[0] ?? null
 
-    const startPage = pageHints[0] ?? viewerStateRef.current.currentPage ?? 1
-    setEvidenceSpikePage(pdfApp, startPage)
-
-    const quoteCandidates = buildEvidenceSpikeQuoteCandidates(quote)
     for (const candidate of quoteCandidates) {
+      if (preferredPage !== null) {
+        setEvidenceSpikePage(pdfApp, preferredPage)
+      }
       attemptedQueries.push(candidate.query)
       const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
       if (outcome.found || outcome.matchesTotal > 0) {
-        const result: PdfEvidenceSpikeResult = {
+        const locatorQuality = resolveQuoteMatchLocatorQuality(anchor.locator_quality, candidate.reason)
+        return {
           ...baseResult,
           status: 'matched',
           strategy: candidate.reason,
+          locatorQuality,
+          degraded: isDegradedLocatorQuality(locatorQuality),
           matchedQuery: candidate.query,
           matchedPage: outcome.matchedPage,
           matchesTotal: outcome.matchesTotal,
@@ -1084,60 +1229,90 @@ export function PdfViewer() {
             ? 'Resolved with a shortened quote fragment after the full PDFX quote did not produce a direct text-layer match.'
             : 'Resolved with a quote-derived search candidate in the PDF.js text layer.',
         }
-        publishEvidenceSpikeResult(result)
-        return result
       }
     }
 
     const sectionCandidates = buildEvidenceSpikeSectionCandidates(sectionTitle, sectionPath)
     for (const candidate of sectionCandidates) {
+      if (preferredPage !== null) {
+        setEvidenceSpikePage(pdfApp, preferredPage)
+      }
       attemptedQueries.push(candidate.query)
       const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
       if (outcome.found || outcome.matchesTotal > 0) {
-        const result: PdfEvidenceSpikeResult = {
+        return {
           ...baseResult,
           status: 'section-fallback',
           strategy: candidate.reason,
+          locatorQuality: 'section_only',
+          degraded: true,
           matchedQuery: candidate.query,
           matchedPage: outcome.matchedPage,
           matchesTotal: outcome.matchesTotal,
           currentMatch: outcome.currentMatch,
           note: 'The quote itself did not match, but section metadata located a relevant page in the PDF viewer.',
         }
-        publishEvidenceSpikeResult(result)
-        return result
       }
     }
 
-    if (pageHints.length > 0) {
-      setEvidenceSpikePage(pdfApp, pageHints[0])
-      const result: PdfEvidenceSpikeResult = {
+    if (preferredPage !== null) {
+      setEvidenceSpikePage(pdfApp, preferredPage)
+      clearPdfJsFindHighlights(pdfApp)
+      return {
         ...baseResult,
         status: 'page-fallback',
         strategy: 'page-hint',
+        locatorQuality: 'page_only',
+        degraded: true,
         matchedQuery: null,
-        matchedPage: pageHints[0],
+        matchedPage: preferredPage,
         matchesTotal: 0,
         currentMatch: 0,
-        note: 'Quote and section search candidates did not resolve, so the prototype navigated to the hinted page as the fallback.',
+        note: 'Navigated to the hinted page because quote and section search did not resolve a reliable text-layer match.',
       }
-      publishEvidenceSpikeResult(result)
-      return result
     }
 
-    const result: PdfEvidenceSpikeResult = {
+    const documentQuality = anchor.locator_quality === 'document_only'
+      ? 'document_only'
+      : 'unresolved'
+
+    clearPdfJsFindHighlights(pdfApp)
+
+    return {
       ...baseResult,
-      status: 'not-found',
+      status: documentQuality === 'document_only' ? 'document-fallback' : 'not-found',
       strategy: 'document',
+      locatorQuality: documentQuality,
+      degraded: true,
       matchedQuery: null,
       matchedPage: null,
       matchesTotal: 0,
       currentMatch: 0,
-      note: 'Neither the PDFX quote nor the available section metadata produced a text-layer match in the current PDF.',
+      note: documentQuality === 'document_only'
+        ? 'Opened the document without a precise page or text target because this anchor is intentionally document-scoped.'
+        : 'The PDF viewer could not localize this evidence to quote, section, or page-level text in the current document.',
     }
+  }, [activeDocument?.documentId])
+
+  const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
+    const result = await executeEvidenceNavigation(
+      {
+        anchor: buildEvidenceSpikeAnchor(input),
+        searchText: input.quote?.trim() || null,
+        pageNumber: input.pageNumber ?? null,
+        sectionTitle: input.sectionTitle ?? null,
+        mode: 'select',
+      },
+      {
+        pageHints: input.pageNumbers,
+        sectionPath: Array.isArray(input.sectionPath) ? input.sectionPath : [],
+      },
+    )
+
+    commitNavigationResult(result)
     publishEvidenceSpikeResult(result)
     return result
-  }, [activeDocument?.documentId, clearAllHighlights])
+  }, [commitNavigationResult, executeEvidenceNavigation])
 
   const applyHighlights = useCallback((specificTextLayer?: HTMLElement) => {
     const iframeWindow = iframeRef.current?.contentWindow as any
@@ -1369,6 +1544,7 @@ export function PdfViewer() {
   const beginDocumentLoad = useCallback((document: ViewerDocument) => {
     console.debug('[PDF DEBUG] beginDocumentLoad invoked', document)
     loadStartRef.current = performance.now()
+    handledNavigationKeyRef.current = null
     setStatus('loading')
     setError(null)
     setTelemetry((prev) => ({
@@ -1380,9 +1556,10 @@ export function PdfViewer() {
     }))
     setActiveDocument(document)
     setOverlays([])
+    commitNavigationResult(null)
     setOverlayRenderKey((prev) => prev + 1)
     persistSession(document, viewerStateRef.current)
-  }, [])
+  }, [commitNavigationResult])
 
   useEffect(() => {
     const storedSettings = loadStoredSettings()
@@ -1457,12 +1634,14 @@ export function PdfViewer() {
       // If document is being unloaded (active=false), clear the viewer
       if (!detail?.active || !detail.document) {
         console.debug('[PDF DEBUG] Document unloaded via chat-document-changed event')
+        handledNavigationKeyRef.current = null
         setActiveDocument(null)
         setStatus('idle')
         setError(null)
         highlightTermsRef.current = []
         setHighlightTerms([])
         setOverlays([])
+        commitNavigationResult(null)
         localStorage.removeItem(SESSION_STORAGE_KEY)
       } else {
         // Document is being loaded - show loading state immediately
@@ -1479,7 +1658,7 @@ export function PdfViewer() {
       unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
-  }, [applyHighlights, beginDocumentLoad, clearAllHighlights, signalLoadComplete])
+  }, [applyHighlights, beginDocumentLoad, clearAllHighlights, commitNavigationResult, signalLoadComplete])
 
   useEffect(() => {
     return () => {
@@ -1541,6 +1720,7 @@ export function PdfViewer() {
       persistSession(activeDocument, viewerStateRef.current)
     } else {
       debug.log('🔍 [PDF VIEWER DEBUG] No active document, resetting to idle')
+      handledNavigationKeyRef.current = null
       localStorage.removeItem(SESSION_STORAGE_KEY)
       setStatus('idle')
       setError(null)
@@ -1550,14 +1730,85 @@ export function PdfViewer() {
         slowLoad: false,
         slowHighlight: false,
       })
+      commitNavigationResult(null)
     }
-  }, [activeDocument?.documentId])
+  }, [activeDocument?.documentId, commitNavigationResult])
 
   useEffect(() => {
     if (status === 'ready' && highlightTermsRef.current.length) {
       applyHighlights()
     }
   }, [status, applyHighlights])
+
+  useEffect(() => {
+    if (!pendingNavigation) {
+      handledNavigationKeyRef.current = null
+      return
+    }
+
+    if (!activeDocument || status !== 'ready') {
+      return
+    }
+
+    const navigationKey = buildNavigationCommandKey(pendingNavigation)
+    if (handledNavigationKeyRef.current === navigationKey) {
+      return
+    }
+
+    handledNavigationKeyRef.current = navigationKey
+    let cancelled = false
+
+    void executeEvidenceNavigation(pendingNavigation)
+      .then((result) => {
+        if (cancelled) {
+          return
+        }
+        commitNavigationResult(result)
+        onNavigationComplete?.()
+      })
+      .catch((error) => {
+        console.warn('Failed to execute typed PDF evidence navigation', error)
+        if (cancelled) {
+          return
+        }
+        commitNavigationResult({
+          status: 'not-found',
+          strategy: 'document',
+          locatorQuality: 'unresolved',
+          degraded: true,
+          mode: pendingNavigation.mode,
+          documentId: activeDocument.documentId,
+          quote: pendingNavigation.anchor.snippet_text?.trim()
+            ?? pendingNavigation.anchor.sentence_text?.trim()
+            ?? pendingNavigation.searchText?.trim()
+            ?? '',
+          pageHints: normalizeEvidenceSpikePageHints({
+            pageNumber: pendingNavigation.pageNumber ?? pendingNavigation.anchor.page_number ?? null,
+          }),
+          sectionTitle: normalizeEvidenceSpikeText(
+            pendingNavigation.sectionTitle ?? pendingNavigation.anchor.section_title ?? '',
+          ) || null,
+          matchedQuery: null,
+          matchedPage: null,
+          matchesTotal: 0,
+          currentMatch: 0,
+          attemptedQueries: [],
+          note: 'Typed evidence navigation failed unexpectedly before the viewer could localize the requested anchor.',
+        })
+        onNavigationComplete?.()
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeDocument,
+    commitNavigationResult,
+    executeEvidenceNavigation,
+    onNavigationComplete,
+    pendingNavigation,
+    status,
+  ])
 
   useEffect(() => {
     const evidenceSpikeEnabled = getEnvFlag(['VITE_DEV_MODE', 'DEV_MODE', 'VITE_DEBUG', 'DEBUG'], false)
@@ -1805,6 +2056,38 @@ export function PdfViewer() {
             <Typography variant="body2" color="text.secondary">
               {activeDocument.pageCount} pages · Serving from {activeDocument.viewerUrl}
             </Typography>
+            {navigationResult && (
+              <>
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip
+                    size="small"
+                    color={getNavigationBadgeColor(navigationResult)}
+                    label={formatLocatorQualityLabel(navigationResult.locatorQuality)}
+                    sx={{ marginTop: 0.5 }}
+                  />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={navigationResult.mode === 'hover' ? 'Hover sync' : 'Selection sync'}
+                    sx={{ marginTop: 0.5 }}
+                  />
+                  {navigationResult.matchedPage !== null && (
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={`Page ${navigationResult.matchedPage}`}
+                      sx={{ marginTop: 0.5 }}
+                    />
+                  )}
+                </Stack>
+                <Typography
+                  variant="body2"
+                  color={navigationResult.degraded ? 'warning.main' : 'text.secondary'}
+                >
+                  {navigationResult.note}
+                </Typography>
+              </>
+            )}
             {highlightTerms.length > 0 && (
               <Stack direction="row" spacing={1} flexWrap="wrap">
                 {highlightTerms.map((term) => (
