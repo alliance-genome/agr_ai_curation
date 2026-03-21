@@ -69,6 +69,28 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 - Presence on disk is not the same as a tracked repo file. Check `git ls-files` before deciding a helper belongs in a PR.
 - If a workflow references `scripts/symphony_allocate_issue_ports.sh` and the file is missing in a workspace, check the source under `.symphony/allocate_issue_ports.sh` and the runtime sync script before assuming the repo lost functionality.
 
+### Symphony deployment route for new/modified scripts
+
+Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of files with different deployment paths:
+
+1. **Git-tracked scripts** (`scripts/utilities/symphony_*.sh`):
+   - Committed to the repo and pushed to `origin/main`.
+   - Synced into per-issue workspaces by `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
+   - **CRITICAL**: New scripts MUST be added to the `ensure_one` manifest in `symphony_ensure_workspace_runtime.sh` or workspaces will not have them. Existing workspaces get updated on the next `before_run` hook.
+
+2. **Gitignored orchestration files** (`.symphony/WORKFLOW.md`, `.symphony/*.sh`):
+   - `.symphony/` is in `.gitignore` — these files are NOT committed to the repo.
+   - Deployed by copying directly into the VM's local source root:
+     `incus file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
+   - The `ensure_workspace_runtime.sh` hook then copies them from the local source root into per-issue workspaces.
+
+**When adding a new Symphony lane helper**:
+1. Create the script in `scripts/utilities/symphony_<name>.sh` (git-tracked).
+2. Add an `ensure_one` line for it in `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
+3. Commit and push both files.
+4. If the script is referenced in WORKFLOW.md, update `.symphony/WORKFLOW.md` and push it to the VM.
+5. Existing workspaces pick up the new script on their next `before_run` hook execution.
+
 ## 6) Expected Change Workflow
 
 1. Sync branch and inspect changed scope.
