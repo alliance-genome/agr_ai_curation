@@ -1301,7 +1301,6 @@ class TestExecuteFlowTermination:
                 "internal": {
                     "tool_output": json.dumps(
                         {
-                            "adapter_key": "reference_adapter",
                             "actor": "gene_expression_specialist",
                             "destination": "gene_expression",
                             "confidence": 0.9,
@@ -1345,7 +1344,8 @@ class TestExecuteFlowTermination:
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"
-        assert persisted_request.adapter_key == "reference_adapter"
+        assert persisted_request.adapter_key == "gene_expression"
+        assert persisted_request.domain_key == "gene_expression"
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert persisted_request.origin_session_id == "flow-session-1"

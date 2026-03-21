@@ -40,6 +40,12 @@ def _sample_envelope_payload() -> dict:
     }
 
 
+def _sample_legacy_envelope_payload() -> dict:
+    payload = _sample_envelope_payload()
+    payload.pop("adapter_key")
+    return payload
+
+
 class _FakeSession:
     def __init__(self, *, fail_commit: bool = False):
         self.fail_commit = fail_commit
@@ -133,6 +139,31 @@ def test_build_extraction_envelope_candidate_parses_json_tool_output():
     assert candidate.metadata["tool_name"] == "ask_gene_expression_specialist"
     assert candidate.metadata["envelope_actor"] == "gene_expression_specialist"
     assert candidate.metadata["envelope_destination"] == "gene_expression"
+
+
+def test_build_extraction_envelope_candidate_prefers_envelope_adapter_key_over_caller_fallback():
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(_sample_envelope_payload()),
+        agent_key="gene-expression",
+        adapter_key="caller_adapter",
+        domain_key="caller_domain",
+    )
+
+    assert candidate is not None
+    assert candidate.adapter_key == "reference_adapter"
+    assert candidate.domain_key == "caller_domain"
+
+
+def test_build_extraction_envelope_candidate_uses_destination_as_adapter_fallback():
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(_sample_legacy_envelope_payload()),
+        agent_key="gene-expression",
+        adapter_key="caller_adapter",
+    )
+
+    assert candidate is not None
+    assert candidate.adapter_key == "gene_expression"
+    assert candidate.domain_key == "gene_expression"
 
 
 def test_build_extraction_envelope_candidate_ignores_non_extraction_payload():

@@ -94,32 +94,43 @@ def build_extraction_envelope_candidate(
     run_summary = payload.get("run_summary", {}) if isinstance(payload, dict) else {}
     candidate_count_raw = run_summary.get("candidate_count", 0)
     candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
+    resolved_adapter_key = str(adapter_key or "").strip() or None
+    resolved_domain_key = str(domain_key or "").strip() or None
 
     if isinstance(payload, dict):
         payload_adapter_key = payload.get("adapter_key")
         actor = payload.get("actor")
         destination = payload.get("destination")
-        if adapter_key is None and isinstance(payload_adapter_key, str):
-            adapter_key = payload_adapter_key.strip() or None
+        envelope_adapter_key = (
+            payload_adapter_key.strip() or None
+            if isinstance(payload_adapter_key, str)
+            else None
+        )
+        envelope_destination = (
+            destination.strip() or None if isinstance(destination, str) else None
+        )
+
+        if envelope_adapter_key is not None:
+            resolved_adapter_key = envelope_adapter_key
+        elif envelope_destination is not None:
+            # Legacy extraction envelopes only expose routing through `destination`.
+            # Persist that neutral adapter identifier so replay paths do not need to
+            # infer ownership from domain-only metadata later.
+            resolved_adapter_key = envelope_destination
         if actor:
             envelope_metadata.setdefault("envelope_actor", actor)
-        if destination:
-            envelope_metadata.setdefault("envelope_destination", destination)
-            if adapter_key is None and isinstance(destination, str):
-                # Existing extraction envelopes expose their adapter/routing target via
-                # `destination`; persist that key here so downstream curation replay
-                # can use adapter-owned identifiers without inventing them later.
-                adapter_key = destination.strip() or None
-            if domain_key is None and isinstance(destination, str):
-                domain_key = destination.strip() or None
+        if envelope_destination is not None:
+            envelope_metadata.setdefault("envelope_destination", envelope_destination)
+            if resolved_domain_key is None:
+                resolved_domain_key = envelope_destination
 
     return ExtractionEnvelopeCandidate(
         agent_key=canonical_agent_key,
         payload_json=payload,
         candidate_count=max(candidate_count, 0),
-        adapter_key=adapter_key,
+        adapter_key=resolved_adapter_key,
         profile_key=profile_key,
-        domain_key=domain_key,
+        domain_key=resolved_domain_key,
         conversation_summary=str(conversation_summary).strip() or None
         if conversation_summary is not None
         else None,
