@@ -158,8 +158,6 @@ def _build_persistence_request(
 ) -> CurationExtractionPersistenceRequest:
     """Translate prep execution into the existing extraction-result persistence contract."""
 
-    extraction_results = agent_input.extraction_results
-
     return CurationExtractionPersistenceRequest(
         document_id=document_id,
         agent_key=CURATION_PREP_AGENT_ID,

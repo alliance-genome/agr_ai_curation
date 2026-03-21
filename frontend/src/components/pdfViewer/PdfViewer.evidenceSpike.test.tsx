@@ -424,6 +424,9 @@ describe('PDF evidence spike helpers', () => {
       }
     })
 
+    await waitFor(() => {
+      expect(iframe.src).toContain('/pdfjs/web/viewer.html?file=%2Ffixtures%2Fsample.pdf')
+    })
     fireEvent.load(iframe)
 
     await waitFor(() => {
@@ -503,6 +506,9 @@ describe('PDF evidence spike helpers', () => {
       }
     })
 
+    await waitFor(() => {
+      expect(iframe.src).toContain('/pdfjs/web/viewer.html?file=%2Ffixtures%2Fsample.pdf')
+    })
     fireEvent.load(iframe)
 
     await waitFor(() => {
@@ -654,6 +660,9 @@ describe('PDF evidence spike helpers', () => {
       }
     })
 
+    await waitFor(() => {
+      expect(iframe.src).toContain('/pdfjs/web/viewer.html?file=%2Ffixtures%2Fsample.pdf')
+    })
     fireEvent.load(iframe)
 
     await waitFor(() => {
