@@ -4,6 +4,7 @@ from .curation_prep_service import (
     CurationPrepPersistenceContext,
     run_curation_prep,
 )
+from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
@@ -50,6 +51,7 @@ __all__ = [
     "AsyncioPipelineTaskScheduler",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
+    "DeterministicEvidenceAnchorResolver",
     "list_extraction_results_for_origin_session",
     "CurationExtractionResultRecord",
     "CurationReviewSession",

@@ -147,6 +147,99 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
             }
 
 
+def fetch_document_chunks_for_resolution(
+    document_id: str,
+    user_id: str,
+    *,
+    page_size: int = 250,
+) -> List[Dict[str, Any]]:
+    """Fetch all document chunks needed for deterministic evidence resolution."""
+
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk retrieval (FR-011, FR-014)")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    from weaviate.classes.query import Filter, Sort
+
+    chunks: List[Dict[str, Any]] = []
+    with connection.session() as client:
+        from ..weaviate_helpers import get_user_collections
+
+        chunk_collection, _ = get_user_collections(client, user_id)
+        offset = 0
+
+        while True:
+            response = chunk_collection.query.fetch_objects(
+                filters=Filter.by_property("documentId").equal(document_id),
+                sort=Sort.by_property("chunkIndex", ascending=True),
+                limit=page_size,
+                offset=offset,
+                include_vector=False,
+                return_properties=[
+                    "chunkIndex",
+                    "content",
+                    "pageNumber",
+                    "sectionTitle",
+                    "parentSection",
+                    "subsection",
+                    "metadata",
+                    "docItemProvenance",
+                ],
+            )
+
+            if not response.objects:
+                break
+
+            for obj in response.objects:
+                props = obj.properties
+                metadata = props.get("metadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                elif not isinstance(metadata, dict):
+                    metadata = {}
+
+                doc_items = []
+                doc_items_str = props.get("docItemProvenance")
+                if doc_items_str:
+                    try:
+                        doc_items = (
+                            json.loads(doc_items_str)
+                            if isinstance(doc_items_str, str)
+                            else doc_items_str
+                        )
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to parse docItemProvenance for resolution chunk %s",
+                            obj.uuid,
+                        )
+
+                chunks.append(
+                    {
+                        "id": str(obj.uuid),
+                        "chunk_index": props.get("chunkIndex"),
+                        "content": props.get("content"),
+                        "page_number": props.get("pageNumber"),
+                        "section_title": props.get("sectionTitle"),
+                        "parent_section": props.get("parentSection"),
+                        "subsection": props.get("subsection"),
+                        "metadata": metadata,
+                        "doc_items": doc_items,
+                    }
+                )
+
+            if len(response.objects) < page_size:
+                break
+            offset += page_size
+
+    return chunks
+
+
 
 
 async def hybrid_search_chunks(

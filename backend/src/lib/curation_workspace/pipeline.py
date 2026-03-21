@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -385,7 +386,7 @@ class PostCurationPipelineDependencies:
         default_factory=dict
     )
     evidence_resolver: EvidenceAnchorResolver = field(
-        default_factory=PassthroughEvidenceAnchorResolver
+        default_factory=DeterministicEvidenceAnchorResolver
     )
     validation_service: BatchValidationService = field(
         default_factory=DeterministicStructuralValidationService
@@ -866,6 +867,7 @@ __all__ = [
     "CandidateNormalizationContext",
     "CurationCandidateNormalizer",
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
+    "DeterministicEvidenceAnchorResolver",
     "DeterministicStructuralValidationService",
     "EvidenceAnchorResolver",
     "EvidenceResolutionContext",
