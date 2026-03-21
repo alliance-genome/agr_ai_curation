@@ -14,7 +14,7 @@ def _make_extraction_result(*, candidate_count: int = 2) -> CurationExtractionRe
         {
             "extraction_result_id": "extract-1",
             "document_id": "document-1",
-            "adapter_key": "disease",
+            "adapter_key": "reference_adapter",
             "profile_key": "primary",
             "domain_key": "disease",
             "agent_key": "disease_extractor",
@@ -26,14 +26,18 @@ def _make_extraction_result(*, candidate_count: int = 2) -> CurationExtractionRe
             "candidate_count": candidate_count,
             "conversation_summary": "Conversation focused on disease findings.",
             "payload_json": {
-                "items": [{"label": "APOE"}],
-                "evidence_records": [
+                "items": [
                     {
-                        "snippet": "APOE was implicated in the disease model.",
-                        "section": "Results",
-                        "subsection": "Disease findings",
-                        "page": 4,
-                        "figure_reference": "Fig. 2",
+                        "label": "APOE",
+                        "evidence_records": [
+                            {
+                                "snippet": "APOE was implicated in the disease model.",
+                                "section": "Results",
+                                "subsection": "Disease findings",
+                                "page": 4,
+                                "figure_reference": "Fig. 2",
+                            }
+                        ],
                     }
                 ],
                 "run_summary": {"candidate_count": candidate_count},
@@ -49,7 +53,7 @@ def _make_prep_output(candidate_count: int = 2) -> CurationPrepAgentOutput:
         {
             "candidates": [
                 {
-                    "adapter_key": "disease",
+                    "adapter_key": "reference_adapter",
                     "profile_key": "primary",
                     "extracted_fields": [
                         {
@@ -130,7 +134,7 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.candidate_count == 2
     assert preview.extraction_result_count == 1
     assert preview.conversation_message_count == 2
-    assert preview.adapter_keys == ["disease"]
+    assert preview.adapter_keys == ["reference_adapter"]
     assert preview.domain_keys == ["disease"]
     assert "You discussed 2 candidate annotations" in preview.summary_text
 
@@ -196,17 +200,17 @@ async def test_run_chat_curation_prep_builds_agent_input_and_returns_summary(mon
 
     agent_input = captured["agent_input"]
     assert len(agent_input.conversation_history) == 2
-    assert agent_input.scope_confirmation.adapter_keys == ["disease"]
+    assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
     assert agent_input.scope_confirmation.profile_keys == ["primary"]
     assert agent_input.scope_confirmation.domain_keys == ["disease"]
     assert len(agent_input.adapter_metadata) == 1
-    assert agent_input.adapter_metadata[0].adapter_key == "disease"
+    assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
     assert len(agent_input.evidence_records) == 1
     assert agent_input.evidence_records[0].anchor.page_number == 4
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
 
     assert result.candidate_count == 2
-    assert result.adapter_keys == ["disease"]
+    assert result.adapter_keys == ["reference_adapter"]
     assert result.warnings == ["Review evidence alignment before downstream normalization."]
     assert "Prepared 2 candidate annotations for curation review." == result.summary_text

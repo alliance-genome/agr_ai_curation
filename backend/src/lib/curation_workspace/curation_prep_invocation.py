@@ -310,24 +310,57 @@ def _build_adapter_metadata(
     return metadata
 
 
+def _collect_evidence_payloads(payload: Any) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+
+    if isinstance(payload, dict):
+        for key in ("evidence_records", "evidence"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                collected.extend(item for item in value if isinstance(item, dict))
+
+        for key, value in payload.items():
+            if key in {"evidence_records", "evidence"}:
+                continue
+            if isinstance(value, (dict, list)):
+                collected.extend(_collect_evidence_payloads(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            collected.extend(_collect_evidence_payloads(item))
+
+    return collected
+
+
 def _build_evidence_records(
     extraction_results: Sequence[CurationExtractionResultRecord],
 ) -> list[CurationPrepEvidenceRecord]:
     evidence_records: list[CurationPrepEvidenceRecord] = []
+    seen_keys: set[tuple[str, str, str, str, str]] = set()
 
     for extraction_result in extraction_results:
         payload = extraction_result.payload_json
-        raw_evidence_records = payload.get("evidence_records", []) if isinstance(payload, dict) else []
-        if not isinstance(raw_evidence_records, list):
-            continue
 
-        for index, raw_record in enumerate(raw_evidence_records, start=1):
-            if not isinstance(raw_record, dict):
+        for index, raw_record in enumerate(_collect_evidence_payloads(payload), start=1):
+            snippet_text = str(raw_record.get("snippet") or raw_record.get("snippet_text") or "").strip()
+            section_title = str(raw_record.get("section") or raw_record.get("section_title") or "").strip()
+            subsection_title = str(
+                raw_record.get("subsection") or raw_record.get("subsection_title") or ""
+            ).strip()
+            page_number = raw_record.get("page") or raw_record.get("page_number")
+            dedupe_key = (
+                extraction_result.extraction_result_id,
+                snippet_text,
+                str(page_number or ""),
+                section_title,
+                subsection_title,
+            )
+            if dedupe_key in seen_keys:
                 continue
 
             anchor = _build_evidence_anchor(raw_record)
             if anchor is None:
                 continue
+            seen_keys.add(dedupe_key)
 
             evidence_records.append(
                 CurationPrepEvidenceRecord(

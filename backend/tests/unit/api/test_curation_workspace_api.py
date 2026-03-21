@@ -22,7 +22,7 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
             candidate_count=2,
             extraction_result_count=1,
             conversation_message_count=4,
-            adapter_keys=["disease"],
+            adapter_keys=["reference_adapter"],
             profile_keys=["primary"],
             domain_keys=["disease"],
             blocking_reasons=[],
@@ -36,7 +36,7 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
     )
 
     assert response.ready is True
-    assert response.adapter_keys == ["disease"]
+    assert response.adapter_keys == ["reference_adapter"]
     assert response.candidate_count == 2
 
 
@@ -70,7 +70,7 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
             candidate_count=2,
             warnings=["Review evidence alignment before downstream normalization."],
             processing_notes=["Prepared from chat extraction context."],
-            adapter_keys=["disease"],
+            adapter_keys=["reference_adapter"],
             profile_keys=["primary"],
             domain_keys=["disease"],
         )
