@@ -214,6 +214,7 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.trace_id == "trace-123"
     assert persisted_request.user_id == "auth-sub"
     assert persisted_request.candidate_count == 1
+    assert persisted_request.adapter_key == "gene_expression"
     assert persisted_request.domain_key == "gene_expression"
     assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
 
