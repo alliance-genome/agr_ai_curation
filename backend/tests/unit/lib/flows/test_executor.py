@@ -1174,6 +1174,54 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is not None
 
     @pytest.mark.asyncio
+    async def test_converts_run_error_into_flow_error(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "curation_prep", step_goal="Prepare candidates"),
+        ])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "RUN_ERROR",
+                "data": {
+                    "message": (
+                        "Curation prep flow steps require at least one upstream extraction envelope."
+                    ),
+                    "trace_id": "trace-1",
+                },
+            }
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "RUN_ERROR" in event_types
+        assert "FLOW_ERROR" in event_types
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "run_error"
+        assert "failed during execution" in flow_error["details"]["message"]
+
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"]["failure_reason"] == (
+            "Curation prep flow steps require at least one upstream extraction envelope."
+        )
+
+    @pytest.mark.asyncio
     async def test_marks_completed_on_chat_output_ready(self, monkeypatch):
         flow = _make_flow([
             _task_input_node(),

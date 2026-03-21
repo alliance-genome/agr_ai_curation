@@ -97,7 +97,7 @@ def _stringify_tool_output(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=True)
+        return json.dumps(value)
     return str(value or "")
 
 
@@ -769,7 +769,7 @@ def get_all_agent_tools(
                             conversation_summary=flow_conversation_summary,
                         ),
                     )
-                    return json.dumps(prep_output.model_dump(mode="json"), ensure_ascii=True)
+                    return json.dumps(prep_output.model_dump(mode="json"))
 
                 return _curation_prep_tool
 
