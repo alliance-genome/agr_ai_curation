@@ -50,13 +50,14 @@ async def run_curation_prep(
     """Run the curation prep agent, persist its raw output, and return the enriched result."""
 
     persistence_context = persistence_context or CurationPrepPersistenceContext()
-    _resolve_document_id(agent_input.extraction_results, persistence_context)
+    primary_extraction_result = _resolve_primary_extraction_result(agent_input.extraction_results)
+    document_id = _resolve_document_id(agent_input.extraction_results, persistence_context)
     agent_definition = get_curation_prep_agent_definition()
     agent = create_curation_prep_agent()
 
     run_config = RunConfig(
         workflow_name="Curation prep",
-        group_id=_resolve_group_id(agent_input, persistence_context),
+        group_id=_resolve_group_id(primary_extraction_result, persistence_context),
         trace_metadata=_build_trace_metadata(agent_input, persistence_context),
     )
 
@@ -80,6 +81,8 @@ async def run_curation_prep(
             raw_output=raw_output,
             final_output=final_output,
             persistence_context=persistence_context,
+            document_id=document_id,
+            primary_extraction_result=primary_extraction_result,
         ),
         db=db,
     )
@@ -150,25 +153,27 @@ def _build_persistence_request(
     raw_output: CurationPrepAgentOutput,
     final_output: CurationPrepAgentOutput,
     persistence_context: CurationPrepPersistenceContext,
+    document_id: str,
+    primary_extraction_result: CurationExtractionResultRecord,
 ) -> CurationExtractionPersistenceRequest:
     """Translate prep execution into the existing extraction-result persistence contract."""
 
     extraction_results = agent_input.extraction_results
 
     return CurationExtractionPersistenceRequest(
-        document_id=_resolve_document_id(extraction_results, persistence_context),
+        document_id=document_id,
         agent_key=CURATION_PREP_AGENT_ID,
-        source_kind=persistence_context.source_kind or extraction_results[0].source_kind,
+        source_kind=persistence_context.source_kind or primary_extraction_result.source_kind,
         adapter_key=_resolve_adapter_key(agent_input),
         profile_key=_resolve_profile_key(agent_input),
         domain_key=_resolve_domain_key(agent_input),
         origin_session_id=(
             persistence_context.origin_session_id
-            or extraction_results[0].origin_session_id
+            or primary_extraction_result.origin_session_id
         ),
-        trace_id=persistence_context.trace_id or extraction_results[0].trace_id,
-        flow_run_id=persistence_context.flow_run_id or extraction_results[0].flow_run_id,
-        user_id=persistence_context.user_id or extraction_results[0].user_id,
+        trace_id=persistence_context.trace_id or primary_extraction_result.trace_id,
+        flow_run_id=persistence_context.flow_run_id or primary_extraction_result.flow_run_id,
+        user_id=persistence_context.user_id or primary_extraction_result.user_id,
         candidate_count=len(raw_output.candidates),
         conversation_summary=_resolve_conversation_summary(agent_input, persistence_context),
         payload_json=raw_output.model_dump(mode="json"),
@@ -181,6 +186,17 @@ def _build_persistence_request(
             "scope_domain_keys": list(agent_input.scope_confirmation.domain_keys),
         },
     )
+
+
+def _resolve_primary_extraction_result(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+) -> CurationExtractionResultRecord:
+    """Return the first extraction result while making the non-empty contract explicit."""
+
+    if not extraction_results:
+        raise ValueError("Curation prep requires at least one extraction result.")
+
+    return extraction_results[0]
 
 
 def _resolve_document_id(
@@ -236,7 +252,7 @@ def _resolve_domain_key(agent_input: CurationPrepAgentInput) -> str | None:
 
 
 def _resolve_group_id(
-    agent_input: CurationPrepAgentInput,
+    primary_extraction_result: CurationExtractionResultRecord,
     persistence_context: CurationPrepPersistenceContext,
 ) -> str | None:
     """Choose a stable tracing group id when one is available."""
@@ -246,8 +262,7 @@ def _resolve_group_id(
     if persistence_context.flow_run_id:
         return persistence_context.flow_run_id
 
-    first_result = agent_input.extraction_results[0]
-    return first_result.origin_session_id or first_result.flow_run_id
+    return primary_extraction_result.origin_session_id or primary_extraction_result.flow_run_id
 
 
 def _build_trace_metadata(

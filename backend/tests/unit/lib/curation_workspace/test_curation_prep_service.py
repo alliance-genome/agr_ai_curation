@@ -234,6 +234,47 @@ async def test_run_curation_prep_populates_usage_and_persists_raw_output(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_run_curation_prep_resolves_document_id_once(monkeypatch):
+    """Document id validation should be reused for persistence rather than recomputed."""
+
+    agent_input = _make_agent_input()
+    raw_output = _make_agent_output()
+    original_resolve_document_id = module._resolve_document_id
+    resolve_document_id_calls = 0
+
+    def _spy_resolve_document_id(extraction_results, persistence_context):
+        nonlocal resolve_document_id_calls
+        resolve_document_id_calls += 1
+        return original_resolve_document_id(extraction_results, persistence_context)
+
+    monkeypatch.setattr(module, "_resolve_document_id", _spy_resolve_document_id)
+    monkeypatch.setattr(
+        module,
+        "get_curation_prep_agent_definition",
+        lambda: SimpleNamespace(model_config=SimpleNamespace(model="gpt-5-mini")),
+    )
+    monkeypatch.setattr(module, "create_curation_prep_agent", lambda: "prep-agent")
+    monkeypatch.setattr(module, "RunConfig", lambda **kwargs: kwargs)
+
+    async def _fake_runner_run(_agent, _input_text, run_config=None):
+        return SimpleNamespace(final_output=raw_output, context_wrapper=None, raw_responses=[])
+
+    monkeypatch.setattr(module.Runner, "run", _fake_runner_run)
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    await module.run_curation_prep(agent_input)
+
+    assert resolve_document_id_calls == 1
+
+
+def test_resolve_primary_extraction_result_requires_non_empty_input():
+    """The explicit first-result helper should guard empty sequences clearly."""
+
+    with pytest.raises(ValueError, match="at least one extraction result"):
+        module._resolve_primary_extraction_result([])
+
+
+@pytest.mark.asyncio
 async def test_run_curation_prep_rejects_multiple_document_ids(monkeypatch):
     """Persisted prep output must target a single document id."""
 
