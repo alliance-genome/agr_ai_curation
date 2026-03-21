@@ -21,6 +21,7 @@ from src.schemas.curation_workspace import (
 
 def _sample_envelope_payload() -> dict:
     return {
+        "adapter_key": "reference_adapter",
         "actor": "gene_expression_specialist",
         "destination": "gene_expression",
         "confidence": 0.92,
@@ -125,7 +126,7 @@ def test_build_extraction_envelope_candidate_parses_json_tool_output():
 
     assert candidate is not None
     assert candidate.agent_key == "gene-expression"
-    assert candidate.adapter_key == "gene_expression"
+    assert candidate.adapter_key == "reference_adapter"
     assert candidate.candidate_count == 2
     assert candidate.domain_key == "gene_expression"
     assert candidate.payload_json["items"] == [{"label": "notch"}]

@@ -6,10 +6,15 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
+from src.lib.conversation_manager import SessionAccessError
+from src.lib.curation_workspace.curation_prep_invocation import (
+    build_chat_curation_prep_preview,
+    run_chat_curation_prep,
+)
 from src.lib.curation_workspace.session_service import (
     get_next_session,
     get_session_detail,
@@ -18,6 +23,11 @@ from src.lib.curation_workspace.session_service import (
     update_session,
 )
 from src.models.sql.database import get_db
+from src.schemas.curation_prep import (
+    CurationPrepChatPreviewResponse,
+    CurationPrepChatRunRequest,
+    CurationPrepChatRunResponse,
+)
 from src.schemas.curation_workspace import (
     CurationDateRange,
     CurationNextSessionRequest,
@@ -123,6 +133,13 @@ def _current_user_id(user: dict) -> str | None:
     return user.get("sub") or user.get("uid")
 
 
+def _require_current_user_id(user: dict) -> str:
+    user_id = _current_user_id(user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    return user_id
+
+
 @router.get("/sessions", response_model=CurationSessionListResponse)
 async def list_review_sessions(
     request: CurationSessionListRequest = Depends(_build_list_request),
@@ -176,6 +193,48 @@ async def patch_review_session(
 ) -> CurationSessionUpdateResponse:
     set_global_user_from_cognito(db, user)
     return update_session(db, session_id, request, user)
+
+
+@router.get("/prep/preview", response_model=CurationPrepChatPreviewResponse)
+async def get_chat_prep_preview(
+    session_id: str = Query(..., min_length=1),
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationPrepChatPreviewResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+
+    try:
+        return build_chat_curation_prep_preview(
+            session_id=session_id,
+            user_id=user_id,
+            db=db,
+        )
+    except SessionAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/prep", response_model=CurationPrepChatRunResponse)
+async def trigger_chat_prep(
+    request: CurationPrepChatRunRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationPrepChatRunResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+
+    try:
+        return await run_chat_curation_prep(
+            request,
+            user_id=user_id,
+            db=db,
+        )
+    except SessionAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 __all__ = ["router"]

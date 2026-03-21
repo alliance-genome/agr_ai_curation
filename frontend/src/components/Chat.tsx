@@ -5,6 +5,12 @@ import { dispatchClearHighlights, dispatchPDFDocumentChanged } from '@/component
 import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
 import FileDownloadCard, { FileInfo } from '@/components/Chat/FileDownloadCard'
+import PrepScopeConfirmationDialog from '@/features/curation/components/PrepScopeConfirmationDialog'
+import {
+  fetchCurationPrepPreview,
+  runCurationPrep,
+  type CurationPrepPreview,
+} from '@/features/curation/services/curationPrepService'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
@@ -168,6 +174,15 @@ function Chat({
   const [feedbackMessageData, setFeedbackMessageData] = useState<{
     content: string
     traceIds: string[]
+  } | null>(null)
+  const [prepDialogOpen, setPrepDialogOpen] = useState(false)
+  const [prepPreview, setPrepPreview] = useState<CurationPrepPreview | null>(null)
+  const [isLoadingPrepPreview, setIsLoadingPrepPreview] = useState(false)
+  const [isPreparingCuration, setIsPreparingCuration] = useState(false)
+  const [prepDialogError, setPrepDialogError] = useState<string | null>(null)
+  const [prepStatus, setPrepStatus] = useState<{
+    kind: 'success' | 'error' | 'info'
+    message: string
   } | null>(null)
   const [refinePrompt, setRefinePrompt] = useState<string | null>(null)
   const [refineText, setRefineText] = useState<string>('')
@@ -902,6 +917,85 @@ function Chat({
     }
   }
 
+  const handleOpenPrepDialog = async () => {
+    if (!propSessionId) {
+      setPrepStatus({
+        kind: 'error',
+        message: 'Start a chat session before preparing for curation.',
+      })
+      return
+    }
+
+    setPrepDialogOpen(true)
+    setPrepDialogError(null)
+    setPrepPreview(null)
+    setIsLoadingPrepPreview(true)
+
+    try {
+      const preview = await fetchCurationPrepPreview(propSessionId)
+      setPrepPreview(preview)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load curation scope.'
+      setPrepDialogError(message)
+    } finally {
+      setIsLoadingPrepPreview(false)
+    }
+  }
+
+  const handleClosePrepDialog = () => {
+    if (isPreparingCuration) {
+      return
+    }
+
+    setPrepDialogOpen(false)
+    setPrepDialogError(null)
+    setPrepPreview(null)
+    setIsLoadingPrepPreview(false)
+  }
+
+  const handleConfirmPrep = async () => {
+    if (!propSessionId || !prepPreview) {
+      setPrepDialogError('Curation scope is not available yet.')
+      return
+    }
+
+    setIsPreparingCuration(true)
+    setPrepDialogError(null)
+    setPrepStatus({
+      kind: 'info',
+      message: 'Preparing candidate annotations for curation review...',
+    })
+
+    try {
+      const result = await runCurationPrep({
+        session_id: propSessionId,
+        adapter_keys: prepPreview.adapter_keys,
+        profile_keys: prepPreview.profile_keys,
+        domain_keys: prepPreview.domain_keys,
+      })
+
+      const warningText = result.warnings.length > 0
+        ? ` Warnings: ${result.warnings.join(' ')}`
+        : ''
+
+      setPrepStatus({
+        kind: 'success',
+        message: `${result.summary_text}${warningText}`.trim(),
+      })
+      setPrepDialogOpen(false)
+      setPrepPreview(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to prepare curation scope.'
+      setPrepDialogError(message)
+      setPrepStatus({
+        kind: 'error',
+        message,
+      })
+    } finally {
+      setIsPreparingCuration(false)
+    }
+  }
+
   const handleResetConversation = async () => {
     if (!window.confirm('Are you sure you want to reset the chat? This will clear all messages and conversation memory.')) {
       return
@@ -1125,6 +1219,30 @@ function Chat({
     setRefineText('')
   }
 
+  const prepButtonLabel = isPreparingCuration
+    ? 'Preparing...'
+    : isLoadingPrepPreview
+      ? 'Loading Scope...'
+      : 'Prepare for Curation'
+
+  const prepStatusStyle = prepStatus?.kind === 'success'
+    ? {
+        border: '1px solid rgba(76, 175, 80, 0.35)',
+        background: 'rgba(76, 175, 80, 0.08)',
+        color: '#2e7d32',
+      }
+    : prepStatus?.kind === 'error'
+      ? {
+          border: '1px solid rgba(220, 53, 69, 0.35)',
+          background: 'rgba(220, 53, 69, 0.08)',
+          color: '#c12d3c',
+        }
+      : {
+          border: '1px solid rgba(33, 150, 243, 0.35)',
+          background: 'rgba(33, 150, 243, 0.08)',
+          color: '#0d6efd',
+        }
+
   return (
     <div
       style={{
@@ -1205,9 +1323,53 @@ function Chat({
                 {isUnloadingPDF ? 'Unloading...' : 'Unload PDF'}
               </button>
             )}
+
+            <button
+              onClick={handleOpenPrepDialog}
+              disabled={!propSessionId || isLoadingPrepPreview || isPreparingCuration}
+              style={{
+                padding: '4px 12px',
+                backgroundColor: (isLoadingPrepPreview || isPreparingCuration || !propSessionId)
+                  ? '#ccc'
+                  : '#2e7d32',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: (isLoadingPrepPreview || isPreparingCuration || !propSessionId)
+                  ? 'not-allowed'
+                  : 'pointer',
+                fontSize: '0.9em',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title="Prepare the current chat scope for curation review"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-8 14l-5-5 1.41-1.41L11 14.17l5.59-5.58L18 10l-7 7z"/>
+              </svg>
+              {prepButtonLabel}
+            </button>
           </div>
         </div>
       </div>
+
+      {prepStatus && (
+        <div
+          role={prepStatus.kind === 'error' ? 'alert' : 'status'}
+          style={{
+            margin: '8px 0',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            ...prepStatusStyle,
+          }}
+        >
+          <span>{prepStatus.message}</span>
+        </div>
+      )}
 
       {limitNotices.length > 0 && (
         <div
@@ -1423,6 +1585,16 @@ function Chat({
         traceIds={feedbackMessageData?.traceIds || []}
         curatorId={user?.email || 'unknown@example.com'}
         onSubmit={handleFeedbackSubmit}
+      />
+
+      <PrepScopeConfirmationDialog
+        open={prepDialogOpen}
+        preview={prepPreview}
+        loading={isLoadingPrepPreview}
+        submitting={isPreparingCuration}
+        error={prepDialogError}
+        onClose={handleClosePrepDialog}
+        onConfirm={handleConfirmPrep}
       />
     </div>
   )

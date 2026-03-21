@@ -16,10 +16,35 @@ const CURATION_DB_WARNING =
 function mockChatFetch(options?: {
   curationDbStatus?: string
   rejectHealth?: boolean
+  prepPreview?: {
+    ready: boolean
+    summary_text: string
+    candidate_count: number
+    extraction_result_count: number
+    conversation_message_count: number
+    adapter_keys: string[]
+    profile_keys: string[]
+    domain_keys: string[]
+    blocking_reasons: string[]
+  }
+  prepRun?: {
+    summary_text: string
+    candidate_count: number
+    warnings: string[]
+    processing_notes: string[]
+    adapter_keys: string[]
+    profile_keys: string[]
+    domain_keys: string[]
+  }
 }) {
-  const { curationDbStatus = 'connected', rejectHealth = false } = options ?? {}
+  const {
+    curationDbStatus = 'connected',
+    rejectHealth = false,
+    prepPreview,
+    prepRun,
+  } = options ?? {}
 
-  vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+  vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
 
     if (url === '/health') {
@@ -35,6 +60,40 @@ function mockChatFetch(options?: {
             curation_db: curationDbStatus,
           },
         }),
+      } as Response
+    }
+
+    if (url.startsWith('/api/curation-workspace/prep/preview')) {
+      return {
+        ok: true,
+        json: async () => prepPreview ?? {
+          ready: false,
+          summary_text: 'No candidate annotations are available from this chat yet.',
+          candidate_count: 0,
+          extraction_result_count: 0,
+          conversation_message_count: 0,
+          adapter_keys: [],
+          profile_keys: [],
+          domain_keys: [],
+          blocking_reasons: [
+            'No candidate annotations are available from this chat yet.',
+          ],
+        },
+      } as Response
+    }
+
+    if (url === '/api/curation-workspace/prep' && init?.method === 'POST') {
+      return {
+        ok: true,
+        json: async () => prepRun ?? {
+          summary_text: 'Prepared 1 candidate annotation for curation review.',
+          candidate_count: 1,
+          warnings: [],
+          processing_notes: [],
+          adapter_keys: ['disease'],
+          profile_keys: ['primary'],
+          domain_keys: ['disease'],
+        },
       } as Response
     }
 
@@ -204,4 +263,74 @@ describe('Chat persistence', () => {
       })
     }
   )
+
+  it('always shows the Prepare for Curation button', () => {
+    renderChat()
+
+    expect(
+      screen.getByRole('button', { name: /prepare for curation/i })
+    ).toBeInTheDocument()
+  })
+
+  it('loads prep scope, confirms prep, and triggers the curation prep API', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 4 candidate annotations. Prepare all for curation review?',
+        candidate_count: 4,
+        extraction_result_count: 2,
+        conversation_message_count: 6,
+        adapter_keys: ['disease'],
+        profile_keys: ['primary'],
+        domain_keys: ['disease'],
+        blocking_reasons: [],
+      },
+      prepRun: {
+        summary_text: 'Prepared 2 candidate annotations for curation review.',
+        candidate_count: 2,
+        warnings: ['Review warnings are available.'],
+        processing_notes: ['Prep completed successfully.'],
+        adapter_keys: ['disease'],
+        profile_keys: ['primary'],
+        domain_keys: ['disease'],
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+
+    expect(
+      await screen.findByText('You discussed 4 candidate annotations. Prepare all for curation review?')
+    ).toBeInTheDocument()
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/curation-workspace/prep/preview?session_id=session-1',
+      {
+        credentials: 'include',
+      }
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /start prep/i }))
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/curation-workspace/prep', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id: 'session-1',
+          adapter_keys: ['disease'],
+          profile_keys: ['primary'],
+          domain_keys: ['disease'],
+        }),
+      })
+    })
+
+    expect(
+      await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
+    ).toBeInTheDocument()
+  })
 })

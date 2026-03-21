@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping, Optional, Sequence
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -192,6 +193,57 @@ def persist_extraction_results(
             session.close()
 
 
+def list_extraction_results(
+    *,
+    db: Optional[Session] = None,
+    document_id: str | None = None,
+    origin_session_id: str | None = None,
+    user_id: str | None = None,
+    source_kind: Any | None = None,
+    exclude_agent_keys: Sequence[str] | None = None,
+) -> list[CurationExtractionResultRecord]:
+    """List persisted extraction-result records using the shared schema contract."""
+    owns_session = db is None
+    session = db or SessionLocal()
+
+    try:
+        statement = select(CurationExtractionResultRecordModel).order_by(
+            CurationExtractionResultRecordModel.created_at.asc(),
+            CurationExtractionResultRecordModel.id.asc(),
+        )
+
+        if document_id:
+            try:
+                document_uuid = UUID(str(document_id).strip())
+            except (AttributeError, TypeError, ValueError):
+                logger.warning(
+                    "Ignoring invalid document_id filter for extraction results: %r",
+                    document_id,
+                )
+                return []
+            statement = statement.where(CurationExtractionResultRecordModel.document_id == document_uuid)
+        if origin_session_id:
+            statement = statement.where(
+                CurationExtractionResultRecordModel.origin_session_id == origin_session_id
+            )
+        if user_id:
+            statement = statement.where(CurationExtractionResultRecordModel.user_id == user_id)
+        if source_kind is not None:
+            statement = statement.where(CurationExtractionResultRecordModel.source_kind == source_kind)
+        if exclude_agent_keys:
+            statement = statement.where(
+                CurationExtractionResultRecordModel.agent_key.notin_(
+                    [str(agent_key) for agent_key in exclude_agent_keys if str(agent_key).strip()]
+                )
+            )
+
+        records = session.execute(statement).scalars().all()
+        return [_record_to_schema(record) for record in records]
+    finally:
+        if owns_session:
+            session.close()
+
+
 def list_extraction_results_for_origin_session(
     origin_session_id: str,
     *,
@@ -337,6 +389,7 @@ __all__ = [
     "ExtractionEnvelopeCandidate",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
+    "list_extraction_results",
     "list_extraction_results_for_origin_session",
     "persist_extraction_result",
     "persist_extraction_results",
