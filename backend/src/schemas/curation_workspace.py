@@ -802,6 +802,10 @@ class CurationCandidate(CurationWorkspaceBaseModel):
         default=None,
         description="Extraction result that seeded this candidate when available",
     )
+    normalized_payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Adapter-owned normalized candidate payload persisted for deterministic review flows",
+    )
     draft: CurationDraft = Field(description="Editable draft state")
     evidence_anchors: list[CurationEvidenceRecord] = Field(
         default_factory=list,
