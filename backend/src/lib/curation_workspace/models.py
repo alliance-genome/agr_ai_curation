@@ -324,6 +324,12 @@ class CurationCandidate(Base):
         _fk("extraction_results.id"),
         nullable=True,
     )
+    normalized_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
     candidate_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,

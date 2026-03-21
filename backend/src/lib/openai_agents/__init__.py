@@ -1,32 +1,23 @@
-"""
-OpenAI Agents SDK implementation for AI Curation Prototype.
+"""OpenAI Agents SDK package exports.
 
-This module provides a full agent-based architecture using OpenAI Agents SDK.
-
-Architecture:
-- Supervisor agent analyzes queries and routes to specialists
-- Specialists can hand back to supervisor for multi-step queries
-- Bidirectional handoffs enable complex cross-domain synthesis
-
-Domain Specialists (created by supervisor):
-- PDF Specialist: Document Q&A using Weaviate hybrid search
-- Disease Ontology Specialist: DOID database queries via SQL
-- Gene Curation Specialist: AGR database queries
-- Chemical Ontology Specialist: ChEBI REST API queries
-
-Tools:
-- SQL query (for disease ontology)
-- REST API (for ChEBI)
-- AGR curation query (for gene data)
-- Weaviate hybrid search (for PDF content)
+Keep package-level exports lazy so importing submodules does not eagerly pull in
+the full supervisor/runner graph during unrelated test collection.
 """
 
-from .runner import run_agent_streamed
-from .agents import create_supervisor_agent
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
 
 __all__ = [
-    # Main entry point
     "run_agent_streamed",
-    # Supervisor entry point
     "create_supervisor_agent",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "run_agent_streamed":
+        return import_module(".runner", __name__).run_agent_streamed
+    if name == "create_supervisor_agent":
+        return import_module(".agents", __name__).create_supervisor_agent
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

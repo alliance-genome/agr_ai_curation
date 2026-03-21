@@ -39,6 +39,7 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "save_tsv_file": "Save TSV File",
     "save_json_file": "Save JSON File",
     "export_to_file": "Export to File",
+    "prepare_for_curation": "Curation Prep",
 }
 
 

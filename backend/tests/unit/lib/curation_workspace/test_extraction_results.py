@@ -2,12 +2,14 @@
 
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
+    list_extraction_results_for_origin_session,
     persist_extraction_result,
     persist_extraction_results,
 )
@@ -64,6 +66,51 @@ class _FakeSession:
 
     def rollback(self):
         self.rollback_calls += 1
+
+    def close(self):
+        self.closed = True
+
+
+class _Field:
+    def __eq__(self, _other):
+        return True
+
+    def in_(self, _values):
+        return True
+
+    def asc(self):
+        return self
+
+
+class _FakeQuery:
+    def __init__(self, rows):
+        self._rows = rows
+        self.filter_calls = 0
+        self.order_by_calls = 0
+        self.all_calls = 0
+
+    def filter(self, *_args, **_kwargs):
+        self.filter_calls += 1
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        self.order_by_calls += 1
+        return self
+
+    def all(self):
+        self.all_calls += 1
+        return list(self._rows)
+
+
+class _FakeQuerySession:
+    def __init__(self, rows):
+        self._rows = rows
+        self.closed = False
+        self.last_query = None
+
+    def query(self, _model):
+        self.last_query = _FakeQuery(self._rows)
+        return self.last_query
 
     def close(self):
         self.closed = True
@@ -198,3 +245,38 @@ def test_persist_extraction_results_rolls_back_batch_on_commit_error():
     assert session.commit_calls == 1
     assert session.rollback_calls == 1
     assert session.refresh_calls == 0
+
+
+def test_list_extraction_results_for_origin_session_returns_empty_for_invalid_document_id(
+    monkeypatch,
+    caplog,
+):
+    fake_model = SimpleNamespace(
+        origin_session_id=_Field(),
+        user_id=_Field(),
+        source_kind=_Field(),
+        document_id=_Field(),
+        agent_key=_Field(),
+        created_at=_Field(),
+        id=_Field(),
+    )
+    session = _FakeQuerySession(rows=[])
+
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results.CurationExtractionResultRecordModel",
+        fake_model,
+    )
+
+    with caplog.at_level("WARNING"):
+        results = list_extraction_results_for_origin_session(
+            "session-1",
+            user_id="user-1",
+            source_kind=CurationExtractionSourceKind.CHAT.value,
+            document_id="not-a-uuid",
+            db=session,
+        )
+
+    assert results == []
+    assert session.last_query is not None
+    assert session.last_query.all_calls == 0
+    assert "Ignoring invalid document_id filter" in caplog.text
