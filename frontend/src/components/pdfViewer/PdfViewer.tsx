@@ -404,8 +404,10 @@ const resolveQuoteMatchLocatorQuality = (
   anchorQuality: EvidenceLocatorQuality,
   candidateReason: PdfEvidenceSpikeCandidateReason,
 ): EvidenceLocatorQuality => {
-  if (anchorQuality === 'exact_quote' || anchorQuality === 'normalized_quote') {
-    return anchorQuality
+  // Quote fallback can degrade an exact anchor, but should not upgrade a
+  // normalized anchor just because the first attempted query happens to match.
+  if (anchorQuality === 'normalized_quote') {
+    return 'normalized_quote'
   }
 
   return candidateReason === 'raw' ? 'exact_quote' : 'normalized_quote'

@@ -366,6 +366,160 @@ describe('PDF evidence spike helpers', () => {
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
   })
 
+  it('downgrades exact quote anchors when only a normalized retry resolves', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(null, {
+        status: 200,
+      }),
+    )
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: 'Repeated   quote\nwith “smart” punctuation',
+        normalized_text: 'Repeated quote with "smart" punctuation',
+        viewer_search_text: 'Repeated   quote\nwith “smart” punctuation',
+        page_number: 3,
+        section_title: 'Results',
+        subsection_title: 'Quantification',
+        chunk_ids: ['chunk-normalized-fallback'],
+      },
+      searchText: 'Repeated   quote\nwith “smart” punctuation',
+      pageNumber: 3,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-5', '/fixtures/sample.pdf', 'normalized-fallback.pdf', 9)
+    await waitFor(() => {
+      expect(screen.getByText('normalized-fallback.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer((query) => {
+      if (query === 'Repeated quote with "smart" punctuation') {
+        return {
+          state: 0,
+          total: 1,
+          current: 1,
+          pageIdx: 2,
+        }
+      }
+
+      return {
+        state: 1,
+        total: 0,
+        current: 0,
+        pageIdx: null,
+      }
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual([
+      'Repeated   quote\nwith “smart” punctuation',
+      'Repeated quote with “smart” punctuation',
+      'Repeated quote with "smart" punctuation',
+    ])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'normalized_quote',
+      degraded: false,
+      matchedQuery: 'Repeated quote with "smart" punctuation',
+      matchedPage: 3,
+    }))
+    expect(screen.getByText('Approximate quote')).toBeInTheDocument()
+  })
+
+  it('does not upgrade normalized quote anchors when the first query resolves', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(null, {
+        status: 200,
+      }),
+    )
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        snippet_text: 'Already normalized quote text',
+        normalized_text: 'Already normalized quote text',
+        viewer_search_text: 'Already normalized quote text',
+        page_number: 2,
+        section_title: 'Discussion',
+        subsection_title: 'Summary',
+        chunk_ids: ['chunk-normalized-stays-normalized'],
+      },
+      searchText: 'Already normalized quote text',
+      pageNumber: 2,
+      sectionTitle: 'Discussion',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-6', '/fixtures/sample.pdf', 'normalized-stable.pdf', 7)
+    await waitFor(() => {
+      expect(screen.getByText('normalized-stable.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer((query) => {
+      if (query === 'Already normalized quote text') {
+        return {
+          state: 0,
+          total: 1,
+          current: 1,
+          pageIdx: 1,
+        }
+      }
+
+      return {
+        state: 1,
+        total: 0,
+        current: 0,
+        pageIdx: null,
+      }
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual(['Already normalized quote text'])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'normalized_quote',
+      degraded: false,
+      matchedQuery: 'Already normalized quote text',
+      matchedPage: 2,
+    }))
+    expect(screen.getByText('Approximate quote')).toBeInTheDocument()
+  })
+
   it('skips quote search for degraded anchors when typed searchText is absent', async () => {
     vi.mocked(global.fetch).mockResolvedValue(
       new Response(null, {
