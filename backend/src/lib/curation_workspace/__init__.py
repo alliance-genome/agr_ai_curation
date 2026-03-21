@@ -66,6 +66,6 @@ __all__ = [
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
-    "run_post_curation_pipeline",
     "run_curation_prep",
+    "run_post_curation_pipeline",
 ]
