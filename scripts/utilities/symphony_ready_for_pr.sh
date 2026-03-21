@@ -220,14 +220,23 @@ INST
     cat <<INST
 READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${loop_round:-1}/${loop_max:-3}). YOU MUST:
 1. Read the full Claude review report at: ${CLAUDE_REPORT_FILE}
-2. For EACH comment, decide: fix it, or skip it with a concrete reason.
-   Default posture: fix most suggestions. Claude is usually right about code quality,
-   missing edge cases, and style issues. Only skip if the suggestion is incorrect,
-   redundant, or clearly outside the ticket scope.
-3. Write your decisions into the workpad as a 'Claude Feedback Disposition' section:
-   - For each comment: one line with 'fixed', 'deferred', or 'not taken' plus the reason.
-4. Move the issue to In Progress and stop this run.
-5. The next In Progress agent will read the workpad and the PR comments, then implement your decisions.
+2. Check whether the review is non-blocking:
+   - If the overall review status is 'Approve' AND there are zero critical or warning findings,
+     the review is non-blocking. Write a short workpad note confirming this, then proceed to
+     gate GitHub checks and move to Human Review Prep. Do NOT bounce to In Progress.
+   - If all findings in the report were already addressed in prior runs (check the workpad
+     for existing 'Claude Feedback Disposition' entries), the review is already resolved.
+     Write a short workpad note confirming this, then proceed to gate GitHub checks and
+     move to Human Review Prep. Do NOT bounce to In Progress.
+3. If the review contains actionable findings (critical, warning, or non-trivial suggestions):
+   a. For EACH comment, decide: fix it, or skip it with a concrete reason.
+      Default posture: fix most suggestions. Claude is usually right about code quality,
+      missing edge cases, and style issues. Only skip if the suggestion is incorrect,
+      redundant, or clearly outside the ticket scope.
+   b. Write your decisions into the workpad as a 'Claude Feedback Disposition' section:
+      - For each comment: one line with 'fixed', 'deferred', or 'not taken' plus the reason.
+   c. Move the issue to In Progress and stop this run.
+   d. The next In Progress agent will read the workpad and the PR comments, then implement your decisions.
 INST
   elif [[ "${CLAUDE_STATUS}" == "maxed_out" ]]; then
     cat <<INST

@@ -189,9 +189,15 @@ EOF
   rm -rf "${temp_dir}"
 }
 
-# ── Test: Head newer than feedback — request_and_wait ────────────────
+# ── Test: Head newer than feedback, no markers — advances round ──────
+#
+# When the head is newer than the initial Claude review and no re-review
+# markers exist, the script should advance to request_and_wait (posting a
+# marker so the round counter progresses).  The old behavior was to always
+# report_current, which trapped agents in an infinite bounce loop when the
+# review was non-blocking (see ALL-102 incident).
 
-test_head_newer_no_markers_reports_initial() {
+test_head_newer_no_markers_advances_round() {
   local temp_dir top_json inline_json output_file rc output
   temp_dir="$(mktemp -d)"
   top_json="${temp_dir}/top.json"
@@ -199,9 +205,9 @@ test_head_newer_no_markers_reports_initial() {
   output_file="${temp_dir}/output.txt"
 
   # Claude reviewed at 14:04, then agent pushed a new commit at 14:10.
-  # No re-review markers exist yet — this is the initial review round.
-  # The script should report the feedback even though head is newer
-  # (the agent may have pushed an unrelated lint fix).
+  # No re-review markers exist.  The script should post a re-review
+  # marker (request_and_wait) so the round counter advances, rather than
+  # endlessly re-reporting the same initial review.
   cat > "${top_json}" <<'EOF'
 {
   "comments": [
@@ -223,20 +229,15 @@ test_head_newer_no_markers_reports_initial() {
 EOF
   echo '[]' > "${inline_json}"
 
-  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}")"
+  # --dry-run prevents the gh pr comment call; wait-seconds=0 means the
+  # poll times out immediately → quiet (no new Claude response yet).
+  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
-  # Initial review should be reported regardless of head position
-  assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
-  assert_contains "CLAUDE_LOOP_ROUND=1" "${output}"
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
 
-  # Clean up report file
-  local report_file
-  report_file="$(echo "${output}" | grep CLAUDE_LOOP_REPORT_FILE= | cut -d= -f2)"
-  [[ -n "${report_file}" ]] && rm -f "${report_file}"
-
-  echo "  PASS: test_head_newer_no_markers_reports_initial"
+  echo "  PASS: test_head_newer_no_markers_advances_round"
   rm -rf "${temp_dir}"
 }
 
@@ -404,7 +405,7 @@ EOF
 
 # ── Test: Under limit continues ──────────────────────────────────────
 
-test_under_limit_reports_and_continues() {
+test_under_limit_head_newer_advances() {
   local temp_dir top_json inline_json output_file rc output
   temp_dir="$(mktemp -d)"
   top_json="${temp_dir}/top.json"
@@ -412,7 +413,7 @@ test_under_limit_reports_and_continues() {
   output_file="${temp_dir}/output.txt"
 
   # Only 1 round done (initial), max is 3, no re-review markers.
-  # Even though head is newer, initial review should be reported.
+  # Head is newer than feedback → request_and_wait (advances the round).
   cat > "${top_json}" <<'EOF'
 {
   "comments": [
@@ -434,19 +435,14 @@ test_under_limit_reports_and_continues() {
 EOF
   echo '[]' > "${inline_json}"
 
-  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --max-rounds 3)"
+  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --max-rounds 3 --dry-run)"
   output="$(cat "${output_file}")"
 
-  assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
   assert_not_contains "maxed_out" "${output}"
 
-  # Clean up report file
-  local report_file
-  report_file="$(echo "${output}" | grep CLAUDE_LOOP_REPORT_FILE= | cut -d= -f2)"
-  [[ -n "${report_file}" ]] && rm -f "${report_file}"
-
-  echo "  PASS: test_under_limit_reports_and_continues"
+  echo "  PASS: test_under_limit_head_newer_advances"
   rm -rf "${temp_dir}"
 }
 
@@ -698,14 +694,15 @@ test_pr109_scenario_head_after_review() {
   inline_json="${temp_dir}/inline.json"
   output_file="${temp_dir}/output.txt"
 
-  # Reproduce the PR #109 timeline exactly:
+  # Reproduce the PR #109 timeline:
   # - PR created at 14:02:45Z
   # - First commit at 14:01:47Z
   # - Claude reviews at 14:04:04Z
   # - Lint fix commit at 14:10:19Z (HEAD is now AFTER Claude's review)
   #
-  # The old script used HEAD commit time as --since, missing Claude's review.
-  # The new script uses PR creation time as --since, catching it.
+  # With the fix, head newer than feedback + no markers → request_and_wait
+  # (posts re-review marker so round counter advances).  With wait-seconds=0
+  # the poll times out immediately → quiet.
 
   cat > "${top_json}" <<'EOF'
 {
@@ -729,17 +726,11 @@ test_pr109_scenario_head_after_review() {
 EOF
   echo '[]' > "${inline_json}"
 
-  # Use PR creation time as --since (the fix)
-  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:02:45Z" "${output_file}")"
+  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:02:45Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
-  assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
-
-  # Clean up report file
-  local report_file
-  report_file="$(echo "${output}" | grep CLAUDE_LOOP_REPORT_FILE= | cut -d= -f2)"
-  [[ -n "${report_file}" ]] && rm -f "${report_file}"
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
 
   echo "  PASS: test_pr109_scenario_head_after_review"
   rm -rf "${temp_dir}"
@@ -794,12 +785,12 @@ echo "Running symphony_claude_review_loop tests..."
 test_initial_review_detected
 test_no_feedback_quiet
 test_old_feedback_before_since_is_quiet
-test_head_newer_no_markers_reports_initial
+test_head_newer_no_markers_advances_round
 test_head_newer_with_markers_triggers_rereview
 test_feedback_current_reports_immediately
 test_maxed_out_after_limit
 test_max_rounds_one_maxes_after_initial
-test_under_limit_reports_and_continues
+test_under_limit_head_newer_advances
 test_inline_comment_detected
 test_pr_review_detected
 test_custom_author

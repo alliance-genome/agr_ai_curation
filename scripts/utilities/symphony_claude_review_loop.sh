@@ -305,11 +305,20 @@ elif not feedback_times:
     wait_since = since_dt
 elif not request_times:
     # Feedback exists but no re-review markers have been posted yet.
-    # This is the initial review round — always report it, even if head
-    # is newer (the agent may have pushed an unrelated commit like a
-    # lint fix after Claude reviewed).
-    action = "report_current"
-    wait_since = None
+    if head_committed_at is not None and latest_feedback is not None and head_committed_at > latest_feedback:
+        # Head is newer than the initial review — the agent likely
+        # addressed the feedback and pushed a fix.  Advance to
+        # request_and_wait so a re-review marker is posted and the
+        # round counter can progress.  Without this, the loop stays
+        # stuck on report_current forever because no marker is ever
+        # created.
+        action = "request_and_wait"
+        wait_since = latest_feedback
+    else:
+        # Head is at or before the review — report the initial
+        # review so the agent can read and address it.
+        action = "report_current"
+        wait_since = None
 elif head_committed_at is not None and latest_feedback is not None and head_committed_at > latest_feedback:
     # Re-review cycle: markers exist and head is newer than latest feedback
     if already_requested:
