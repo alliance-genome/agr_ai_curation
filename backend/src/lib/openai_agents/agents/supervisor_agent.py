@@ -105,7 +105,7 @@ def _normalize_scope_values(values: Sequence[str] | None) -> list[str]:
 def _latest_assistant_message(session_history: Sequence[Dict[str, Any]]) -> str | None:
     """Return the most recent assistant message stored for the session."""
 
-    for exchange in reversed(list(session_history)):
+    for exchange in reversed(session_history):
         assistant_text = str(exchange.get("assistant") or "").strip()
         if assistant_text:
             return assistant_text
