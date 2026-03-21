@@ -96,12 +96,13 @@ class CurationPrepBaseModel(BaseModel):
 def _parse_strict_json(value: str, *, field_name: str) -> Any:
     """Parse strict JSON while rejecting NaN and Infinity values."""
 
+    def reject_non_finite(_constant: str) -> Any:
+        raise ValueError(f"{field_name} must not contain non-finite numbers")
+
     try:
         parsed = json.loads(
             value,
-            parse_constant=lambda constant: (_ for _ in ()).throw(
-                ValueError(f"{field_name} must not contain non-finite numbers")
-            ),
+            parse_constant=reject_non_finite,
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"{field_name} must contain valid JSON") from exc
@@ -111,13 +112,22 @@ def _parse_strict_json(value: str, *, field_name: str) -> Any:
     return parsed
 
 
-def _validate_field_path(path: str, *, field_name: str) -> str:
+def _validate_field_path(
+    path: str,
+    *,
+    field_name: str,
+    allow_numeric_segments: bool = True,
+) -> str:
     """Require dot-delimited paths to avoid empty or padded segments."""
 
     segments = path.split(".")
     if any(not segment or segment != segment.strip() for segment in segments):
         raise ValueError(
             f"{field_name} must use dot-delimited segments without empty or padded path components"
+        )
+    if not allow_numeric_segments and any(segment.isdigit() for segment in segments):
+        raise ValueError(
+            f"{field_name} must not use numeric path segments; encode list values in json_value instead"
         )
     return path
 
@@ -328,7 +338,11 @@ class CurationPrepExtractedField(CurationPrepBaseModel):
     def validate_field_path(cls, value: str) -> str:
         """Require well-formed adapter-owned field paths."""
 
-        return _validate_field_path(value, field_name="field_path")
+        return _validate_field_path(
+            value,
+            field_name="field_path",
+            allow_numeric_segments=False,
+        )
 
     @model_validator(mode="after")
     def validate_value_slot(self) -> "CurationPrepExtractedField":

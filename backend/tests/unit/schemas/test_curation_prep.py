@@ -211,6 +211,35 @@ def test_curation_prep_candidate_accepts_nested_evidence_reference_for_json_fiel
     assert candidate.evidence_references[0].field_path == "phenotype.label"
 
 
+def test_curation_prep_candidate_accepts_numeric_evidence_path_inside_json_field():
+    """Evidence references may point into arrays carried by a JSON extracted field."""
+
+    payload = make_candidate_payload()
+    payload["extracted_fields"].append(
+        {
+            "field_path": "supporting_papers",
+            "value_type": CurationPrepExtractedFieldValueType.JSON,
+            "string_value": None,
+            "number_value": None,
+            "boolean_value": None,
+            "json_value": '[{"title": "APOE evidence paper"}]',
+        }
+    )
+    payload["evidence_references"] = [
+        {
+            "field_path": "supporting_papers.0.title",
+            "evidence_record_id": "evidence-1",
+            "extraction_result_id": "extract-1",
+            "anchor": make_anchor_payload(),
+            "rationale": "The snippet supports the first paper title captured in the JSON field.",
+        }
+    ]
+
+    candidate = CurationPrepCandidate(**payload)
+
+    assert candidate.evidence_references[0].field_path == "supporting_papers.0.title"
+
+
 @pytest.mark.parametrize(
     "invalid_fields",
     [
@@ -243,6 +272,16 @@ def test_curation_prep_candidate_accepts_nested_evidence_reference_for_json_fiel
                 "number_value": None,
                 "boolean_value": None,
                 "json_value": "\"scalar values must use a dedicated value slot\"",
+            }
+        ],
+        [
+            {
+                "field_path": "items.0.name",
+                "value_type": CurationPrepExtractedFieldValueType.STRING,
+                "string_value": "APOE",
+                "number_value": None,
+                "boolean_value": None,
+                "json_value": None,
             }
         ],
     ],
