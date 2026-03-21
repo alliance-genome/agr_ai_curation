@@ -187,7 +187,10 @@ class DeterministicEvidenceAnchorResolver:
         normalized_candidate: "NormalizedCandidate",
         context: "EvidenceResolutionContext",
     ) -> list[PreparedEvidenceRecordInput]:
-        del normalized_candidate
+        # The protocol includes the normalized candidate for future adapter-aware
+        # enrichment, even though this resolver currently resolves from evidence
+        # references plus document chunks only.
+        _ = normalized_candidate
 
         primary_fields: set[str] = set()
         resolved_records: list[PreparedEvidenceRecordInput] = []
@@ -278,16 +281,13 @@ class DeterministicEvidenceAnchorResolver:
         return _build_unresolved_anchor(incoming_anchor), _dedupe_strings(warnings)
 
     def _resolve_user_id(self, prep_extraction_result_id: str) -> str | None:
-        session = self._session_factory()
-        try:
+        with self._session_factory() as session:
             result = session.scalar(
                 select(ExtractionResultModel.user_id).where(
                     ExtractionResultModel.id == prep_extraction_result_id
                 )
             )
             return (str(result).strip() or None) if result is not None else None
-        finally:
-            session.close()
 
 
 def _resolve_quote_reference(
