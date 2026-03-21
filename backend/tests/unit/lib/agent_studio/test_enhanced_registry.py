@@ -1,6 +1,5 @@
 # backend/tests/unit/lib/agent_studio/test_enhanced_registry.py
 """Tests for enhanced AGENT_REGISTRY with frontend and batching fields."""
-import pytest
 
 
 class TestEnhancedRegistry:
