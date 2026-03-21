@@ -1,0 +1,298 @@
+"""Bootstrap and manual-create orchestration for curation workspace sessions."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import UUID
+
+from fastapi import HTTPException, status
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.lib.curation_workspace.models import (
+    CurationExtractionResultRecord as ExtractionResultModel,
+)
+from src.lib.curation_workspace.pipeline import (
+    PipelineExecutionMode,
+    PostCurationPipelineRequest,
+    run_post_curation_pipeline,
+)
+from src.lib.curation_workspace.session_service import (
+    PreparedSessionUpsertRequest,
+    find_reusable_prepared_session,
+    get_session_detail,
+    upsert_prepared_session,
+)
+from src.lib.openai_agents.agents.curation_prep_agent import CURATION_PREP_AGENT_ID
+from src.models.sql.pdf_document import PDFDocument
+from src.schemas.curation_prep import CurationPrepAgentOutput
+from src.schemas.curation_workspace import (
+    CurationActorType,
+    CurationDocumentBootstrapRequest,
+    CurationDocumentBootstrapResponse,
+    CurationSessionCreateRequest,
+    CurationSessionCreateResponse,
+    CurationSessionStatus,
+)
+
+
+def create_manual_session(
+    request: CurationSessionCreateRequest,
+    *,
+    current_user_id: str,
+    actor_claims: dict[str, str | None],
+    db: Session,
+) -> CurationSessionCreateResponse:
+    """Create an empty manual session without replaying the prep pipeline."""
+
+    _require_document(db, request.document_id)
+
+    prepared_at = datetime.now(timezone.utc)
+    result = upsert_prepared_session(
+        db,
+        PreparedSessionUpsertRequest(
+            document_id=request.document_id,
+            adapter_key=request.adapter_key,
+            profile_key=request.profile_key,
+            created_by_id=current_user_id,
+            assigned_curator_id=request.curator_id,
+            notes=request.notes,
+            tags=list(request.tags),
+            prepared_at=prepared_at,
+            status=CurationSessionStatus.NEW,
+            candidates=[],
+            session_created_actor_type=CurationActorType.USER,
+            session_created_actor=_actor_payload(actor_claims),
+            session_created_message="Manual review session created via curation workspace API",
+        ),
+    )
+
+    return CurationSessionCreateResponse(
+        created=result.created,
+        session=get_session_detail(db, result.session_id),
+    )
+
+
+async def bootstrap_document_session(
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    *,
+    current_user_id: str,
+    db: Session,
+) -> CurationDocumentBootstrapResponse:
+    """Replay the newest matching persisted prep result into a review session."""
+
+    _require_document(db, document_id)
+    extraction_result = _select_bootstrap_extraction_result(
+        db,
+        document_id=document_id,
+        request=request,
+    )
+    prep_output = _replayable_prep_output(extraction_result)
+    adapter_key = _resolved_adapter_key(extraction_result, prep_output)
+    profile_key = _resolved_profile_key(extraction_result, prep_output)
+    reusable_session = find_reusable_prepared_session(
+        db,
+        document_id=document_id,
+        adapter_key=adapter_key,
+        profile_key=profile_key,
+        flow_run_id=extraction_result.flow_run_id,
+        prep_extraction_result_id=str(extraction_result.id),
+    )
+
+    prepared_at = datetime.now(timezone.utc)
+    pipeline_result = await run_post_curation_pipeline(
+        PostCurationPipelineRequest(
+            prep_output=prep_output,
+            document_id=document_id,
+            source_kind=extraction_result.source_kind,
+            adapter_key=adapter_key,
+            profile_key=profile_key,
+            flow_run_id=extraction_result.flow_run_id,
+            origin_session_id=extraction_result.origin_session_id,
+            trace_id=extraction_result.trace_id,
+            user_id=current_user_id,
+            created_by_id=(
+                reusable_session.created_by_id if reusable_session else current_user_id
+            ),
+            assigned_curator_id=(
+                request.curator_id
+                if request.curator_id is not None
+                else reusable_session.assigned_curator_id if reusable_session else None
+            ),
+            notes=reusable_session.notes if reusable_session else None,
+            tags=tuple(reusable_session.tags) if reusable_session else (),
+            prepared_at=prepared_at,
+            review_session_id=reusable_session.session_id if reusable_session else None,
+            prep_extraction_result_id=str(extraction_result.id),
+            execution_mode=PipelineExecutionMode.SYNC,
+        ),
+        db=db,
+    )
+
+    if pipeline_result.session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Bootstrap pipeline did not return a review session identifier",
+        )
+
+    return CurationDocumentBootstrapResponse(
+        created=bool(pipeline_result.created),
+        session=get_session_detail(db, pipeline_result.session_id),
+    )
+
+
+def _require_document(db: Session, document_id: str) -> PDFDocument:
+    document_uuid = _parse_uuid(document_id, field_name="document_id")
+    document = db.get(PDFDocument, document_uuid)
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+    return document
+
+
+def _select_bootstrap_extraction_result(
+    db: Session,
+    *,
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+) -> ExtractionResultModel:
+    statement = (
+        select(ExtractionResultModel)
+        .where(ExtractionResultModel.document_id == _parse_uuid(document_id, field_name="document_id"))
+        .where(ExtractionResultModel.agent_key == CURATION_PREP_AGENT_ID)
+        .order_by(ExtractionResultModel.created_at.desc(), ExtractionResultModel.id.desc())
+    )
+
+    adapter_key = _normalized_optional_str(request.adapter_key)
+    profile_key = _normalized_optional_str(request.profile_key)
+    domain_key = _normalized_optional_str(request.domain_key)
+
+    if adapter_key is not None:
+        statement = statement.where(ExtractionResultModel.adapter_key == adapter_key)
+    if profile_key is not None:
+        statement = statement.where(ExtractionResultModel.profile_key == profile_key)
+    if domain_key is not None:
+        statement = statement.where(ExtractionResultModel.domain_key == domain_key)
+
+    extraction_result = db.scalars(statement).first()
+    if extraction_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No persisted curation prep extraction results were found for "
+                f"document {document_id}"
+            ),
+        )
+
+    return extraction_result
+
+
+def _replayable_prep_output(extraction_result: ExtractionResultModel) -> CurationPrepAgentOutput:
+    payload = extraction_result.payload_json
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored curation prep extraction payload is not replayable",
+        )
+
+    metadata = dict(extraction_result.extraction_metadata or {})
+    run_metadata = metadata.get("final_run_metadata", payload.get("run_metadata"))
+    try:
+        return CurationPrepAgentOutput.model_validate(
+            {
+                "candidates": payload.get("candidates", []),
+                "run_metadata": run_metadata,
+            }
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored curation prep extraction payload is not replayable",
+        ) from exc
+
+
+def _resolved_adapter_key(
+    extraction_result: ExtractionResultModel,
+    prep_output: CurationPrepAgentOutput,
+) -> str:
+    adapter_key = _normalized_optional_str(extraction_result.adapter_key)
+    if adapter_key is not None:
+        return adapter_key
+
+    adapter_keys = sorted({candidate.adapter_key for candidate in prep_output.candidates})
+    if len(adapter_keys) == 1:
+        return adapter_keys[0]
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Bootstrap requires prep candidates for exactly one adapter",
+    )
+
+
+def _resolved_profile_key(
+    extraction_result: ExtractionResultModel,
+    prep_output: CurationPrepAgentOutput,
+) -> str | None:
+    profile_key = _normalized_optional_str(extraction_result.profile_key)
+    if profile_key is not None:
+        return profile_key
+
+    profile_keys = {
+        _normalized_optional_str(candidate.profile_key)
+        for candidate in prep_output.candidates
+    }
+    profile_keys.discard(None)
+    if len(profile_keys) <= 1:
+        return next(iter(profile_keys), None)
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Bootstrap requires prep candidates for at most one profile",
+    )
+
+
+def _actor_payload(actor_claims: dict[str, str | None]) -> dict[str, str]:
+    actor_id = str(actor_claims.get("sub") or actor_claims.get("uid") or "").strip()
+    payload: dict[str, str] = {}
+    if actor_id:
+        payload["actor_id"] = actor_id
+
+    display_name = str(
+        actor_claims.get("name")
+        or actor_claims.get("preferred_username")
+        or actor_claims.get("email")
+        or ""
+    ).strip()
+    if display_name:
+        payload["display_name"] = display_name
+
+    email = str(actor_claims.get("email") or "").strip()
+    if email:
+        payload["email"] = email
+
+    return payload
+
+
+def _parse_uuid(value: str, *, field_name: str) -> UUID:
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {field_name}: {value}",
+        ) from exc
+
+
+def _normalized_optional_str(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+__all__ = [
+    "bootstrap_document_session",
+    "create_manual_session",
+]

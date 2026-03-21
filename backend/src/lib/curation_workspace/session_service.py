@@ -174,6 +174,9 @@ class PreparedSessionUpsertRequest:
     candidates: list[PreparedCandidateInput] = field(default_factory=list)
     session_validation_snapshot: PreparedValidationSnapshotInput | None = None
     replace_existing_candidates: bool = True
+    session_created_actor_type: CurationActorType = CurationActorType.SYSTEM
+    session_created_actor: dict[str, Any] = field(default_factory=dict)
+    session_created_message: str = "Deterministic post-agent pipeline created the review session"
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,17 @@ class PreparedSessionUpsertResult:
     session_id: str
     created: bool
     candidate_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReusablePreparedSessionContext:
+    """Existing unreviewed session metadata that is safe to refresh in place."""
+
+    session_id: str
+    created_by_id: str | None = None
+    assigned_curator_id: str | None = None
+    notes: str | None = None
+    tags: list[str] = field(default_factory=list)
 
 STATUS_SORT_ORDER = case(
     (ReviewSessionModel.status == CurationSessionStatus.NEW, 1),
@@ -867,6 +881,69 @@ def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSes
     return _session_detail(session, document_map, user_map)
 
 
+def find_reusable_prepared_session(
+    db: Session,
+    *,
+    document_id: str,
+    adapter_key: str,
+    profile_key: str | None,
+    flow_run_id: str | None,
+    prep_extraction_result_id: str | UUID,
+) -> ReusablePreparedSessionContext | None:
+    """Return the newest untouched NEW session that can be refreshed in place."""
+
+    target_extraction_result_id = _normalize_uuid(
+        prep_extraction_result_id,
+        field_name="prep_extraction_result_id",
+    )
+    statement = (
+        select(ReviewSessionModel)
+        .where(ReviewSessionModel.document_id == _normalize_uuid(document_id, field_name="document_id"))
+        .where(ReviewSessionModel.adapter_key == adapter_key)
+        .where(ReviewSessionModel.status == CurationSessionStatus.NEW)
+        .options(*PREPARED_SESSION_LOAD_OPTIONS)
+        .order_by(
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.created_at.desc(),
+            ReviewSessionModel.id.desc(),
+        )
+    )
+
+    if profile_key is None:
+        statement = statement.where(ReviewSessionModel.profile_key.is_(None))
+    else:
+        statement = statement.where(ReviewSessionModel.profile_key == profile_key)
+
+    if flow_run_id is None:
+        statement = statement.where(ReviewSessionModel.flow_run_id.is_(None))
+    else:
+        statement = statement.where(ReviewSessionModel.flow_run_id == flow_run_id)
+
+    for session_row in db.scalars(statement).all():
+        if session_row.reviewed_candidates > 0 or session_row.submissions:
+            continue
+        if any(
+            action_log_entry.candidate_id is not None or action_log_entry.draft_id is not None
+            for action_log_entry in session_row.action_log_entries
+        ):
+            continue
+        candidate_extraction_result_ids = {
+            candidate.extraction_result_id
+            for candidate in session_row.candidates
+        }
+        if candidate_extraction_result_ids != {target_extraction_result_id}:
+            continue
+        return ReusablePreparedSessionContext(
+            session_id=str(session_row.id),
+            created_by_id=session_row.created_by_id,
+            assigned_curator_id=session_row.assigned_curator_id,
+            notes=session_row.notes,
+            tags=list(session_row.tags or []),
+        )
+
+    return None
+
+
 def update_session(
     db: Session,
     session_id: str | UUID,
@@ -1181,14 +1258,16 @@ def upsert_prepared_session(
         )
 
         if created:
+            created_actor = dict(request.session_created_actor) or None
             db.add(
                 SessionActionLogModel(
                     session_id=session_row.id,
                     action_type=CurationActionType.SESSION_CREATED,
-                    actor_type=CurationActorType.SYSTEM,
+                    actor_type=request.session_created_actor_type,
+                    actor=created_actor,
                     occurred_at=request.prepared_at,
                     new_session_status=session_row.status,
-                    message="Deterministic post-agent pipeline created the review session",
+                    message=request.session_created_message,
                 )
             )
 
@@ -1538,6 +1617,7 @@ def _apply_progress_counts(
 
 __all__ = [
     "get_next_session",
+    "find_reusable_prepared_session",
     "get_session_detail",
     "get_session_stats",
     "list_sessions",
@@ -1546,6 +1626,7 @@ __all__ = [
     "PreparedEvidenceRecordInput",
     "PreparedSessionUpsertRequest",
     "PreparedSessionUpsertResult",
+    "ReusablePreparedSessionContext",
     "PreparedValidationSnapshotInput",
     "upsert_prepared_session",
     "update_session",
