@@ -21,10 +21,13 @@ Provider Configuration:
 
 import os
 import logging
-from typing import Optional, Literal, Union
+from typing import Optional, Literal, TYPE_CHECKING, Union
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from agents.extensions.models.litellm_model import LitellmModel
 
 # =============================================================================
 # LLM Provider Configuration
