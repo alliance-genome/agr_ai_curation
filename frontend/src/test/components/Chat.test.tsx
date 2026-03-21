@@ -304,11 +304,19 @@ describe('Chat persistence', () => {
       await screen.findByText('You discussed 4 candidate annotations. Prepare all for curation review?')
     ).toBeInTheDocument()
 
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/curation-workspace/prep/preview?session_id=session-1',
+      {
+        credentials: 'include',
+      }
+    )
+
     fireEvent.click(screen.getByRole('button', { name: /start prep/i }))
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith('/api/curation-workspace/prep', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },

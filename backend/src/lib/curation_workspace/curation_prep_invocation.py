@@ -92,19 +92,16 @@ async def run_chat_curation_prep(
         requested_values=request.adapter_keys,
         available_values=context.adapter_keys,
         scope_name="adapter",
-        allow_empty=False,
     )
     profile_keys = _resolve_scope_values(
         requested_values=request.profile_keys,
         available_values=context.profile_keys,
         scope_name="profile",
-        allow_empty=True,
     )
     domain_keys = _resolve_scope_values(
         requested_values=request.domain_keys,
         available_values=context.domain_keys,
         scope_name="domain",
-        allow_empty=True,
     )
 
     adapter_metadata = _build_adapter_metadata(
@@ -261,14 +258,11 @@ def _resolve_scope_values(
     requested_values: Sequence[str],
     available_values: Sequence[str],
     scope_name: str,
-    allow_empty: bool,
 ) -> list[str]:
     normalized_requested = _unique_non_empty(requested_values)
     normalized_available = _unique_non_empty(available_values)
 
     if not normalized_requested:
-        if allow_empty:
-            return normalized_available
         return normalized_available
 
     invalid_values = [value for value in normalized_requested if value not in normalized_available]

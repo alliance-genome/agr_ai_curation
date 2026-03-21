@@ -38,7 +38,10 @@ async function readApiError(response: Response): Promise<string> {
 
 export async function fetchCurationPrepPreview(sessionId: string): Promise<CurationPrepPreview> {
   const response = await fetch(
-    `/api/curation-workspace/prep/preview?session_id=${encodeURIComponent(sessionId)}`
+    `/api/curation-workspace/prep/preview?session_id=${encodeURIComponent(sessionId)}`,
+    {
+      credentials: 'include',
+    }
   )
 
   if (!response.ok) {
@@ -51,6 +54,7 @@ export async function fetchCurationPrepPreview(sessionId: string): Promise<Curat
 export async function runCurationPrep(request: CurationPrepRunRequest): Promise<CurationPrepRunResponse> {
   const response = await fetch('/api/curation-workspace/prep', {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
