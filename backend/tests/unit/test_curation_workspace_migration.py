@@ -119,6 +119,12 @@ def _constraint_names(table_call: dict[str, object]) -> set[str]:
     return names
 
 
+def _single_foreign_key(column: sa.Column) -> sa.ForeignKey:
+    foreign_keys = list(column.foreign_keys)
+    assert len(foreign_keys) == 1
+    return foreign_keys[0]
+
+
 def test_upgrade_creates_curation_workspace_tables_and_indexes(monkeypatch):
     module = _load_migration_module(
         monkeypatch,
@@ -175,6 +181,7 @@ def test_upgrade_creates_curation_workspace_tables_and_indexes(monkeypatch):
     assert "ck_curation_review_sessions_status" in _constraint_names(
         _table_by_name(op_recorder, "curation_review_sessions")
     )
+    assert list(session_columns["current_candidate_id"].foreign_keys) == []
 
     candidate_columns = _columns(_table_by_name(op_recorder, "curation_candidates"))
     assert set(candidate_columns) == {
@@ -210,8 +217,10 @@ def test_upgrade_creates_curation_workspace_tables_and_indexes(monkeypatch):
     assert "ck_annotation_drafts_version" in draft_constraint_names
 
     validation_table = _table_by_name(op_recorder, "validation_snapshots")
+    validation_columns = _columns(validation_table)
     assert "ck_validation_snapshots_scope" in _constraint_names(validation_table)
     assert "ck_validation_snapshots_candidate_scope" in _constraint_names(validation_table)
+    assert validation_columns["summary"].server_default is None
 
     saved_view_table = _table_by_name(op_recorder, "curation_saved_views")
     assert "ck_curation_saved_views_sort_by" in _constraint_names(saved_view_table)
@@ -250,6 +259,26 @@ def test_upgrade_creates_curation_workspace_tables_and_indexes(monkeypatch):
         "CREATE INDEX ix_action_log_session ON curation_action_log (session_id, occurred_at DESC)",
         "CREATE INDEX ix_action_log_candidate ON curation_action_log (candidate_id, occurred_at DESC) WHERE candidate_id IS NOT NULL",
     ]
+
+    expected_foreign_keys = {
+        ("curation_review_sessions", "document_id"): "pdf_documents.id",
+        ("extraction_results", "document_id"): "pdf_documents.id",
+        ("curation_candidates", "session_id"): "curation_review_sessions.id",
+        ("curation_candidates", "extraction_result_id"): "extraction_results.id",
+        ("evidence_anchors", "candidate_id"): "curation_candidates.id",
+        ("annotation_drafts", "candidate_id"): "curation_candidates.id",
+        ("validation_snapshots", "session_id"): "curation_review_sessions.id",
+        ("validation_snapshots", "candidate_id"): "curation_candidates.id",
+        ("curation_submissions", "session_id"): "curation_review_sessions.id",
+        ("curation_action_log", "session_id"): "curation_review_sessions.id",
+        ("curation_action_log", "candidate_id"): "curation_candidates.id",
+        ("curation_action_log", "draft_id"): "annotation_drafts.id",
+    }
+    for (table_name, column_name), target in expected_foreign_keys.items():
+        column = _columns(_table_by_name(op_recorder, table_name))[column_name]
+        foreign_key = _single_foreign_key(column)
+        assert foreign_key.target_fullname == target
+        assert foreign_key.ondelete == module.FK_ON_DELETE_NO_ACTION
 
 
 def test_upgrade_snapshots_enum_values_locally(monkeypatch):

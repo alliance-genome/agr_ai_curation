@@ -24,6 +24,7 @@ JSONB = postgresql.JSONB(astext_type=sa.Text())
 UUID = postgresql.UUID(as_uuid=True)
 JSONB_EMPTY_ARRAY = sa.text("'[]'::jsonb")
 JSONB_EMPTY_OBJECT = sa.text("'{}'::jsonb")
+FK_ON_DELETE_NO_ACTION = "NO ACTION"
 
 CURATION_SESSION_STATUSES = (
     "new",
@@ -115,6 +116,10 @@ def _uuid_pk(column_name: str = "id") -> sa.Column:
     )
 
 
+def _fk(target: str) -> sa.ForeignKey:
+    return sa.ForeignKey(target, ondelete=FK_ON_DELETE_NO_ACTION)
+
+
 def upgrade() -> None:
     op.create_table(
         "curation_review_sessions",
@@ -122,8 +127,10 @@ def upgrade() -> None:
         sa.Column("status", sa.String(), nullable=False, server_default="new"),
         sa.Column("adapter_key", sa.String(), nullable=False),
         sa.Column("profile_key", sa.String(), nullable=True),
-        sa.Column("document_id", UUID, sa.ForeignKey("pdf_documents.id"), nullable=False),
+        sa.Column("document_id", UUID, _fk("pdf_documents.id"), nullable=False),
         sa.Column("flow_run_id", sa.String(), nullable=True),
+        # Keep this nullable UUID unconstrained so the session->candidate pointer
+        # does not introduce a circular FK dependency with curation_candidates.
         sa.Column("current_candidate_id", UUID, nullable=True),
         sa.Column("assigned_curator_id", sa.String(), nullable=True),
         sa.Column("created_by_id", sa.String(), nullable=True),
@@ -196,7 +203,7 @@ def upgrade() -> None:
     op.create_table(
         "extraction_results",
         _uuid_pk(),
-        sa.Column("document_id", UUID, sa.ForeignKey("pdf_documents.id"), nullable=False),
+        sa.Column("document_id", UUID, _fk("pdf_documents.id"), nullable=False),
         sa.Column("adapter_key", sa.String(), nullable=True),
         sa.Column("profile_key", sa.String(), nullable=True),
         sa.Column("domain_key", sa.String(), nullable=True),
@@ -231,7 +238,7 @@ def upgrade() -> None:
     op.create_table(
         "curation_candidates",
         _uuid_pk(),
-        sa.Column("session_id", UUID, sa.ForeignKey("curation_review_sessions.id"), nullable=False),
+        sa.Column("session_id", UUID, _fk("curation_review_sessions.id"), nullable=False),
         sa.Column("source", sa.String(), nullable=False),
         sa.Column(
             "status",
@@ -247,7 +254,7 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=True),
         sa.Column("conversation_summary", sa.Text(), nullable=True),
         sa.Column("unresolved_ambiguities", JSONB, nullable=False, server_default=JSONB_EMPTY_ARRAY),
-        sa.Column("extraction_result_id", UUID, sa.ForeignKey("extraction_results.id"), nullable=True),
+        sa.Column("extraction_result_id", UUID, _fk("extraction_results.id"), nullable=True),
         sa.Column("metadata", JSONB, nullable=False, server_default=JSONB_EMPTY_OBJECT),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -277,7 +284,7 @@ def upgrade() -> None:
     op.create_table(
         "evidence_anchors",
         _uuid_pk(),
-        sa.Column("candidate_id", UUID, sa.ForeignKey("curation_candidates.id"), nullable=False),
+        sa.Column("candidate_id", UUID, _fk("curation_candidates.id"), nullable=False),
         sa.Column("source", sa.String(), nullable=False),
         sa.Column("field_keys", JSONB, nullable=False, server_default=JSONB_EMPTY_ARRAY),
         sa.Column("field_group_keys", JSONB, nullable=False, server_default=JSONB_EMPTY_ARRAY),
@@ -294,7 +301,7 @@ def upgrade() -> None:
     op.create_table(
         "annotation_drafts",
         _uuid_pk(),
-        sa.Column("candidate_id", UUID, sa.ForeignKey("curation_candidates.id"), nullable=False),
+        sa.Column("candidate_id", UUID, _fk("curation_candidates.id"), nullable=False),
         sa.Column("adapter_key", sa.String(), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("title", sa.String(), nullable=True),
@@ -313,8 +320,8 @@ def upgrade() -> None:
         "validation_snapshots",
         _uuid_pk(),
         sa.Column("scope", sa.String(), nullable=False),
-        sa.Column("session_id", UUID, sa.ForeignKey("curation_review_sessions.id"), nullable=False),
-        sa.Column("candidate_id", UUID, sa.ForeignKey("curation_candidates.id"), nullable=True),
+        sa.Column("session_id", UUID, _fk("curation_review_sessions.id"), nullable=False),
+        sa.Column("candidate_id", UUID, _fk("curation_candidates.id"), nullable=True),
         sa.Column("adapter_key", sa.String(), nullable=True),
         sa.Column(
             "state",
@@ -323,6 +330,7 @@ def upgrade() -> None:
             server_default="not_requested",
         ),
         sa.Column("field_results", JSONB, nullable=False, server_default=JSONB_EMPTY_OBJECT),
+        # Validation snapshots always carry an explicit summary payload.
         sa.Column("summary", JSONB, nullable=False),
         sa.Column("warnings", JSONB, nullable=False, server_default=JSONB_EMPTY_ARRAY),
         sa.Column("requested_at", sa.DateTime(timezone=True), nullable=True),
@@ -356,7 +364,7 @@ def upgrade() -> None:
     op.create_table(
         "curation_submissions",
         _uuid_pk(),
-        sa.Column("session_id", UUID, sa.ForeignKey("curation_review_sessions.id"), nullable=False),
+        sa.Column("session_id", UUID, _fk("curation_review_sessions.id"), nullable=False),
         sa.Column("adapter_key", sa.String(), nullable=False),
         sa.Column("mode", sa.String(), nullable=False),
         sa.Column("target_key", sa.String(), nullable=False),
@@ -385,9 +393,9 @@ def upgrade() -> None:
     op.create_table(
         "curation_action_log",
         _uuid_pk(),
-        sa.Column("session_id", UUID, sa.ForeignKey("curation_review_sessions.id"), nullable=False),
-        sa.Column("candidate_id", UUID, sa.ForeignKey("curation_candidates.id"), nullable=True),
-        sa.Column("draft_id", UUID, sa.ForeignKey("annotation_drafts.id"), nullable=True),
+        sa.Column("session_id", UUID, _fk("curation_review_sessions.id"), nullable=False),
+        sa.Column("candidate_id", UUID, _fk("curation_candidates.id"), nullable=True),
+        sa.Column("draft_id", UUID, _fk("annotation_drafts.id"), nullable=True),
         sa.Column("action_type", sa.String(), nullable=False),
         sa.Column("actor_type", sa.String(), nullable=False),
         sa.Column("actor", JSONB, nullable=True),

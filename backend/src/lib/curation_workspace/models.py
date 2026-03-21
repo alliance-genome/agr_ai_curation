@@ -43,6 +43,7 @@ from src.schemas.curation_workspace import (
 
 JSONB_EMPTY_ARRAY = text("'[]'::jsonb")
 JSONB_EMPTY_OBJECT = text("'{}'::jsonb")
+FK_ON_DELETE_NO_ACTION = "NO ACTION"
 
 
 def _enum_type(enum_cls: Any) -> Enum:
@@ -55,6 +56,10 @@ def _enum_type(enum_cls: Any) -> Enum:
         create_constraint=False,
         validate_strings=True,
     )
+
+
+def _fk(target: str) -> ForeignKey:
+    return ForeignKey(target, ondelete=FK_ON_DELETE_NO_ACTION)
 
 
 class CurationReviewSession(Base):
@@ -78,10 +83,12 @@ class CurationReviewSession(Base):
     profile_key: Mapped[str | None] = mapped_column(String(), nullable=True)
     document_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("pdf_documents.id"),
+        _fk("pdf_documents.id"),
         nullable=False,
     )
     flow_run_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    # Keep this pointer unconstrained so the session->candidate reference does
+    # not create a circular FK dependency with curation_candidates.session_id.
     current_candidate_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
         nullable=True,
@@ -216,7 +223,7 @@ class CurationExtractionResultRecord(Base):
     )
     document_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("pdf_documents.id"),
+        _fk("pdf_documents.id"),
         nullable=False,
     )
     adapter_key: Mapped[str | None] = mapped_column(String(), nullable=True)
@@ -281,7 +288,7 @@ class CurationCandidate(Base):
     )
     session_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_review_sessions.id"),
+        _fk("curation_review_sessions.id"),
         nullable=False,
     )
     source: Mapped[CurationCandidateSource] = mapped_column(
@@ -314,7 +321,7 @@ class CurationCandidate(Base):
     )
     extraction_result_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("extraction_results.id"),
+        _fk("extraction_results.id"),
         nullable=True,
     )
     candidate_metadata: Mapped[dict[str, Any]] = mapped_column(
@@ -390,7 +397,7 @@ class CurationEvidenceRecord(Base):
     )
     candidate_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_candidates.id"),
+        _fk("curation_candidates.id"),
         nullable=False,
     )
     source: Mapped[CurationEvidenceSource] = mapped_column(
@@ -457,7 +464,7 @@ class CurationDraft(Base):
     )
     candidate_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_candidates.id"),
+        _fk("curation_candidates.id"),
         nullable=False,
         unique=True,
     )
@@ -524,12 +531,12 @@ class CurationValidationSnapshot(Base):
     )
     session_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_review_sessions.id"),
+        _fk("curation_review_sessions.id"),
         nullable=False,
     )
     candidate_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_candidates.id"),
+        _fk("curation_candidates.id"),
         nullable=True,
     )
     adapter_key: Mapped[str | None] = mapped_column(String(), nullable=True)
@@ -545,6 +552,7 @@ class CurationValidationSnapshot(Base):
         default=dict,
         server_default=JSONB_EMPTY_OBJECT,
     )
+    # Validation snapshots must persist the explicit API summary payload.
     summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     warnings: Mapped[list[str]] = mapped_column(
         JSONB,
@@ -591,7 +599,7 @@ class CurationSubmissionRecord(Base):
     )
     session_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_review_sessions.id"),
+        _fk("curation_review_sessions.id"),
         nullable=False,
     )
     adapter_key: Mapped[str] = mapped_column(String(), nullable=False)
@@ -651,17 +659,17 @@ class CurationActionLogEntry(Base):
     )
     session_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_review_sessions.id"),
+        _fk("curation_review_sessions.id"),
         nullable=False,
     )
     candidate_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("curation_candidates.id"),
+        _fk("curation_candidates.id"),
         nullable=True,
     )
     draft_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("annotation_drafts.id"),
+        _fk("annotation_drafts.id"),
         nullable=True,
     )
     action_type: Mapped[CurationActionType] = mapped_column(
