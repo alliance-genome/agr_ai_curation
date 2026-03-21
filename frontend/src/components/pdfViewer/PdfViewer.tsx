@@ -427,15 +427,23 @@ const buildEvidenceSpikeAnchor = (input: PdfEvidenceSpikeInput): EvidenceAnchor 
 }
 
 const buildNavigationCommandKey = (command: EvidenceNavigationCommand): string => {
-  return JSON.stringify({
-    anchorKind: command.anchor.anchor_kind,
-    locatorQuality: command.anchor.locator_quality,
-    searchText: command.searchText ?? null,
-    pageNumber: command.pageNumber ?? null,
-    sectionTitle: command.sectionTitle ?? null,
-    mode: command.mode,
-    chunkIds: command.anchor.chunk_ids,
-  })
+  return JSON.stringify([
+    command.anchor.anchor_kind,
+    command.anchor.locator_quality,
+    command.anchor.supports_decision,
+    command.anchor.snippet_text ?? null,
+    command.anchor.sentence_text ?? null,
+    command.anchor.normalized_text ?? null,
+    command.anchor.viewer_search_text ?? null,
+    command.anchor.page_number ?? null,
+    command.anchor.section_title ?? null,
+    command.anchor.subsection_title ?? null,
+    command.searchText ?? null,
+    command.pageNumber ?? null,
+    command.sectionTitle ?? null,
+    command.mode,
+    command.anchor.chunk_ids,
+  ])
 }
 
 const getNavigationBadgeColor = (
@@ -1160,12 +1168,14 @@ export function PdfViewer({
       pageNumber: command.pageNumber ?? anchor.page_number ?? null,
     })
     const sectionTitle = normalizeEvidenceSpikeText(command.sectionTitle ?? anchor.section_title ?? '') || null
-    const sectionPath = [
-      anchor.subsection_title,
-      ...(options?.sectionPath ?? []),
-    ]
-      .map((segment) => normalizeEvidenceSpikeText(segment ?? ''))
-      .filter(Boolean)
+    const sectionPath = uniqueTerms(
+      [
+        anchor.subsection_title,
+        ...(options?.sectionPath ?? []),
+      ]
+        .map((segment) => normalizeEvidenceSpikeText(segment ?? ''))
+        .filter(Boolean),
+    )
     const attemptedQueries: string[] = []
     const baseResult = {
       documentId: activeDocument?.documentId ?? null,

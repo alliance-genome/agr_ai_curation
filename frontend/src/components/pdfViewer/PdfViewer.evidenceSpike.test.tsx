@@ -230,6 +230,11 @@ describe('PDF evidence spike helpers', () => {
     expect(
       buildEvidenceSpikeSectionCandidates(' Results ', ['Paper', 'Results', 'Subheading']).map((candidate) => candidate.query),
     ).toEqual(['Results', 'Paper', 'Subheading'])
+
+    expect(
+      buildEvidenceSpikeSectionCandidates('Results', ['Quantification', 'Results', 'Quantification'])
+        .map((candidate) => candidate.query),
+    ).toEqual(['Results', 'Quantification'])
   })
 
   it('uses the dev-only harness to drive normalized PDF.js find queries', async () => {
