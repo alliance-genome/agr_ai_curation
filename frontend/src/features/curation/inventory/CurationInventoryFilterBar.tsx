@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import SearchIcon from '@mui/icons-material/Search'
 import {
   Box,
@@ -42,6 +43,7 @@ interface CurationInventoryFilterBarProps {
   onSearchChange: (value: string) => void
   onClearAllFilters: () => void
   hasActiveFilters: boolean
+  queueActions?: ReactNode
 }
 
 interface ChipGroupProps {
@@ -114,6 +116,7 @@ export default function CurationInventoryFilterBar({
   onSearchChange,
   onClearAllFilters,
   hasActiveFilters,
+  queueActions,
 }: CurationInventoryFilterBarProps) {
   return (
     <Paper variant="outlined" sx={{ p: 2.5 }}>
@@ -223,7 +226,9 @@ export default function CurationInventoryFilterBar({
           </Stack>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Box data-testid="curation-saved-views-slot" />
-            <Box data-testid="curation-queue-actions-slot" />
+            <Box data-testid="curation-queue-actions-slot">
+              {queueActions}
+            </Box>
           </Box>
         </Stack>
       </Stack>
