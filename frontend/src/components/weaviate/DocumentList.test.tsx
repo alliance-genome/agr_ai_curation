@@ -5,10 +5,25 @@ import { createMockDocument } from '../../test/test-utils';
 
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
+const openCurationWorkspaceMock = vi.fn();
+const getCurationWorkspaceLaunchAvailabilityMock = vi.fn();
 
 vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
 }));
+
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace'
+  );
+
+  return {
+    ...actual,
+    getCurationWorkspaceLaunchAvailability: (options: unknown) =>
+      getCurationWorkspaceLaunchAvailabilityMock(options),
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  };
+});
 
 vi.mock('../../services/weaviate', async () => {
   const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
@@ -141,6 +156,8 @@ describe('DocumentList', () => {
     vi.clearAllMocks();
     refetchHealthMock.mockReset();
     emitGlobalToastMock.mockReset();
+    openCurationWorkspaceMock.mockReset();
+    getCurationWorkspaceLaunchAvailabilityMock.mockReset();
   });
 
   it('renders document list with all documents', () => {
@@ -215,6 +232,56 @@ describe('DocumentList', () => {
     fireEvent.click(deleteButtons[0].parentElement!);
 
     expect(defaultProps.onDelete).toHaveBeenCalledWith('1');
+  });
+
+  it('opens Review & Curate from the document action column', async () => {
+    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
+      existingSessionId: 'session-1',
+      canBootstrap: true,
+    });
+    openCurationWorkspaceMock.mockResolvedValue('session-1');
+
+    render(
+      <DocumentList
+        {...defaultProps}
+        documents={[createMockDocument({ id: 'doc-review', embeddingStatus: 'completed' })]}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /review & curate/i }));
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'session-1',
+          documentId: 'doc-review',
+        })
+      );
+    });
+  });
+
+  it('hides Review & Curate when the document has no prepared session', async () => {
+    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
+      existingSessionId: null,
+      canBootstrap: false,
+    });
+
+    render(
+      <DocumentList
+        {...defaultProps}
+        documents={[createMockDocument({ id: 'doc-without-session', embeddingStatus: 'completed' })]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(getCurationWorkspaceLaunchAvailabilityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-without-session',
+        })
+      );
+    });
+
+    expect(screen.queryByRole('button', { name: /review & curate/i })).not.toBeInTheDocument();
   });
 
   it('disables re-embed button for processing documents', () => {

@@ -42,6 +42,7 @@ import { AuditEvent, AuditEventType } from '../types/AuditEvent';
 import FeedbackDialog from '../components/Chat/FeedbackDialog';
 import { submitFeedback } from '../services/feedbackService';
 import { useAuth } from '../contexts/AuthContext';
+import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 
 // Valid audit event types that should be shown in the batch audit panel
 // NOTE: Excludes AGENT_THINKING because it emits per-token events that
@@ -1052,14 +1053,24 @@ const BatchPage: React.FC = () => {
             <ListItem
               key={doc.id}
               secondaryAction={
-                <IconButton
-                  edge="end"
-                  size="small"
-                  onClick={(e) => handleDocumentMenuOpen(e, doc)}
-                  aria-label="document actions"
-                >
-                  <MoreVertIcon fontSize="small" />
-                </IconButton>
+                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                  {doc.status === 'completed' && activeBatchId && (
+                    <PreparedReviewAndCurateButton
+                      documentId={doc.document_id}
+                      flowRunId={activeBatchId}
+                      iconOnly={true}
+                      size="small"
+                    />
+                  )}
+                  <IconButton
+                    edge="end"
+                    size="small"
+                    onClick={(e) => handleDocumentMenuOpen(e, doc)}
+                    aria-label="document actions"
+                  >
+                    <MoreVertIcon fontSize="small" />
+                  </IconButton>
+                </Box>
               }
             >
               <ListItemIcon sx={{ minWidth: 36 }}>
@@ -1135,6 +1146,14 @@ const BatchPage: React.FC = () => {
               key={doc.id}
               secondaryAction={
                 <Box sx={{ display: 'flex', gap: 0.5 }}>
+                  {doc.status === 'completed' && activeBatchId && (
+                    <PreparedReviewAndCurateButton
+                      documentId={doc.document_id}
+                      flowRunId={activeBatchId}
+                      iconOnly={true}
+                      size="small"
+                    />
+                  )}
                   <IconButton
                     size="small"
                     onClick={(e) => handleDocumentMenuOpen(e, doc)}

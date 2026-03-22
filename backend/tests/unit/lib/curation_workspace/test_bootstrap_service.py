@@ -1,0 +1,228 @@
+"""Unit tests for curation workspace bootstrap selection helpers."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from src.lib.curation_workspace import bootstrap_service as module
+from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionResultModel
+from src.models.sql.database import Base
+from src.models.sql.pdf_document import PDFDocument
+from src.schemas.curation_workspace import (
+    CurationDocumentBootstrapRequest,
+    CurationExtractionSourceKind,
+)
+
+
+@compiles(PostgresUUID, "sqlite")
+def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
+    return "CHAR(36)"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
+    return "JSON"
+
+
+TEST_TABLES = [
+    PDFDocument.__table__,
+    ExtractionResultModel.__table__,
+]
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    restored_defaults = []
+    restored_indexes = []
+    for table in TEST_TABLES:
+        restored_indexes.append((table, set(table.indexes)))
+        table.indexes.clear()
+        for column in table.columns:
+            restored_defaults.append((column, column.server_default))
+            column.server_default = None
+
+    Base.metadata.create_all(bind=engine, tables=TEST_TABLES)
+    session_local = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    session = session_local()
+
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine, tables=TEST_TABLES)
+        for table, indexes in restored_indexes:
+            table.indexes.update(indexes)
+        for column, server_default in restored_defaults:
+            column.server_default = server_default
+
+
+def _create_document(db_session) -> PDFDocument:
+    now = datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc)
+    document = PDFDocument(
+        id=uuid4(),
+        filename="paper.pdf",
+        title="Paper Title",
+        file_path="/tmp/paper.pdf",
+        file_hash="a" * 64,
+        file_size=1024,
+        page_count=5,
+        upload_timestamp=now,
+        last_accessed=now,
+        status="processed",
+    )
+    db_session.add(document)
+    db_session.commit()
+    return document
+
+
+def _create_extraction_result(
+    db_session,
+    *,
+    document_id: str,
+    flow_run_id: str | None,
+    origin_session_id: str | None,
+    created_at: datetime,
+) -> ExtractionResultModel:
+    record = ExtractionResultModel(
+        id=uuid4(),
+        document_id=document_id,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        domain_key="entity",
+        agent_key="curation_prep",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id=origin_session_id,
+        trace_id=f"trace-{flow_run_id or origin_session_id or 'none'}",
+        flow_run_id=flow_run_id,
+        user_id="user-1",
+        candidate_count=1,
+        conversation_summary="Prep summary.",
+        payload_json={
+            "candidates": [],
+            "run_metadata": {
+                "model_name": "placeholder",
+                "token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "processing_notes": [],
+                "warnings": [],
+            },
+        },
+        extraction_metadata={"final_run_metadata": {"model_name": "gpt-5-mini"}},
+        created_at=created_at,
+    )
+    db_session.add(record)
+    db_session.commit()
+    return record
+
+
+def test_select_bootstrap_extraction_result_honors_flow_run_id(db_session):
+    document = _create_document(db_session)
+    older_matching = _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-2",
+        origin_session_id="chat-session-2",
+        created_at=datetime(2026, 3, 21, 15, 31, tzinfo=timezone.utc),
+    )
+
+    selected = module._select_bootstrap_extraction_result(
+        db_session,
+        document_id=str(document.id),
+        request=CurationDocumentBootstrapRequest(flow_run_id="flow-1"),
+    )
+
+    assert selected.id == older_matching.id
+
+
+def test_select_bootstrap_extraction_result_honors_origin_session_id(db_session):
+    document = _create_document(db_session)
+    older_matching = _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-2",
+        created_at=datetime(2026, 3, 21, 15, 31, tzinfo=timezone.utc),
+    )
+
+    selected = module._select_bootstrap_extraction_result(
+        db_session,
+        document_id=str(document.id),
+        request=CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+    )
+
+    assert selected.id == older_matching.id
+
+
+def test_get_document_bootstrap_availability_returns_true_when_matching_result_exists(db_session):
+    document = _create_document(db_session)
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        str(document.id),
+        CurationDocumentBootstrapRequest(flow_run_id="flow-1"),
+        db=db_session,
+    )
+
+    assert availability.eligible is True
+
+
+def test_get_document_bootstrap_availability_returns_false_when_no_matching_result_exists(db_session):
+    document = _create_document(db_session)
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        str(document.id),
+        CurationDocumentBootstrapRequest(flow_run_id="flow-missing"),
+        db=db_session,
+    )
+
+    assert availability.eligible is False

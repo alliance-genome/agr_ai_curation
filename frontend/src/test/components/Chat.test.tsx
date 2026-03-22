@@ -4,6 +4,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Chat from '../../components/Chat'
 
+const mockNavigate = vi.fn()
+const openCurationWorkspaceMock = vi.fn()
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
+
+vi.mock('@/features/curation/navigation/openCurationWorkspace', () => ({
+  openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+}))
+
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     user: { email: 'curator@example.org' },
@@ -36,12 +51,17 @@ function mockChatFetch(options?: {
     profile_keys: string[]
     domain_keys: string[]
   }
+  activeDocument?: {
+    id: string
+    filename?: string | null
+  }
 }) {
   const {
     curationDbStatus = 'connected',
     rejectHealth = false,
     prepPreview,
     prepRun,
+    activeDocument,
   } = options ?? {}
 
   vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -97,6 +117,21 @@ function mockChatFetch(options?: {
       } as Response
     }
 
+    if (url === '/api/chat/document') {
+      return {
+        ok: true,
+        json: async () => activeDocument
+          ? {
+              active: true,
+              document: activeDocument,
+            }
+          : {
+              active: false,
+              document: null,
+            },
+      } as Response
+    }
+
     return {
       ok: true,
       json: async () => ({}),
@@ -129,6 +164,8 @@ describe('Chat persistence', () => {
   beforeEach(() => {
     localStorage.clear()
     Element.prototype.scrollIntoView = vi.fn()
+    mockNavigate.mockReset()
+    openCurationWorkspaceMock.mockReset()
     mockChatFetch()
   })
 
@@ -332,5 +369,94 @@ describe('Chat persistence', () => {
     expect(
       await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
     ).toBeInTheDocument()
+  })
+
+  it('opens the curation workspace after prep completes for an active document', async () => {
+    openCurationWorkspaceMock
+      .mockResolvedValueOnce('curation-session-1')
+      .mockResolvedValueOnce('curation-session-2')
+      .mockResolvedValueOnce('curation-session-2')
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-1',
+        filename: 'doc-1.pdf',
+      },
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 2 candidate annotations. Prepare all for curation review?',
+        candidate_count: 2,
+        extraction_result_count: 1,
+        conversation_message_count: 4,
+        adapter_keys: ['gene'],
+        profile_keys: ['primary'],
+        domain_keys: ['gene'],
+        blocking_reasons: [],
+      },
+      prepRun: {
+        summary_text: 'Prepared 2 candidate annotations for curation review.',
+        candidate_count: 2,
+        warnings: [],
+        processing_notes: [],
+        adapter_keys: ['gene'],
+        profile_keys: ['primary'],
+        domain_keys: ['gene'],
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /start prep/i }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['gene'],
+          navigate: mockNavigate,
+        })
+      )
+    })
+
+    expect(
+      await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
+    ).toBeInTheDocument()
+
+    openCurationWorkspaceMock.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i, hidden: true }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'curation-session-1',
+          documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['gene'],
+          navigate: mockNavigate,
+        })
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i, hidden: true }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'curation-session-2',
+          documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['gene'],
+          navigate: mockNavigate,
+        })
+      )
+    })
   })
 })

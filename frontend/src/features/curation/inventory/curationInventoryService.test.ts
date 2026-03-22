@@ -21,6 +21,7 @@ describe('curationInventoryService', () => {
         curator_ids: ['curator-1'],
         tags: ['priority'],
         flow_run_id: 'flow-1',
+        origin_session_id: 'chat-session-1',
         document_id: 'doc-1',
         search: '  beta paper  ',
         prepared_between: {
@@ -46,6 +47,7 @@ describe('curationInventoryService', () => {
     expect(params.getAll('curator_id')).toEqual(['curator-1'])
     expect(params.getAll('tag')).toEqual(['priority'])
     expect(params.get('flow_run_id')).toBe('flow-1')
+    expect(params.get('origin_session_id')).toBe('chat-session-1')
     expect(params.get('document_id')).toBe('doc-1')
     expect(params.get('search')).toBe('beta paper')
     expect(params.get('prepared_from')).toBe('2026-03-01T00:00:00Z')
@@ -69,6 +71,7 @@ describe('curationInventoryService', () => {
         curator_ids: [],
         tags: [],
         flow_run_id: null,
+        origin_session_id: null,
         document_id: null,
         search: 'pmid',
         prepared_between: null,
