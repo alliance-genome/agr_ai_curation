@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import String, asc, case, delete, desc, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -34,7 +35,6 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     CurationDocumentRef,
     CurationEvidenceSource,
-    CurationEvidenceQualityCounts,
     CurationEvidenceSummary,
     CurationExtractionResultRecord,
     CurationFlowRunSummary,
@@ -577,47 +577,7 @@ def _evidence_summary(session: ReviewSessionModel) -> CurationEvidenceSummary | 
         for candidate in session.candidates
         for evidence_anchor in candidate.evidence_anchors
     ]
-    if not anchors:
-        return None
-
-    quality_counts = CurationEvidenceQualityCounts()
-    warnings: list[str] = []
-
-    for evidence_anchor in anchors:
-        locator_quality = str((evidence_anchor.anchor or {}).get("locator_quality") or "")
-        if locator_quality == "exact_quote":
-            quality_counts.exact_quote += 1
-        elif locator_quality == "normalized_quote":
-            quality_counts.normalized_quote += 1
-        elif locator_quality == "section_only":
-            quality_counts.section_only += 1
-        elif locator_quality == "page_only":
-            quality_counts.page_only += 1
-        elif locator_quality == "document_only":
-            quality_counts.document_only += 1
-        else:
-            quality_counts.unresolved += 1
-        warnings.extend(evidence_anchor.warnings or [])
-
-    total_anchor_count = len(anchors)
-    resolved_anchor_count = (
-        quality_counts.exact_quote
-        + quality_counts.normalized_quote
-        + quality_counts.section_only
-        + quality_counts.page_only
-    )
-    viewer_highlightable_anchor_count = (
-        quality_counts.exact_quote + quality_counts.normalized_quote
-    )
-
-    return CurationEvidenceSummary(
-        total_anchor_count=total_anchor_count,
-        resolved_anchor_count=resolved_anchor_count,
-        viewer_highlightable_anchor_count=viewer_highlightable_anchor_count,
-        quality_counts=quality_counts,
-        degraded=bool(quality_counts.document_only or quality_counts.unresolved or warnings),
-        warnings=sorted(set(warnings)),
-    )
+    return summarize_evidence_records(anchors)
 
 
 def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | None:

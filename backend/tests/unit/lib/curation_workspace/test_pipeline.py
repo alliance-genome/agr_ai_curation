@@ -342,12 +342,28 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert candidate_row.extraction_result_id == prep_record.id
     assert candidate_row.normalized_payload["gene"]["symbol"] == "GENE1"
     assert candidate_row.candidate_metadata["prep_evidence_references"][0]["field_path"] == "gene.symbol"
+    assert candidate_row.candidate_metadata["evidence_summary"] == {
+        "total_anchor_count": 1,
+        "resolved_anchor_count": 1,
+        "viewer_highlightable_anchor_count": 1,
+        "quality_counts": {
+            "exact_quote": 1,
+            "normalized_quote": 0,
+            "section_only": 0,
+            "page_only": 0,
+            "document_only": 0,
+            "unresolved": 0,
+        },
+        "degraded": False,
+        "warnings": [],
+    }
 
     evidence_row = db_session.scalars(
         select(EvidenceRecordModel).where(EvidenceRecordModel.candidate_id == candidate_row.id)
     ).one()
     assert evidence_row.field_keys == ["gene.symbol"]
     assert evidence_row.anchor["chunk_ids"] == ["chunk-1"]
+    assert evidence_row.anchor["viewer_highlightable"] is True
 
     draft_row = db_session.scalars(
         select(DraftModel).where(DraftModel.candidate_id == candidate_row.id)

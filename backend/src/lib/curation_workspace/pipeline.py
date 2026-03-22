@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -14,6 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
+from src.lib.curation_workspace.evidence_quality import (
+    evidence_anchor_payload_with_quality,
+    summarize_evidence_records,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -54,6 +58,7 @@ DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
 PREP_EVIDENCE_REFERENCES_METADATA_KEY = "prep_evidence_references"
 PREP_UNRESOLVED_AMBIGUITIES_METADATA_KEY = "prep_unresolved_ambiguities"
 NORMALIZER_METADATA_KEY = "normalizer"
+EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
 
 
 class PipelineExecutionMode(str, Enum):
@@ -501,18 +506,25 @@ def _execute_pipeline_steps(
             ),
         )
         normalized_candidates.append(normalized_candidate)
+        resolved_records = dependencies.evidence_resolver.resolve(
+            candidate,
+            normalized_candidate=normalized_candidate,
+            context=EvidenceResolutionContext(
+                document_id=request.document_id,
+                adapter_key=adapter_key,
+                profile_key=profile_key,
+                prep_extraction_result_id=str(prep_extraction_result.id),
+                candidate_index=candidate_index,
+            ),
+        )
         evidence_records_by_candidate.append(
-            dependencies.evidence_resolver.resolve(
-                candidate,
-                normalized_candidate=normalized_candidate,
-                context=EvidenceResolutionContext(
-                    document_id=request.document_id,
-                    adapter_key=adapter_key,
-                    profile_key=profile_key,
-                    prep_extraction_result_id=str(prep_extraction_result.id),
-                    candidate_index=candidate_index,
-                ),
-            )
+            [
+                replace(
+                    record,
+                    anchor=evidence_anchor_payload_with_quality(record.anchor),
+                )
+                for record in resolved_records
+            ]
         )
 
     validated_at = request.prepared_at or datetime.now(timezone.utc)
@@ -584,6 +596,7 @@ def _prepared_candidate_input(
 ) -> PreparedCandidateInput:
     prep_candidate = normalized_candidate.prep_candidate
     metadata = dict(normalized_candidate.metadata)
+    evidence_summary = summarize_evidence_records(evidence_records)
     metadata[PREP_EVIDENCE_REFERENCES_METADATA_KEY] = [
         _serialize_evidence_reference(reference)
         for reference in prep_candidate.evidence_references
@@ -593,6 +606,8 @@ def _prepared_candidate_input(
         for ambiguity in prep_candidate.unresolved_ambiguities
     ]
     metadata["prep_candidate_index"] = candidate_index
+    if evidence_summary is not None:
+        metadata[EVIDENCE_SUMMARY_METADATA_KEY] = evidence_summary.model_dump(mode="json")
 
     return PreparedCandidateInput(
         source=CurationCandidateSource.EXTRACTED,
