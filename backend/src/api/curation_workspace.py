@@ -14,6 +14,7 @@ from src.lib.conversation_manager import SessionAccessError
 from src.lib.curation_workspace.bootstrap_service import (
     bootstrap_document_session,
     create_manual_session,
+    get_document_bootstrap_availability,
 )
 from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
@@ -40,6 +41,7 @@ from src.schemas.curation_prep import (
 )
 from src.schemas.curation_workspace import (
     CurationDateRange,
+    CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationDocumentBootstrapResponse,
     CurationEvidenceRecomputeRequest,
@@ -86,6 +88,7 @@ def _session_filters_from_query(
     curator_ids: Annotated[list[str] | None, Query(alias="curator_id")] = None,
     tags: Annotated[list[str] | None, Query(alias="tag")] = None,
     flow_run_id: str | None = Query(default=None),
+    origin_session_id: str | None = Query(default=None),
     document_id: str | None = Query(default=None),
     search: str | None = Query(default=None),
     prepared_from: datetime | None = Query(default=None, alias="prepared_from"),
@@ -101,6 +104,7 @@ def _session_filters_from_query(
         curator_ids=curator_ids or [],
         tags=tags or [],
         flow_run_id=flow_run_id,
+        origin_session_id=origin_session_id,
         document_id=document_id,
         search=search,
         prepared_between=_date_range(prepared_from, prepared_to),
@@ -130,6 +134,22 @@ def _build_stats_request(
     filters: CurationSessionFilters = Depends(_session_filters_from_query),
 ) -> CurationSessionStatsRequest:
     return CurationSessionStatsRequest(filters=filters)
+
+
+def _bootstrap_request_from_query(
+    adapter_key: str | None = Query(default=None),
+    profile_key: str | None = Query(default=None),
+    domain_key: str | None = Query(default=None),
+    flow_run_id: str | None = Query(default=None),
+    origin_session_id: str | None = Query(default=None),
+) -> CurationDocumentBootstrapRequest:
+    return CurationDocumentBootstrapRequest(
+        adapter_key=adapter_key,
+        profile_key=profile_key,
+        domain_key=domain_key,
+        flow_run_id=flow_run_id,
+        origin_session_id=origin_session_id,
+    )
 
 
 def _build_next_request(
@@ -297,6 +317,25 @@ async def post_document_bootstrap(
         document_id,
         request,
         current_user_id=user_id,
+        db=db,
+    )
+
+
+@router.get(
+    "/documents/{document_id}/bootstrap-availability",
+    response_model=CurationDocumentBootstrapAvailabilityResponse,
+)
+async def get_document_bootstrap_status(
+    document_id: str,
+    request: CurationDocumentBootstrapRequest = Depends(_bootstrap_request_from_query),
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationDocumentBootstrapAvailabilityResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return get_document_bootstrap_availability(
+        document_id,
+        request,
         db=db,
     )
 

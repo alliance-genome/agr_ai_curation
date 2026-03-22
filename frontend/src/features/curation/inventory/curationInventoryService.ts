@@ -27,6 +27,10 @@ function appendFilters(params: URLSearchParams, filters?: CurationSessionFilters
     params.set('flow_run_id', filters.flow_run_id)
   }
 
+  if (filters?.origin_session_id) {
+    params.set('origin_session_id', filters.origin_session_id)
+  }
+
   if (filters?.document_id) {
     params.set('document_id', filters.document_id)
   }

@@ -30,7 +30,11 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationExtractionSourceKind,
+    CurationSessionFilters,
+    CurationSessionListRequest,
+    CurationSessionSortField,
     CurationSessionStatus,
+    CurationSortDirection,
 )
 
 
@@ -117,7 +121,14 @@ def _create_document(db_session):
     return document
 
 
-def _create_extraction_result(db_session, *, document_id: str, domain_key: str) -> ExtractionResultModel:
+def _create_extraction_result(
+    db_session,
+    *,
+    document_id: str,
+    domain_key: str,
+    origin_session_id: str = "chat-session-1",
+    flow_run_id: str = "flow-1",
+) -> ExtractionResultModel:
     record = ExtractionResultModel(
         id=uuid4(),
         document_id=UUID(document_id),
@@ -126,9 +137,9 @@ def _create_extraction_result(db_session, *, document_id: str, domain_key: str) 
         domain_key=domain_key,
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
-        origin_session_id="chat-session-1",
+        origin_session_id=origin_session_id,
         trace_id=f"trace-{domain_key}",
-        flow_run_id="flow-1",
+        flow_run_id=flow_run_id,
         user_id="user-1",
         candidate_count=1,
         conversation_summary=f"Prep summary for {domain_key}.",
@@ -245,3 +256,43 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
 
     assert matching is not None
     assert matching.session_id == str(session_alpha.id)
+
+
+def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    extraction_chat_one = _create_extraction_result(
+        db_session,
+        document_id=document_id,
+        domain_key="alpha",
+        origin_session_id="chat-session-1",
+    )
+    extraction_chat_two = _create_extraction_result(
+        db_session,
+        document_id=document_id,
+        domain_key="beta",
+        origin_session_id="chat-session-2",
+    )
+    session_one = _create_session_for_extraction(
+        db_session,
+        document_id=document_id,
+        extraction_result_id=extraction_chat_one.id,
+    )
+    _create_session_for_extraction(
+        db_session,
+        document_id=document_id,
+        extraction_result_id=extraction_chat_two.id,
+    )
+
+    response = module.list_sessions(
+        db_session,
+        CurationSessionListRequest(
+            filters=CurationSessionFilters(origin_session_id="chat-session-1"),
+            sort_by=CurationSessionSortField.PREPARED_AT,
+            sort_direction=CurationSortDirection.DESC,
+            page=1,
+            page_size=25,
+        ),
+    )
+
+    assert [session.session_id for session in response.sessions] == [str(session_one.id)]

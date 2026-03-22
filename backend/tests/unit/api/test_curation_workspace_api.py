@@ -9,6 +9,7 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationEvidenceRecomputeRequest,
     CurationEvidenceResolveRequest,
@@ -155,6 +156,8 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
         adapter_key="reference_adapter",
         profile_key="primary",
         domain_key="entity",
+        flow_run_id="flow-7",
+        origin_session_id="chat-session-7",
         curator_id="curator-2",
     )
     db = object()
@@ -202,6 +205,46 @@ async def test_post_document_bootstrap_propagates_no_extraction_results_error(mo
     assert exc.value.detail == (
         "No persisted curation prep extraction results were found for document document-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = CurationDocumentBootstrapAvailabilityResponse(eligible=True)
+    captured: dict[str, object] = {}
+
+    def _get_document_bootstrap_availability(document_id, request, *, db):
+        captured["document_id"] = document_id
+        captured["request"] = request
+        captured["db"] = db
+        return expected
+
+    monkeypatch.setattr(
+        module,
+        "get_document_bootstrap_availability",
+        _get_document_bootstrap_availability,
+    )
+
+    db = object()
+    response = await module.get_document_bootstrap_status(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            adapter_key="reference_adapter",
+            flow_run_id="flow-7",
+        ),
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response == expected
+    assert captured == {
+        "document_id": "document-1",
+        "request": CurationDocumentBootstrapRequest(
+            adapter_key="reference_adapter",
+            flow_run_id="flow-7",
+        ),
+        "db": db,
+    }
 
 
 @pytest.mark.asyncio

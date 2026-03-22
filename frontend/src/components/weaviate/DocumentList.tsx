@@ -50,6 +50,7 @@ import {
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
+import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 
 interface DocumentListProps {
   documents: DocumentSummary[];
@@ -391,7 +392,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 200,
+      width: onTitleUpdate ? 280 : 240,
       sortable: false,
       filterable: false,
       headerAlign: 'center',
@@ -421,6 +422,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
                 </IconButton>
               </span>
             </Tooltip>
+            {summary && (
+              <PreparedReviewAndCurateButton
+                documentId={summary.id}
+                disabled={disableLoad || !summary}
+                iconOnly={true}
+                size="small"
+              />
+            )}
             <Tooltip title="Download">
               <IconButton
                 size="small"
