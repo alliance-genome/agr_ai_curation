@@ -700,7 +700,7 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         ),
     )
 
-    return CurationCandidateSchema(
+    return CurationCandidatePayload(
         candidate_id=str(candidate.id),
         session_id=str(candidate.session_id),
         source=candidate.source,
