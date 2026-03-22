@@ -1,6 +1,15 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 
 import type {
+  CurationSavedViewCreateRequest,
+  CurationSavedViewCreateResponse,
+  CurationSavedViewDeleteResponse,
+  CurationSavedViewListResponse,
   CurationSessionListRequest,
   CurationSessionListResponse,
   CurationSessionStatsRequest,
@@ -9,9 +18,18 @@ import type {
 import { readCurationApiError } from '../services/api'
 import { buildCurationSessionFilterQueryParams } from '../services/curationSessionQueryParams'
 
-async function fetchCurationJson<T>(path: string): Promise<T> {
+export const CURATION_SAVED_VIEWS_QUERY_KEY = ['curation-saved-views'] as const
+
+async function fetchCurationJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
   const response = await fetch(path, {
     credentials: 'include',
+    ...init,
+    headers,
   })
 
   if (!response.ok) {
@@ -75,6 +93,30 @@ export async function fetchCurationSessionStats(
   )
 }
 
+export async function fetchCurationSavedViews(): Promise<CurationSavedViewListResponse> {
+  return fetchCurationJson<CurationSavedViewListResponse>('/api/curation-workspace/views')
+}
+
+export async function createCurationSavedView(
+  request: CurationSavedViewCreateRequest
+): Promise<CurationSavedViewCreateResponse> {
+  return fetchCurationJson<CurationSavedViewCreateResponse>('/api/curation-workspace/views', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function deleteCurationSavedView(
+  viewId: string
+): Promise<CurationSavedViewDeleteResponse> {
+  return fetchCurationJson<CurationSavedViewDeleteResponse>(
+    `/api/curation-workspace/views/${viewId}`,
+    {
+      method: 'DELETE',
+    }
+  )
+}
+
 export function useCurationSessionList(request: CurationSessionListRequest) {
   return useQuery({
     queryKey: ['curation-session-list', request],
@@ -88,5 +130,38 @@ export function useCurationSessionStats(request: CurationSessionStatsRequest) {
     queryKey: ['curation-session-stats', request],
     queryFn: () => fetchCurationSessionStats(request),
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useCurationSavedViews() {
+  return useQuery({
+    queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+    queryFn: fetchCurationSavedViews,
+  })
+}
+
+export function useCreateCurationSavedView() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: createCurationSavedView,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+      })
+    },
+  })
+}
+
+export function useDeleteCurationSavedView() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: deleteCurationSavedView,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+      })
+    },
   })
 }

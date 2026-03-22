@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import CurationInventoryPage from './CurationInventoryPage'
 import type {
+  CurationSavedViewListResponse,
   CurationSessionListResponse,
   CurationSessionStatsResponse,
 } from '../features/curation/types'
@@ -148,6 +149,7 @@ describe('CurationInventoryPage', () => {
       curator_ids: [],
       tags: [],
       flow_run_id: null,
+      origin_session_id: null,
       document_id: null,
       search: null,
       prepared_between: null,
@@ -176,6 +178,41 @@ describe('CurationInventoryPage', () => {
     applied_filters: listResponse.applied_filters,
   }
 
+  const savedViewResponse: CurationSavedViewListResponse = {
+    views: [
+      {
+        view_id: 'saved-view-1',
+        name: 'My pending sessions',
+        description: 'Only my active gene sessions',
+        filters: {
+          statuses: ['new'],
+          adapter_keys: ['gene'],
+          profile_keys: ['alpha'],
+          domain_keys: [],
+          curator_ids: [],
+          tags: [],
+          flow_run_id: null,
+          origin_session_id: 'chat-session-7',
+          document_id: null,
+          search: 'pending',
+          prepared_between: null,
+          last_worked_between: null,
+          saved_view_id: null,
+        },
+        sort_by: 'adapter',
+        sort_direction: 'asc',
+        is_default: false,
+        created_by: {
+          actor_id: 'curator-1',
+          display_name: 'Alex Curator',
+          email: 'alex@example.org',
+        },
+        created_at: '2026-03-22T13:20:00Z',
+        updated_at: '2026-03-22T13:20:00Z',
+      },
+    ],
+  }
+
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
@@ -184,6 +221,10 @@ describe('CurationInventoryPage', () => {
 
         if (url.startsWith('/api/curation-workspace/sessions/stats')) {
           return jsonResponse(statsResponse)
+        }
+
+        if (url === '/api/curation-workspace/views') {
+          return jsonResponse(savedViewResponse)
         }
 
         if (url.startsWith('/api/curation-workspace/sessions')) {
@@ -255,4 +296,37 @@ describe('CurationInventoryPage', () => {
 
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
   }, 15000) // Filter-driven refetches plus MUI interactions can exceed the default timeout under CI load.
+
+  it('applies a saved view through the inventory hook and re-queries the session list', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText('Alpha paper')
+
+    await user.selectOptions(
+      await screen.findByLabelText('Saved view'),
+      savedViewResponse.views[0].view_id
+    )
+
+    await waitFor(() => {
+      const sessionListCalls = vi
+        .mocked(global.fetch)
+        .mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
+
+      expect(
+        sessionListCalls.some((url) =>
+          url.includes('status=new') &&
+          url.includes('adapter_key=gene') &&
+          url.includes('profile_key=alpha') &&
+          url.includes('search=pending') &&
+          url.includes('sort_by=adapter') &&
+          url.includes('sort_direction=asc') &&
+          url.includes('saved_view_id=saved-view-1') &&
+          !url.includes('origin_session_id=')
+        )
+      ).toBe(true)
+    })
+  })
 })

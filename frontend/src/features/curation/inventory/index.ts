@@ -1,4 +1,5 @@
 export { default as CurationInventoryFilterBar } from './CurationInventoryFilterBar'
+export { default as SavedViewSelector } from './SavedViewSelector'
 export { default as CurationInventoryTable } from './CurationInventoryTable'
 export { default as QueueNavigationButton } from './QueueNavigationButton'
 export { useCurationInventory } from './useCurationInventory'

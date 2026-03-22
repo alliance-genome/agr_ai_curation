@@ -25,6 +25,11 @@ from src.lib.curation_workspace.evidence_service import (
     recompute_evidence,
     resolve_evidence,
 )
+from src.lib.curation_workspace.saved_view_service import (
+    create_saved_view as create_saved_view_record,
+    delete_saved_view as delete_saved_view_record,
+    list_saved_views as list_saved_view_records,
+)
 from src.lib.curation_workspace.session_service import (
     get_next_session,
     get_session_detail,
@@ -54,6 +59,10 @@ from src.schemas.curation_workspace import (
     CurationManualEvidenceCreateResponse,
     CurationQueueNavigationDirection,
     CurationReviewSession,
+    CurationSavedViewCreateRequest,
+    CurationSavedViewCreateResponse,
+    CurationSavedViewDeleteResponse,
+    CurationSavedViewListResponse,
     CurationSessionFilters,
     CurationSessionCreateRequest,
     CurationSessionCreateResponse,
@@ -91,6 +100,7 @@ def _session_filters_from_query(
     origin_session_id: str | None = Query(default=None),
     document_id: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    saved_view_id: str | None = Query(default=None, alias="saved_view_id"),
     prepared_from: datetime | None = Query(default=None, alias="prepared_from"),
     prepared_to: datetime | None = Query(default=None, alias="prepared_to"),
     last_worked_from: datetime | None = Query(default=None, alias="last_worked_from"),
@@ -107,6 +117,7 @@ def _session_filters_from_query(
         origin_session_id=origin_session_id,
         document_id=document_id,
         search=search,
+        saved_view_id=saved_view_id,
         prepared_between=_date_range(prepared_from, prepared_to),
         last_worked_between=_date_range(last_worked_from, last_worked_to),
     )
@@ -204,6 +215,46 @@ async def post_review_session(
         current_user_id=user_id,
         actor_claims=user,
         db=db,
+    )
+
+
+@router.get("/views", response_model=CurationSavedViewListResponse)
+async def get_saved_views(
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSavedViewListResponse:
+    user_id = _require_current_user_id(user)
+    set_global_user_from_cognito(db, user)
+    return list_saved_view_records(db, current_user_id=user_id)
+
+
+@router.post("/views", response_model=CurationSavedViewCreateResponse)
+async def post_saved_view(
+    request: CurationSavedViewCreateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSavedViewCreateResponse:
+    user_id = _require_current_user_id(user)
+    set_global_user_from_cognito(db, user)
+    return create_saved_view_record(
+        db,
+        request,
+        current_user_id=user_id,
+    )
+
+
+@router.delete("/views/{view_id}", response_model=CurationSavedViewDeleteResponse)
+async def delete_saved_view(
+    view_id: UUID,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSavedViewDeleteResponse:
+    user_id = _require_current_user_id(user)
+    set_global_user_from_cognito(db, user)
+    return delete_saved_view_record(
+        db,
+        view_id,
+        current_user_id=user_id,
     )
 
 
