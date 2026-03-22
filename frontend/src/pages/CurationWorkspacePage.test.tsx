@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { ThemeProvider, createTheme } from '@mui/material/styles'
+import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurationWorkspace } from '@/features/curation/types'
+import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
 
 const serviceMocks = vi.hoisted(() => ({
@@ -26,20 +27,23 @@ vi.mock('@/components/pdfViewer/PdfViewer', () => ({
 
 function buildWorkspace(): CurationWorkspace {
   return {
-    session: {
-      session_id: 'session-1',
-      status: 'in_progress',
-      adapter: {
-        adapter_key: 'gene',
-        display_label: 'Gene',
-        metadata: {},
-      },
-      document: {
-        document_id: 'document-1',
-        title: 'Workspace Document',
-        pdf_url: '/api/documents/document-1.pdf',
-        viewer_url: '/api/documents/document-1.pdf',
-      },
+      session: {
+        session_id: 'session-1',
+        status: 'in_progress',
+        adapter: {
+          adapter_key: 'gene',
+          display_label: 'Gene',
+          profile_label: 'Human',
+          color_token: 'green',
+          metadata: {},
+        },
+        document: {
+          document_id: 'document-1',
+          title: 'Workspace Document',
+          pmid: '123456',
+          pdf_url: '/api/documents/document-1.pdf',
+          viewer_url: '/api/documents/document-1.pdf',
+        },
       progress: {
         total_candidates: 2,
         reviewed_candidates: 1,
@@ -148,7 +152,7 @@ function renderPage(initialEntry: string) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={createTheme()}>
+      <ThemeProvider theme={theme}>
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route
@@ -201,8 +205,11 @@ describe('CurationWorkspacePage', () => {
       )
     })
 
-    expect(screen.getByText('Pending candidate')).toBeInTheDocument()
-    expect(screen.getByText('Session Details')).toBeInTheDocument()
+    expect(screen.getAllByText('Pending candidate')).toHaveLength(2)
+    expect(screen.getByText('Candidate Queue')).toBeInTheDocument()
+    expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
+    expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
+    expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
@@ -214,13 +221,16 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(screen.getByText('Accepted candidate')).toBeInTheDocument()
+      expect(screen.getAllByText('Accepted candidate')).toHaveLength(2)
     })
 
     expect(screen.getByTestId('location')).toHaveTextContent(
       '/curation/session-1/candidate-accepted',
     )
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
+    expect(screen.getByText('Workspace Document')).toBeInTheDocument()
+    expect(screen.getByText('PMID 123456')).toBeInTheDocument()
+    expect(screen.getByText('Decision Toolbar')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(serviceMocks.dispatchPDFDocumentChanged).toHaveBeenCalledWith(
