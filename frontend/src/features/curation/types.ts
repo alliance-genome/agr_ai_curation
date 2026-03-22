@@ -366,6 +366,7 @@ export interface CurationSessionFilters {
   curator_ids?: string[]
   tags?: string[]
   flow_run_id?: string | null
+  origin_session_id?: string | null
   document_id?: string | null
   search?: string | null
   prepared_between?: CurationDateRange | null
@@ -612,18 +613,21 @@ export interface CurationSessionCreateResponse {
 }
 
 export interface CurationDocumentBootstrapRequest {
-  document_id: string
   adapter_key?: string | null
   profile_key?: string | null
   domain_key?: string | null
-  source_extraction_result_id?: string | null
+  flow_run_id?: string | null
+  origin_session_id?: string | null
   curator_id?: string | null
-  force_rebuild?: boolean
 }
 
 export interface CurationDocumentBootstrapResponse {
   created: boolean
-  workspace: CurationWorkspace
+  session: CurationReviewSession
+}
+
+export interface CurationDocumentBootstrapAvailabilityResponse {
+  eligible: boolean
 }
 
 export interface CurationSessionUpdateRequest {

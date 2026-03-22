@@ -29,6 +29,7 @@ from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import CurationPrepAgentOutput
 from src.schemas.curation_workspace import (
     CurationActorType,
+    CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationDocumentBootstrapResponse,
     CurationSessionCreateRequest,
@@ -143,6 +144,30 @@ async def bootstrap_document_session(
     )
 
 
+def get_document_bootstrap_availability(
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    *,
+    db: Session,
+) -> CurationDocumentBootstrapAvailabilityResponse:
+    """Return whether the current bootstrap selectors can resolve a prep result."""
+
+    _require_document(db, document_id)
+
+    try:
+        _select_bootstrap_extraction_result(
+            db,
+            document_id=document_id,
+            request=request,
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_404_NOT_FOUND:
+            return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
+        raise
+
+    return CurationDocumentBootstrapAvailabilityResponse(eligible=True)
+
+
 def _require_document(db: Session, document_id: str) -> PDFDocument:
     document_uuid = _parse_uuid(document_id, field_name="document_id")
     document = db.get(PDFDocument, document_uuid)
@@ -170,6 +195,8 @@ def _select_bootstrap_extraction_result(
     adapter_key = _normalized_optional_str(request.adapter_key)
     profile_key = _normalized_optional_str(request.profile_key)
     domain_key = _normalized_optional_str(request.domain_key)
+    flow_run_id = _normalized_optional_str(request.flow_run_id)
+    origin_session_id = _normalized_optional_str(request.origin_session_id)
 
     if adapter_key is not None:
         statement = statement.where(ExtractionResultModel.adapter_key == adapter_key)
@@ -177,6 +204,10 @@ def _select_bootstrap_extraction_result(
         statement = statement.where(ExtractionResultModel.profile_key == profile_key)
     if domain_key is not None:
         statement = statement.where(ExtractionResultModel.domain_key == domain_key)
+    if flow_run_id is not None:
+        statement = statement.where(ExtractionResultModel.flow_run_id == flow_run_id)
+    if origin_session_id is not None:
+        statement = statement.where(ExtractionResultModel.origin_session_id == origin_session_id)
 
     extraction_result = db.scalars(statement).first()
     if extraction_result is None:

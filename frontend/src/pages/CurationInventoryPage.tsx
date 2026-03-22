@@ -1,15 +1,27 @@
+import { useMemo } from 'react'
 import { Alert, Box, LinearProgress, Stack, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 
 import {
   CurationInventoryFilterBar,
   CurationInventoryTable,
+  QueueNavigationButton,
+  SavedViewSelector,
   useCurationInventory,
 } from '../features/curation/inventory'
+import { buildCurationQueueNavigationState } from '../features/curation/services/curationQueueNavigationService'
 
 export default function CurationInventoryPage() {
   const navigate = useNavigate()
   const inventory = useCurationInventory()
+  const queueRequest = useMemo(
+    () => ({
+      filters: inventory.filters,
+      sort_by: inventory.sortBy,
+      sort_direction: inventory.sortDirection,
+    }),
+    [inventory.filters, inventory.sortBy, inventory.sortDirection],
+  )
   const sessionErrorMessage = inventory.listQuery.error instanceof Error
     ? inventory.listQuery.error.message
     : undefined
@@ -44,6 +56,17 @@ export default function CurationInventoryPage() {
           </Alert>
         )}
 
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <SavedViewSelector
+            filters={inventory.filters}
+            onApplyView={inventory.applySavedView}
+            onClearSelection={inventory.clearSavedViewSelection}
+            selectedViewId={inventory.savedViewId}
+            sortBy={inventory.sortBy}
+            sortDirection={inventory.sortDirection}
+          />
+        </Box>
+
         <CurationInventoryFilterBar
           adapterKeys={inventory.adapterKeys}
           adapterOptions={inventory.adapterOptions}
@@ -59,6 +82,7 @@ export default function CurationInventoryPage() {
           onToggleStatus={inventory.toggleStatus}
           profileKeys={inventory.profileKeys}
           profileOptions={inventory.profileOptions}
+          queueActions={<QueueNavigationButton request={queueRequest} />}
           searchInput={inventory.searchInput}
           stats={inventory.statsQuery.data?.stats}
           statuses={inventory.statuses}
@@ -89,7 +113,11 @@ export default function CurationInventoryPage() {
               void inventory.listQuery.refetch()
               void inventory.statsQuery.refetch()
             }}
-            onRowClick={(sessionId) => navigate(`/curation/${sessionId}`)}
+            onRowClick={(sessionId) => {
+              navigate(`/curation/${sessionId}`, {
+                state: buildCurationQueueNavigationState(queueRequest),
+              })
+            }}
             onSortChange={inventory.handleSortChange}
             pageInfo={inventory.pageInfo}
             sessions={inventory.listQuery.data?.sessions ?? []}

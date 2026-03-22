@@ -7,13 +7,37 @@ import FingerprintIcon from '@mui/icons-material/Fingerprint'
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import RateReviewIcon from '@mui/icons-material/RateReview'
 
+import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
+import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
+
 interface MessageActionsProps {
   messageContent: string
   traceId?: string
   onFeedbackClick: () => void
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+  onReviewAndCurateOpened?: (sessionId: string) => void
 }
 
-function MessageActions({ messageContent, traceId, onFeedbackClick }: MessageActionsProps) {
+const actionButtonSx = {
+  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  border: '1px solid rgba(255, 255, 255, 0.2)',
+  color: 'rgba(255, 255, 255, 0.7)',
+  '&:hover': {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    color: '#ffffff',
+    transform: 'scale(1.1)'
+  },
+  transition: 'all 0.2s',
+  padding: '0.25rem'
+} as const
+
+function MessageActions({
+  messageContent,
+  traceId,
+  onFeedbackClick,
+  reviewAndCurateTarget,
+  onReviewAndCurateOpened,
+}: MessageActionsProps) {
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const menuOpen = Boolean(anchorEl)
@@ -70,6 +94,22 @@ function MessageActions({ messageContent, traceId, onFeedbackClick }: MessageAct
       }}
       className="message-actions"
     >
+      {reviewAndCurateTarget && (
+        <ReviewAndCurateButton
+          sessionId={reviewAndCurateTarget.sessionId}
+          documentId={reviewAndCurateTarget.documentId}
+          flowRunId={reviewAndCurateTarget.flowRunId}
+          originSessionId={reviewAndCurateTarget.originSessionId}
+          adapterKeys={reviewAndCurateTarget.adapterKeys}
+          profileKeys={reviewAndCurateTarget.profileKeys}
+          domainKeys={reviewAndCurateTarget.domainKeys}
+          iconOnly={true}
+          size="small"
+          sx={actionButtonSx}
+          onOpened={onReviewAndCurateOpened}
+        />
+      )}
+
       {/* Triple-dot menu button */}
       <IconButton
         size="small"
@@ -78,18 +118,7 @@ function MessageActions({ messageContent, traceId, onFeedbackClick }: MessageAct
         aria-controls={menuOpen ? 'message-actions-menu' : undefined}
         aria-haspopup="true"
         aria-expanded={menuOpen ? 'true' : undefined}
-        sx={{
-          backgroundColor: 'rgba(255, 255, 255, 0.1)',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          color: 'rgba(255, 255, 255, 0.7)',
-          '&:hover': {
-            backgroundColor: 'rgba(255, 255, 255, 0.2)',
-            color: '#ffffff',
-            transform: 'scale(1.1)'
-          },
-          transition: 'all 0.2s',
-          padding: '0.25rem'
-        }}
+        sx={actionButtonSx}
       >
         <MoreVertIcon fontSize="small" />
       </IconButton>
@@ -99,18 +128,7 @@ function MessageActions({ messageContent, traceId, onFeedbackClick }: MessageAct
         size="small"
         onClick={handleCopyMessage}
         aria-label="copy message"
-        sx={{
-          backgroundColor: 'rgba(255, 255, 255, 0.1)',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          color: 'rgba(255, 255, 255, 0.7)',
-          '&:hover': {
-            backgroundColor: 'rgba(255, 255, 255, 0.2)',
-            color: '#ffffff',
-            transform: 'scale(1.1)'
-          },
-          transition: 'all 0.2s',
-          padding: '0.25rem'
-        }}
+        sx={actionButtonSx}
       >
         <ContentCopyIcon fontSize="small" />
       </IconButton>

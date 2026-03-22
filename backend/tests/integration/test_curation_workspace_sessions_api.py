@@ -916,6 +916,7 @@ def test_get_next_review_session_returns_queue_navigation_context(
             "curator_ids": [],
             "tags": [],
             "flow_run_id": None,
+            "origin_session_id": None,
             "document_id": None,
             "search": None,
             "prepared_between": None,

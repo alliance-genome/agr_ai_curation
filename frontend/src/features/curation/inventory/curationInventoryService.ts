@@ -1,68 +1,43 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 
 import type {
   CurationFlowRunListRequest,
   CurationFlowRunListResponse,
   CurationFlowRunSessionsRequest,
   CurationFlowRunSessionsResponse,
-  CurationSessionFilters,
+  CurationSavedViewCreateRequest,
+  CurationSavedViewCreateResponse,
+  CurationSavedViewDeleteResponse,
+  CurationSavedViewListResponse,
   CurationSessionListRequest,
   CurationSessionListResponse,
   CurationSessionStatsRequest,
   CurationSessionStatsResponse,
 } from '../types'
 import { readCurationApiError } from '../services/api'
+import { buildCurationSessionFilterQueryParams } from '../services/curationSessionQueryParams'
 
 interface CurationInventoryQueryOptions {
   enabled?: boolean
 }
 
-function appendStringList(params: URLSearchParams, key: string, values?: string[]) {
-  values?.filter(Boolean).forEach((value) => {
-    params.append(key, value)
-  })
-}
+export const CURATION_SAVED_VIEWS_QUERY_KEY = ['curation-saved-views'] as const
 
-function appendFilters(params: URLSearchParams, filters?: CurationSessionFilters) {
-  appendStringList(params, 'status', filters?.statuses)
-  appendStringList(params, 'adapter_key', filters?.adapter_keys)
-  appendStringList(params, 'profile_key', filters?.profile_keys)
-  appendStringList(params, 'domain_key', filters?.domain_keys)
-  appendStringList(params, 'curator_id', filters?.curator_ids)
-  appendStringList(params, 'tag', filters?.tags)
-
-  if (filters?.flow_run_id) {
-    params.set('flow_run_id', filters.flow_run_id)
+async function fetchCurationJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
   }
 
-  if (filters?.document_id) {
-    params.set('document_id', filters.document_id)
-  }
-
-  if (filters?.search?.trim()) {
-    params.set('search', filters.search.trim())
-  }
-
-  if (filters?.prepared_between?.from_at) {
-    params.set('prepared_from', filters.prepared_between.from_at)
-  }
-
-  if (filters?.prepared_between?.to_at) {
-    params.set('prepared_to', filters.prepared_between.to_at)
-  }
-
-  if (filters?.last_worked_between?.from_at) {
-    params.set('last_worked_from', filters.last_worked_between.from_at)
-  }
-
-  if (filters?.last_worked_between?.to_at) {
-    params.set('last_worked_to', filters.last_worked_between.to_at)
-  }
-}
-
-async function fetchCurationJson<T>(path: string): Promise<T> {
   const response = await fetch(path, {
     credentials: 'include',
+    ...init,
+    headers,
   })
 
   if (!response.ok) {
@@ -75,9 +50,7 @@ async function fetchCurationJson<T>(path: string): Promise<T> {
 export function buildCurationSessionListQueryParams(
   request: CurationSessionListRequest
 ): URLSearchParams {
-  const params = new URLSearchParams()
-
-  appendFilters(params, request.filters)
+  const params = buildCurationSessionFilterQueryParams(request.filters)
 
   if (request.sort_by) {
     params.set('sort_by', request.sort_by)
@@ -105,24 +78,19 @@ export function buildCurationSessionListQueryParams(
 export function buildCurationSessionStatsQueryParams(
   request: CurationSessionStatsRequest
 ): URLSearchParams {
-  const params = new URLSearchParams()
-  appendFilters(params, request.filters)
-  return params
+  return buildCurationSessionFilterQueryParams(request.filters)
 }
 
 export function buildCurationFlowRunListQueryParams(
   request: CurationFlowRunListRequest
 ): URLSearchParams {
-  const params = new URLSearchParams()
-  appendFilters(params, request.filters)
-  return params
+  return buildCurationSessionFilterQueryParams(request.filters)
 }
 
 export function buildCurationFlowRunSessionsQueryParams(
   request: CurationFlowRunSessionsRequest
 ): URLSearchParams {
-  const params = new URLSearchParams()
-  appendFilters(params, request.filters)
+  const params = buildCurationSessionFilterQueryParams(request.filters)
 
   if (request.page) {
     params.set('page', String(request.page))
@@ -152,6 +120,30 @@ export async function fetchCurationSessionStats(
   const query = params.toString()
   return fetchCurationJson<CurationSessionStatsResponse>(
     `/api/curation-workspace/sessions/stats${query ? `?${query}` : ''}`
+  )
+}
+
+export async function fetchCurationSavedViews(): Promise<CurationSavedViewListResponse> {
+  return fetchCurationJson<CurationSavedViewListResponse>('/api/curation-workspace/views')
+}
+
+export async function createCurationSavedView(
+  request: CurationSavedViewCreateRequest
+): Promise<CurationSavedViewCreateResponse> {
+  return fetchCurationJson<CurationSavedViewCreateResponse>('/api/curation-workspace/views', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function deleteCurationSavedView(
+  viewId: string
+): Promise<CurationSavedViewDeleteResponse> {
+  return fetchCurationJson<CurationSavedViewDeleteResponse>(
+    `/api/curation-workspace/views/${viewId}`,
+    {
+      method: 'DELETE',
+    }
   )
 }
 
@@ -190,6 +182,39 @@ export function useCurationSessionStats(request: CurationSessionStatsRequest) {
     queryKey: ['curation-session-stats', request],
     queryFn: () => fetchCurationSessionStats(request),
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useCurationSavedViews() {
+  return useQuery({
+    queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+    queryFn: fetchCurationSavedViews,
+  })
+}
+
+export function useCreateCurationSavedView() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: createCurationSavedView,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+      })
+    },
+  })
+}
+
+export function useDeleteCurationSavedView() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: deleteCurationSavedView,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
+      })
+    },
   })
 }
 

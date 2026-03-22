@@ -174,13 +174,18 @@ describe('BatchGroupRow', () => {
       expect(screen.getByText('Batch beta')).toBeInTheDocument()
     })
 
-    expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-      '/api/curation-workspace/flow-runs/flow-alpha/sessions?page=1&page_size=1',
-      { credentials: 'include' }
+    const fetchCalls = vi.mocked(global.fetch).mock.calls
+
+    expect(String(fetchCalls[0][0])).toBe(
+      '/api/curation-workspace/flow-runs/flow-alpha/sessions?page=1&page_size=1'
     )
-    expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-      '/api/curation-workspace/flow-runs/flow-alpha/sessions?page=2&page_size=1',
-      { credentials: 'include' }
+    expect(fetchCalls[0][1]?.credentials).toBe('include')
+    expect(fetchCalls[0][1]?.headers).toBeInstanceOf(Headers)
+
+    expect(String(fetchCalls[1][0])).toBe(
+      '/api/curation-workspace/flow-runs/flow-alpha/sessions?page=2&page_size=1'
     )
+    expect(fetchCalls[1][1]?.credentials).toBe('include')
+    expect(fetchCalls[1][1]?.headers).toBeInstanceOf(Headers)
   })
 })
