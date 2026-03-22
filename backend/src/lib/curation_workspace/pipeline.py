@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
+from src.lib.curation_workspace.evidence_quality import evidence_anchor_payload_with_quality
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -501,18 +502,25 @@ def _execute_pipeline_steps(
             ),
         )
         normalized_candidates.append(normalized_candidate)
+        resolved_records = dependencies.evidence_resolver.resolve(
+            candidate,
+            normalized_candidate=normalized_candidate,
+            context=EvidenceResolutionContext(
+                document_id=request.document_id,
+                adapter_key=adapter_key,
+                profile_key=profile_key,
+                prep_extraction_result_id=str(prep_extraction_result.id),
+                candidate_index=candidate_index,
+            ),
+        )
         evidence_records_by_candidate.append(
-            dependencies.evidence_resolver.resolve(
-                candidate,
-                normalized_candidate=normalized_candidate,
-                context=EvidenceResolutionContext(
-                    document_id=request.document_id,
-                    adapter_key=adapter_key,
-                    profile_key=profile_key,
-                    prep_extraction_result_id=str(prep_extraction_result.id),
-                    candidate_index=candidate_index,
-                ),
-            )
+            [
+                replace(
+                    record,
+                    anchor=evidence_anchor_payload_with_quality(record.anchor),
+                )
+                for record in resolved_records
+            ]
         )
 
     validated_at = request.prepared_at or datetime.now(timezone.utc)

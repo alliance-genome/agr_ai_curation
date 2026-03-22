@@ -73,6 +73,10 @@ class EvidenceAnchor(BaseModel):
         default=None,
         description="Best available text-layer search string for the real PDF viewer",
     )
+    viewer_highlightable: bool = Field(
+        default=False,
+        description="Whether the viewer has enough quote text to reliably highlight this anchor",
+    )
     pdfx_markdown_offset_start: Optional[int] = Field(
         default=None,
         ge=0,

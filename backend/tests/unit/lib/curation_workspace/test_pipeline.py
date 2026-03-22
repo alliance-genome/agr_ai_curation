@@ -348,6 +348,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     ).one()
     assert evidence_row.field_keys == ["gene.symbol"]
     assert evidence_row.anchor["chunk_ids"] == ["chunk-1"]
+    assert evidence_row.anchor["viewer_highlightable"] is True
 
     draft_row = db_session.scalars(
         select(DraftModel).where(DraftModel.candidate_id == candidate_row.id)

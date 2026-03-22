@@ -39,6 +39,7 @@ export interface EvidenceAnchor {
   sentence_text?: string | null
   normalized_text?: string | null
   viewer_search_text?: string | null
+  viewer_highlightable?: boolean
   pdfx_markdown_offset_start?: number | null
   pdfx_markdown_offset_end?: number | null
   page_number?: number | null
