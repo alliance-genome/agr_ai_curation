@@ -1395,27 +1395,26 @@ class CurationSessionCreateRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Curator who should own the new session",
     )
-    seed_extraction_result_ids: list[str] = Field(
-        default_factory=list,
-        description="Extraction results to use when bootstrapping the session",
-    )
     notes: Optional[str] = Field(default=None, description="Initial session notes")
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Optional generic labels to attach to the new session",
+    )
 
 
 class CurationSessionCreateResponse(CurationWorkspaceBaseModel):
     """Response contract for manual review-session creation."""
 
     created: bool = Field(description="Whether the request created a new session")
-    workspace: CurationWorkspace = Field(description="Hydrated workspace payload")
+    session: CurationReviewSession = Field(description="Created review session payload")
 
 
 class CurationDocumentBootstrapRequest(CurationWorkspaceBaseModel):
-    """Request contract for document-to-session bootstrap."""
+    """Request contract for replaying persisted prep output into a review session."""
 
-    document_id: str = Field(description="Document identifier")
     adapter_key: Optional[str] = Field(
         default=None,
-        description="Optional adapter key to scope bootstrap candidate generation",
+        description="Optional adapter key to scope bootstrap selection",
     )
     profile_key: Optional[str] = Field(
         default=None,
@@ -1425,17 +1424,9 @@ class CurationDocumentBootstrapRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Optional domain filter for bootstrap selection",
     )
-    source_extraction_result_id: Optional[str] = Field(
-        default=None,
-        description="Specific extraction result to replay when bootstrapping",
-    )
     curator_id: Optional[str] = Field(
         default=None,
         description="Curator who should own the bootstrapped session",
-    )
-    force_rebuild: bool = Field(
-        default=False,
-        description="Whether an existing session should be refreshed rather than reused",
     )
 
 
@@ -1443,9 +1434,9 @@ class CurationDocumentBootstrapResponse(CurationWorkspaceBaseModel):
     """Response contract for document bootstrap mutations."""
 
     created: bool = Field(
-        description="Whether the bootstrap created a new session instead of reusing an existing one"
+        description="Whether the bootstrap created a new session instead of refreshing one"
     )
-    workspace: CurationWorkspace = Field(description="Hydrated workspace payload")
+    session: CurationReviewSession = Field(description="Created or refreshed review session payload")
 
 
 class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):

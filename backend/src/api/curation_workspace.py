@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
 from src.lib.conversation_manager import SessionAccessError
+from src.lib.curation_workspace.bootstrap_service import (
+    bootstrap_document_session,
+    create_manual_session,
+)
 from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
     run_chat_curation_prep,
@@ -30,11 +34,15 @@ from src.schemas.curation_prep import (
 )
 from src.schemas.curation_workspace import (
     CurationDateRange,
+    CurationDocumentBootstrapRequest,
+    CurationDocumentBootstrapResponse,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationQueueNavigationDirection,
     CurationReviewSession,
     CurationSessionFilters,
+    CurationSessionCreateRequest,
+    CurationSessionCreateResponse,
     CurationSessionListRequest,
     CurationSessionListResponse,
     CurationSessionSortField,
@@ -150,6 +158,22 @@ async def list_review_sessions(
     return list_sessions(db, request)
 
 
+@router.post("/sessions", response_model=CurationSessionCreateResponse)
+async def post_review_session(
+    request: CurationSessionCreateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSessionCreateResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+    return create_manual_session(
+        request,
+        current_user_id=user_id,
+        actor_claims=user,
+        db=db,
+    )
+
+
 @router.get("/sessions/stats", response_model=CurationSessionStatsResponse)
 async def get_review_session_stats(
     request: CurationSessionStatsRequest = Depends(_build_stats_request),
@@ -193,6 +217,26 @@ async def patch_review_session(
 ) -> CurationSessionUpdateResponse:
     set_global_user_from_cognito(db, user)
     return update_session(db, session_id, request, user)
+
+
+@router.post(
+    "/documents/{document_id}/bootstrap",
+    response_model=CurationDocumentBootstrapResponse,
+)
+async def post_document_bootstrap(
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationDocumentBootstrapResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+    return await bootstrap_document_session(
+        document_id,
+        request,
+        current_user_id=user_id,
+        db=db,
+    )
 
 
 @router.get("/prep/preview", response_model=CurationPrepChatPreviewResponse)
