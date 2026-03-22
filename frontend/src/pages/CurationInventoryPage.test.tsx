@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import CurationInventoryPage from './CurationInventoryPage'
 import type {
+  CurationFlowRunListResponse,
+  CurationFlowRunSessionsResponse,
   CurationSessionListResponse,
   CurationSessionStatsResponse,
 } from '../features/curation/types'
@@ -176,11 +178,55 @@ describe('CurationInventoryPage', () => {
     applied_filters: listResponse.applied_filters,
   }
 
+  const flowRunListResponse: CurationFlowRunListResponse = {
+    flow_runs: [
+      {
+        flow_run_id: 'flow-1',
+        display_label: 'flow-1',
+        session_count: 1,
+        reviewed_count: 1,
+        pending_count: 1,
+        submitted_count: 0,
+        last_activity_at: '2026-03-20T09:00:00Z',
+      },
+    ],
+    applied_filters: listResponse.applied_filters,
+  }
+
+  const flowRunSessionsResponse: CurationFlowRunSessionsResponse = {
+    flow_run: flowRunListResponse.flow_runs[0],
+    sessions: [
+      {
+        ...listResponse.sessions[0],
+        document: {
+          ...listResponse.sessions[0].document,
+          title: 'Grouped alpha paper',
+        },
+      },
+    ],
+    page_info: {
+      page: 1,
+      page_size: 25,
+      total_items: 1,
+      total_pages: 1,
+      has_next_page: false,
+      has_previous_page: false,
+    },
+  }
+
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+
+        if (url.startsWith('/api/curation-workspace/flow-runs/flow-1/sessions')) {
+          return jsonResponse(flowRunSessionsResponse)
+        }
+
+        if (url.startsWith('/api/curation-workspace/flow-runs')) {
+          return jsonResponse(flowRunListResponse)
+        }
 
         if (url.startsWith('/api/curation-workspace/sessions/stats')) {
           return jsonResponse(statsResponse)
@@ -254,5 +300,20 @@ describe('CurationInventoryPage', () => {
     })
 
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('switches into flow-run mode and expands grouped sessions', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText('Alpha paper')
+
+    await user.click(screen.getByRole('button', { name: 'By flow run' }))
+
+    expect(await screen.findByText('Flow run flow-1')).toBeInTheDocument()
+
+    await user.click(screen.getByText('Flow run flow-1'))
+
+    expect(await screen.findByText('Grouped alpha paper')).toBeInTheDocument()
   })
 })

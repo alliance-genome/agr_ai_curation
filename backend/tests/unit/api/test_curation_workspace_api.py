@@ -12,6 +12,8 @@ from src.schemas.curation_workspace import (
     CurationDocumentBootstrapRequest,
     CurationEvidenceRecomputeRequest,
     CurationEvidenceResolveRequest,
+    CurationFlowRunListRequest,
+    CurationFlowRunSessionsRequest,
     CurationManualEvidenceCreateRequest,
     CurationSessionCreateRequest,
     EvidenceAnchor,
@@ -277,6 +279,64 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
         "request": request,
         "actor_claims": user,
         "db": db,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_review_flow_runs_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _list_flow_runs(db, request):
+        captured["db"] = db
+        captured["request"] = request
+        return expected
+
+    monkeypatch.setattr(module, "list_flow_runs", _list_flow_runs)
+
+    request = CurationFlowRunListRequest()
+    db = object()
+
+    response = await module.get_review_flow_runs(
+        request=request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "request": request,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_review_flow_run_sessions_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _list_flow_run_sessions(db, request):
+        captured["db"] = db
+        captured["request"] = request
+        return expected
+
+    monkeypatch.setattr(module, "list_flow_run_sessions", _list_flow_run_sessions)
+
+    request = CurationFlowRunSessionsRequest(flow_run_id="flow-alpha", page=2, page_size=10)
+    db = object()
+
+    response = await module.get_review_flow_run_sessions(
+        request=request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "request": request,
     }
 
 

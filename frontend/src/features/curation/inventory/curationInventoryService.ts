@@ -1,6 +1,10 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
 import type {
+  CurationFlowRunListRequest,
+  CurationFlowRunListResponse,
+  CurationFlowRunSessionsRequest,
+  CurationFlowRunSessionsResponse,
   CurationSessionFilters,
   CurationSessionListRequest,
   CurationSessionListResponse,
@@ -8,6 +12,10 @@ import type {
   CurationSessionStatsResponse,
 } from '../types'
 import { readCurationApiError } from '../services/api'
+
+interface CurationInventoryQueryOptions {
+  enabled?: boolean
+}
 
 function appendStringList(params: URLSearchParams, key: string, values?: string[]) {
   values?.filter(Boolean).forEach((value) => {
@@ -102,6 +110,31 @@ export function buildCurationSessionStatsQueryParams(
   return params
 }
 
+export function buildCurationFlowRunListQueryParams(
+  request: CurationFlowRunListRequest
+): URLSearchParams {
+  const params = new URLSearchParams()
+  appendFilters(params, request.filters)
+  return params
+}
+
+export function buildCurationFlowRunSessionsQueryParams(
+  request: CurationFlowRunSessionsRequest
+): URLSearchParams {
+  const params = new URLSearchParams()
+  appendFilters(params, request.filters)
+
+  if (request.page) {
+    params.set('page', String(request.page))
+  }
+
+  if (request.page_size) {
+    params.set('page_size', String(request.page_size))
+  }
+
+  return params
+}
+
 export async function fetchCurationSessionList(
   request: CurationSessionListRequest
 ): Promise<CurationSessionListResponse> {
@@ -122,6 +155,28 @@ export async function fetchCurationSessionStats(
   )
 }
 
+export async function fetchCurationFlowRunList(
+  request: CurationFlowRunListRequest
+): Promise<CurationFlowRunListResponse> {
+  const params = buildCurationFlowRunListQueryParams(request)
+  const query = params.toString()
+  return fetchCurationJson<CurationFlowRunListResponse>(
+    `/api/curation-workspace/flow-runs${query ? `?${query}` : ''}`
+  )
+}
+
+export async function fetchCurationFlowRunSessions(
+  request: CurationFlowRunSessionsRequest
+): Promise<CurationFlowRunSessionsResponse> {
+  const params = buildCurationFlowRunSessionsQueryParams(request)
+  const query = params.toString()
+  return fetchCurationJson<CurationFlowRunSessionsResponse>(
+    `/api/curation-workspace/flow-runs/${encodeURIComponent(request.flow_run_id)}/sessions${
+      query ? `?${query}` : ''
+    }`
+  )
+}
+
 export function useCurationSessionList(request: CurationSessionListRequest) {
   return useQuery({
     queryKey: ['curation-session-list', request],
@@ -135,5 +190,29 @@ export function useCurationSessionStats(request: CurationSessionStatsRequest) {
     queryKey: ['curation-session-stats', request],
     queryFn: () => fetchCurationSessionStats(request),
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useCurationFlowRunList(
+  request: CurationFlowRunListRequest,
+  options: CurationInventoryQueryOptions = {}
+) {
+  return useQuery({
+    queryKey: ['curation-flow-run-list', request],
+    queryFn: () => fetchCurationFlowRunList(request),
+    placeholderData: keepPreviousData,
+    enabled: options.enabled,
+  })
+}
+
+export function useCurationFlowRunSessions(
+  request: CurationFlowRunSessionsRequest,
+  options: CurationInventoryQueryOptions = {}
+) {
+  return useQuery({
+    queryKey: ['curation-flow-run-sessions', request],
+    queryFn: () => fetchCurationFlowRunSessions(request),
+    placeholderData: keepPreviousData,
+    enabled: options.enabled,
   })
 }

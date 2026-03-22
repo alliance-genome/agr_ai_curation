@@ -29,6 +29,8 @@ from src.lib.curation_workspace.session_service import (
     get_session_detail,
     get_session_workspace,
     get_session_stats,
+    list_flow_run_sessions,
+    list_flow_runs,
     list_sessions,
     update_session,
 )
@@ -46,6 +48,10 @@ from src.schemas.curation_workspace import (
     CurationEvidenceRecomputeResponse,
     CurationEvidenceResolveRequest,
     CurationEvidenceResolveResponse,
+    CurationFlowRunListRequest,
+    CurationFlowRunListResponse,
+    CurationFlowRunSessionsRequest,
+    CurationFlowRunSessionsResponse,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationManualEvidenceCreateRequest,
@@ -132,6 +138,26 @@ def _build_stats_request(
     return CurationSessionStatsRequest(filters=filters)
 
 
+def _build_flow_run_list_request(
+    filters: CurationSessionFilters = Depends(_session_filters_from_query),
+) -> CurationFlowRunListRequest:
+    return CurationFlowRunListRequest(filters=filters)
+
+
+def _build_flow_run_sessions_request(
+    run_id: str,
+    filters: CurationSessionFilters = Depends(_session_filters_from_query),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+) -> CurationFlowRunSessionsRequest:
+    return CurationFlowRunSessionsRequest(
+        flow_run_id=run_id,
+        filters=filters,
+        page=page,
+        page_size=page_size,
+    )
+
+
 def _build_next_request(
     filters: CurationSessionFilters = Depends(_session_filters_from_query),
     current_session_id: str | None = Query(default=None),
@@ -199,6 +225,26 @@ async def get_review_session_stats(
         request,
         current_user_id=_current_user_id(user),
     )
+
+
+@router.get("/flow-runs", response_model=CurationFlowRunListResponse)
+async def get_review_flow_runs(
+    request: CurationFlowRunListRequest = Depends(_build_flow_run_list_request),
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationFlowRunListResponse:
+    set_global_user_from_cognito(db, user)
+    return list_flow_runs(db, request)
+
+
+@router.get("/flow-runs/{run_id}/sessions", response_model=CurationFlowRunSessionsResponse)
+async def get_review_flow_run_sessions(
+    request: CurationFlowRunSessionsRequest = Depends(_build_flow_run_sessions_request),
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationFlowRunSessionsResponse:
+    set_global_user_from_cognito(db, user)
+    return list_flow_run_sessions(db, request)
 
 
 @router.get("/sessions/next", response_model=CurationNextSessionResponse)

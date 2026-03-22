@@ -30,6 +30,9 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationExtractionSourceKind,
+    CurationFlowRunListRequest,
+    CurationFlowRunSessionsRequest,
+    CurationSessionFilters,
     CurationSessionStatus,
 )
 
@@ -204,6 +207,45 @@ def _create_session_for_extraction(
     return session_row
 
 
+def _create_review_session(
+    db_session,
+    *,
+    document_id: str,
+    flow_run_id: str | None,
+    status: CurationSessionStatus,
+    prepared_at: datetime,
+    last_worked_at: datetime | None,
+    reviewed_candidates: int,
+    pending_candidates: int,
+) -> ReviewSessionModel:
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=status,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        document_id=UUID(document_id),
+        flow_run_id=flow_run_id,
+        session_version=1,
+        notes="Prepared session.",
+        tags=["triage"],
+        total_candidates=max(reviewed_candidates + pending_candidates, 1),
+        reviewed_candidates=reviewed_candidates,
+        pending_candidates=pending_candidates,
+        accepted_candidates=0,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=prepared_at,
+        last_worked_at=last_worked_at,
+        submitted_at=last_worked_at if status == CurationSessionStatus.SUBMITTED else None,
+        created_at=prepared_at,
+        updated_at=prepared_at,
+    )
+    db_session.add(session_row)
+    db_session.commit()
+    return session_row
+
+
 def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
     document = _create_document(db_session)
     document_id = str(document.id)
@@ -245,3 +287,150 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
 
     assert matching is not None
     assert matching.session_id == str(session_alpha.id)
+
+
+def test_list_flow_runs_returns_aggregated_summaries(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    now = _now()
+
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.NEW,
+        prepared_at=now,
+        last_worked_at=now,
+        reviewed_candidates=0,
+        pending_candidates=2,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.SUBMITTED,
+        prepared_at=now.replace(hour=14),
+        last_worked_at=now.replace(hour=16),
+        reviewed_candidates=2,
+        pending_candidates=0,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-beta",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=now.replace(day=20),
+        last_worked_at=now.replace(day=20, hour=13),
+        reviewed_candidates=1,
+        pending_candidates=1,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id=None,
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(day=19),
+        last_worked_at=None,
+        reviewed_candidates=0,
+        pending_candidates=1,
+    )
+
+    response = module.list_flow_runs(
+        db_session,
+        CurationFlowRunListRequest(filters=CurationSessionFilters()),
+    )
+
+    assert [flow_run.flow_run_id for flow_run in response.flow_runs] == [
+        "flow-alpha",
+        "flow-beta",
+    ]
+    assert response.flow_runs[0].session_count == 2
+    assert response.flow_runs[0].reviewed_count == 1
+    assert response.flow_runs[0].pending_count == 1
+    assert response.flow_runs[0].submitted_count == 1
+    assert response.flow_runs[0].last_activity_at == now.replace(hour=16).replace(tzinfo=None)
+    assert response.flow_runs[1].session_count == 1
+
+
+def test_list_flow_run_sessions_returns_paginated_summaries(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    now = _now()
+    newest_session = _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=now.replace(hour=18),
+        last_worked_at=now.replace(hour=19),
+        reviewed_candidates=1,
+        pending_candidates=1,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(hour=14),
+        last_worked_at=now.replace(hour=15),
+        reviewed_candidates=0,
+        pending_candidates=2,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-beta",
+        status=CurationSessionStatus.SUBMITTED,
+        prepared_at=now.replace(day=20),
+        last_worked_at=now.replace(day=20, hour=13),
+        reviewed_candidates=2,
+        pending_candidates=0,
+    )
+
+    response = module.list_flow_run_sessions(
+        db_session,
+        CurationFlowRunSessionsRequest(
+            flow_run_id="flow-alpha",
+            page=1,
+            page_size=1,
+        ),
+    )
+
+    assert response.flow_run.flow_run_id == "flow-alpha"
+    assert response.flow_run.session_count == 2
+    assert response.flow_run.reviewed_count == 1
+    assert response.flow_run.pending_count == 2
+    assert response.page_info.model_dump() == {
+        "page": 1,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+        "has_next_page": True,
+        "has_previous_page": False,
+    }
+    assert [session.session_id for session in response.sessions] == [str(newest_session.id)]
+
+
+def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.NEW,
+        prepared_at=_now(),
+        last_worked_at=_now(),
+        reviewed_candidates=0,
+        pending_candidates=1,
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        module.list_flow_run_sessions(
+            db_session,
+            CurationFlowRunSessionsRequest(flow_run_id="flow-missing"),
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Flow run flow-missing not found"

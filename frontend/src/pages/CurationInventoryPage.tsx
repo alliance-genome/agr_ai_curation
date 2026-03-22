@@ -78,6 +78,7 @@ export default function CurationInventoryPage() {
           )}
           <CurationInventoryTable
             errorMessage={sessionErrorMessage}
+            filters={inventory.filters}
             hasActiveFilters={inventory.hasActiveFilters}
             isLoading={inventory.listQuery.isLoading}
             isRefreshing={inventory.listQuery.isFetching}
