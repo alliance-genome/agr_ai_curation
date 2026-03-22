@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import {
@@ -17,6 +17,9 @@ import {
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import {
+  readCurationQueueNavigationState,
+} from '@/features/curation/services/curationQueueNavigationService'
 import { fetchCurationWorkspace } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
@@ -25,6 +28,7 @@ import type {
 import {
   CurationWorkspaceProvider,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
+import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
@@ -78,6 +82,7 @@ export function resolveActiveCandidateId(
 }
 
 function CurationWorkspacePage() {
+  const location = useLocation()
   const navigate = useNavigate()
   const { sessionId, candidateId } = useParams<{
     sessionId: string
@@ -87,6 +92,7 @@ function CurationWorkspacePage() {
   const workspaceSessionId = typeof sessionId === 'string' && sessionId.length > 0
     ? sessionId
     : null
+  const queueNavigationState = readCurationQueueNavigationState(location.state)
 
   const workspaceQuery = useQuery({
     queryKey: ['curation-workspace', workspaceSessionId],
@@ -117,14 +123,20 @@ function CurationWorkspacePage() {
     }
 
     if (resolvedCandidateId && candidateId !== resolvedCandidateId) {
-      navigate(`/curation/${sessionId}/${resolvedCandidateId}`, { replace: true })
+      navigate(`/curation/${sessionId}/${resolvedCandidateId}`, {
+        replace: true,
+        state: location.state,
+      })
       return
     }
 
     if (!resolvedCandidateId && candidateId) {
-      navigate(`/curation/${sessionId}`, { replace: true })
+      navigate(`/curation/${sessionId}`, {
+        replace: true,
+        state: location.state,
+      })
     }
-  }, [candidateId, navigate, resolvedCandidateId, sessionId, workspace])
+  }, [candidateId, location.state, navigate, resolvedCandidateId, sessionId, workspace])
 
   const setActiveCandidate = useCallback(
     (nextCandidateId: string | null, options?: { replace?: boolean }) => {
@@ -137,10 +149,13 @@ function CurationWorkspacePage() {
         nextCandidateId
           ? `/curation/${sessionId}/${nextCandidateId}`
           : `/curation/${sessionId}`,
-        { replace: options?.replace ?? false },
+        {
+          replace: options?.replace ?? false,
+          state: location.state,
+        },
       )
     },
-    [navigate, sessionId],
+    [location.state, navigate, sessionId],
   )
 
   const activeCandidate = useMemo(
@@ -292,13 +307,20 @@ function CurationWorkspacePage() {
               Session {workspace.session.session_id} • {formatStatusLabel(workspace.session.status)}
             </Typography>
           </Stack>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            <Chip label={`${workspace.candidates.length} candidates`} />
-            <Chip label={`${workspace.session.progress.pending_candidates} pending`} />
-            <Chip
-              label={`${workspace.session.progress.reviewed_candidates} reviewed`}
-              variant="outlined"
+          <Stack spacing={1} alignItems={{ xs: 'stretch', md: 'flex-end' }}>
+            <WorkspaceSessionNavigation
+              currentSessionId={workspace.session.session_id}
+              queueContext={queueNavigationState?.queueContext}
+              queueRequest={queueNavigationState?.queueRequest}
             />
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Chip label={`${workspace.candidates.length} candidates`} />
+              <Chip label={`${workspace.session.progress.pending_candidates} pending`} />
+              <Chip
+                label={`${workspace.session.progress.reviewed_candidates} reviewed`}
+                variant="outlined"
+              />
+            </Stack>
           </Stack>
         </Stack>
 
