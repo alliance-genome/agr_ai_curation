@@ -6,6 +6,7 @@ import {
   CurationInventoryFilterBar,
   CurationInventoryTable,
   QueueNavigationButton,
+  SavedViewSelector,
   useCurationInventory,
 } from '../features/curation/inventory'
 import { buildCurationQueueNavigationState } from '../features/curation/services/curationQueueNavigationService'
@@ -54,6 +55,17 @@ export default function CurationInventoryPage() {
             Status counts are temporarily unavailable. Session filters still work normally.
           </Alert>
         )}
+
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <SavedViewSelector
+            filters={inventory.filters}
+            onApplyView={inventory.applySavedView}
+            onClearSelection={inventory.clearSavedViewSelection}
+            selectedViewId={inventory.savedViewId}
+            sortBy={inventory.sortBy}
+            sortDirection={inventory.sortDirection}
+          />
+        </Box>
 
         <CurationInventoryFilterBar
           adapterKeys={inventory.adapterKeys}

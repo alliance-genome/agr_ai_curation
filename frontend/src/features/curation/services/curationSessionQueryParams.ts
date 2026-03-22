@@ -48,6 +48,10 @@ export function appendCurationSessionFilters(
   if (filters?.last_worked_between?.to_at) {
     params.set('last_worked_to', filters.last_worked_between.to_at)
   }
+
+  if (filters?.saved_view_id) {
+    params.set('saved_view_id', filters.saved_view_id)
+  }
 }
 
 export function buildCurationSessionFilterQueryParams(

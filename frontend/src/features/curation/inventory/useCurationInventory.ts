@@ -1,11 +1,12 @@
 import { useDeferredValue, useEffect, useState } from 'react'
 
 import type {
+  CurationSavedView,
   CurationSessionFilters,
   CurationSessionSortField,
   CurationSessionStatus,
-  CurationSortDirection,
   CurationSessionSummary,
+  CurationSortDirection,
 } from '../types'
 import { getAdapterLabel, type InventoryFilterOption } from './inventoryPresentation'
 import {
@@ -16,6 +17,21 @@ import {
 const DEFAULT_SORT_BY: CurationSessionSortField = 'prepared_at'
 const DEFAULT_SORT_DIRECTION: CurationSortDirection = 'desc'
 const DEFAULT_PAGE_SIZE = 25
+const EMPTY_FILTERS: CurationSessionFilters = {
+  statuses: [],
+  adapter_keys: [],
+  profile_keys: [],
+  domain_keys: [],
+  curator_ids: [],
+  tags: [],
+  flow_run_id: null,
+  origin_session_id: null,
+  document_id: null,
+  search: null,
+  prepared_between: null,
+  last_worked_between: null,
+  saved_view_id: null,
+}
 
 function toggleValue<T extends string>(values: T[], value: T): T[] {
   return values.includes(value)
@@ -29,6 +45,34 @@ function defaultSortDirectionForField(field: CurationSessionSortField): Curation
   }
 
   return 'asc'
+}
+
+function normalizeFilters(filters?: CurationSessionFilters): CurationSessionFilters {
+  return {
+    statuses: [...(filters?.statuses ?? [])],
+    adapter_keys: [...(filters?.adapter_keys ?? [])],
+    profile_keys: [...(filters?.profile_keys ?? [])],
+    domain_keys: [...(filters?.domain_keys ?? [])],
+    curator_ids: [...(filters?.curator_ids ?? [])],
+    tags: [...(filters?.tags ?? [])],
+    flow_run_id: filters?.flow_run_id ?? null,
+    origin_session_id: filters?.origin_session_id ?? null,
+    document_id: filters?.document_id ?? null,
+    search: filters?.search?.trim() || null,
+    prepared_between: filters?.prepared_between
+      ? {
+          from_at: filters.prepared_between.from_at ?? null,
+          to_at: filters.prepared_between.to_at ?? null,
+        }
+      : null,
+    last_worked_between: filters?.last_worked_between
+      ? {
+          from_at: filters.last_worked_between.from_at ?? null,
+          to_at: filters.last_worked_between.to_at ?? null,
+        }
+      : null,
+    saved_view_id: null,
+  }
 }
 
 function buildAdapterOptions(sessions: CurationSessionSummary[]): InventoryFilterOption[] {
@@ -80,32 +124,45 @@ function mergeOptions(
   return Array.from(merged.values()).sort((left, right) => left.label.localeCompare(right.label))
 }
 
-function buildFilters(
-  statuses: CurationSessionStatus[],
-  adapterKeys: string[],
-  profileKeys: string[],
-  search: string
-): CurationSessionFilters {
-  return {
-    statuses,
-    adapter_keys: adapterKeys,
-    profile_keys: profileKeys,
-    domain_keys: [],
-    curator_ids: [],
-    tags: [],
-    flow_run_id: null,
-    document_id: null,
-    search: search || null,
-    prepared_between: null,
-    last_worked_between: null,
-    saved_view_id: null,
-  }
+function ensureSelectedOptions(
+  options: InventoryFilterOption[],
+  selectedKeys: string[]
+): InventoryFilterOption[] {
+  const merged = new Map(options.map((option) => [option.key, option]))
+
+  selectedKeys.forEach((selectedKey) => {
+    if (!merged.has(selectedKey)) {
+      merged.set(selectedKey, {
+        key: selectedKey,
+        label: selectedKey,
+        colorToken: null,
+      })
+    }
+  })
+
+  return Array.from(merged.values()).sort((left, right) => left.label.localeCompare(right.label))
+}
+
+function hasActiveFilters(filters: CurationSessionFilters, searchInput: string): boolean {
+  return (
+    (filters.statuses?.length ?? 0) > 0 ||
+    (filters.adapter_keys?.length ?? 0) > 0 ||
+    (filters.profile_keys?.length ?? 0) > 0 ||
+    (filters.domain_keys?.length ?? 0) > 0 ||
+    (filters.curator_ids?.length ?? 0) > 0 ||
+    (filters.tags?.length ?? 0) > 0 ||
+    Boolean(filters.flow_run_id) ||
+    Boolean(filters.origin_session_id) ||
+    Boolean(filters.document_id) ||
+    Boolean(filters.prepared_between?.from_at || filters.prepared_between?.to_at) ||
+    Boolean(filters.last_worked_between?.from_at || filters.last_worked_between?.to_at) ||
+    searchInput.trim().length > 0
+  )
 }
 
 export function useCurationInventory() {
-  const [statuses, setStatuses] = useState<CurationSessionStatus[]>([])
-  const [adapterKeys, setAdapterKeys] = useState<string[]>([])
-  const [profileKeys, setProfileKeys] = useState<string[]>([])
+  const [baseFilters, setBaseFilters] = useState<CurationSessionFilters>(EMPTY_FILTERS)
+  const [savedViewId, setSavedViewId] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
   const deferredSearchInput = useDeferredValue(searchInput)
   const [page, setPage] = useState(1)
@@ -116,8 +173,12 @@ export function useCurationInventory() {
   const [knownProfileOptions, setKnownProfileOptions] = useState<InventoryFilterOption[]>([])
 
   const search = deferredSearchInput.trim()
-  const filters = buildFilters(statuses, adapterKeys, profileKeys, search)
-  const statsFilters = {
+  const filters: CurationSessionFilters = {
+    ...baseFilters,
+    search: search || null,
+    saved_view_id: savedViewId,
+  }
+  const statsFilters: CurationSessionFilters = {
     ...filters,
     statuses: [],
   }
@@ -144,60 +205,87 @@ export function useCurationInventory() {
     setKnownProfileOptions((currentOptions) => mergeOptions(currentOptions, buildProfileOptions(sessions)))
   }, [listQuery.data?.sessions])
 
-  const adapterOptions = knownAdapterOptions
-  const profileOptions = knownProfileOptions
+  const statuses = baseFilters.statuses ?? []
+  const adapterKeys = baseFilters.adapter_keys ?? []
+  const profileKeys = baseFilters.profile_keys ?? []
+  const adapterOptions = ensureSelectedOptions(knownAdapterOptions, adapterKeys)
+  const profileOptions = ensureSelectedOptions(knownProfileOptions, profileKeys)
   const pageInfo = listQuery.data?.page_info
-  const hasActiveFilters =
-    statuses.length > 0 ||
-    adapterKeys.length > 0 ||
-    profileKeys.length > 0 ||
-    searchInput.trim().length > 0
+
+  function applyManualFilterChange(
+    updater: (currentFilters: CurationSessionFilters) => CurationSessionFilters
+  ) {
+    setPage(1)
+    setSavedViewId(null)
+    setBaseFilters((currentFilters) => updater(currentFilters))
+  }
 
   function toggleStatus(status: CurationSessionStatus) {
-    setPage(1)
-    setStatuses((currentValues) => toggleValue(currentValues, status))
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      statuses: toggleValue(currentFilters.statuses ?? [], status),
+    }))
   }
 
   function clearStatuses() {
-    setPage(1)
-    setStatuses([])
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      statuses: [],
+    }))
   }
 
   function toggleAdapterKey(adapterKey: string) {
-    setPage(1)
-    setAdapterKeys((currentValues) => toggleValue(currentValues, adapterKey))
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      adapter_keys: toggleValue(currentFilters.adapter_keys ?? [], adapterKey),
+    }))
   }
 
   function clearAdapterKeys() {
-    setPage(1)
-    setAdapterKeys([])
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      adapter_keys: [],
+    }))
   }
 
   function toggleProfileKey(profileKey: string) {
-    setPage(1)
-    setProfileKeys((currentValues) => toggleValue(currentValues, profileKey))
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      profile_keys: toggleValue(currentFilters.profile_keys ?? [], profileKey),
+    }))
   }
 
   function clearProfileKeys() {
-    setPage(1)
-    setProfileKeys([])
+    applyManualFilterChange((currentFilters) => ({
+      ...currentFilters,
+      profile_keys: [],
+    }))
   }
 
   function clearAllFilters() {
     setPage(1)
-    setStatuses([])
-    setAdapterKeys([])
-    setProfileKeys([])
+    setSavedViewId(null)
+    setBaseFilters(EMPTY_FILTERS)
     setSearchInput('')
+  }
+
+  function clearSavedViewSelection() {
+    setSavedViewId(null)
   }
 
   function handleSearchChange(nextValue: string) {
     setPage(1)
+    setSavedViewId(null)
     setSearchInput(nextValue)
+    setBaseFilters((currentFilters) => ({
+      ...currentFilters,
+      search: nextValue.trim() || null,
+    }))
   }
 
   function handleSortChange(field: CurationSessionSortField) {
     setPage(1)
+    setSavedViewId(null)
 
     if (sortBy === field) {
       setSortDirection((currentDirection) => currentDirection === 'asc' ? 'desc' : 'asc')
@@ -217,6 +305,16 @@ export function useCurationInventory() {
     setPageSize(nextPageSize)
   }
 
+  function applySavedView(savedView: CurationSavedView) {
+    const nextFilters = normalizeFilters(savedView.filters)
+    setPage(1)
+    setSavedViewId(savedView.view_id)
+    setBaseFilters(nextFilters)
+    setSearchInput(nextFilters.search ?? '')
+    setSortBy(savedView.sort_by)
+    setSortDirection(savedView.sort_direction)
+  }
+
   return {
     statuses,
     adapterKeys,
@@ -230,9 +328,10 @@ export function useCurationInventory() {
     adapterOptions,
     profileOptions,
     filters,
+    savedViewId,
     listQuery,
     statsQuery,
-    hasActiveFilters,
+    hasActiveFilters: hasActiveFilters(baseFilters, searchInput),
     toggleStatus,
     clearStatuses,
     toggleAdapterKey,
@@ -240,6 +339,8 @@ export function useCurationInventory() {
     toggleProfileKey,
     clearProfileKeys,
     clearAllFilters,
+    clearSavedViewSelection,
+    applySavedView,
     handleSearchChange,
     handleSortChange,
     handlePageChange,
