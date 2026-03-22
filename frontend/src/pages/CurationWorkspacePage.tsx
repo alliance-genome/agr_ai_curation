@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
@@ -19,6 +19,9 @@ import {
   getEvidenceLabel,
   getValidationLabel,
 } from '@/features/curation/inventory/inventoryPresentation'
+import {
+  readCurationQueueNavigationState,
+} from '@/features/curation/services/curationQueueNavigationService'
 import { fetchCurationWorkspace } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
@@ -29,6 +32,7 @@ import {
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
+import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
@@ -156,6 +160,7 @@ function WorkspaceSlotPlaceholder({
 }
 
 function CurationWorkspacePage() {
+  const location = useLocation()
   const navigate = useNavigate()
   const { sessionId, candidateId } = useParams<{
     sessionId: string
@@ -165,6 +170,7 @@ function CurationWorkspacePage() {
   const workspaceSessionId = typeof sessionId === 'string' && sessionId.length > 0
     ? sessionId
     : null
+  const queueNavigationState = readCurationQueueNavigationState(location.state)
 
   const workspaceQuery = useQuery({
     queryKey: ['curation-workspace', workspaceSessionId],
@@ -195,14 +201,20 @@ function CurationWorkspacePage() {
     }
 
     if (resolvedCandidateId && candidateId !== resolvedCandidateId) {
-      navigate(`/curation/${sessionId}/${resolvedCandidateId}`, { replace: true })
+      navigate(`/curation/${sessionId}/${resolvedCandidateId}`, {
+        replace: true,
+        state: location.state,
+      })
       return
     }
 
     if (!resolvedCandidateId && candidateId) {
-      navigate(`/curation/${sessionId}`, { replace: true })
+      navigate(`/curation/${sessionId}`, {
+        replace: true,
+        state: location.state,
+      })
     }
-  }, [candidateId, navigate, resolvedCandidateId, sessionId, workspace])
+  }, [candidateId, location.state, navigate, resolvedCandidateId, sessionId, workspace])
 
   const setActiveCandidate = useCallback(
     (nextCandidateId: string | null, options?: { replace?: boolean }) => {
@@ -215,10 +227,13 @@ function CurationWorkspacePage() {
         nextCandidateId
           ? `/curation/${sessionId}/${nextCandidateId}`
           : `/curation/${sessionId}`,
-        { replace: options?.replace ?? false },
+        {
+          replace: options?.replace ?? false,
+          state: location.state,
+        },
       )
     },
-    [navigate, sessionId],
+    [location.state, navigate, sessionId],
   )
 
   const activeCandidate = useMemo(
@@ -468,7 +483,18 @@ function CurationWorkspacePage() {
         <WorkspaceShell
           editorSlot={editorSlot}
           evidenceSlot={evidenceSlot}
-          headerSlot={<WorkspaceHeader session={workspace.session} />}
+          headerSlot={(
+            <WorkspaceHeader
+              navigationSlot={(
+                <WorkspaceSessionNavigation
+                  currentSessionId={workspace.session.session_id}
+                  queueContext={queueNavigationState?.queueContext}
+                  queueRequest={queueNavigationState?.queueRequest}
+                />
+              )}
+              session={workspace.session}
+            />
+          )}
           pdfSlot={<PdfViewer />}
           queueSlot={queueSlot}
           toolbarSlot={toolbarSlot}

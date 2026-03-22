@@ -137,10 +137,15 @@ function buildWorkspace(): CurationWorkspace {
 
 function LocationProbe() {
   const location = useLocation()
-  return <div data-testid="location">{location.pathname}</div>
+  return (
+    <>
+      <div data-testid="location">{location.pathname}</div>
+      <div data-testid="location-state">{JSON.stringify(location.state)}</div>
+    </>
+  )
 }
 
-function renderPage(initialEntry: string) {
+function renderPage(initialEntry: string | { pathname: string; state?: unknown }) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -213,6 +218,11 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
+    expect(
+      screen.getByText(
+        'Queue navigation is available when you open a session from the inventory queue.',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('honors an explicit candidate id and initializes the PDF viewer document', async () => {
@@ -227,6 +237,7 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(
       '/curation/session-1/candidate-accepted',
     )
+    expect(screen.getByTestId('location-state')).toHaveTextContent('null')
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
     expect(screen.getByText('Workspace Document')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456')).toBeInTheDocument()
@@ -240,5 +251,26 @@ describe('CurationWorkspacePage', () => {
         0,
       )
     })
+  })
+
+  it('preserves location state when it normalizes the candidate route', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+
+    renderPage({
+      pathname: '/curation/session-1',
+      state: {
+        launchedFromInventory: true,
+        note: 'preserve-this-state',
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+    })
+
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"launchedFromInventory":true')
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"note":"preserve-this-state"')
   })
 })

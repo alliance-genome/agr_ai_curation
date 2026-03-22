@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded'
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded'
@@ -22,6 +24,7 @@ import type { CurationReviewSession } from '@/features/curation/types'
 export interface WorkspaceHeaderProps {
   session: CurationReviewSession
   backHref?: string
+  navigationSlot?: ReactNode
   onPreviousSession?: () => void
   onNextSession?: () => void
   previousDisabled?: boolean
@@ -48,6 +51,7 @@ function getDocumentMetaLabel(session: CurationReviewSession): string {
 export default function WorkspaceHeader({
   session,
   backHref = '/curation',
+  navigationSlot,
   onPreviousSession,
   onNextSession,
   previousDisabled = true,
@@ -121,26 +125,32 @@ export default function WorkspaceHeader({
             />
           </Stack>
 
-          <Stack direction="row" spacing={1}>
-            <Button
-              disabled={previousDisabled}
-              onClick={onPreviousSession}
-              size="small"
-              startIcon={<ChevronLeftRoundedIcon />}
-              variant="outlined"
-            >
-              Prev Session
-            </Button>
-            <Button
-              disabled={nextDisabled}
-              onClick={onNextSession}
-              size="small"
-              endIcon={<ChevronRightRoundedIcon />}
-              variant="outlined"
-            >
-              Next Session
-            </Button>
-          </Stack>
+          {navigationSlot ? (
+            <Box data-testid="workspace-header-navigation-slot">
+              {navigationSlot}
+            </Box>
+          ) : (
+            <Stack direction="row" spacing={1}>
+              <Button
+                disabled={previousDisabled}
+                onClick={onPreviousSession}
+                size="small"
+                startIcon={<ChevronLeftRoundedIcon />}
+                variant="outlined"
+              >
+                Prev Session
+              </Button>
+              <Button
+                disabled={nextDisabled}
+                onClick={onNextSession}
+                size="small"
+                endIcon={<ChevronRightRoundedIcon />}
+                variant="outlined"
+              >
+                Next Session
+              </Button>
+            </Stack>
+          )}
         </Stack>
       </Stack>
     </Box>

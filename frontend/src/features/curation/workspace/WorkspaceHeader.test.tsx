@@ -91,4 +91,14 @@ describe('WorkspaceHeader', () => {
     expect(onPreviousSession).toHaveBeenCalledTimes(1)
     expect(onNextSession).toHaveBeenCalledTimes(1)
   })
+
+  it('renders a custom navigation slot when provided', () => {
+    renderHeader({
+      navigationSlot: <div>Queue navigation slot</div>,
+    })
+
+    expect(screen.getByText('Queue navigation slot')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /prev session/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /next session/i })).not.toBeInTheDocument()
+  })
 })
