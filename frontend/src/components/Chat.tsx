@@ -101,6 +101,26 @@ interface StoredChatData {
   messages: SerializedMessage[]
 }
 
+function withUpdatedReviewAndCurateSessionId(
+  messages: Message[],
+  messageId: string,
+  sessionId: string
+): Message[] {
+  return messages.map((message) => {
+    if (message.id !== messageId || !message.reviewAndCurateTarget) {
+      return message
+    }
+
+    return {
+      ...message,
+      reviewAndCurateTarget: {
+        ...message.reviewAndCurateTarget,
+        sessionId,
+      },
+    }
+  })
+}
+
 function shouldShowCurationDbWarning(status?: string | null): boolean {
   return status !== 'connected' && status !== 'not_configured'
 }
@@ -938,19 +958,8 @@ function Chat({
         })
 
         if (options?.messageId) {
-          setMessages(prev => prev.map((message) => {
-            if (message.id !== options.messageId || !message.reviewAndCurateTarget) {
-              return message
-            }
-
-            return {
-              ...message,
-              reviewAndCurateTarget: {
-                ...message.reviewAndCurateTarget,
-                sessionId,
-              },
-            }
-          }))
+          const messageId = options.messageId
+          setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
         }
 
         return sessionId
@@ -1611,23 +1620,12 @@ function Chat({
                   onFeedbackClick={() => handleFeedbackClick(message.content, message.traceIds)}
                   reviewAndCurateTarget={message.reviewAndCurateTarget}
                   onReviewAndCurateOpened={(sessionId) => {
-                    if (!message.id) {
+                    const messageId = message.id
+                    if (!messageId) {
                       return
                     }
 
-                    setMessages(prev => prev.map((candidateMessage) => {
-                      if (candidateMessage.id !== message.id || !candidateMessage.reviewAndCurateTarget) {
-                        return candidateMessage
-                      }
-
-                      return {
-                        ...candidateMessage,
-                        reviewAndCurateTarget: {
-                          ...candidateMessage.reviewAndCurateTarget,
-                          sessionId,
-                        },
-                      }
-                    }))
+                    setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
                   }}
                 />
               ) : (

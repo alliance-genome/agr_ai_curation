@@ -24,12 +24,12 @@ export interface CurationWorkspaceLaunchAvailability {
   canBootstrap: boolean
 }
 
-function normalizeScopeValues(values?: string[] | null): string[] {
+export function normalizeCurationWorkspaceScopeValues(values?: string[] | null): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
 }
 
 function resolveSingleScopeValue(values?: string[] | null): string | null {
-  const normalizedValues = normalizeScopeValues(values)
+  const normalizedValues = normalizeCurationWorkspaceScopeValues(values)
   return normalizedValues.length === 1 ? normalizedValues[0] : null
 }
 
@@ -102,9 +102,9 @@ export async function findExistingCurationSessionId(
       document_id: target.documentId ?? null,
       flow_run_id: target.flowRunId ?? null,
       origin_session_id: target.originSessionId ?? null,
-      adapter_keys: normalizeScopeValues(target.adapterKeys),
-      profile_keys: normalizeScopeValues(target.profileKeys),
-      domain_keys: normalizeScopeValues(target.domainKeys),
+      adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
+      profile_keys: normalizeCurationWorkspaceScopeValues(target.profileKeys),
+      domain_keys: normalizeCurationWorkspaceScopeValues(target.domainKeys),
     },
     sort_by: 'prepared_at',
     sort_direction: 'desc',

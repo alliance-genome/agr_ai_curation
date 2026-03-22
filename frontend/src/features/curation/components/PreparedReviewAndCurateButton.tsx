@@ -3,11 +3,10 @@ import { useQuery } from '@tanstack/react-query'
 import ReviewAndCurateButton, {
   type ReviewAndCurateButtonProps,
 } from '@/features/curation/components/ReviewAndCurateButton'
-import { getCurationWorkspaceLaunchAvailability } from '@/features/curation/navigation/openCurationWorkspace'
-
-function normalizeScopeValues(values?: string[] | null): string[] {
-  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
-}
+import {
+  getCurationWorkspaceLaunchAvailability,
+  normalizeCurationWorkspaceScopeValues,
+} from '@/features/curation/navigation/openCurationWorkspace'
 
 type PreparedReviewAndCurateButtonProps = Omit<ReviewAndCurateButtonProps, 'sessionId'> & {
   sessionId?: string | null
@@ -23,9 +22,9 @@ export default function PreparedReviewAndCurateButton({
   domainKeys,
   ...buttonProps
 }: PreparedReviewAndCurateButtonProps) {
-  const normalizedAdapterKeys = normalizeScopeValues(adapterKeys)
-  const normalizedProfileKeys = normalizeScopeValues(profileKeys)
-  const normalizedDomainKeys = normalizeScopeValues(domainKeys)
+  const normalizedAdapterKeys = normalizeCurationWorkspaceScopeValues(adapterKeys)
+  const normalizedProfileKeys = normalizeCurationWorkspaceScopeValues(profileKeys)
+  const normalizedDomainKeys = normalizeCurationWorkspaceScopeValues(domainKeys)
 
   const launchAvailabilityQuery = useQuery({
     queryKey: [
@@ -55,10 +54,6 @@ export default function PreparedReviewAndCurateButton({
   const canLaunch = Boolean(resolvedSessionId || launchAvailabilityQuery.data?.canBootstrap)
 
   if (!sessionId && (launchAvailabilityQuery.isLoading || launchAvailabilityQuery.isError || !canLaunch)) {
-    return null
-  }
-
-  if (!canLaunch) {
     return null
   }
 

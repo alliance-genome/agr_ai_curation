@@ -372,7 +372,10 @@ describe('Chat persistence', () => {
   })
 
   it('opens the curation workspace after prep completes for an active document', async () => {
-    openCurationWorkspaceMock.mockResolvedValue('curation-session-1')
+    openCurationWorkspaceMock
+      .mockResolvedValueOnce('curation-session-1')
+      .mockResolvedValueOnce('curation-session-2')
+      .mockResolvedValueOnce('curation-session-2')
     mockChatFetch({
       activeDocument: {
         id: 'doc-1',
@@ -429,6 +432,23 @@ describe('Chat persistence', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          sessionId: 'curation-session-1',
+          documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['gene'],
+          navigate: mockNavigate,
+        })
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i, hidden: true }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'curation-session-2',
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],

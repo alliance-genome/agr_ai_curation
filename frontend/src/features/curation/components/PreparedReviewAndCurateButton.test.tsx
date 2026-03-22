@@ -15,11 +15,18 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-vi.mock('@/features/curation/navigation/openCurationWorkspace', () => ({
-  getCurationWorkspaceLaunchAvailability: (options: unknown) =>
-    getCurationWorkspaceLaunchAvailabilityMock(options),
-  openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
-}))
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace'
+  )
+
+  return {
+    ...actual,
+    getCurationWorkspaceLaunchAvailability: (options: unknown) =>
+      getCurationWorkspaceLaunchAvailabilityMock(options),
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  }
+})
 
 describe('PreparedReviewAndCurateButton', () => {
   beforeEach(() => {
@@ -39,6 +46,9 @@ describe('PreparedReviewAndCurateButton', () => {
       <PreparedReviewAndCurateButton
         documentId="doc-1"
         flowRunId="flow-1"
+        adapterKeys={[' gene ', 'gene', '']}
+        profileKeys={[' primary ', 'primary']}
+        domainKeys={[' disease ', 'disease']}
         iconOnly={true}
       />
     )
@@ -49,9 +59,9 @@ describe('PreparedReviewAndCurateButton', () => {
       documentId: 'doc-1',
       flowRunId: 'flow-1',
       originSessionId: undefined,
-      adapterKeys: [],
-      profileKeys: [],
-      domainKeys: [],
+      adapterKeys: ['gene'],
+      profileKeys: ['primary'],
+      domainKeys: ['disease'],
     })
 
     fireEvent.click(button)
@@ -62,6 +72,9 @@ describe('PreparedReviewAndCurateButton', () => {
           sessionId: 'session-existing',
           documentId: 'doc-1',
           flowRunId: 'flow-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['disease'],
           navigate: mockNavigate,
         })
       )

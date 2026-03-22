@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   getCurationWorkspaceLaunchAvailability,
+  normalizeCurationWorkspaceScopeValues,
   openCurationWorkspace,
   resolveCurationWorkspaceSessionId,
 } from './openCurationWorkspace'
@@ -29,6 +30,12 @@ function buildSessionListResponse(sessionIds: string[]) {
 describe('openCurationWorkspace', () => {
   beforeEach(() => {
     vi.mocked(global.fetch).mockReset()
+  })
+
+  it('normalizes launch scope values by trimming blanks and removing duplicates', () => {
+    expect(
+      normalizeCurationWorkspaceScopeValues([' gene ', '', 'gene', 'disease', 'disease '])
+    ).toEqual(['gene', 'disease'])
   })
 
   it('navigates directly when the launch target already includes a session id', async () => {
