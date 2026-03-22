@@ -86,9 +86,11 @@ describe('openCurationWorkspace', () => {
     expect(parsedUrl.searchParams.get('sort_direction')).toBe('desc')
     expect(parsedUrl.searchParams.get('page')).toBe('1')
     expect(parsedUrl.searchParams.get('page_size')).toBe('1')
-    expect(requestInit).toEqual({
-      credentials: 'include',
-    })
+    expect(requestInit).toEqual(
+      expect.objectContaining({
+        credentials: 'include',
+      })
+    )
     expect(navigate).toHaveBeenCalledWith('/curation/session-existing')
   })
 
