@@ -31,6 +31,7 @@ const AgentStudioPage = lazy(() => import('./pages/AgentStudioPage'))
 const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
 const CurationInventoryPage = lazy(() => import('./pages/CurationInventoryPage'))
+const CurationWorkspacePage = lazy(() => import('./pages/CurationWorkspacePage'))
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
 const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
@@ -502,6 +503,14 @@ export function AppContent() {
           <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />
+          <Route
+            path="/curation/:sessionId"
+            element={renderLazyRoute(<CurationWorkspacePage />)}
+          />
+          <Route
+            path="/curation/:sessionId/:candidateId"
+            element={renderLazyRoute(<CurationWorkspacePage />)}
+          />
           <Route path="/pdf-viewer" element={
             <Box sx={{
               width: '100%',

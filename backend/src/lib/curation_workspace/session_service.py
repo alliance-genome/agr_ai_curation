@@ -31,9 +31,12 @@ from src.schemas.curation_workspace import (
     CurationActorRef,
     CurationActorType,
     CurationAdapterRef,
+    CurationCandidate as CurationCandidatePayload,
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationDraft as CurationDraftPayload,
     CurationDocumentRef,
+    CurationEvidenceRecord as CurationEvidenceRecordPayload,
     CurationEvidenceSource,
     CurationEvidenceSummary,
     CurationExtractionResultRecord,
@@ -61,6 +64,8 @@ from src.schemas.curation_workspace import (
     CurationValidationScope,
     CurationValidationSnapshotState,
     CurationValidationSummary,
+    CurationWorkspace as CurationWorkspacePayload,
+    CurationWorkspaceResponse,
     FieldValidationResult,
     SubmissionPayloadContract,
 )
@@ -73,7 +78,10 @@ SUMMARY_LOAD_OPTIONS = (
 
 DETAIL_LOAD_OPTIONS = (
     *SUMMARY_LOAD_OPTIONS,
+    selectinload(ReviewSessionModel.action_log_entries),
+    selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.draft),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.extraction_result),
+    selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.validation_snapshots),
     selectinload(ReviewSessionModel.submissions),
 )
 
@@ -543,22 +551,19 @@ def _session_progress(session: ReviewSessionModel) -> CurationSessionProgress:
     )
 
 
-def _latest_validation_summary(session: ReviewSessionModel) -> CurationValidationSummary | None:
-    if not session.validation_snapshots:
+def _validation_summary(
+    snapshots: Sequence[ValidationSnapshotModel],
+) -> CurationValidationSummary | None:
+    if not snapshots:
         return None
 
-    session_level_snapshots = [
-        snapshot
-        for snapshot in session.validation_snapshots
-        if snapshot.candidate_id is None
-    ]
-    snapshots = sorted(
-        session_level_snapshots or list(session.validation_snapshots),
+    ordered_snapshots = sorted(
+        snapshots,
         key=lambda snapshot: snapshot.completed_at
         or snapshot.requested_at
         or datetime.min.replace(tzinfo=timezone.utc),
     )
-    snapshot = snapshots[-1]
+    snapshot = ordered_snapshots[-1]
     summary_payload = dict(snapshot.summary or {})
     summary_payload.setdefault("state", snapshot.state)
     summary_payload.setdefault("counts", {})
@@ -571,13 +576,29 @@ def _latest_validation_summary(session: ReviewSessionModel) -> CurationValidatio
         return None
 
 
-def _evidence_summary(session: ReviewSessionModel) -> CurationEvidenceSummary | None:
-    anchors = [
-        evidence_anchor
-        for candidate in session.candidates
-        for evidence_anchor in candidate.evidence_anchors
+def _latest_validation_summary(session: ReviewSessionModel) -> CurationValidationSummary | None:
+    session_level_snapshots = [
+        snapshot
+        for snapshot in session.validation_snapshots
+        if snapshot.candidate_id is None
     ]
-    return summarize_evidence_records(anchors)
+    return _validation_summary(session_level_snapshots or list(session.validation_snapshots))
+
+
+def _evidence_summary_from_records(
+    records: Sequence[EvidenceRecordModel],
+) -> CurationEvidenceSummary | None:
+    return summarize_evidence_records(records)
+
+
+def _evidence_summary(session: ReviewSessionModel) -> CurationEvidenceSummary | None:
+    return _evidence_summary_from_records(
+        [
+            evidence_anchor
+            for candidate in session.candidates
+            for evidence_anchor in candidate.evidence_anchors
+        ]
+    )
 
 
 def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | None:
@@ -728,6 +749,88 @@ def _action_log_entry(record: SessionActionLogModel | None) -> CurationActionLog
     )
 
 
+def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
+    if candidate.draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} is missing its draft payload",
+        )
+
+    return CurationDraftPayload(
+        draft_id=str(candidate.draft.id),
+        candidate_id=str(candidate.draft.candidate_id),
+        adapter_key=candidate.draft.adapter_key,
+        version=candidate.draft.version,
+        title=candidate.draft.title,
+        summary=candidate.draft.summary,
+        fields=list(candidate.draft.fields or []),
+        notes=candidate.draft.notes,
+        created_at=candidate.draft.created_at,
+        updated_at=candidate.draft.updated_at,
+        last_saved_at=candidate.draft.last_saved_at,
+        metadata=dict(candidate.draft.draft_metadata or {}),
+    )
+
+
+def _candidate_validation_summary(candidate: CurationCandidate) -> CurationValidationSummary | None:
+    return _validation_summary(
+        [
+            snapshot
+            for snapshot in candidate.validation_snapshots
+            if snapshot.candidate_id == candidate.id
+        ]
+    )
+
+
+def _candidate_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
+    return CurationEvidenceRecordPayload(
+        anchor_id=str(record.id),
+        candidate_id=str(record.candidate_id),
+        source=record.source,
+        field_keys=list(record.field_keys or []),
+        field_group_keys=list(record.field_group_keys or []),
+        is_primary=record.is_primary,
+        anchor=dict(record.anchor or {}),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        warnings=list(record.warnings or []),
+    )
+
+
+def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload:
+    evidence_records = [
+        _candidate_evidence_record(record)
+        for record in candidate.evidence_anchors
+    ]
+    return CurationCandidatePayload(
+        candidate_id=str(candidate.id),
+        session_id=str(candidate.session_id),
+        source=candidate.source,
+        status=candidate.status,
+        order=candidate.order,
+        adapter_key=candidate.adapter_key,
+        profile_key=candidate.profile_key,
+        display_label=candidate.display_label,
+        secondary_label=candidate.secondary_label,
+        confidence=candidate.confidence,
+        conversation_summary=candidate.conversation_summary,
+        unresolved_ambiguities=list(candidate.unresolved_ambiguities or []),
+        extraction_result_id=(
+            str(candidate.extraction_result_id)
+            if candidate.extraction_result_id is not None
+            else None
+        ),
+        draft=_draft_payload(candidate),
+        evidence_anchors=evidence_records,
+        validation=_candidate_validation_summary(candidate),
+        evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
+        created_at=candidate.created_at,
+        updated_at=candidate.updated_at,
+        last_reviewed_at=candidate.last_reviewed_at,
+        metadata=dict(candidate.candidate_metadata or {}),
+    )
+
+
 def _page_info(*, page: int, page_size: int, total_items: int) -> CurationPageInfo:
     total_pages = ceil(total_items / page_size) if total_items else 0
     return CurationPageInfo(
@@ -846,6 +949,41 @@ def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSes
     session = sessions[0]
     document_map, user_map = _session_context_maps(db, [session])
     return _session_detail(session, document_map, user_map)
+
+
+def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorkspaceResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+
+    session = sessions[0]
+    document_map, user_map = _session_context_maps(db, [session])
+    workspace = CurationWorkspacePayload(
+        session=_session_detail(session, document_map, user_map),
+        candidates=[_candidate_payload(candidate) for candidate in session.candidates],
+        active_candidate_id=(
+            str(session.current_candidate_id)
+            if session.current_candidate_id is not None
+            else None
+        ),
+        queue_context=None,
+        action_log=[
+            action_log_entry
+            for action_log_entry in (
+                _action_log_entry(record) for record in session.action_log_entries
+            )
+            if action_log_entry is not None
+        ],
+        submission_history=[
+            _submission_record(record) for record in session.submissions
+        ],
+        saved_view_context=None,
+    )
+    return CurationWorkspaceResponse(workspace=workspace)
 
 
 def find_reusable_prepared_session(
@@ -1586,6 +1724,7 @@ __all__ = [
     "get_next_session",
     "find_reusable_prepared_session",
     "get_session_detail",
+    "get_session_workspace",
     "get_session_stats",
     "list_sessions",
     "PreparedCandidateInput",
