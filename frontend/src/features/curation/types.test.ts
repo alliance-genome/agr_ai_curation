@@ -30,6 +30,7 @@ describe('curation workspace substrate types', () => {
       'last_worked_at',
       'status',
       'document_title',
+      'adapter',
       'candidate_count',
       'validation',
       'evidence',

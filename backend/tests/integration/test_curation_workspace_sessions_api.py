@@ -621,6 +621,39 @@ def test_list_review_sessions_search_escapes_like_wildcards(
     ]
 
 
+def test_list_review_sessions_supports_adapter_sorting(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    ascending_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "sort_by": "adapter",
+            "sort_direction": "asc",
+        },
+    )
+    assert ascending_response.status_code == 200, ascending_response.text
+    assert [session["session_id"] for session in ascending_response.json()["sessions"]] == [
+        seeded_review_sessions["session_gamma_id"],
+        seeded_review_sessions["session_alpha_id"],
+        seeded_review_sessions["session_beta_id"],
+    ]
+
+    descending_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "sort_by": "adapter",
+            "sort_direction": "desc",
+        },
+    )
+    assert descending_response.status_code == 200, descending_response.text
+    assert [session["session_id"] for session in descending_response.json()["sessions"]] == [
+        seeded_review_sessions["session_beta_id"],
+        seeded_review_sessions["session_gamma_id"],
+        seeded_review_sessions["session_alpha_id"],
+    ]
+
+
 def test_patch_review_session_updates_status_and_notes(
     client: TestClient,
     seeded_review_sessions,

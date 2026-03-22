@@ -231,6 +231,17 @@ describe('CurationInventoryPage', () => {
       expect(sessionListCalls.some((url) => url.includes('status=new'))).toBe(true)
     })
 
+    await user.click(screen.getByRole('button', { name: /Adapter \/ Profile/i }))
+    await waitFor(() => {
+      const sessionListCalls = vi
+        .mocked(global.fetch)
+        .mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
+
+      expect(sessionListCalls.some((url) => url.includes('sort_by=adapter'))).toBe(true)
+    })
+
     await user.type(screen.getByLabelText('Search sessions'), 'beta')
     await waitFor(() => {
       const sessionListCalls = vi
@@ -241,5 +252,7 @@ describe('CurationInventoryPage', () => {
 
       expect(sessionListCalls.some((url) => url.includes('search=beta'))).toBe(true)
     })
+
+    expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
   })
 })

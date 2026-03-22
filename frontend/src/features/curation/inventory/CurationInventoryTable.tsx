@@ -146,7 +146,13 @@ export default function CurationInventoryTable({
                 label="Paper"
                 onSortChange={onSortChange}
               />
-              <TableCell>Adapter / Profile</TableCell>
+              <SortableHeader
+                active={sortBy === 'adapter'}
+                direction={sortDirection}
+                field="adapter"
+                label="Adapter / Profile"
+                onSortChange={onSortChange}
+              />
               <SortableHeader
                 active={sortBy === 'candidate_count'}
                 direction={sortDirection}

@@ -69,6 +69,14 @@ function FilterChipGroup({
         <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
           {label}
         </Typography>
+        <Chip
+          clickable
+          color="default"
+          label="All"
+          onClick={onClear}
+          size="small"
+          variant={selectedKeys.length === 0 ? 'filled' : 'outlined'}
+        />
         {options.map((option) => {
           const selected = selectedKeys.includes(option.key)
           return (
@@ -83,11 +91,6 @@ function FilterChipGroup({
             />
           )
         })}
-        {selectedKeys.length > 0 && (
-          <Button color="inherit" onClick={onClear} size="small">
-            Clear
-          </Button>
-        )}
       </Stack>
     </Stack>
   )
