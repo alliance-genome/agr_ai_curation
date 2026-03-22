@@ -269,6 +269,12 @@ def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, rev
     )
 
 
+def _passthrough_dependencies() -> module.PostCurationPipelineDependencies:
+    return module.PostCurationPipelineDependencies(
+        evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
+    )
+
+
 def test_passthrough_candidate_normalizer_builds_payload_and_draft_fields():
     prep_output = _make_prep_output()
     candidate: CurationPrepCandidate = prep_output.candidates[0]
@@ -307,6 +313,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
         db=db_session,
+        dependencies=_passthrough_dependencies(),
     )
 
     assert result.status is module.PipelineRunStatus.COMPLETED
@@ -462,6 +469,7 @@ def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_s
             review_session_id=str(existing_session.id),
         ),
         db=db_session,
+        dependencies=_passthrough_dependencies(),
     )
 
     assert result.session_id == str(existing_session.id)
@@ -494,6 +502,7 @@ def test_execute_post_curation_pipeline_requires_persisted_prep_result(db_sessio
         module.execute_post_curation_pipeline(
             _make_request(prep_output, document_id=str(document.id)),
             db=db_session,
+            dependencies=_passthrough_dependencies(),
         )
 
 
@@ -517,6 +526,7 @@ def test_execute_post_curation_pipeline_with_owned_session_commits_results(db_se
 
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
+        dependencies=_passthrough_dependencies(),
     )
 
     verification_session = session_factory()
@@ -541,6 +551,7 @@ def test_execute_post_curation_pipeline_with_external_session_leaves_commit_to_c
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
         db=db_session,
+        dependencies=_passthrough_dependencies(),
     )
 
     pending_session = db_session.scalars(

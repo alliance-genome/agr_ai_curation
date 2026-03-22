@@ -9,7 +9,6 @@ import asyncio
 import json
 
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
-from openai import OpenAI
 
 from .connection import get_connection
 
@@ -145,6 +144,99 @@ def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -
                     "details": str(e)
                 }
             }
+
+
+def fetch_document_chunks_for_resolution(
+    document_id: str,
+    user_id: str,
+    *,
+    page_size: int = 250,
+) -> List[Dict[str, Any]]:
+    """Fetch all document chunks needed for deterministic evidence resolution."""
+
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk retrieval (FR-011, FR-014)")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    from weaviate.classes.query import Filter, Sort
+
+    chunks: List[Dict[str, Any]] = []
+    with connection.session() as client:
+        from ..weaviate_helpers import get_user_collections
+
+        chunk_collection, _ = get_user_collections(client, user_id)
+        offset = 0
+
+        while True:
+            response = chunk_collection.query.fetch_objects(
+                filters=Filter.by_property("documentId").equal(document_id),
+                sort=Sort.by_property("chunkIndex", ascending=True),
+                limit=page_size,
+                offset=offset,
+                include_vector=False,
+                return_properties=[
+                    "chunkIndex",
+                    "content",
+                    "pageNumber",
+                    "sectionTitle",
+                    "parentSection",
+                    "subsection",
+                    "metadata",
+                    "docItemProvenance",
+                ],
+            )
+
+            if not response.objects:
+                break
+
+            for obj in response.objects:
+                props = obj.properties
+                metadata = props.get("metadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                elif not isinstance(metadata, dict):
+                    metadata = {}
+
+                doc_items = []
+                doc_items_str = props.get("docItemProvenance")
+                if doc_items_str:
+                    try:
+                        doc_items = (
+                            json.loads(doc_items_str)
+                            if isinstance(doc_items_str, str)
+                            else doc_items_str
+                        )
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to parse docItemProvenance for resolution chunk %s",
+                            obj.uuid,
+                        )
+
+                chunks.append(
+                    {
+                        "id": str(obj.uuid),
+                        "chunk_index": props.get("chunkIndex"),
+                        "content": props.get("content"),
+                        "page_number": props.get("pageNumber"),
+                        "section_title": props.get("sectionTitle"),
+                        "parent_section": props.get("parentSection"),
+                        "subsection": props.get("subsection"),
+                        "metadata": metadata,
+                        "doc_items": doc_items,
+                    }
+                )
+
+            if len(response.objects) < page_size:
+                break
+            offset += page_size
+
+    return chunks
 
 
 
@@ -567,7 +659,6 @@ async def get_chunks_by_section(
             chunks = []
             for obj in range_response.objects:
                 props = obj.properties
-                current_title = props.get("sectionTitle")
                 
                 # REMOVED HEURISTIC: Do not stop on title change.
                 # Subsections (e.g. "2.1 Genetics") often have different titles 
@@ -636,7 +727,7 @@ async def search_chunks_by_keyword(
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
 
-            from weaviate.classes.query import Filter, Sort
+            from weaviate.classes.query import Filter
 
             # Filter: document + early pages
             doc_filter = Filter.by_property("documentId").equal(document_id)
@@ -1514,9 +1605,8 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     metadata = obj.properties.get("metadata", {})
                     if isinstance(metadata, str):
                         try:
-                            import json
                             metadata = json.loads(metadata)
-                        except:
+                        except (TypeError, json.JSONDecodeError):
                             metadata = {}
 
                     # Ensure required metadata fields exist
@@ -1536,8 +1626,12 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     doc_items_str = obj.properties.get("docItemProvenance")
                     if doc_items_str:
                         try:
-                            doc_items = json.loads(doc_items_str)
-                        except:
+                            doc_items = (
+                                json.loads(doc_items_str)
+                                if isinstance(doc_items_str, str)
+                                else doc_items_str
+                            )
+                        except (TypeError, json.JSONDecodeError):
                             logger.warning("Failed to parse docItemProvenance for chunk %s", chunk_id)
                             doc_items = []
 
@@ -1550,7 +1644,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                         "element_type": obj.properties.get("elementType"),
                         "page_number": obj.properties.get("pageNumber"),
                         "sectionTitle": obj.properties.get("sectionTitle"),
-                        "metadata": metadata,  # Now properly parsed with required fields
+                        "metadata": metadata if include_metadata else {},  # Now properly parsed with required fields
                         "doc_items": doc_items  # Include provenance data
                     }
                     chunks.append(chunk_data)
