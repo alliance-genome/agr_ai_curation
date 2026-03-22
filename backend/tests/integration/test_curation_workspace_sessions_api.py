@@ -667,6 +667,71 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     ]
 
 
+def test_get_review_flow_runs_returns_filtered_group_summaries(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.get(
+        "/api/curation-workspace/flow-runs",
+        params={
+            "status": "submitted",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["applied_filters"]["statuses"] == ["submitted"]
+    assert payload["flow_runs"] == [
+        {
+            "flow_run_id": "flow-beta",
+            "display_label": "flow-beta",
+            "session_count": 1,
+            "reviewed_count": 1,
+            "pending_count": 0,
+            "submitted_count": 1,
+            "last_activity_at": "2026-03-11T09:00:00Z",
+        }
+    ]
+
+
+def test_get_review_flow_run_sessions_returns_paginated_group_members(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.get(
+        "/api/curation-workspace/flow-runs/flow-alpha/sessions",
+        params={
+            "page": 1,
+            "page_size": 1,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["flow_run"] == {
+        "flow_run_id": "flow-alpha",
+        "display_label": "flow-alpha",
+        "session_count": 2,
+        "reviewed_count": 1,
+        "pending_count": 1,
+        "submitted_count": 0,
+        "last_activity_at": "2026-03-05T15:00:00Z",
+    }
+    assert [session["session_id"] for session in payload["sessions"]] == [
+        seeded_review_sessions["session_beta_id"]
+    ]
+    assert payload["page_info"] == {
+        "page": 1,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+        "has_next_page": True,
+        "has_previous_page": False,
+    }
+
+
 def test_get_review_session_returns_detail_payload(
     client: TestClient,
     seeded_review_sessions,
@@ -851,6 +916,7 @@ def test_get_next_review_session_returns_queue_navigation_context(
             "curator_ids": [],
             "tags": [],
             "flow_run_id": None,
+            "origin_session_id": None,
             "document_id": None,
             "search": None,
             "prepared_between": None,

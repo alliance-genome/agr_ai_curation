@@ -6,6 +6,10 @@ import {
 } from '@tanstack/react-query'
 
 import type {
+  CurationFlowRunListRequest,
+  CurationFlowRunListResponse,
+  CurationFlowRunSessionsRequest,
+  CurationFlowRunSessionsResponse,
   CurationSavedViewCreateRequest,
   CurationSavedViewCreateResponse,
   CurationSavedViewDeleteResponse,
@@ -17,6 +21,10 @@ import type {
 } from '../types'
 import { readCurationApiError } from '../services/api'
 import { buildCurationSessionFilterQueryParams } from '../services/curationSessionQueryParams'
+
+interface CurationInventoryQueryOptions {
+  enabled?: boolean
+}
 
 export const CURATION_SAVED_VIEWS_QUERY_KEY = ['curation-saved-views'] as const
 
@@ -73,6 +81,28 @@ export function buildCurationSessionStatsQueryParams(
   return buildCurationSessionFilterQueryParams(request.filters)
 }
 
+export function buildCurationFlowRunListQueryParams(
+  request: CurationFlowRunListRequest
+): URLSearchParams {
+  return buildCurationSessionFilterQueryParams(request.filters)
+}
+
+export function buildCurationFlowRunSessionsQueryParams(
+  request: CurationFlowRunSessionsRequest
+): URLSearchParams {
+  const params = buildCurationSessionFilterQueryParams(request.filters)
+
+  if (request.page) {
+    params.set('page', String(request.page))
+  }
+
+  if (request.page_size) {
+    params.set('page_size', String(request.page_size))
+  }
+
+  return params
+}
+
 export async function fetchCurationSessionList(
   request: CurationSessionListRequest
 ): Promise<CurationSessionListResponse> {
@@ -114,6 +144,28 @@ export async function deleteCurationSavedView(
     {
       method: 'DELETE',
     }
+  )
+}
+
+export async function fetchCurationFlowRunList(
+  request: CurationFlowRunListRequest
+): Promise<CurationFlowRunListResponse> {
+  const params = buildCurationFlowRunListQueryParams(request)
+  const query = params.toString()
+  return fetchCurationJson<CurationFlowRunListResponse>(
+    `/api/curation-workspace/flow-runs${query ? `?${query}` : ''}`
+  )
+}
+
+export async function fetchCurationFlowRunSessions(
+  request: CurationFlowRunSessionsRequest
+): Promise<CurationFlowRunSessionsResponse> {
+  const params = buildCurationFlowRunSessionsQueryParams(request)
+  const query = params.toString()
+  return fetchCurationJson<CurationFlowRunSessionsResponse>(
+    `/api/curation-workspace/flow-runs/${encodeURIComponent(request.flow_run_id)}/sessions${
+      query ? `?${query}` : ''
+    }`
   )
 }
 
@@ -163,5 +215,29 @@ export function useDeleteCurationSavedView() {
         queryKey: CURATION_SAVED_VIEWS_QUERY_KEY,
       })
     },
+  })
+}
+
+export function useCurationFlowRunList(
+  request: CurationFlowRunListRequest,
+  options: CurationInventoryQueryOptions = {}
+) {
+  return useQuery({
+    queryKey: ['curation-flow-run-list', request],
+    queryFn: () => fetchCurationFlowRunList(request),
+    placeholderData: keepPreviousData,
+    enabled: options.enabled,
+  })
+}
+
+export function useCurationFlowRunSessions(
+  request: CurationFlowRunSessionsRequest,
+  options: CurationInventoryQueryOptions = {}
+) {
+  return useQuery({
+    queryKey: ['curation-flow-run-sessions', request],
+    queryFn: () => fetchCurationFlowRunSessions(request),
+    placeholderData: keepPreviousData,
+    enabled: options.enabled,
   })
 }

@@ -101,7 +101,7 @@ export function getAdapterLabel(adapter: CurationAdapterRef): string {
 
 export function getAdapterChipColor(
   adapter: Pick<CurationAdapterRef, 'color_token' | 'metadata'>
-): NonNullable<ChipProps['color']> {
+): 'primary' | 'secondary' | 'info' | 'success' | 'warning' | 'error' {
   const metadataColorToken =
     typeof adapter.metadata?.color_token === 'string'
       ? adapter.metadata.color_token

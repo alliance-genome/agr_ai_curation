@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  buildCurationFlowRunListQueryParams,
+  buildCurationFlowRunSessionsQueryParams,
   buildCurationSessionListQueryParams,
   buildCurationSessionStatsQueryParams,
   createCurationSavedView,
   deleteCurationSavedView,
+  fetchCurationFlowRunSessions,
   fetchCurationSavedViews,
   fetchCurationSessionList,
 } from './curationInventoryService'
@@ -92,6 +95,124 @@ describe('curationInventoryService', () => {
     expect(params.get('page')).toBeNull()
   })
 
+  it('serializes flow-run list filters into query params', () => {
+    const params = buildCurationFlowRunListQueryParams({
+      filters: {
+        statuses: ['submitted'],
+        adapter_keys: ['gene'],
+        profile_keys: [],
+        domain_keys: [],
+        curator_ids: [],
+        tags: [],
+        flow_run_id: 'flow-1',
+        origin_session_id: 'chat-session-7',
+        document_id: null,
+        search: 'batch',
+        prepared_between: null,
+        last_worked_between: null,
+        saved_view_id: 'saved-view-3',
+      },
+    })
+
+    expect(params.getAll('status')).toEqual(['submitted'])
+    expect(params.getAll('adapter_key')).toEqual(['gene'])
+    expect(params.get('flow_run_id')).toBe('flow-1')
+    expect(params.get('origin_session_id')).toBe('chat-session-7')
+    expect(params.get('search')).toBe('batch')
+    expect(params.get('saved_view_id')).toBe('saved-view-3')
+  })
+
+  it('serializes flow-run session pagination into query params', () => {
+    const params = buildCurationFlowRunSessionsQueryParams({
+      flow_run_id: 'flow alpha',
+      filters: {
+        statuses: ['in_progress'],
+        adapter_keys: [],
+        profile_keys: [],
+        domain_keys: [],
+        curator_ids: [],
+        tags: [],
+        flow_run_id: null,
+        origin_session_id: 'chat-session-9',
+        document_id: null,
+        search: null,
+        prepared_between: null,
+        last_worked_between: null,
+        saved_view_id: 'saved-view-4',
+      },
+      page: 2,
+      page_size: 10,
+    })
+
+    expect(params.getAll('status')).toEqual(['in_progress'])
+    expect(params.get('origin_session_id')).toBe('chat-session-9')
+    expect(params.get('saved_view_id')).toBe('saved-view-4')
+    expect(params.get('page')).toBe('2')
+    expect(params.get('page_size')).toBe('10')
+  })
+
+  it('encodes the flow-run id when fetching grouped sessions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            flow_run: {
+              flow_run_id: 'flow alpha',
+              display_label: 'flow alpha',
+              session_count: 1,
+              reviewed_count: 0,
+              pending_count: 1,
+              submitted_count: 0,
+              last_activity_at: '2026-03-20T00:00:00Z',
+            },
+            sessions: [],
+            page_info: {
+              page: 1,
+              page_size: 25,
+              total_items: 0,
+              total_pages: 0,
+              has_next_page: false,
+              has_previous_page: false,
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+      )
+    )
+
+    await fetchCurationFlowRunSessions({
+      flow_run_id: 'flow alpha',
+      filters: {
+        statuses: [],
+        adapter_keys: [],
+        profile_keys: [],
+        domain_keys: [],
+        curator_ids: [],
+        tags: [],
+        flow_run_id: null,
+        origin_session_id: null,
+        document_id: null,
+        search: null,
+        prepared_between: null,
+        last_worked_between: null,
+        saved_view_id: null,
+      },
+      page: 1,
+      page_size: 25,
+    })
+
+    const [url, init] = vi.mocked(global.fetch).mock.calls[0]
+    expect(String(url)).toBe('/api/curation-workspace/flow-runs/flow%20alpha/sessions?page=1&page_size=25')
+    expect(init?.credentials).toBe('include')
+    expect(init?.headers).toBeInstanceOf(Headers)
+  })
+
   it('surfaces API error details from failed list requests', async () => {
     vi.stubGlobal(
       'fetch',
@@ -152,6 +273,7 @@ describe('curationInventoryService', () => {
                 curator_ids: [],
                 tags: [],
                 flow_run_id: null,
+                origin_session_id: null,
                 document_id: null,
                 search: null,
                 prepared_between: null,
@@ -187,6 +309,7 @@ describe('curationInventoryService', () => {
         curator_ids: [],
         tags: [],
         flow_run_id: null,
+        origin_session_id: null,
         document_id: null,
         search: null,
         prepared_between: null,
@@ -216,6 +339,7 @@ describe('curationInventoryService', () => {
           curator_ids: [],
           tags: [],
           flow_run_id: null,
+          origin_session_id: null,
           document_id: null,
           search: null,
           prepared_between: null,
