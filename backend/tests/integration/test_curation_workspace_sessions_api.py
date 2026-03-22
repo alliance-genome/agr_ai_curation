@@ -349,6 +349,90 @@ def seeded_review_sessions(client: TestClient, test_db):
     ]
     test_db.add_all(candidates)
 
+    drafts = [
+        CurationDraft(
+            candidate_id=candidate_alpha_id,
+            adapter_key="disease",
+            version=1,
+            title="Alpha draft",
+            summary="Alpha summary",
+            fields=[
+                {
+                    "field_key": "disease_term",
+                    "label": "Disease term",
+                    "value": "Alpha disease",
+                    "seed_value": "Alpha disease",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                }
+            ],
+            notes="Alpha draft notes",
+            created_at=datetime(2026, 3, 1, 10, 6, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 1, 10, 7, tzinfo=timezone.utc),
+            draft_metadata={},
+        ),
+        CurationDraft(
+            candidate_id=candidate_beta_id,
+            adapter_key="gene",
+            version=2,
+            title="Beta draft",
+            summary="Beta summary",
+            fields=[
+                {
+                    "field_key": "gene_symbol",
+                    "label": "Gene symbol",
+                    "value": "BETA1",
+                    "seed_value": "BETA1",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                }
+            ],
+            notes="Beta draft notes",
+            created_at=datetime(2026, 3, 5, 12, 6, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 5, 14, 6, tzinfo=timezone.utc),
+            last_saved_at=datetime(2026, 3, 5, 14, 10, tzinfo=timezone.utc),
+            draft_metadata={"source": "fixture"},
+        ),
+        CurationDraft(
+            candidate_id=candidate_gamma_id,
+            adapter_key="disease",
+            version=2,
+            title="Gamma draft",
+            summary="Gamma summary",
+            fields=[
+                {
+                    "field_key": "disease_term",
+                    "label": "Disease term",
+                    "value": "Gamma disease",
+                    "seed_value": "Gamma disease",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                }
+            ],
+            notes="Gamma draft notes",
+            created_at=datetime(2026, 3, 10, 9, 6, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 10, 10, 6, tzinfo=timezone.utc),
+            last_saved_at=datetime(2026, 3, 10, 10, 10, tzinfo=timezone.utc),
+            draft_metadata={},
+        ),
+    ]
+    test_db.add_all(drafts)
+
     evidence_records = [
         CurationEvidenceRecord(
             candidate_id=candidate_alpha_id,
@@ -512,6 +596,9 @@ def seeded_review_sessions(client: TestClient, test_db):
     test_db.query(CurationEvidenceRecord).filter(
         CurationEvidenceRecord.candidate_id.in_([candidate_alpha_id, candidate_beta_id, candidate_gamma_id])
     ).delete(synchronize_session=False)
+    test_db.query(CurationDraft).filter(
+        CurationDraft.candidate_id.in_([candidate_alpha_id, candidate_beta_id, candidate_gamma_id])
+    ).delete(synchronize_session=False)
     test_db.query(CurationCandidate).filter(
         CurationCandidate.id.in_([candidate_alpha_id, candidate_beta_id, candidate_gamma_id])
     ).delete(synchronize_session=False)
@@ -596,6 +683,34 @@ def test_get_review_session_returns_detail_payload(
     assert payload["extraction_results"][0]["domain_key"] == "gene"
     assert payload["latest_submission"]["status"] == "preview_ready"
     assert payload["latest_submission"]["payload"]["payload_json"] == {"ok": True}
+
+
+def test_get_review_session_include_workspace_returns_hydrated_workspace_payload(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.get(
+        f"/api/curation-workspace/sessions/{seeded_review_sessions['session_beta_id']}",
+        params={"include_workspace": "true"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["workspace"]["session"]["session_id"] == seeded_review_sessions["session_beta_id"]
+    assert payload["workspace"]["session"]["document"]["title"] == "Beta_gene paper"
+    assert payload["workspace"]["active_candidate_id"] is not None
+    assert payload["workspace"]["queue_context"] is None
+    assert payload["workspace"]["saved_view_context"] is None
+    assert payload["workspace"]["action_log"] == []
+    assert payload["workspace"]["submission_history"][0]["status"] == "preview_ready"
+
+    candidate = payload["workspace"]["candidates"][0]
+    assert candidate["candidate_id"] == payload["workspace"]["active_candidate_id"]
+    assert candidate["display_label"] == "Beta gene candidate"
+    assert candidate["draft"]["title"] == "Beta draft"
+    assert candidate["draft"]["fields"][0]["field_key"] == "gene_symbol"
+    assert candidate["evidence_anchors"][0]["anchor"]["locator_quality"] == "normalized_quote"
+    assert candidate["evidence_summary"]["quality_counts"]["normalized_quote"] == 1
 
 
 def test_list_review_sessions_search_escapes_like_wildcards(

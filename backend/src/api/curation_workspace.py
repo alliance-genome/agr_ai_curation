@@ -22,6 +22,7 @@ from src.lib.curation_workspace.curation_prep_invocation import (
 from src.lib.curation_workspace.session_service import (
     get_next_session,
     get_session_detail,
+    get_session_workspace,
     get_session_stats,
     list_sessions,
     update_session,
@@ -52,6 +53,7 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
+    CurationWorkspaceResponse,
 )
 from src.services.user_service import set_global_user_from_cognito
 
@@ -198,13 +200,16 @@ async def get_next_review_session(
     return get_next_session(db, request)
 
 
-@router.get("/sessions/{session_id}", response_model=CurationReviewSession)
+@router.get("/sessions/{session_id}", response_model=None)
 async def get_review_session(
     session_id: UUID,
+    include_workspace: bool = Query(default=False),
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
-) -> CurationReviewSession:
+) -> CurationReviewSession | CurationWorkspaceResponse:
     set_global_user_from_cognito(db, user)
+    if include_workspace:
+        return get_session_workspace(db, session_id)
     return get_session_detail(db, session_id)
 
 
