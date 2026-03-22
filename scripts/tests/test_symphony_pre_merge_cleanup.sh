@@ -169,6 +169,30 @@ case "${1:-}" in
     esac
     exit 0
     ;;
+  image)
+    shift
+    case "${1:-}" in
+      ls)
+        shift
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --format)
+              shift 2
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+        read_lines "${STATE_DIR}/images"
+        ;;
+      rm)
+        shift
+        remove_matches "${STATE_DIR}/images" "$@"
+        ;;
+    esac
+    exit 0
+    ;;
   network)
     shift
     case "${1:-}" in
@@ -284,6 +308,14 @@ cid-proof-2|all58proof|${workspace}|${workspace}/docker-compose.production.yml|a
 EOF
   printf '%s\n' "all58proof_postgres_data" > "${temp_dir}/state/volumes"
   printf '%s\n' "all58proof_default" > "${temp_dir}/state/networks"
+  cat > "${temp_dir}/state/images" <<'EOF'
+all58-backend
+all58-frontend
+all58proof-backend
+all58proof-frontend
+all58proof-frontend-builder
+keep-me
+EOF
 
   output="$(
     with_fake_docker "${temp_dir}" \
@@ -293,9 +325,11 @@ EOF
   assert_contains "CLEANUP_STATUS=success" "${output}"
   assert_contains "CLEANUP_PROJECTS=all58,all58proof" "${output}"
   assert_contains "CLEANUP_LEFTOVER_CONTAINERS=0" "${output}"
+  assert_contains "CLEANUP_LEFTOVER_IMAGES=0" "${output}"
   [[ ! -s "${temp_dir}/state/containers" ]]
   [[ ! -s "${temp_dir}/state/volumes" ]]
   [[ ! -s "${temp_dir}/state/networks" ]]
+  [[ "$(cat "${temp_dir}/state/images")" == "keep-me" ]]
 }
 
 test_compose_failure_falls_back_to_direct_cleanup() {
@@ -310,6 +344,12 @@ cid-main-1|all77|${workspace}|${workspace}/docker-compose.yml|all77-frontend-1
 EOF
   printf '%s\n' "all77_postgres_data" > "${temp_dir}/state/volumes"
   printf '%s\n' "all77_default" > "${temp_dir}/state/networks"
+  cat > "${temp_dir}/state/images" <<'EOF'
+all77-backend
+all77-frontend
+all77-frontend-builder
+keep-me
+EOF
 
   output="$(
     with_fake_docker "${temp_dir}" \
@@ -319,12 +359,40 @@ EOF
   assert_contains "CLEANUP_STATUS=success" "${output}"
   assert_contains "CLEANUP_ATTEMPTS=1" "${output}"
   assert_contains "CLEANUP_LEFTOVER_CONTAINERS=0" "${output}"
+  assert_contains "CLEANUP_LEFTOVER_IMAGES=0" "${output}"
   [[ ! -s "${temp_dir}/state/containers" ]]
   [[ ! -s "${temp_dir}/state/volumes" ]]
   [[ ! -s "${temp_dir}/state/networks" ]]
+  [[ "$(cat "${temp_dir}/state/images")" == "keep-me" ]]
+}
+
+test_cleanup_matches_sanitized_issue_image_names() {
+  local temp_dir workspace output
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/ALL-107"
+  mkdir -p "${temp_dir}/state" "${workspace}"
+  touch "${workspace}/docker-compose.yml"
+
+  cat > "${temp_dir}/state/images" <<'EOF'
+all107-backend
+all107-frontend
+all107-frontend-builder
+all-107-unrelated
+keep-me
+EOF
+
+  output="$(
+    with_fake_docker "${temp_dir}" \
+      bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" --compose-project all-107 --max-attempts 1
+  )"
+
+  assert_contains "CLEANUP_STATUS=success" "${output}"
+  assert_contains "CLEANUP_LEFTOVER_IMAGES=0" "${output}"
+  [[ "$(cat "${temp_dir}/state/images")" == $'all-107-unrelated\nkeep-me' ]]
 }
 
 test_force_cleanup_uses_workspace_project_discovery
 test_compose_failure_falls_back_to_direct_cleanup
+test_cleanup_matches_sanitized_issue_image_names
 
 echo "symphony_pre_merge_cleanup tests passed"

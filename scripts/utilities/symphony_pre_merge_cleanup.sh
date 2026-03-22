@@ -8,6 +8,7 @@ Usage:
 
 Behavior:
   - Attempts issue-local docker teardown before merge.
+  - Removes issue-local Docker images after containers are gone.
   - Applies bounded self-healing (ownership fix + docker config fallback).
   - Emits machine-parsable summary lines:
       CLEANUP_STATUS=success|partial
@@ -18,6 +19,7 @@ Behavior:
       CLEANUP_LEFTOVER_CONTAINERS=<n>
       CLEANUP_LEFTOVER_VOLUMES=<n>
       CLEANUP_LEFTOVER_NETWORKS=<n>
+      CLEANUP_LEFTOVER_IMAGES=<n>
       CLEANUP_FIXES=<comma-separated or none>
       CLEANUP_FIRST_ERROR=<single-line message or none>
   - Exits 0 on success, 42 on partial cleanup.
@@ -92,6 +94,7 @@ status="partial"
 leftover_containers_count=0
 leftover_volumes_count=0
 leftover_networks_count=0
+leftover_images_count=0
 cleanup_projects_cache=()
 
 record_first_error() {
@@ -170,6 +173,46 @@ list_project_networks_for_project() {
   docker network ls --format '{{.Name}}' 2>/dev/null | awk -v prefix="${project}_" 'index($0, prefix) == 1'
 }
 
+project_image_prefixes_for_project() {
+  local project="$1"
+  local workspace_base=""
+  local -a prefixes=()
+
+  workspace_base="$(basename "${workspace_dir}" | tr '[:upper:]' '[:lower:]')"
+
+  prefixes+=("${project}")
+  prefixes+=("$(printf '%s' "${project}" | tr -cd '[:alnum:]')") 
+  prefixes+=("${workspace_base}")
+  prefixes+=("$(printf '%s' "${workspace_base}" | tr -cd '[:alnum:]')")
+
+  printf '%s\n' "${prefixes[@]}" | awk 'NF && !seen[$0]++'
+}
+
+list_project_images_for_project() {
+  local project="$1"
+  local prefix=""
+  local -a repos=()
+
+  while IFS= read -r prefix; do
+    [[ -n "${prefix}" ]] || continue
+    repos+=("${prefix}-backend" "${prefix}-frontend" "${prefix}-frontend-builder")
+  done < <(project_image_prefixes_for_project "${project}")
+
+  docker image ls --format '{{.Repository}}' 2>/dev/null \
+    | awk -v repo_list="$(printf '%s\n' "${repos[@]}")" '
+        BEGIN {
+          split(repo_list, repos, "\n")
+          for (i in repos) {
+            if (repos[i] != "") {
+              allowed[repos[i]] = 1
+            }
+          }
+        }
+        allowed[$0] { print }
+      ' \
+    | unique_nonempty_lines
+}
+
 inspect_project_label() {
   local project="$1"
   local label="$2"
@@ -186,6 +229,7 @@ prune_project_resources_for_project() {
   local project="$1"
   local -a volumes
   local -a networks
+  local -a images
 
   mapfile -t volumes < <(list_project_volumes_for_project "${project}" || true)
   if [[ ${#volumes[@]} -gt 0 ]]; then
@@ -195,6 +239,11 @@ prune_project_resources_for_project() {
   mapfile -t networks < <(list_project_networks_for_project "${project}" || true)
   if [[ ${#networks[@]} -gt 0 ]]; then
     docker network rm "${networks[@]}" >/dev/null 2>&1 || true
+  fi
+
+  mapfile -t images < <(list_project_images_for_project "${project}" || true)
+  if [[ ${#images[@]} -gt 0 ]]; then
+    docker image rm "${images[@]}" >/dev/null 2>&1 || true
   fi
 }
 
@@ -276,10 +325,12 @@ refresh_leftover_counts() {
   local -a containers=()
   local -a volumes=()
   local -a networks=()
+  local -a images=()
 
   leftover_containers_count=0
   leftover_volumes_count=0
   leftover_networks_count=0
+  leftover_images_count=0
 
   if [[ ${#cleanup_projects_cache[@]} -eq 0 ]]; then
     load_cleanup_projects
@@ -289,10 +340,12 @@ refresh_leftover_counts() {
     mapfile -t containers < <(list_project_containers_for_project "${project}" || true)
     mapfile -t volumes < <(list_project_volumes_for_project "${project}" || true)
     mapfile -t networks < <(list_project_networks_for_project "${project}" || true)
+    mapfile -t images < <(list_project_images_for_project "${project}" || true)
 
     leftover_containers_count=$((leftover_containers_count + ${#containers[@]}))
     leftover_volumes_count=$((leftover_volumes_count + ${#volumes[@]}))
     leftover_networks_count=$((leftover_networks_count + ${#networks[@]}))
+    leftover_images_count=$((leftover_images_count + ${#images[@]}))
   done
 }
 
@@ -327,7 +380,7 @@ docker_teardown_once() {
 
   refresh_leftover_counts
 
-  if [[ "${leftover_containers_count}" -eq 0 && "${leftover_volumes_count}" -eq 0 && "${leftover_networks_count}" -eq 0 ]]; then
+  if [[ "${leftover_containers_count}" -eq 0 && "${leftover_volumes_count}" -eq 0 && "${leftover_networks_count}" -eq 0 && "${leftover_images_count}" -eq 0 ]]; then
     printf '%s' "${combined_output}"
     return 0
   fi
@@ -335,7 +388,7 @@ docker_teardown_once() {
   if [[ -n "${combined_output}" ]]; then
     combined_output="${combined_output}"$'\n'
   fi
-  combined_output="${combined_output}leftover docker resources for ${compose_project}: containers=${leftover_containers_count} volumes=${leftover_volumes_count} networks=${leftover_networks_count}"
+  combined_output="${combined_output}leftover docker resources for ${compose_project}: containers=${leftover_containers_count} volumes=${leftover_volumes_count} networks=${leftover_networks_count} images=${leftover_images_count}"
   printf '%s' "${combined_output}"
   return 1
 }
@@ -372,11 +425,11 @@ else
   refresh_leftover_counts
 
   if [[ "${teardown_rc:-1}" -eq 0 ]]; then
-    if [[ "${leftover_containers_count}" -eq 0 && "${leftover_volumes_count}" -eq 0 && "${leftover_networks_count}" -eq 0 ]]; then
+    if [[ "${leftover_containers_count}" -eq 0 && "${leftover_volumes_count}" -eq 0 && "${leftover_networks_count}" -eq 0 && "${leftover_images_count}" -eq 0 ]]; then
       status="success"
     else
       status="partial"
-      record_first_error "leftover docker resources for ${compose_project}: containers=${leftover_containers_count} volumes=${leftover_volumes_count} networks=${leftover_networks_count}"
+      record_first_error "leftover docker resources for ${compose_project}: containers=${leftover_containers_count} volumes=${leftover_volumes_count} networks=${leftover_networks_count} images=${leftover_images_count}"
     fi
   else
     status="partial"
@@ -455,6 +508,7 @@ echo "CLEANUP_WORKSPACE_REMOVED=${workspace_removed}"
 echo "CLEANUP_LEFTOVER_CONTAINERS=${leftover_containers_count}"
 echo "CLEANUP_LEFTOVER_VOLUMES=${leftover_volumes_count}"
 echo "CLEANUP_LEFTOVER_NETWORKS=${leftover_networks_count}"
+echo "CLEANUP_LEFTOVER_IMAGES=${leftover_images_count}"
 echo "CLEANUP_FIXES=${fixes}"
 echo "CLEANUP_FIRST_ERROR=${first_error}"
 
