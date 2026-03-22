@@ -773,13 +773,7 @@ def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
 
 
 def _candidate_validation_summary(candidate: CurationCandidate) -> CurationValidationSummary | None:
-    return _validation_summary(
-        [
-            snapshot
-            for snapshot in candidate.validation_snapshots
-            if snapshot.candidate_id == candidate.id
-        ]
-    )
+    return _validation_summary(candidate.validation_snapshots)
 
 
 def _candidate_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:

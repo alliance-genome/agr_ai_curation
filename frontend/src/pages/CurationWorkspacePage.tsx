@@ -26,6 +26,8 @@ import {
   CurationWorkspaceProvider,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 
+const WORKSPACE_STALE_TIME_MS = 60_000
+
 function formatStatusLabel(value: string): string {
   return value
     .split('_')
@@ -82,11 +84,21 @@ function CurationWorkspacePage() {
     candidateId?: string
   }>()
   const [activeCandidateId, setActiveCandidateId] = useState<string | null>(null)
+  const workspaceSessionId = typeof sessionId === 'string' && sessionId.length > 0
+    ? sessionId
+    : null
 
   const workspaceQuery = useQuery({
-    queryKey: ['curation-workspace', sessionId],
-    queryFn: () => fetchCurationWorkspace(sessionId as string),
-    enabled: typeof sessionId === 'string' && sessionId.length > 0,
+    queryKey: ['curation-workspace', workspaceSessionId],
+    queryFn: async () => {
+      if (!workspaceSessionId) {
+        throw new Error('Missing curation session identifier.')
+      }
+
+      return fetchCurationWorkspace(workspaceSessionId)
+    },
+    enabled: workspaceSessionId !== null,
+    staleTime: WORKSPACE_STALE_TIME_MS,
   })
 
   const workspace = workspaceQuery.data ?? null
@@ -359,27 +371,30 @@ function CurationWorkspacePage() {
               <CardContent>
                 <Stack spacing={1.5}>
                   <Typography variant="overline" color="text.secondary">
-                    Session Context
+                    Session Details
                   </Typography>
                   <Typography variant="body2">
                     Adapter: {workspace.session.adapter.display_label ?? workspace.session.adapter.adapter_key}
                   </Typography>
                   <Typography variant="body2">
+                    Session version: {workspace.session.session_version}
+                  </Typography>
+                  <Typography variant="body2">
                     PDF source: {workspace.session.document.pdf_url ?? 'Unavailable'}
                   </Typography>
-                  <Divider />
-                  <Typography variant="body2" color="text.secondary">
-                    This page owns session loading, route-driven candidate focus, workspace
-                    context, and PDF viewer initialization. Workspace shell composition,
-                    queue rendering, and autosave remain with sibling tickets.
-                  </Typography>
+                  {workspace.session.warnings.length > 0 ? (
+                    <>
+                      <Divider />
+                      <Typography variant="body2" color="text.secondary">
+                        {workspace.session.warnings.length} session warning
+                        {workspace.session.warnings.length === 1 ? '' : 's'} available for
+                        review.
+                      </Typography>
+                    </>
+                  ) : null}
                 </Stack>
               </CardContent>
             </Card>
-
-            <Alert severity="info">
-              Child workspace panels will consume this page&apos;s context in later waves.
-            </Alert>
           </Stack>
         </Box>
       </Box>

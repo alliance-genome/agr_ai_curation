@@ -202,6 +202,7 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getByText('Pending candidate')).toBeInTheDocument()
+    expect(screen.getByText('Session Details')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Union
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -200,10 +200,7 @@ async def get_next_review_session(
     return get_next_session(db, request)
 
 
-@router.get(
-    "/sessions/{session_id}",
-    response_model=Union[CurationReviewSession, CurationWorkspaceResponse],
-)
+@router.get("/sessions/{session_id}", response_model=None)
 async def get_review_session(
     session_id: UUID,
     include_workspace: bool = Query(default=False),
