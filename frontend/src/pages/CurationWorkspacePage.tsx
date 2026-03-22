@@ -1,22 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
-  CircularProgress,
   Divider,
+  CircularProgress,
   Stack,
   Typography,
 } from '@mui/material'
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import {
+  getAdapterLabel,
+  getEvidenceLabel,
+  getValidationLabel,
+} from '@/features/curation/inventory/inventoryPresentation'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
@@ -28,11 +30,13 @@ import type {
 import {
   CurationWorkspaceProvider,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
+import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
+import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
-function formatStatusLabel(value: string): string {
+function formatLabel(value: string): string {
   return value
     .split('_')
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
@@ -79,6 +83,80 @@ export function resolveActiveCandidateId(
   }
 
   return candidates[0]?.candidate_id ?? null
+}
+
+function getCandidateStatusColor(
+  status?: CurationCandidate['status'] | null,
+): 'warning' | 'success' | 'error' {
+  switch (status) {
+    case 'accepted':
+      return 'success'
+    case 'rejected':
+      return 'error'
+    case 'pending':
+    default:
+      return 'warning'
+  }
+}
+
+function getCandidateEvidenceSummary(candidate: CurationCandidate | null): string {
+  if (!candidate) {
+    return 'No evidence available.'
+  }
+
+  if (candidate.evidence_summary) {
+    return getEvidenceLabel(candidate.evidence_summary)
+  }
+
+  return `${candidate.evidence_anchors.length} anchors`
+}
+
+function getCandidateValidationSummary(candidate: CurationCandidate | null): string {
+  if (!candidate?.validation) {
+    return 'Validation details load into the editor panel in a later ticket.'
+  }
+
+  return getValidationLabel(candidate.validation)
+}
+
+function WorkspaceSlotPlaceholder({
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  eyebrow: string
+  title: string
+  description: string
+  children?: ReactNode
+}) {
+  return (
+    <Box
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1.5,
+        p: 2,
+        overflow: 'auto',
+      }}
+    >
+      <Stack spacing={0.75}>
+        <Typography color="text.secondary" variant="overline">
+          {eyebrow}
+        </Typography>
+        <Typography variant="h6">
+          {title}
+        </Typography>
+        <Typography color="text.secondary" variant="body2">
+          {description}
+        </Typography>
+      </Stack>
+
+      {children}
+    </Box>
+  )
 }
 
 function CurationWorkspacePage() {
@@ -272,6 +350,124 @@ function CurationWorkspacePage() {
     )
   }
 
+  const queueSlot = (
+    <WorkspaceSlotPlaceholder
+      description="Compact queue cards and selection controls land in ALL-119. The active candidate stays visible here so the shell can be exercised before that ticket merges."
+      eyebrow="Candidate Queue"
+      title={activeCandidate?.display_label ?? 'Queue placeholder'}
+    >
+      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
+        <Chip label={`${workspace.candidates.length} total`} size="small" />
+        <Chip
+          label={`${workspace.session.progress.pending_candidates} pending`}
+          size="small"
+          variant="outlined"
+        />
+        <Chip
+          color={getCandidateStatusColor(activeCandidate?.status)}
+          label={`Active: ${formatLabel(activeCandidate?.status ?? 'pending')}`}
+          size="small"
+        />
+      </Stack>
+      <Typography variant="body2">
+        {activeCandidate
+          ? `Current candidate: ${activeCandidate.display_label ?? activeCandidate.candidate_id}`
+          : 'This session does not currently expose an active candidate.'}
+      </Typography>
+      <Typography color="text.secondary" variant="body2">
+        Reviewed {workspace.session.progress.reviewed_candidates} of
+        {' '}
+        {workspace.session.progress.total_candidates}
+        {' '}
+        candidates in this session.
+      </Typography>
+    </WorkspaceSlotPlaceholder>
+  )
+
+  const toolbarSlot = (
+    <WorkspaceSlotPlaceholder
+      description="ALL-117 owns the real Review and Curate actions. These buttons are layout placeholders only in this shell pass."
+      eyebrow="Decision Toolbar"
+      title="Review controls"
+    >
+      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
+        <Button disabled size="small" variant="contained">
+          Accept
+        </Button>
+        <Button disabled size="small" variant="outlined">
+          Reject
+        </Button>
+        <Button disabled size="small" variant="outlined">
+          Reset
+        </Button>
+      </Stack>
+      <Typography color="text.secondary" variant="body2">
+        {activeCandidate
+          ? `Ready for ${activeCandidate.display_label ?? activeCandidate.candidate_id}`
+          : 'Select a candidate to review.'}
+      </Typography>
+    </WorkspaceSlotPlaceholder>
+  )
+
+  const editorSlot = (
+    <WorkspaceSlotPlaceholder
+      description="ALL-122 will replace this with the shared annotation editor. The shell keeps session and draft context visible here for now."
+      eyebrow="Annotation Editor"
+      title={activeCandidate?.draft.draft_id ?? 'Editor placeholder'}
+    >
+      <Stack spacing={1}>
+        <Typography variant="body2">
+          Adapter: {getAdapterLabel(workspace.session.adapter)}
+        </Typography>
+        <Typography variant="body2">
+          Draft version: {activeCandidate?.draft.version ?? 'Unavailable'}
+        </Typography>
+        <Typography variant="body2">
+          Session version: {workspace.session.session_version}
+        </Typography>
+        <Typography variant="body2">
+          Validation: {getCandidateValidationSummary(activeCandidate)}
+        </Typography>
+      </Stack>
+
+      {workspace.session.warnings.length > 0 ? (
+        <>
+          <Divider />
+          <Typography color="text.secondary" variant="body2">
+            {workspace.session.warnings.length} session warning
+            {workspace.session.warnings.length === 1 ? '' : 's'} available for review.
+          </Typography>
+        </>
+      ) : null}
+    </WorkspaceSlotPlaceholder>
+  )
+
+  const evidenceSlot = (
+    <WorkspaceSlotPlaceholder
+      description="ALL-121 will supply evidence cards in this region. Until then, the shell exposes counts and source metadata so the layout is fully wired."
+      eyebrow="Evidence Panel"
+      title={activeCandidate?.display_label ?? 'Evidence placeholder'}
+    >
+      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
+        <Chip
+          label={getCandidateEvidenceSummary(activeCandidate)}
+          size="small"
+          variant="outlined"
+        />
+        <Chip
+          label={`PDF: ${workspace.session.document.pdf_url ? 'Available' : 'Unavailable'}`}
+          size="small"
+          variant="outlined"
+        />
+      </Stack>
+      <Typography color="text.secondary" variant="body2">
+        {activeCandidate
+          ? `${activeCandidate.evidence_anchors.length} evidence anchors are attached to this candidate.`
+          : 'Evidence details appear once a candidate is selected.'}
+      </Typography>
+    </WorkspaceSlotPlaceholder>
+  )
+
   return (
     <CurationWorkspaceProvider value={contextValue}>
       <Box
@@ -281,144 +477,28 @@ function CurationWorkspacePage() {
           flexDirection: 'column',
           minHeight: 0,
           p: 2,
-          gap: 2,
           overflow: 'hidden',
         }}
       >
-        <Stack
-          direction={{ xs: 'column', md: 'row' }}
-          spacing={2}
-          alignItems={{ xs: 'flex-start', md: 'center' }}
-          justifyContent="space-between"
-        >
-          <Stack spacing={0.5}>
-            <Button
-              component={RouterLink}
-              to="/curation"
-              startIcon={<ArrowBackRoundedIcon />}
-              sx={{ alignSelf: 'flex-start', px: 0 }}
-            >
-              Back to Inventory
-            </Button>
-            <Typography variant="h4">
-              {workspace.session.document.title}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Session {workspace.session.session_id} • {formatStatusLabel(workspace.session.status)}
-            </Typography>
-          </Stack>
-          <Stack spacing={1} alignItems={{ xs: 'stretch', md: 'flex-end' }}>
-            <WorkspaceSessionNavigation
-              currentSessionId={workspace.session.session_id}
-              queueContext={queueNavigationState?.queueContext}
-              queueRequest={queueNavigationState?.queueRequest}
+        <WorkspaceShell
+          editorSlot={editorSlot}
+          evidenceSlot={evidenceSlot}
+          headerSlot={(
+            <WorkspaceHeader
+              navigationSlot={(
+                <WorkspaceSessionNavigation
+                  currentSessionId={workspace.session.session_id}
+                  queueContext={queueNavigationState?.queueContext}
+                  queueRequest={queueNavigationState?.queueRequest}
+                />
+              )}
+              session={workspace.session}
             />
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              <Chip label={`${workspace.candidates.length} candidates`} />
-              <Chip label={`${workspace.session.progress.pending_candidates} pending`} />
-              <Chip
-                label={`${workspace.session.progress.reviewed_candidates} reviewed`}
-                variant="outlined"
-              />
-            </Stack>
-          </Stack>
-        </Stack>
-
-        <Box
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            display: 'grid',
-            gap: 2,
-            gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 2fr) minmax(320px, 1fr)' },
-          }}
-        >
-          <Card
-            sx={{
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-            }}
-          >
-            <Box
-              sx={{
-                flex: 1,
-                minHeight: { xs: 420, lg: 0 },
-                '& > *': {
-                  height: '100%',
-                },
-              }}
-            >
-              <PdfViewer />
-            </Box>
-          </Card>
-
-          <Stack spacing={2} sx={{ minWidth: 0, overflow: 'auto' }}>
-            <Card variant="outlined">
-              <CardContent>
-                <Stack spacing={1.5}>
-                  <Typography variant="overline" color="text.secondary">
-                    Active Candidate
-                  </Typography>
-                  <Typography variant="h5">
-                    {activeCandidate?.display_label ?? 'No candidate available'}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {activeCandidate
-                      ? `Candidate ${activeCandidate.candidate_id}`
-                      : 'This session does not currently expose a candidate queue.'}
-                  </Typography>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    <Chip
-                      label={`Status: ${formatStatusLabel(activeCandidate?.status ?? 'pending')}`}
-                      size="small"
-                    />
-                    <Chip
-                      label={`Evidence anchors: ${activeCandidate?.evidence_anchors.length ?? 0}`}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </Stack>
-                  {activeCandidate?.conversation_summary ? (
-                    <Typography variant="body2" color="text.secondary">
-                      {activeCandidate.conversation_summary}
-                    </Typography>
-                  ) : null}
-                </Stack>
-              </CardContent>
-            </Card>
-
-            <Card variant="outlined">
-              <CardContent>
-                <Stack spacing={1.5}>
-                  <Typography variant="overline" color="text.secondary">
-                    Session Details
-                  </Typography>
-                  <Typography variant="body2">
-                    Adapter: {workspace.session.adapter.display_label ?? workspace.session.adapter.adapter_key}
-                  </Typography>
-                  <Typography variant="body2">
-                    Session version: {workspace.session.session_version}
-                  </Typography>
-                  <Typography variant="body2">
-                    PDF source: {workspace.session.document.pdf_url ?? 'Unavailable'}
-                  </Typography>
-                  {workspace.session.warnings.length > 0 ? (
-                    <>
-                      <Divider />
-                      <Typography variant="body2" color="text.secondary">
-                        {workspace.session.warnings.length} session warning
-                        {workspace.session.warnings.length === 1 ? '' : 's'} available for
-                        review.
-                      </Typography>
-                    </>
-                  ) : null}
-                </Stack>
-              </CardContent>
-            </Card>
-          </Stack>
-        </Box>
+          )}
+          pdfSlot={<PdfViewer />}
+          queueSlot={queueSlot}
+          toolbarSlot={toolbarSlot}
+        />
       </Box>
     </CurationWorkspaceProvider>
   )

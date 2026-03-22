@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import CurationInventoryPage from './CurationInventoryPage'
@@ -25,7 +25,14 @@ function jsonResponse(payload: unknown): Response {
 
 function SessionDestination() {
   const params = useParams()
-  return <div>Workspace route for {params.sessionId}</div>
+  const location = useLocation()
+
+  return (
+    <>
+      <div>Workspace route for {params.sessionId}</div>
+      <div data-testid="location-state">{JSON.stringify(location.state)}</div>
+    </>
+  )
 }
 
 function renderPage() {
@@ -253,15 +260,16 @@ describe('CurationInventoryPage', () => {
     await user.click(screen.getByText('Alpha paper'))
 
     expect(await screen.findByText('Workspace route for session-1')).toBeInTheDocument()
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"queueRequest"')
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"sort_by":"prepared_at"')
   })
 
   it('re-queries the inventory when filters change', async () => {
-    const user = userEvent.setup()
     renderPage()
 
     await screen.findByText('Alpha paper')
 
-    await user.click(screen.getByRole('button', { name: /New 4/i }))
+    fireEvent.click(screen.getByRole('button', { name: /New 4/i }))
     await waitFor(() => {
       const sessionListCalls = vi
         .mocked(global.fetch)
@@ -272,7 +280,7 @@ describe('CurationInventoryPage', () => {
       expect(sessionListCalls.some((url) => url.includes('status=new'))).toBe(true)
     })
 
-    await user.click(screen.getByRole('button', { name: /Adapter \/ Profile/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Adapter \/ Profile/i }))
     await waitFor(() => {
       const sessionListCalls = vi
         .mocked(global.fetch)
@@ -283,7 +291,9 @@ describe('CurationInventoryPage', () => {
       expect(sessionListCalls.some((url) => url.includes('sort_by=adapter'))).toBe(true)
     })
 
-    await user.type(screen.getByLabelText('Search sessions'), 'beta')
+    fireEvent.change(screen.getByLabelText('Search sessions'), {
+      target: { value: 'beta' },
+    })
     await waitFor(() => {
       const sessionListCalls = vi
         .mocked(global.fetch)
@@ -305,7 +315,7 @@ describe('CurationInventoryPage', () => {
 
     await user.selectOptions(
       await screen.findByLabelText('Saved view'),
-      savedViewResponse.views[0].view_id
+      savedViewResponse.views[0].view_id,
     )
 
     await waitFor(() => {
@@ -325,7 +335,7 @@ describe('CurationInventoryPage', () => {
           url.includes('sort_direction=asc') &&
           url.includes('saved_view_id=saved-view-1') &&
           !url.includes('origin_session_id=')
-        )
+        ),
       ).toBe(true)
     })
   })
