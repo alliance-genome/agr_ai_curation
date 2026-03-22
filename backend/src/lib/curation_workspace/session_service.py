@@ -35,6 +35,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationDraft as CurationDraftPayload,
+    CurationDraftField as CurationDraftFieldSchema,
     CurationDocumentRef,
     CurationEvidenceRecord as CurationEvidenceRecordPayload,
     CurationEvidenceSource,
@@ -61,11 +62,13 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateResponse,
     CurationSortDirection,
     CurationSubmissionRecord,
+    CurationValidationSnapshot as CurationValidationSnapshotSchema,
     CurationValidationScope,
     CurationValidationSnapshotState,
     CurationValidationSummary,
     CurationWorkspace as CurationWorkspacePayload,
     CurationWorkspaceResponse,
+    EvidenceAnchor,
     FieldValidationResult,
     SubmissionPayloadContract,
 )
@@ -89,6 +92,12 @@ PREPARED_SESSION_LOAD_OPTIONS = (
     selectinload(ReviewSessionModel.candidates),
     selectinload(ReviewSessionModel.submissions),
     selectinload(ReviewSessionModel.action_log_entries),
+)
+
+CANDIDATE_DETAIL_LOAD_OPTIONS = (
+    selectinload(CurationCandidate.draft),
+    selectinload(CurationCandidate.evidence_anchors),
+    selectinload(CurationCandidate.validation_snapshots),
 )
 
 
@@ -265,6 +274,12 @@ def _normalize_uuid(value: str | UUID, *, field_name: str) -> UUID:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid {field_name}: {value}",
         ) from exc
+
+
+def normalize_uuid(value: str | UUID, *, field_name: str) -> UUID:
+    """Public UUID normalization helper shared across curation workspace services."""
+
+    return _normalize_uuid(value, field_name=field_name)
 
 
 def _ordered_clause(expression: Any, direction: CurationSortDirection, *, nulls_last: bool = False) -> Any:
@@ -589,8 +604,6 @@ def _evidence_summary_from_records(
     records: Sequence[EvidenceRecordModel],
 ) -> CurationEvidenceSummary | None:
     return summarize_evidence_records(records)
-
-
 def _evidence_summary(session: ReviewSessionModel) -> CurationEvidenceSummary | None:
     return _evidence_summary_from_records(
         [
@@ -598,6 +611,121 @@ def _evidence_summary(session: ReviewSessionModel) -> CurationEvidenceSummary | 
             for candidate in session.candidates
             for evidence_anchor in candidate.evidence_anchors
         ]
+    )
+
+
+def _draft_detail(record: DraftModel | None) -> CurationDraftPayload | None:
+    if record is None:
+        return None
+
+    return CurationDraftPayload(
+        draft_id=str(record.id),
+        candidate_id=str(record.candidate_id),
+        adapter_key=record.adapter_key,
+        version=record.version,
+        title=record.title,
+        summary=record.summary,
+        fields=[
+            CurationDraftFieldSchema.model_validate(field_payload)
+            for field_payload in (record.fields or [])
+        ],
+        notes=record.notes,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        last_saved_at=record.last_saved_at,
+        metadata=dict(record.draft_metadata or {}),
+    )
+
+
+def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
+    return CurationEvidenceRecordPayload(
+        anchor_id=str(record.id),
+        candidate_id=str(record.candidate_id),
+        source=record.source,
+        field_keys=list(record.field_keys or []),
+        field_group_keys=list(record.field_group_keys or []),
+        is_primary=record.is_primary,
+        anchor=EvidenceAnchor.model_validate(record.anchor or {}),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        warnings=list(record.warnings or []),
+    )
+
+
+def build_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
+    """Public evidence-record serializer shared across curation workspace services."""
+
+    return _evidence_record(record)
+
+
+def _validation_snapshot(record: ValidationSnapshotModel) -> CurationValidationSnapshotSchema:
+    summary_payload = dict(record.summary or {})
+    summary_payload.setdefault("state", record.state)
+    summary_payload.setdefault("counts", {})
+    summary_payload.setdefault("warnings", list(record.warnings or []))
+    summary_payload.setdefault("stale_field_keys", [])
+    summary_payload.setdefault("last_validated_at", record.completed_at)
+
+    return CurationValidationSnapshotSchema(
+        snapshot_id=str(record.id),
+        scope=record.scope,
+        session_id=str(record.session_id),
+        candidate_id=str(record.candidate_id) if record.candidate_id else None,
+        adapter_key=record.adapter_key,
+        state=record.state,
+        field_results={
+            field_key: FieldValidationResult.model_validate(result_payload)
+            for field_key, result_payload in (record.field_results or {}).items()
+        },
+        summary=CurationValidationSummary.model_validate(summary_payload),
+        requested_at=record.requested_at,
+        completed_at=record.completed_at,
+        warnings=list(record.warnings or []),
+    )
+
+
+def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
+    draft = _draft_detail(candidate.draft)
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Candidate {candidate.id} draft is missing",
+        )
+
+    ordered_evidence = sorted(
+        candidate.evidence_anchors,
+        key=lambda evidence_record: (
+            evidence_record.created_at,
+            evidence_record.updated_at,
+            evidence_record.id,
+        ),
+    )
+
+    return CurationCandidateSchema(
+        candidate_id=str(candidate.id),
+        session_id=str(candidate.session_id),
+        source=candidate.source,
+        status=candidate.status,
+        order=candidate.order,
+        adapter_key=candidate.adapter_key,
+        profile_key=candidate.profile_key,
+        display_label=candidate.display_label,
+        secondary_label=candidate.secondary_label,
+        confidence=candidate.confidence,
+        conversation_summary=candidate.conversation_summary,
+        unresolved_ambiguities=list(candidate.unresolved_ambiguities or []),
+        extraction_result_id=(
+            str(candidate.extraction_result_id) if candidate.extraction_result_id else None
+        ),
+        normalized_payload=dict(candidate.normalized_payload or {}),
+        draft=draft,
+        evidence_anchors=[_evidence_record(record) for record in ordered_evidence],
+        validation=_validation_summary(candidate.validation_snapshots),
+        evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
+        created_at=candidate.created_at,
+        updated_at=candidate.updated_at,
+        last_reviewed_at=candidate.last_reviewed_at,
+        metadata=dict(candidate.candidate_metadata or {}),
     )
 
 
@@ -747,6 +875,14 @@ def _action_log_entry(record: SessionActionLogModel | None) -> CurationActionLog
         message=record.message,
         metadata=dict(record.action_metadata or {}),
     )
+
+
+def build_action_log_entry(
+    record: SessionActionLogModel | None,
+) -> CurationActionLogEntry | None:
+    """Public action-log serializer shared across curation workspace services."""
+
+    return _action_log_entry(record)
 
 
 def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
@@ -978,6 +1114,41 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
         saved_view_context=None,
     )
     return CurationWorkspaceResponse(workspace=workspace)
+
+
+def get_candidate_detail(
+    db: Session,
+    candidate_id: str | UUID,
+    *,
+    session_id: str | UUID | None = None,
+) -> CurationCandidatePayload:
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    statement = (
+        select(CurationCandidate)
+        .where(CurationCandidate.id == normalized_candidate_id)
+        .options(*CANDIDATE_DETAIL_LOAD_OPTIONS)
+    )
+
+    if session_id is not None:
+        normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+        statement = statement.where(CurationCandidate.session_id == normalized_session_id)
+
+    candidate = db.scalars(statement).first()
+    if candidate is None:
+        if session_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"Curation candidate {normalized_candidate_id} not found in session "
+                    f"{normalized_session_id}"
+                ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation candidate {normalized_candidate_id} not found",
+        )
+
+    return _candidate_detail(candidate)
 
 
 def find_reusable_prepared_session(
@@ -1319,6 +1490,12 @@ def _actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
     if actor_claims.get("email"):
         payload["email"] = actor_claims["email"]
     return payload
+
+
+def build_actor_claims_payload(actor_claims: dict[str, Any]) -> dict[str, str]:
+    """Public actor payload helper shared across curation workspace services."""
+
+    return _actor_claims_payload(actor_claims)
 
 
 def upsert_prepared_session(
@@ -1715,12 +1892,17 @@ def _apply_progress_counts(
 
 
 __all__ = [
+    "build_action_log_entry",
+    "build_actor_claims_payload",
+    "build_evidence_record",
     "get_next_session",
+    "get_candidate_detail",
     "find_reusable_prepared_session",
     "get_session_detail",
     "get_session_workspace",
     "get_session_stats",
     "list_sessions",
+    "normalize_uuid",
     "PreparedCandidateInput",
     "PreparedDraftFieldInput",
     "PreparedEvidenceRecordInput",
