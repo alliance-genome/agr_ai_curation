@@ -252,6 +252,8 @@ describe('CurationInventoryPage', () => {
     renderPage()
 
     expect(await screen.findByText('Curation Inventory')).toBeInTheDocument()
+    expect(await screen.findByText('Total Sessions')).toBeInTheDocument()
+    expect(screen.getByText('across 2 domains')).toBeInTheDocument()
     expect(await screen.findByText('Alpha paper')).toBeInTheDocument()
     expect(screen.getByText('Gene Adapter / Alpha Profile')).toBeInTheDocument()
     expect(screen.getByText('Alex Curator')).toBeInTheDocument()

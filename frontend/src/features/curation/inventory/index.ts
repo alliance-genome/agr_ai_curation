@@ -2,4 +2,5 @@ export { default as CurationInventoryFilterBar } from './CurationInventoryFilter
 export { default as SavedViewSelector } from './SavedViewSelector'
 export { default as CurationInventoryTable } from './CurationInventoryTable'
 export { default as QueueNavigationButton } from './QueueNavigationButton'
+export { default as InventoryStatsCards } from './InventoryStatsCards'
 export { useCurationInventory } from './useCurationInventory'

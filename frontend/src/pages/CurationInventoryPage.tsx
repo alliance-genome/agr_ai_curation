@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
-import { Alert, Box, LinearProgress, Stack, Typography } from '@mui/material'
+import { Box, LinearProgress, Stack, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 
 import {
   CurationInventoryFilterBar,
   CurationInventoryTable,
+  InventoryStatsCards,
   QueueNavigationButton,
   SavedViewSelector,
   useCurationInventory,
@@ -47,14 +48,16 @@ export default function CurationInventoryPage() {
           </Typography>
         </Stack>
 
-        {/* Reserved for ALL-109 dashboard cards once that lane lands. */}
-        <Box data-testid="curation-inventory-stats-slot" />
-
-        {statsErrorMessage && (
-          <Alert severity="warning">
-            Status counts are temporarily unavailable. Session filters still work normally.
-          </Alert>
-        )}
+        <Box data-testid="curation-inventory-stats-slot">
+          <InventoryStatsCards
+            errorMessage={statsErrorMessage}
+            isLoading={inventory.statsQuery.isLoading}
+            onRetry={() => {
+              void inventory.statsQuery.refetch()
+            }}
+            stats={inventory.statsQuery.data?.stats}
+          />
+        </Box>
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <SavedViewSelector
