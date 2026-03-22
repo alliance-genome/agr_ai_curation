@@ -9,7 +9,6 @@ import asyncio
 import json
 
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
-from openai import OpenAI
 
 from .connection import get_connection
 
@@ -660,7 +659,6 @@ async def get_chunks_by_section(
             chunks = []
             for obj in range_response.objects:
                 props = obj.properties
-                current_title = props.get("sectionTitle")
                 
                 # REMOVED HEURISTIC: Do not stop on title change.
                 # Subsections (e.g. "2.1 Genetics") often have different titles 
@@ -729,7 +727,7 @@ async def search_chunks_by_keyword(
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
 
-            from weaviate.classes.query import Filter, Sort
+            from weaviate.classes.query import Filter
 
             # Filter: document + early pages
             doc_filter = Filter.by_property("documentId").equal(document_id)
@@ -1607,9 +1605,8 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     metadata = obj.properties.get("metadata", {})
                     if isinstance(metadata, str):
                         try:
-                            import json
                             metadata = json.loads(metadata)
-                        except:
+                        except (TypeError, json.JSONDecodeError):
                             metadata = {}
 
                     # Ensure required metadata fields exist
@@ -1629,8 +1626,12 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     doc_items_str = obj.properties.get("docItemProvenance")
                     if doc_items_str:
                         try:
-                            doc_items = json.loads(doc_items_str)
-                        except:
+                            doc_items = (
+                                json.loads(doc_items_str)
+                                if isinstance(doc_items_str, str)
+                                else doc_items_str
+                            )
+                        except (TypeError, json.JSONDecodeError):
                             logger.warning("Failed to parse docItemProvenance for chunk %s", chunk_id)
                             doc_items = []
 
@@ -1643,7 +1644,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                         "element_type": obj.properties.get("elementType"),
                         "page_number": obj.properties.get("pageNumber"),
                         "sectionTitle": obj.properties.get("sectionTitle"),
-                        "metadata": metadata,  # Now properly parsed with required fields
+                        "metadata": metadata if include_metadata else {},  # Now properly parsed with required fields
                         "doc_items": doc_items  # Include provenance data
                     }
                     chunks.append(chunk_data)
