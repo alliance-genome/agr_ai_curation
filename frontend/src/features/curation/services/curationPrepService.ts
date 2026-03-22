@@ -1,3 +1,5 @@
+import { readCurationApiError } from './api'
+
 export interface CurationPrepPreview {
   ready: boolean
   summary_text: string
@@ -27,15 +29,6 @@ export interface CurationPrepRunResponse {
   domain_keys: string[]
 }
 
-async function readApiError(response: Response): Promise<string> {
-  try {
-    const payload = await response.json() as { detail?: string; message?: string }
-    return payload.detail || payload.message || 'Request failed'
-  } catch {
-    return 'Request failed'
-  }
-}
-
 export async function fetchCurationPrepPreview(sessionId: string): Promise<CurationPrepPreview> {
   const response = await fetch(
     `/api/curation-workspace/prep/preview?session_id=${encodeURIComponent(sessionId)}`,
@@ -45,7 +38,7 @@ export async function fetchCurationPrepPreview(sessionId: string): Promise<Curat
   )
 
   if (!response.ok) {
-    throw new Error(await readApiError(response))
+    throw new Error(await readCurationApiError(response))
   }
 
   return response.json() as Promise<CurationPrepPreview>
@@ -67,7 +60,7 @@ export async function runCurationPrep(request: CurationPrepRunRequest): Promise<
   })
 
   if (!response.ok) {
-    throw new Error(await readApiError(response))
+    throw new Error(await readCurationApiError(response))
   }
 
   return response.json() as Promise<CurationPrepRunResponse>

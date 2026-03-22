@@ -358,6 +358,7 @@ class CurationSessionSortField(str, Enum):
     LAST_WORKED_AT = "last_worked_at"
     STATUS = "status"
     DOCUMENT_TITLE = "document_title"
+    ADAPTER = "adapter"
     CANDIDATE_COUNT = "candidate_count"
     VALIDATION = "validation"
     EVIDENCE = "evidence"

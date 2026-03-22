@@ -49,6 +49,7 @@ vi.mock('./pages/ViewerSettings', () => ({ default: () => <div>Viewer</div> }));
 vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</div> }));
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));
+vi.mock('./pages/CurationInventoryPage', () => ({ default: () => <div>Curation Inventory Page</div> }));
 
 const theme = createTheme();
 
@@ -242,5 +243,23 @@ describe('AppContent global notifications', () => {
       expect(urls.some((url) => url.includes('/api/weaviate/pdf-jobs'))).toBe(true);
       expect(urls.some((url) => url.includes('/api/batches'))).toBe(false);
     });
+  });
+
+  it('renders the Curation nav link and inventory route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/curation');
+
+    expect(await screen.findByText('Curation Inventory Page')).toBeInTheDocument();
+    expect(screen.getByText('Curation')).toBeInTheDocument();
   });
 });

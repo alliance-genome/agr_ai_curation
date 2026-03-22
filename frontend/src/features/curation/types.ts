@@ -123,6 +123,7 @@ export const CURATION_SESSION_SORT_FIELDS = [
   'last_worked_at',
   'status',
   'document_title',
+  'adapter',
   'candidate_count',
   'validation',
   'evidence',

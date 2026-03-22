@@ -391,6 +391,13 @@ def _sort_order_clauses(
             ReviewSessionModel.prepared_at.desc(),
             ReviewSessionModel.id.asc(),
         )
+    if sort_by == CurationSessionSortField.ADAPTER:
+        return (
+            _ordered_clause(func.lower(func.coalesce(ReviewSessionModel.adapter_key, "")), sort_direction),
+            _ordered_clause(func.lower(func.coalesce(ReviewSessionModel.profile_key, "")), sort_direction),
+            ReviewSessionModel.prepared_at.desc(),
+            ReviewSessionModel.id.asc(),
+        )
     if sort_by == CurationSessionSortField.CANDIDATE_COUNT:
         return (
             _ordered_clause(ReviewSessionModel.total_candidates, sort_direction),
