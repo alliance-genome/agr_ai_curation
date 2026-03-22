@@ -14,7 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
-from src.lib.curation_workspace.evidence_quality import evidence_anchor_payload_with_quality
+from src.lib.curation_workspace.evidence_quality import (
+    evidence_anchor_payload_with_quality,
+    summarize_evidence_records,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -55,6 +58,7 @@ DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
 PREP_EVIDENCE_REFERENCES_METADATA_KEY = "prep_evidence_references"
 PREP_UNRESOLVED_AMBIGUITIES_METADATA_KEY = "prep_unresolved_ambiguities"
 NORMALIZER_METADATA_KEY = "normalizer"
+EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
 
 
 class PipelineExecutionMode(str, Enum):
@@ -592,6 +596,7 @@ def _prepared_candidate_input(
 ) -> PreparedCandidateInput:
     prep_candidate = normalized_candidate.prep_candidate
     metadata = dict(normalized_candidate.metadata)
+    evidence_summary = summarize_evidence_records(evidence_records)
     metadata[PREP_EVIDENCE_REFERENCES_METADATA_KEY] = [
         _serialize_evidence_reference(reference)
         for reference in prep_candidate.evidence_references
@@ -601,6 +606,8 @@ def _prepared_candidate_input(
         for ambiguity in prep_candidate.unresolved_ambiguities
     ]
     metadata["prep_candidate_index"] = candidate_index
+    if evidence_summary is not None:
+        metadata[EVIDENCE_SUMMARY_METADATA_KEY] = evidence_summary.model_dump(mode="json")
 
     return PreparedCandidateInput(
         source=CurationCandidateSource.EXTRACTED,
