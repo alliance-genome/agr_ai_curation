@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import { Table, TableBody, TableCell, TableRow } from '@mui/material'
@@ -102,7 +103,29 @@ function groupedResponse(
   }
 }
 
-function renderBatchGroupRow() {
+function singlePageGroupedResponse(session: CurationSessionSummary): CurationFlowRunSessionsResponse {
+  return {
+    flow_run: {
+      ...flowRun,
+      session_count: 1,
+      reviewed_count: 0,
+      pending_count: 1,
+    },
+    sessions: [session],
+    page_info: {
+      page: 1,
+      page_size: 1,
+      total_items: 1,
+      total_pages: 1,
+      has_next_page: false,
+      has_previous_page: false,
+    },
+  }
+}
+
+function renderBatchGroupRow(
+  overrides: Partial<ComponentProps<typeof BatchGroupRow>> = {}
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -112,27 +135,44 @@ function renderBatchGroupRow() {
     },
   })
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
-        <Table>
-          <TableBody>
-            <BatchGroupRow
-              colSpan={9}
-              filters={defaultFilters}
-              flowRun={flowRun}
-              pageSize={1}
-              renderSessionRow={(session) => (
-                <TableRow key={session.session_id}>
-                  <TableCell colSpan={9}>{session.document.title}</TableCell>
-                </TableRow>
-              )}
-            />
-          </TableBody>
-        </Table>
-      </ThemeProvider>
-    </QueryClientProvider>
-  )
+  const renderSessionRow: ComponentProps<typeof BatchGroupRow>['renderSessionRow'] =
+    overrides.renderSessionRow ??
+    ((session) => (
+      <TableRow key={session.session_id}>
+        <TableCell colSpan={9}>{session.document.title}</TableCell>
+      </TableRow>
+    ))
+
+  function buildTree(props: Partial<ComponentProps<typeof BatchGroupRow>> = {}) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme}>
+          <Table>
+            <TableBody>
+              <BatchGroupRow
+                colSpan={9}
+                filters={defaultFilters}
+                flowRun={flowRun}
+                pageSize={1}
+                renderSessionRow={renderSessionRow}
+                {...overrides}
+                {...props}
+              />
+            </TableBody>
+          </Table>
+        </ThemeProvider>
+      </QueryClientProvider>
+    )
+  }
+
+  const renderResult = render(buildTree())
+
+  return {
+    ...renderResult,
+    rerenderBatchGroupRow: (props: Partial<ComponentProps<typeof BatchGroupRow>> = {}) => {
+      renderResult.rerender(buildTree(props))
+    },
+  }
 }
 
 describe('BatchGroupRow', () => {
@@ -187,5 +227,55 @@ describe('BatchGroupRow', () => {
     )
     expect(fetchCalls[1][1]?.credentials).toBe('include')
     expect(fetchCalls[1][1]?.headers).toBeInstanceOf(Headers)
+  })
+
+  it('resets grouped pagination when the filter scope changes', async () => {
+    const user = userEvent.setup()
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+
+        if (url.includes('status=submitted')) {
+          return new Response(
+            JSON.stringify(singlePageGroupedResponse(buildSession('session-3', 'Filtered alpha')))
+          )
+        }
+
+        if (url.includes('page=2')) {
+          return new Response(JSON.stringify(groupedResponse(buildSession('session-2', 'Batch beta'), 2)))
+        }
+
+        return new Response(JSON.stringify(groupedResponse(buildSession('session-1', 'Batch alpha'), 1)))
+      })
+    )
+
+    const { rerenderBatchGroupRow } = renderBatchGroupRow()
+
+    await user.click(screen.getByText('Flow run flow-alpha'))
+    expect(await screen.findByText('Batch alpha')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /go to page 2/i }))
+    expect(await screen.findByText('Batch beta')).toBeInTheDocument()
+
+    rerenderBatchGroupRow({
+      filters: {
+        ...defaultFilters,
+        statuses: ['submitted'],
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Filtered alpha')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('No sessions matched this flow run.')).not.toBeInTheDocument()
+
+    const fetchCalls = vi.mocked(global.fetch).mock.calls
+
+    expect(fetchCalls).toHaveLength(3)
+    expect(String(fetchCalls[2][0])).toBe(
+      '/api/curation-workspace/flow-runs/flow-alpha/sessions?status=submitted&page=1&page_size=1'
+    )
   })
 })

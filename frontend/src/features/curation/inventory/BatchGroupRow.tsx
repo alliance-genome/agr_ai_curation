@@ -11,7 +11,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { Fragment, type ReactNode, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react'
 
 import type {
   CurationFlowRunSummary,
@@ -20,7 +20,10 @@ import type {
   CurationSessionSummary,
 } from '../types'
 import { formatSessionDate } from './inventoryPresentation'
-import { useCurationFlowRunSessions } from './curationInventoryService'
+import {
+  buildCurationFlowRunSessionsQueryParams,
+  useCurationFlowRunSessions,
+} from './curationInventoryService'
 
 interface BatchGroupRowProps {
   colSpan: number
@@ -41,6 +44,20 @@ function renderRangeLabel(pageInfo?: CurationPageInfo): string {
   return `Showing ${start}-${end} of ${pageInfo.total_items} sessions`
 }
 
+function buildFlowRunPagingContextKey(
+  flowRunId: string,
+  filters: CurationSessionFilters,
+  pageSize: number
+): string {
+  const params = buildCurationFlowRunSessionsQueryParams({
+    flow_run_id: flowRunId,
+    filters,
+    page_size: pageSize,
+  })
+
+  return `${flowRunId}?${params.toString()}`
+}
+
 export default function BatchGroupRow({
   colSpan,
   filters,
@@ -50,12 +67,26 @@ export default function BatchGroupRow({
 }: BatchGroupRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [page, setPage] = useState(1)
+  const pagingContextKey = buildFlowRunPagingContextKey(flowRun.flow_run_id, filters, pageSize)
+  const previousPagingContextKey = useRef(pagingContextKey)
+  const hasPagingContextChanged = previousPagingContextKey.current !== pagingContextKey
+  // Clamp back to page 1 as soon as the grouped request scope changes to avoid false empty states.
+  const currentPage = hasPagingContextChanged ? 1 : page
+
+  useEffect(() => {
+    if (!hasPagingContextChanged) {
+      return
+    }
+
+    previousPagingContextKey.current = pagingContextKey
+    setPage(1)
+  }, [hasPagingContextChanged, pagingContextKey])
 
   const sessionsQuery = useCurationFlowRunSessions(
     {
       flow_run_id: flowRun.flow_run_id,
       filters,
-      page,
+      page: currentPage,
       page_size: pageSize,
     },
     {
