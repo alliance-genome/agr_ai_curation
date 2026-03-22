@@ -49,6 +49,21 @@ const COLUMN_COUNT = 9
 
 type InventoryViewMode = 'sessions' | 'flow_runs'
 
+const COLUMN_HEADERS: Array<{
+  field: CurationSessionSortField
+  label: string
+}> = [
+  { field: 'status', label: 'Status' },
+  { field: 'document_title', label: 'Paper' },
+  { field: 'adapter', label: 'Adapter / Profile' },
+  { field: 'candidate_count', label: 'Candidates' },
+  { field: 'validation', label: 'Validation' },
+  { field: 'evidence', label: 'Evidence' },
+  { field: 'prepared_at', label: 'Prepared' },
+  { field: 'last_worked_at', label: 'Last Worked' },
+  { field: 'curator', label: 'Curator' },
+]
+
 interface CurationInventoryTableProps {
   filters: CurationSessionFilters
   sessions: CurationSessionSummary[]
@@ -337,69 +352,20 @@ export default function CurationInventoryTable({
         <Table size="small" sx={{ minWidth: 1220 }}>
           <TableHead>
             <TableRow>
-              <SortableHeader
-                active={sortBy === 'status'}
-                direction={sortDirection}
-                field="status"
-                label="Status"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'document_title'}
-                direction={sortDirection}
-                field="document_title"
-                label="Paper"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'adapter'}
-                direction={sortDirection}
-                field="adapter"
-                label="Adapter / Profile"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'candidate_count'}
-                direction={sortDirection}
-                field="candidate_count"
-                label="Candidates"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'validation'}
-                direction={sortDirection}
-                field="validation"
-                label="Validation"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'evidence'}
-                direction={sortDirection}
-                field="evidence"
-                label="Evidence"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'prepared_at'}
-                direction={sortDirection}
-                field="prepared_at"
-                label="Prepared"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'last_worked_at'}
-                direction={sortDirection}
-                field="last_worked_at"
-                label="Last Worked"
-                onSortChange={onSortChange}
-              />
-              <SortableHeader
-                active={sortBy === 'curator'}
-                direction={sortDirection}
-                field="curator"
-                label="Curator"
-                onSortChange={onSortChange}
-              />
+              {viewMode === 'sessions'
+                ? COLUMN_HEADERS.map((column) => (
+                    <SortableHeader
+                      active={sortBy === column.field}
+                      direction={sortDirection}
+                      field={column.field}
+                      key={column.field}
+                      label={column.label}
+                      onSortChange={onSortChange}
+                    />
+                  ))
+                : COLUMN_HEADERS.map((column) => (
+                    <TableCell key={column.field}>{column.label}</TableCell>
+                  ))}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -549,7 +515,7 @@ export default function CurationInventoryTable({
           </Stack>
         ) : (
           <Typography color="text.secondary" variant="caption">
-            Expand a flow run to load its sessions.
+            Flow runs are ordered by latest activity. Expand a flow run to load its sessions.
           </Typography>
         )}
       </Stack>

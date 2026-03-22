@@ -311,6 +311,10 @@ describe('CurationInventoryPage', () => {
     await user.click(screen.getByRole('button', { name: 'By flow run' }))
 
     expect(await screen.findByText('Flow run flow-1')).toBeInTheDocument()
+    expect(
+      screen.getByText('Flow runs are ordered by latest activity. Expand a flow run to load its sessions.')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Curator' })).not.toBeInTheDocument()
 
     await user.click(screen.getByText('Flow run flow-1'))
 
