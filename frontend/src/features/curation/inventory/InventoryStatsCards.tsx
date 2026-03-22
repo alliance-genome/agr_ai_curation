@@ -12,7 +12,7 @@ import type { CurationSessionStats } from '../types'
 
 interface InventoryStatsCardsProps {
   stats?: CurationSessionStats
-  isLoading: boolean
+  isPending: boolean
   errorMessage?: string
   onRetry?: () => void
 }
@@ -187,15 +187,15 @@ function LoadingSkeletonCards() {
 
 export default function InventoryStatsCards({
   stats,
-  isLoading,
+  isPending,
   errorMessage,
   onRetry,
 }: InventoryStatsCardsProps) {
-  if (isLoading && !stats) {
+  if (isPending) {
     return <LoadingSkeletonCards />
   }
 
-  if (!stats) {
+  if (errorMessage || !stats) {
     return (
       <Paper
         variant="outlined"

@@ -51,7 +51,7 @@ export default function CurationInventoryPage() {
         <Box data-testid="curation-inventory-stats-slot">
           <InventoryStatsCards
             errorMessage={statsErrorMessage}
-            isLoading={inventory.statsQuery.isLoading}
+            isPending={inventory.statsQuery.isFetching}
             onRetry={() => {
               void inventory.statsQuery.refetch()
             }}

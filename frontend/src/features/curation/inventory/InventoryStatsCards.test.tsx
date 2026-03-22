@@ -28,7 +28,7 @@ function renderCards(props: Partial<ComponentProps<typeof InventoryStatsCards>> 
     <ThemeProvider theme={theme}>
       <InventoryStatsCards
         errorMessage={undefined}
-        isLoading={false}
+        isPending={false}
         stats={stats}
         {...props}
       />
@@ -63,11 +63,20 @@ describe('InventoryStatsCards', () => {
 
   it('renders five loading skeleton cards while stats are pending', () => {
     renderCards({
-      isLoading: true,
+      isPending: true,
       stats: undefined,
     })
 
     expect(screen.getAllByTestId('inventory-stats-card-skeleton')).toHaveLength(5)
+  })
+
+  it('renders loading skeletons while a refetch is pending even if previous stats exist', () => {
+    renderCards({
+      isPending: true,
+    })
+
+    expect(screen.getAllByTestId('inventory-stats-card-skeleton')).toHaveLength(5)
+    expect(screen.queryByText('Total Sessions')).not.toBeInTheDocument()
   })
 
   it('renders a graceful empty state when stats fail to load', async () => {
