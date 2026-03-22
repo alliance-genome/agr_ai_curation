@@ -907,6 +907,10 @@ class CurationSessionFilters(CurationWorkspaceBaseModel):
         default=None,
         description="Optional flow-run filter for grouped inventory views",
     )
+    origin_session_id: Optional[str] = Field(
+        default=None,
+        description="Optional upstream chat or flow session identifier filter",
+    )
     document_id: Optional[str] = Field(
         default=None,
         description="Optional document filter",
@@ -1429,6 +1433,14 @@ class CurationDocumentBootstrapRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Optional domain filter for bootstrap selection",
     )
+    flow_run_id: Optional[str] = Field(
+        default=None,
+        description="Optional flow-run identifier used to scope bootstrap selection",
+    )
+    origin_session_id: Optional[str] = Field(
+        default=None,
+        description="Optional upstream chat or flow session identifier used to scope bootstrap selection",
+    )
     curator_id: Optional[str] = Field(
         default=None,
         description="Curator who should own the bootstrapped session",
@@ -1442,6 +1454,14 @@ class CurationDocumentBootstrapResponse(CurationWorkspaceBaseModel):
         description="Whether the bootstrap created a new session instead of refreshing one"
     )
     session: CurationReviewSession = Field(description="Created or refreshed review session payload")
+
+
+class CurationDocumentBootstrapAvailabilityResponse(CurationWorkspaceBaseModel):
+    """Response contract for document bootstrap availability checks."""
+
+    eligible: bool = Field(
+        description="Whether a matching persisted curation prep result exists for bootstrap"
+    )
 
 
 class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
@@ -1865,6 +1885,7 @@ __all__ = [
     "CurationCandidateValidationResponse",
     "CurationDateRange",
     "CurationDocumentBootstrapRequest",
+    "CurationDocumentBootstrapAvailabilityResponse",
     "CurationDocumentBootstrapResponse",
     "CurationDocumentRef",
     "CurationDraft",

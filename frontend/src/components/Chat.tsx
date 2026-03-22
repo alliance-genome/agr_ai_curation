@@ -11,9 +11,15 @@ import {
   runCurationPrep,
   type CurationPrepPreview,
 } from '@/features/curation/services/curationPrepService'
+import {
+  openCurationWorkspace,
+  type CurationWorkspaceLaunchTarget,
+} from '@/features/curation/navigation/openCurationWorkspace'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
+import { emitGlobalToast } from '@/lib/globalNotifications'
+import { useNavigate } from 'react-router-dom'
 
 // localStorage key for chat messages (shared with HomePage)
 const CHAT_MESSAGES_KEY = 'chat-messages'
@@ -26,6 +32,7 @@ interface Message {
   traceIds?: string[]
   type?: 'text' | 'file_download'  // Message type for special rendering
   fileData?: FileInfo              // File info for file_download type
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
 }
 
 // Type for serialized messages (timestamp as string)
@@ -37,6 +44,7 @@ interface SerializedMessage {
   traceIds?: string[]
   type?: 'text' | 'file_download'
   fileData?: FileInfo
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
 }
 
 interface ActiveDocument {
@@ -91,6 +99,26 @@ interface ChatProps {
 interface StoredChatData {
   session_id: string | null
   messages: SerializedMessage[]
+}
+
+function withUpdatedReviewAndCurateSessionId(
+  messages: Message[],
+  messageId: string,
+  sessionId: string
+): Message[] {
+  return messages.map((message) => {
+    if (message.id !== messageId || !message.reviewAndCurateTarget) {
+      return message
+    }
+
+    return {
+      ...message,
+      reviewAndCurateTarget: {
+        ...message.reviewAndCurateTarget,
+        sessionId,
+      },
+    }
+  })
 }
 
 function shouldShowCurationDbWarning(status?: string | null): boolean {
@@ -160,6 +188,7 @@ function Chat({
   isLoading,
   sendMessage
 }: ChatProps) {
+  const navigate = useNavigate()
   // Initialize messages from localStorage if available
   const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(propSessionId))
   const [inputMessage, setInputMessage] = useState('')
@@ -917,6 +946,34 @@ function Chat({
     }
   }
 
+  const handleOpenCurationWorkspace = useCallback(
+    async (
+      target: CurationWorkspaceLaunchTarget,
+      options?: { messageId?: string }
+    ) => {
+      try {
+        const sessionId = await openCurationWorkspace({
+          ...target,
+          navigate,
+        })
+
+        if (options?.messageId) {
+          const messageId = options.messageId
+          setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
+        }
+
+        return sessionId
+      } catch (error) {
+        emitGlobalToast({
+          message: error instanceof Error ? error.message : 'Failed to open the curation workspace.',
+          severity: 'error',
+        })
+        return null
+      }
+    },
+    [navigate]
+  )
+
   const handleOpenPrepDialog = async () => {
     if (!propSessionId) {
       setPrepStatus({
@@ -953,7 +1010,7 @@ function Chat({
     setIsLoadingPrepPreview(false)
   }
 
-  const handleConfirmPrep = async () => {
+  const handleConfirmPrep = useCallback(async () => {
     if (!propSessionId || !prepPreview) {
       setPrepDialogError('Curation scope is not available yet.')
       return
@@ -977,13 +1034,41 @@ function Chat({
       const warningText = result.warnings.length > 0
         ? ` Warnings: ${result.warnings.join(' ')}`
         : ''
+      const prepSummary = `${result.summary_text}${warningText}`.trim()
+      const targetDocumentId = activeDocument?.id ?? null
+      const reviewAndCurateTarget = targetDocumentId
+        ? {
+            documentId: targetDocumentId,
+            originSessionId: propSessionId,
+            adapterKeys: result.adapter_keys,
+            profileKeys: result.profile_keys,
+            domainKeys: result.domain_keys,
+          }
+        : null
+      const prepMessageId = `prep-${Date.now()}`
 
-      setPrepStatus({
-        kind: 'success',
-        message: `${result.summary_text}${warningText}`.trim(),
-      })
+      setPrepStatus(null)
       setPrepDialogOpen(false)
       setPrepPreview(null)
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: prepSummary,
+          timestamp: new Date(),
+          id: prepMessageId,
+          reviewAndCurateTarget,
+        },
+      ])
+
+      if (reviewAndCurateTarget) {
+        void handleOpenCurationWorkspace(reviewAndCurateTarget, { messageId: prepMessageId })
+      } else {
+        emitGlobalToast({
+          message: 'Curation prep completed, but there is no active document to review.',
+          severity: 'warning',
+        })
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to prepare curation scope.'
       setPrepDialogError(message)
@@ -994,7 +1079,7 @@ function Chat({
     } finally {
       setIsPreparingCuration(false)
     }
-  }
+  }, [activeDocument?.id, handleOpenCurationWorkspace, prepPreview, propSessionId])
 
   const handleResetConversation = async () => {
     if (!window.confirm('Are you sure you want to reset the chat? This will clear all messages and conversation memory.')) {
@@ -1533,6 +1618,15 @@ function Chat({
                   messageContent={message.content}
                   traceId={message.traceIds && message.traceIds.length > 0 ? message.traceIds[message.traceIds.length - 1] : undefined}
                   onFeedbackClick={() => handleFeedbackClick(message.content, message.traceIds)}
+                  reviewAndCurateTarget={message.reviewAndCurateTarget}
+                  onReviewAndCurateOpened={(sessionId) => {
+                    const messageId = message.id
+                    if (!messageId) {
+                      return
+                    }
+
+                    setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
+                  }}
                 />
               ) : (
                 <button

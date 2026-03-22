@@ -1,6 +1,7 @@
 """Unit tests for curation workspace prep endpoints."""
 
 import pytest
+from uuid import uuid4
 
 from src.api import curation_workspace as module
 from src.schemas.curation_prep import (
@@ -9,10 +10,12 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationEvidenceRecomputeRequest,
     CurationEvidenceResolveRequest,
     CurationManualEvidenceCreateRequest,
+    CurationSavedViewCreateRequest,
     CurationSessionCreateRequest,
     EvidenceAnchor,
     EvidenceAnchorKind,
@@ -137,6 +140,108 @@ async def test_post_review_session_propagates_missing_document_error(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_get_saved_views_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+    db = object()
+
+    def _list_saved_views(db, *, current_user_id):
+        captured["db"] = db
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "list_saved_view_records", _list_saved_views)
+
+    response = await module.get_saved_views(
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "current_user_id": "user-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_saved_view_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+    db = object()
+
+    def _create_saved_view(db, request, *, current_user_id):
+        captured["db"] = db
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "create_saved_view_record", _create_saved_view)
+
+    request = CurationSavedViewCreateRequest(
+        name="My pending sessions",
+        filters={},
+        sort_by="prepared_at",
+        sort_direction="desc",
+    )
+
+    response = await module.post_saved_view(
+        request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured["db"] is db
+    assert captured["request"] == request
+    assert captured["current_user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_delete_saved_view_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+    db = object()
+
+    def _delete_saved_view(db, view_id, *, current_user_id):
+        captured["db"] = db
+        captured["view_id"] = view_id
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "delete_saved_view_record", _delete_saved_view)
+
+    view_id = uuid4()
+    response = await module.delete_saved_view(
+        view_id,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured["db"] is db
+    assert captured["view_id"] == view_id
+    assert captured["current_user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_get_saved_views_requires_user_id(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module.get_saved_views(
+            user={"email": "user@example.org"},
+            db=object(),
+        )
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "User identifier not found in token"
+
+
+@pytest.mark.asyncio
 async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatch):
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
     expected = object()
@@ -155,6 +260,8 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
         adapter_key="reference_adapter",
         profile_key="primary",
         domain_key="entity",
+        flow_run_id="flow-7",
+        origin_session_id="chat-session-7",
         curator_id="curator-2",
     )
     db = object()
@@ -202,6 +309,46 @@ async def test_post_document_bootstrap_propagates_no_extraction_results_error(mo
     assert exc.value.detail == (
         "No persisted curation prep extraction results were found for document document-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = CurationDocumentBootstrapAvailabilityResponse(eligible=True)
+    captured: dict[str, object] = {}
+
+    def _get_document_bootstrap_availability(document_id, request, *, db):
+        captured["document_id"] = document_id
+        captured["request"] = request
+        captured["db"] = db
+        return expected
+
+    monkeypatch.setattr(
+        module,
+        "get_document_bootstrap_availability",
+        _get_document_bootstrap_availability,
+    )
+
+    db = object()
+    response = await module.get_document_bootstrap_status(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            adapter_key="reference_adapter",
+            flow_run_id="flow-7",
+        ),
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response == expected
+    assert captured == {
+        "document_id": "document-1",
+        "request": CurationDocumentBootstrapRequest(
+            adapter_key="reference_adapter",
+            flow_run_id="flow-7",
+        ),
+        "db": db,
+    }
 
 
 @pytest.mark.asyncio

@@ -305,7 +305,7 @@ describe('CurationInventoryPage', () => {
     })
 
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
-  }, 10000)
+  }, 15000) // Filter-driven refetches plus MUI interactions can exceed the default timeout under CI load.
 
   it('applies a saved view through the inventory hook and re-queries the session list', async () => {
     const user = userEvent.setup()

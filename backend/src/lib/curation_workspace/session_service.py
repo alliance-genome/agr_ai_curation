@@ -312,6 +312,20 @@ def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
     if filters.flow_run_id:
         statement = statement.where(ReviewSessionModel.flow_run_id == filters.flow_run_id)
 
+    if filters.origin_session_id:
+        statement = statement.where(
+            exists(
+                select(1)
+                .select_from(CurationCandidate)
+                .join(
+                    ExtractionResultModel,
+                    CurationCandidate.extraction_result_id == ExtractionResultModel.id,
+                )
+                .where(CurationCandidate.session_id == ReviewSessionModel.id)
+                .where(ExtractionResultModel.origin_session_id == filters.origin_session_id)
+            )
+        )
+
     if filters.document_id:
         statement = statement.where(
             ReviewSessionModel.document_id == _normalize_uuid(

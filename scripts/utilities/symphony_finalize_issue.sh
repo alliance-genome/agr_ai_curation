@@ -19,6 +19,9 @@ Options:
   --cleanup-max-attempts N     Max attempts for pre-cleanup (default: 2)
   --dry-run                    Do not merge; report intended actions
   --pr-json-file PATH          Test fixture override for `gh pr list` JSON
+  --pr-view-json-file PATH     Test fixture override for `gh pr view` JSON
+  --max-conflict-bounces N     Max Finalizing->In Progress bounces before Blocked (default: 1)
+  --conflict-bounce-count N    Current bounce count (caller tracks via Linear history)
 EOF
 }
 
@@ -33,6 +36,9 @@ cleanup_script=""
 cleanup_max_attempts=2
 dry_run=0
 pr_json_file=""
+pr_view_json_file=""
+max_conflict_bounces=1
+conflict_bounce_count=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,6 +84,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pr-json-file)
       pr_json_file="${2:-}"
+      shift 2
+      ;;
+    --pr-view-json-file)
+      pr_view_json_file="${2:-}"
+      shift 2
+      ;;
+    --max-conflict-bounces)
+      max_conflict_bounces="${2:-1}"
+      shift 2
+      ;;
+    --conflict-bounce-count)
+      conflict_bounce_count="${2:-0}"
       shift 2
       ;;
     -h|--help)
@@ -161,6 +179,83 @@ fetch_pr_json() {
   fi
 }
 
+# ── Conflict analysis helpers ──────────────────────────────────────
+
+fetch_pr_view_json() {
+  if [[ -n "${pr_view_json_file}" ]]; then
+    cat "${pr_view_json_file}"
+  else
+    local -a cmd=(gh pr view "${resolved_pr_number}" --json mergeable,mergeStateStatus,files,headRefOid,baseRefName)
+    if [[ -n "${repo}" ]]; then
+      cmd+=(--repo "${repo}")
+    fi
+    "${cmd[@]}"
+  fi
+}
+
+analyze_merge_conflict() {
+  # Returns structured conflict context via stdout.
+  # Requires: resolved_pr_number, repo, branch, workspace_dir, issue_identifier
+  local pr_view_json pr_mergeable conflicting_files sibling_info
+
+  pr_view_json="$(fetch_pr_view_json)"
+  pr_mergeable="$(printf '%s' "${pr_view_json}" | jq -r '.mergeable // ""')"
+
+  if [[ "${pr_mergeable}" != "CONFLICTING" ]]; then
+    echo "CONFLICT_DETECTED=false"
+    return 0
+  fi
+
+  echo "CONFLICT_DETECTED=true"
+
+  # Get the list of files changed in this PR
+  local pr_files
+  pr_files="$(printf '%s' "${pr_view_json}" | jq -r '[.files[]?.path // empty] | join(",")')"
+  echo "CONFLICT_PR_FILES=${pr_files}"
+
+  # Identify which files actually conflict by attempting a local merge
+  local conflict_files_list=""
+  if [[ -d "${workspace_dir}" ]]; then
+    set +e
+    git -C "${workspace_dir}" fetch origin main --quiet 2>/dev/null
+    local merge_test_output
+    merge_test_output="$(git -C "${workspace_dir}" merge --no-commit --no-ff origin/main 2>&1)"
+    local merge_test_rc=$?
+    set -e
+
+    if [[ "${merge_test_rc}" -ne 0 ]]; then
+      # Extract conflicting file paths from merge output
+      conflict_files_list="$(printf '%s\n' "${merge_test_output}" | sed -n 's/^CONFLICT.*Merge conflict in \(.*\)$/\1/p' | tr '\n' ',')"
+      conflict_files_list="${conflict_files_list%,}"  # trim trailing comma
+    fi
+    # Abort the test merge
+    git -C "${workspace_dir}" merge --abort 2>/dev/null || true
+  fi
+  echo "CONFLICT_FILES=${conflict_files_list}"
+
+  # Identify sibling ticket(s) that landed on main touching the conflicting files
+  local sibling_tickets=""
+  if [[ -n "${conflict_files_list}" && -d "${workspace_dir}" ]]; then
+    local IFS=','
+    local -a conflict_arr=( ${conflict_files_list} )
+    IFS=' '
+    # Look at recent main commits touching conflicting files, extract ticket identifiers
+    sibling_tickets="$(
+      git -C "${workspace_dir}" log origin/main --oneline -20 -- "${conflict_arr[@]}" 2>/dev/null \
+        | grep -oP 'ALL-\d+' \
+        | if [[ -n "${issue_identifier}" ]]; then grep -v "${issue_identifier}"; else cat; fi \
+        | sort -u \
+        | tr '\n' ',' || true
+    )"
+    sibling_tickets="${sibling_tickets%,}"
+  fi
+  echo "CONFLICT_SIBLING_TICKETS=${sibling_tickets}"
+
+  local base_ref
+  base_ref="$(printf '%s' "${pr_view_json}" | jq -r '.baseRefName // "main"')"
+  echo "CONFLICT_BASE_REF=${base_ref}"
+}
+
 resolve_open_pr() {
   if [[ -n "${resolved_pr_number}" ]]; then
     return 0
@@ -229,6 +324,32 @@ if [[ "${delivery_mode}" == "pr" ]]; then
     fi
 
     if [[ "${merge_rc}" -ne 0 ]]; then
+      # Analyze whether this is a merge conflict (recoverable) or something else
+      set +e
+      conflict_analysis="$(analyze_merge_conflict)"
+      set -e
+      conflict_detected="$(printf '%s\n' "${conflict_analysis}" | sed -n 's/^CONFLICT_DETECTED=//p')"
+
+      if [[ "${conflict_detected}" == "true" && "${conflict_bounce_count}" -lt "${max_conflict_bounces}" ]]; then
+        # Recoverable merge conflict — bounce to In Progress for LLM resolution
+        echo "FINALIZE_STATUS=merge_conflict"
+        echo "FINALIZE_NEXT_STATE=In Progress"
+        echo "FINALIZE_DELIVERY_MODE=${delivery_mode}"
+        echo "FINALIZE_ISSUE_IDENTIFIER=${issue_identifier}"
+        echo "FINALIZE_BRANCH=${branch}"
+        echo "FINALIZE_PR_NUMBER=${resolved_pr_number}"
+        echo "FINALIZE_PR_URL=${resolved_pr_url}"
+        echo "FINALIZE_PRE_CLEANUP_STATUS=${pre_cleanup_status}"
+        echo "FINALIZE_MERGE_OUTPUT=$(printf '%s' "${merge_output}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+        # Emit conflict details for the LLM to use in its workpad comment
+        printf '%s\n' "${conflict_analysis}"
+        cat <<INST
+FINALIZE_MESSAGE=PR #${resolved_pr_number} has merge conflicts. Write a workpad comment with the conflict details above, then move to In Progress and stop this run. The In Progress lane will handle conflict resolution.
+INST
+        exit 22
+      fi
+
+      # Non-conflict failure or bounce limit exceeded — fall through to Blocked
       echo "FINALIZE_STATUS=blocked_merge_failed"
       echo "FINALIZE_NEXT_STATE=Blocked"
       echo "FINALIZE_DELIVERY_MODE=${delivery_mode}"
