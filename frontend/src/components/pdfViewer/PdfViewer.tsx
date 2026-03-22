@@ -1718,11 +1718,17 @@ export function PdfViewer({
 
     iframe.addEventListener('load', handleLoad)
     iframe.addEventListener('error', handleError)
+
+    if (activeDocument && (iframe.contentWindow as any)?.PDFViewerApplication?.eventBus) {
+      // Recover when the iframe finished loading before this effect reattached listeners.
+      initialisePdfApplication()
+    }
+
     return () => {
       iframe.removeEventListener('load', handleLoad)
       iframe.removeEventListener('error', handleError)
     }
-  }, [initialisePdfApplication, viewerSrc, signalLoadComplete])
+  }, [activeDocument, initialisePdfApplication, viewerSrc, signalLoadComplete])
 
   useEffect(() => {
     if (activeDocument) {

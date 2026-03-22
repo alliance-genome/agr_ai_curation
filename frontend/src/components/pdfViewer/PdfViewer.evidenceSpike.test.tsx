@@ -602,6 +602,78 @@ describe('PDF evidence spike helpers', () => {
     expect(screen.getByText('Section fallback')).toBeInTheDocument()
   })
 
+  it('recovers typed navigation when the viewer is ready before the iframe load listener reattaches', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(null, {
+        status: 200,
+      }),
+    )
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'section',
+        locator_quality: 'section_only',
+        supports_decision: 'supports',
+        snippet_text: 'Snippet text exists but should not be used as a typed quote-search fallback.',
+        normalized_text: 'Snippet text exists but should not be used as a typed quote-search fallback.',
+        viewer_search_text: null,
+        page_number: 4,
+        section_title: 'Results',
+        subsection_title: 'Quantification',
+        chunk_ids: ['chunk-3'],
+      },
+      searchText: null,
+      pageNumber: 4,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    const { eventBus } = installMockPdfViewer((query) => {
+      if (query === 'Results') {
+        return {
+          state: 0,
+          total: 1,
+          current: 1,
+          pageIdx: 3,
+        }
+      }
+
+      return {
+        state: 1,
+        total: 0,
+        current: 0,
+        pageIdx: null,
+      }
+    })
+
+    dispatchPDFDocumentChanged('doc-4-race', '/fixtures/sample.pdf', 'degraded-race.pdf', 12)
+    await waitFor(() => {
+      expect(screen.getByText('degraded-race.pdf')).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual(['Results'])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'section-fallback',
+      locatorQuality: 'section_only',
+      degraded: true,
+      matchedQuery: 'Results',
+      matchedPage: 4,
+    }))
+  })
+
   it('re-biases each retry to the hinted page and reports section fallback when quote search fails', async () => {
     vi.mocked(global.fetch).mockResolvedValue(
       new Response(null, {
