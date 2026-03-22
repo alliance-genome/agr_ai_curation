@@ -116,6 +116,7 @@ ensure_one "${local_source_root}/scripts/utilities/symphony_human_review_prep.sh
 ensure_one "${local_source_root}/scripts/utilities/symphony_ready_for_pr.sh" "scripts/utilities/symphony_ready_for_pr.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_loop.sh" "scripts/utilities/symphony_claude_review_loop.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_review.sh" "scripts/utilities/symphony_in_review.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_in_progress.sh" "scripts/utilities/symphony_in_progress.sh" "0755" "required"
 # Legacy scripts kept for backward compatibility until all workspaces update
 ensure_one "${local_source_root}/scripts/utilities/symphony_request_claude_rereview.sh" "scripts/utilities/symphony_request_claude_rereview.sh" "0755" "optional"
 ensure_one "${local_source_root}/scripts/utilities/symphony_wait_for_claude_review.sh" "scripts/utilities/symphony_wait_for_claude_review.sh" "0755" "optional"
