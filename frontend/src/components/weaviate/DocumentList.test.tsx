@@ -12,10 +12,18 @@ vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
 }));
 
-vi.mock('@/features/curation/navigation/openCurationWorkspace', () => ({
-  getCurationWorkspaceLaunchAvailability: (options: unknown) => getCurationWorkspaceLaunchAvailabilityMock(options),
-  openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
-}));
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace'
+  );
+
+  return {
+    ...actual,
+    getCurationWorkspaceLaunchAvailability: (options: unknown) =>
+      getCurationWorkspaceLaunchAvailabilityMock(options),
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  };
+});
 
 vi.mock('../../services/weaviate', async () => {
   const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
