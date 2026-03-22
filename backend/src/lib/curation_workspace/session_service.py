@@ -651,7 +651,6 @@ def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPaylo
         warnings=list(record.warnings or []),
     )
 
-
 def build_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
     """Public evidence-record serializer shared across curation workspace services."""
 
@@ -884,7 +883,6 @@ def build_action_log_entry(
 
     return _action_log_entry(record)
 
-
 def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
     if candidate.draft is None:
         raise HTTPException(
@@ -959,8 +957,6 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         last_reviewed_at=candidate.last_reviewed_at,
         metadata=dict(candidate.candidate_metadata or {}),
     )
-
-
 def _page_info(*, page: int, page_size: int, total_items: int) -> CurationPageInfo:
     total_pages = ceil(total_items / page_size) if total_items else 0
     return CurationPageInfo(

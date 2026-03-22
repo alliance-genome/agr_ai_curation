@@ -26,12 +26,12 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession as ReviewSessionModel,
 )
 from src.lib.curation_workspace.session_service import (
-    _action_log_entry,
-    _actor_claims_payload,
-    _evidence_record,
-    _normalize_uuid,
+    build_action_log_entry,
+    build_actor_claims_payload,
+    build_evidence_record,
     get_candidate_detail,
     get_session_detail,
+    normalize_uuid,
 )
 from src.schemas.curation_prep import CurationPrepCandidate
 from src.schemas.curation_workspace import (
@@ -113,7 +113,7 @@ def recompute_evidence(
         ),
         action_type=CurationActionType.EVIDENCE_RECOMPUTED,
         actor_type=CurationActorType.USER,
-        actor=_actor_claims_payload(actor_claims),
+        actor=build_actor_claims_payload(actor_claims),
         occurred_at=now,
         changed_field_keys=_dedupe_strings(changed_field_keys),
         evidence_anchor_ids=[str(row.id) for row in updated_rows],
@@ -132,8 +132,8 @@ def recompute_evidence(
 
     response = CurationEvidenceRecomputeResponse(
         session=get_session_detail(db, session.id),
-        updated_evidence_records=[_evidence_record(row) for row in updated_rows],
-        action_log_entry=_action_log_entry(action_log_row),
+        updated_evidence_records=[build_evidence_record(row) for row in updated_rows],
+        action_log_entry=build_action_log_entry(action_log_row),
     )
     db.commit()
     return response
@@ -201,7 +201,7 @@ def create_manual_evidence(
         draft_id=candidate.draft.id if candidate.draft is not None else None,
         action_type=CurationActionType.EVIDENCE_MANUAL_ADDED,
         actor_type=CurationActorType.USER,
-        actor=_actor_claims_payload(actor_claims),
+        actor=build_actor_claims_payload(actor_claims),
         occurred_at=now,
         changed_field_keys=field_keys,
         evidence_anchor_ids=[str(evidence_row.id)],
@@ -216,9 +216,9 @@ def create_manual_evidence(
     db.flush()
 
     response = CurationManualEvidenceCreateResponse(
-        evidence_record=_evidence_record(evidence_row),
+        evidence_record=build_evidence_record(evidence_row),
         candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
-        action_log_entry=_action_log_entry(action_log_row),
+        action_log_entry=build_action_log_entry(action_log_row),
     )
     db.commit()
     return response
@@ -306,7 +306,7 @@ def resolve_evidence(
     db.flush()
 
     response = CurationEvidenceResolveResponse(
-        evidence_record=_evidence_record(evidence_row),
+        evidence_record=build_evidence_record(evidence_row),
         candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
     )
     db.commit()
@@ -314,7 +314,7 @@ def resolve_evidence(
 
 
 def _load_session_for_mutation(db: Session, session_id: str | UUID) -> ReviewSessionModel:
-    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_session_id = normalize_uuid(session_id, field_name="session_id")
     session = db.scalars(
         select(ReviewSessionModel)
         .where(ReviewSessionModel.id == normalized_session_id)
@@ -332,7 +332,7 @@ def _candidate_in_session(
     session: ReviewSessionModel,
     candidate_id: str | UUID,
 ) -> CandidateModel:
-    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    normalized_candidate_id = normalize_uuid(candidate_id, field_name="candidate_id")
     for candidate in session.candidates:
         if candidate.id == normalized_candidate_id:
             return candidate
