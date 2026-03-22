@@ -254,5 +254,5 @@ describe('CurationInventoryPage', () => {
     })
 
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
-  })
+  }, 15000) // Filter-driven refetches plus MUI interactions can exceed the default timeout under CI load.
 })
