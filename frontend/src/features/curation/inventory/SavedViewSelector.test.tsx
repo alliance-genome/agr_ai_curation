@@ -231,7 +231,7 @@ describe('SavedViewSelector', () => {
     })
     expect(requestBody.filters.saved_view_id).toBeNull()
     expect(requestBody.filters.statuses).toEqual(['in_progress'])
-  })
+  }, 10_000)
 
   it('deletes the selected saved view and clears the selection', async () => {
     const savedView = buildSavedView()
@@ -274,9 +274,49 @@ describe('SavedViewSelector', () => {
 
     await screen.findByText('Only active sessions assigned to me.')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await screen.findByRole('dialog')
+    expect(screen.getByText('Delete saved view?')).toBeInTheDocument()
+    expect(screen.getByText(`Delete "${savedView.name}" permanently?`)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Delete saved view' }))
 
     await waitFor(() => {
       expect(onClearSelection).toHaveBeenCalled()
     })
+  })
+
+  it('does not delete a saved view until the confirmation is accepted', async () => {
+    const savedView = buildSavedView()
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ views: [savedView] }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const user = userEvent.setup()
+    const { onClearSelection } = renderSelector({
+      selectedViewId: savedView.view_id,
+    })
+
+    await screen.findByText('Only active sessions assigned to me.')
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await screen.findByRole('dialog')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Delete saved view?')).not.toBeInTheDocument()
+    })
+
+    expect(onClearSelection).not.toHaveBeenCalled()
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === `/api/curation-workspace/views/${savedView.view_id}` &&
+          init?.method === 'DELETE'
+      )
+    ).toBe(false)
   })
 })

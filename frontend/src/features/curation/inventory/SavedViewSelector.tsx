@@ -67,6 +67,7 @@ export default function SavedViewSelector({
   const createViewMutation = useCreateCurationSavedView()
   const deleteViewMutation = useDeleteCurationSavedView()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [descriptionInput, setDescriptionInput] = useState('')
   const [isDefault, setIsDefault] = useState(false)
@@ -94,6 +95,14 @@ export default function SavedViewSelector({
 
     setIsDialogOpen(false)
     resetDialogState()
+  }
+
+  function handleDeleteDialogClose() {
+    if (deleteViewMutation.isPending) {
+      return
+    }
+
+    setIsDeleteDialogOpen(false)
   }
 
   async function handleSaveCurrentView() {
@@ -131,6 +140,7 @@ export default function SavedViewSelector({
 
     try {
       await deleteViewMutation.mutateAsync(selectedViewId)
+      setIsDeleteDialogOpen(false)
       onClearSelection()
     } catch {
       // React Query keeps the mutation error for display.
@@ -190,7 +200,8 @@ export default function SavedViewSelector({
           color="inherit"
           disabled={!selectedViewId || deleteViewMutation.isPending}
           onClick={() => {
-            void handleDeleteSelectedView()
+            setLocalError(null)
+            setIsDeleteDialogOpen(true)
           }}
           startIcon={
             deleteViewMutation.isPending ? <CircularProgress size={14} /> : <DeleteOutlineIcon />
@@ -258,6 +269,40 @@ export default function SavedViewSelector({
             variant="contained"
           >
             {createViewMutation.isPending ? 'Saving...' : 'Save view'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="xs"
+        onClose={handleDeleteDialogClose}
+        open={isDeleteDialogOpen}
+      >
+        <DialogTitle>Delete saved view?</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            <Typography color="text.secondary" variant="body2">
+              {selectedView
+                ? `Delete "${selectedView.name}" permanently?`
+                : 'Delete this saved view permanently?'}
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              This action cannot be undone.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteDialogClose}>Cancel</Button>
+          <Button
+            color="error"
+            disabled={deleteViewMutation.isPending || !selectedViewId}
+            onClick={() => {
+              void handleDeleteSelectedView()
+            }}
+            variant="contained"
+          >
+            {deleteViewMutation.isPending ? 'Deleting...' : 'Delete saved view'}
           </Button>
         </DialogActions>
       </Dialog>
