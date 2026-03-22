@@ -117,6 +117,9 @@ ensure_one "${local_source_root}/scripts/utilities/symphony_ready_for_pr.sh" "sc
 ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_loop.sh" "scripts/utilities/symphony_claude_review_loop.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_review.sh" "scripts/utilities/symphony_in_review.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_progress.sh" "scripts/utilities/symphony_in_progress.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_context.sh" "scripts/utilities/symphony_linear_issue_context.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_linear_workpad.sh" "scripts/utilities/symphony_linear_workpad.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_state.sh" "scripts/utilities/symphony_linear_issue_state.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_finalize_issue.sh" "scripts/utilities/symphony_finalize_issue.sh" "0755" "required"
 # Legacy scripts kept for backward compatibility until all workspaces update
 ensure_one "${local_source_root}/scripts/utilities/symphony_request_claude_rereview.sh" "scripts/utilities/symphony_request_claude_rereview.sh" "0755" "optional"
@@ -127,6 +130,7 @@ ensure_one "${local_source_root}/scripts/utilities/symphony_local_db_tunnel_stat
 ensure_one "${local_source_root}/scripts/utilities/symphony_local_db_tunnel_stop.sh" "scripts/utilities/symphony_local_db_tunnel_stop.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_microvm_worker_run.sh" "scripts/utilities/symphony_microvm_worker_run.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/lib/local_db_tunnel_common.sh" "scripts/lib/local_db_tunnel_common.sh" "0644" "required"
+ensure_one "${local_source_root}/scripts/lib/symphony_linear_common.sh" "scripts/lib/symphony_linear_common.sh" "0644" "required"
 
 # Helpful but not strictly required for every lane.
 ensure_one "${local_source_root}/docker-compose.yml" "docker-compose.yml" "0644" "optional"

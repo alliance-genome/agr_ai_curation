@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
+
 # =============================================================================
 # symphony_in_review.sh
 #
@@ -26,6 +30,7 @@ Options:
   --review-author VALUE      GitHub login for PR review comments (default: claude)
   --linear-api-key VALUE     Linear API key (default: from ~/.linear/api_key.txt)
   --output-file PATH         Write the review brief to this file (default: stdout)
+  --context-json-file PATH   Test/debug override for normalized issue context JSON
   --pr-json-file PATH        Test fixture override for `gh pr list` JSON
   --pr-comments-file PATH    Test fixture override for `gh pr view` JSON (comments)
   --linear-json-file PATH    Test fixture override for Linear issue JSON
@@ -38,6 +43,7 @@ repo=""
 review_author="claude"
 linear_api_key=""
 output_file=""
+context_json_file=""
 pr_json_file=""
 pr_comments_file=""
 linear_json_file=""
@@ -50,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --review-author) review_author="${2:-}"; shift 2 ;;
     --linear-api-key) linear_api_key="${2:-}"; shift 2 ;;
     --output-file) output_file="${2:-}"; shift 2 ;;
+    --context-json-file) context_json_file="${2:-}"; shift 2 ;;
     --pr-json-file) pr_json_file="${2:-}"; shift 2 ;;
     --pr-comments-file) pr_comments_file="${2:-}"; shift 2 ;;
     --linear-json-file) linear_json_file="${2:-}"; shift 2 ;;
@@ -69,38 +76,39 @@ fi
 
 # ── Load Linear API key ─────────────────────────────────────────────
 
-if [[ -z "${linear_api_key}" ]]; then
-  local_key_file="${HOME}/.linear/api_key.txt"
-  if [[ -f "${local_key_file}" ]]; then
-    linear_api_key="$(tr -d '[:space:]' < "${local_key_file}")"
+resolve_context_json_file() {
+  if [[ -n "${context_json_file}" ]]; then
+    printf '%s' "${context_json_file}"
+    return 0
   fi
-fi
 
-if [[ -z "${linear_api_key}" && -z "${linear_json_file}" ]]; then
+  local temp_context
+  local -a cmd
+  temp_context="$(mktemp /tmp/symphony-in-review-context-XXXXXX.json)"
+  cmd=(bash "${CONTEXT_HELPER}" --issue-identifier "${issue_identifier}" --json-output-file "${temp_context}")
+  if [[ -n "${linear_json_file}" ]]; then
+    cmd+=(--linear-json-file "${linear_json_file}")
+  elif [[ -n "${linear_api_key}" ]]; then
+    cmd+=(--linear-api-key "${linear_api_key}")
+  fi
+
+  if ! "${cmd[@]}" >/dev/null 2>&1; then
+    rm -f "${temp_context}"
+    return 1
+  fi
+
+  printf '%s' "${temp_context}"
+}
+
+if ! context_json_file="$(resolve_context_json_file)"; then
   echo "IN_REVIEW_STATUS=error"
-  echo "IN_REVIEW_ERROR=No Linear API key found. Set --linear-api-key or create ~/.linear/api_key.txt"
+  echo "IN_REVIEW_ERROR=Could not fetch Linear issue ${issue_identifier}"
   exit 2
 fi
 
-# ── Fetch Linear issue data ─────────────────────────────────────────
+context_json="$(cat "${context_json_file}")"
 
-fetch_linear_json() {
-  if [[ -n "${linear_json_file}" ]]; then
-    cat "${linear_json_file}"
-    return
-  fi
-
-  curl -s https://api.linear.app/graphql \
-    -H "Authorization: ${linear_api_key}" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg id "${issue_identifier}" \
-      '{query: ("query { issue(id: \"" + $id + "\") { identifier title description url state { name } labels { nodes { name } } comments(first: 50) { nodes { createdAt updatedAt body user { name } } } } }")}')"
-}
-
-linear_json="$(fetch_linear_json)"
-
-# Validate we got data
-issue_title="$(printf '%s' "${linear_json}" | jq -r '.data.issue.title // empty')"
+issue_title="$(printf '%s' "${context_json}" | jq -r '.issue.title // empty')"
 if [[ -z "${issue_title}" ]]; then
   echo "IN_REVIEW_STATUS=error"
   echo "IN_REVIEW_ERROR=Could not fetch Linear issue ${issue_identifier}"
@@ -161,7 +169,7 @@ fi
 
 # ── Compute comment count at module level (used in brief and output) ─
 
-comment_count="$(printf '%s' "${linear_json}" | jq '.data.issue.comments.nodes | length')"
+comment_count="$(printf '%s' "${context_json}" | jq '.comments_count // 0')"
 
 # ── Build the review brief ──────────────────────────────────────────
 
@@ -169,15 +177,15 @@ build_brief() {
   echo "# Review Brief: ${issue_identifier}"
   echo ""
   echo "**Title**: ${issue_title}"
-  echo "**State**: $(printf '%s' "${linear_json}" | jq -r '.data.issue.state.name // "unknown"')"
-  echo "**URL**: $(printf '%s' "${linear_json}" | jq -r '.data.issue.url // ""')"
+  echo "**State**: $(printf '%s' "${context_json}" | jq -r '.issue.state.name // "unknown"')"
+  echo "**URL**: $(printf '%s' "${context_json}" | jq -r '.issue.url // ""')"
   echo ""
 
   # Section 1: Issue description
   echo "## 1. Issue Description"
   echo ""
   local description
-  description="$(printf '%s' "${linear_json}" | jq -r '.data.issue.description // "No description provided."')"
+  description="$(printf '%s' "${context_json}" | jq -r '.issue.description // "No description provided."')"
   echo "${description}"
   echo ""
 
@@ -189,11 +197,11 @@ build_brief() {
     echo "No comments on this issue."
     echo ""
   else
-    printf '%s' "${linear_json}" | jq -r '
-      .data.issue.comments.nodes
-      | sort_by(.createdAt)
+    printf '%s' "${context_json}" | jq -r '
+      .comments
+      | sort_by(.created_at)
       | to_entries[]
-      | "### Comment \(.key + 1) — \(.value.user.name // "Unknown") (\(.value.createdAt // "unknown time"))\n\n\(.value.body)\n"
+      | "### Comment \(.key + 1) — \(.value.user_name // "Unknown") (\(.value.created_at // "unknown time"))\n\n\(.value.body)\n"
     '
   fi
 

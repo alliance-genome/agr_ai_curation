@@ -55,6 +55,9 @@ EOF
   cat > "${source_root}/scripts/lib/local_db_tunnel_common.sh" <<'EOF'
 common-v1
 EOF
+  cat > "${source_root}/scripts/lib/symphony_linear_common.sh" <<'EOF'
+symphony-linear-common-v1
+EOF
 
   for helper in \
     symphony_pre_merge_cleanup.sh \
@@ -63,9 +66,15 @@ EOF
     symphony_human_review_prep.sh \
     symphony_ready_for_pr.sh \
     symphony_claude_review_loop.sh \
+    symphony_in_review.sh \
+    symphony_in_progress.sh \
+    symphony_finalize_issue.sh \
     symphony_request_claude_rereview.sh \
     symphony_wait_for_claude_review.sh \
     symphony_claude_review_rounds.sh \
+    symphony_linear_issue_context.sh \
+    symphony_linear_workpad.sh \
+    symphony_linear_issue_state.sh \
     symphony_local_db_tunnel_start.sh \
     symphony_local_db_tunnel_status.sh \
     symphony_local_db_tunnel_stop.sh \
@@ -106,7 +115,7 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=20" "${output}"
+  assert_contains "SYNC_ENV_COPIED=27" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
@@ -151,7 +160,7 @@ EOF
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
-  assert_contains "SYNC_ENV_COPIED=18" "${output}"
+  assert_contains "SYNC_ENV_COPIED=25" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
     echo "Expected refresh mode to overwrite docker-compose.yml" >&2
     exit 1

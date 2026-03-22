@@ -77,6 +77,7 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
    - Committed to the repo and pushed to `origin/main`.
    - Synced into per-issue workspaces by `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
    - **CRITICAL**: New scripts MUST be added to the `ensure_one` manifest in `symphony_ensure_workspace_runtime.sh` or workspaces will not have them. Existing workspaces get updated on the next `before_run` hook.
+   - **CRITICAL**: After pushing to `origin/main`, you MUST also sync the VM's local source checkout. Symphony uses `SYMPHONY_LOCAL_SOURCE_ROOT` (set in `.symphony/run.sh`) which points to the VM's local checkout — NOT directly to GitHub. If the VM checkout is stale, `ensure_workspace_runtime.sh` will fail to find newly-added required scripts.
 
 2. **Gitignored orchestration files** (`.symphony/WORKFLOW.md`, `.symphony/*.sh`):
    - `.symphony/` is in `.gitignore` — these files are NOT committed to the repo.
@@ -84,12 +85,25 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
      `incus file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
    - The `ensure_workspace_runtime.sh` hook then copies them from the local source root into per-issue workspaces.
 
+**Syncing the VM checkout** (required after pushing git-tracked changes):
+```bash
+incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+  'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && git pull origin main'
+```
+After syncing, restart Symphony so the new process picks up the updated source root:
+```bash
+incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+  'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && pkill -f "./bin/symphony" || true; sleep 2; nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
+```
+
 **When adding a new Symphony lane helper**:
 1. Create the script in `scripts/utilities/symphony_<name>.sh` (git-tracked).
 2. Add an `ensure_one` line for it in `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
 3. Commit and push both files.
-4. If the script is referenced in WORKFLOW.md, update `.symphony/WORKFLOW.md` and push it to the VM.
-5. Existing workspaces pick up the new script on their next `before_run` hook execution.
+4. **Sync the VM checkout**: `git pull origin main` inside the VM (see command above).
+5. **Restart Symphony** inside the VM so the running process uses the updated source root.
+6. If the script is referenced in WORKFLOW.md, update `.symphony/WORKFLOW.md` and push it to the VM via `incus file push`.
+7. Existing workspaces pick up the new script on their next `before_run` hook execution.
 
 ## 6) Expected Change Workflow
 

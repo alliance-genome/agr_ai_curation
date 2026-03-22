@@ -2,6 +2,13 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+# shellcheck source=../lib/symphony_linear_common.sh
+source "${REPO_ROOT}/scripts/lib/symphony_linear_common.sh"
+
+CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
+
 # =============================================================================
 # symphony_in_progress.sh
 #
@@ -27,6 +34,7 @@ Options:
   --review-author VALUE      GitHub login for PR review comments (default: claude)
   --linear-api-key VALUE     Linear API key (default: from ~/.linear/api_key.txt)
   --output-file PATH         Write the brief to this file (default: temp file)
+  --context-json-file PATH   Test/debug override for normalized issue context JSON
   --linear-json-file PATH    Test fixture override for Linear issue JSON
   --history-json-file PATH   Test fixture override for Linear history JSON
   --pr-json-file PATH        Test fixture override for gh pr list JSON
@@ -40,6 +48,7 @@ repo=""
 review_author="claude"
 linear_api_key=""
 output_file=""
+context_json_file=""
 linear_json_file=""
 history_json_file=""
 pr_json_file=""
@@ -53,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --review-author) review_author="${2:-}"; shift 2 ;;
     --linear-api-key) linear_api_key="${2:-}"; shift 2 ;;
     --output-file) output_file="${2:-}"; shift 2 ;;
+    --context-json-file) context_json_file="${2:-}"; shift 2 ;;
     --linear-json-file) linear_json_file="${2:-}"; shift 2 ;;
     --history-json-file) history_json_file="${2:-}"; shift 2 ;;
     --pr-json-file) pr_json_file="${2:-}"; shift 2 ;;
@@ -73,52 +83,60 @@ fi
 
 # ── Load Linear API key ─────────────────────────────────────────────
 
-if [[ -z "${linear_api_key}" ]]; then
-  local_key_file="${HOME}/.linear/api_key.txt"
-  if [[ -f "${local_key_file}" ]]; then
-    linear_api_key="$(tr -d '[:space:]' < "${local_key_file}")"
+resolve_context_json_file() {
+  if [[ -n "${context_json_file}" ]]; then
+    printf '%s' "${context_json_file}"
+    return 0
   fi
-fi
 
-if [[ -z "${linear_api_key}" ]] && { [[ -z "${linear_json_file}" ]] || [[ -z "${history_json_file}" ]]; }; then
+  local temp_context temp_linear merged_raw
+  local -a cmd
+  temp_context="$(mktemp /tmp/symphony-in-progress-context-XXXXXX.json)"
+  cmd=(bash "${CONTEXT_HELPER}" --issue-identifier "${issue_identifier}" --include-history --json-output-file "${temp_context}")
+
+  if [[ -n "${linear_json_file}" || -n "${history_json_file}" ]]; then
+    if [[ -z "${linear_json_file}" || -z "${history_json_file}" ]]; then
+      echo "Both --linear-json-file and --history-json-file are required together." >&2
+      rm -f "${temp_context}"
+      return 1
+    fi
+
+    temp_linear="$(mktemp /tmp/symphony-in-progress-linear-raw-XXXXXX.json)"
+    merged_raw="$(jq -n \
+      --slurpfile issue "${linear_json_file}" \
+      --slurpfile history "${history_json_file}" '
+      {
+        data: {
+          issue: (
+            ($issue[0].data.issue // {})
+            + {history: (($history[0].data.issue.history // {nodes: []}))}
+          )
+        }
+      }')"
+    printf '%s\n' "${merged_raw}" > "${temp_linear}"
+    cmd+=(--linear-json-file "${temp_linear}")
+  elif [[ -n "${linear_api_key}" ]]; then
+    cmd+=(--linear-api-key "${linear_api_key}")
+  fi
+
+  if ! "${cmd[@]}" >/dev/null 2>&1; then
+    rm -f "${temp_context}" "${temp_linear:-}"
+    return 1
+  fi
+
+  rm -f "${temp_linear:-}"
+  printf '%s' "${temp_context}"
+}
+
+if ! context_json_file="$(resolve_context_json_file)"; then
   echo "IN_PROGRESS_STATUS=error"
-  echo "IN_PROGRESS_ERROR=No Linear API key found. Set --linear-api-key or create ~/.linear/api_key.txt"
+  echo "IN_PROGRESS_ERROR=Could not fetch Linear issue ${issue_identifier}"
   exit 2
 fi
 
-# ── Fetch Linear issue data ─────────────────────────────────────────
+context_json="$(cat "${context_json_file}")"
 
-fetch_linear_json() {
-  if [[ -n "${linear_json_file}" ]]; then
-    cat "${linear_json_file}"
-    return
-  fi
-
-  curl -s https://api.linear.app/graphql \
-    -H "Authorization: ${linear_api_key}" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg id "${issue_identifier}" \
-      '{query: ("query { issue(id: \"" + $id + "\") { identifier title description url state { name } labels { nodes { name } } comments(first: 50) { nodes { createdAt updatedAt body user { name } } } } }")}')"
-}
-
-fetch_history_json() {
-  if [[ -n "${history_json_file}" ]]; then
-    cat "${history_json_file}"
-    return
-  fi
-
-  curl -s https://api.linear.app/graphql \
-    -H "Authorization: ${linear_api_key}" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg id "${issue_identifier}" \
-      '{query: ("query { issue(id: \"" + $id + "\") { history(first: 50) { nodes { createdAt fromState { name } toState { name } } } } }")}')"
-}
-
-linear_json="$(fetch_linear_json)"
-history_json="$(fetch_history_json)"
-
-# Validate we got data
-issue_title="$(printf '%s' "${linear_json}" | jq -r '.data.issue.title // empty')"
+issue_title="$(printf '%s' "${context_json}" | jq -r '.issue.title // empty')"
 if [[ -z "${issue_title}" ]]; then
   echo "IN_PROGRESS_STATUS=error"
   echo "IN_PROGRESS_ERROR=Could not fetch Linear issue ${issue_identifier}"
@@ -128,13 +146,13 @@ fi
 # ── Detect entry context from history ────────────────────────────────
 
 # Find the most recent transition INTO "In Progress" and what state it came from
-entry_context="$(printf '%s' "${history_json}" | jq -r '
-  [.data.issue.history.nodes[]
-   | select(.toState.name == "In Progress" and .fromState != null)]
-  | sort_by(.createdAt)
+entry_context="$(printf '%s' "${context_json}" | jq -r '
+  [.history[]
+   | select(.to_state.name == "In Progress" and .from_state != null)]
+  | sort_by(.created_at)
   | last
-  // {fromState: {name: "unknown"}, createdAt: "unknown"}
-  | {from: .fromState.name, at: .createdAt}
+  // {from_state: {name: "unknown"}, created_at: "unknown"}
+  | {from: .from_state.name, at: .created_at}
   | "\(.from)|\(.at)"
 ')"
 
@@ -142,9 +160,9 @@ entry_from="$(echo "${entry_context}" | cut -d'|' -f1)"
 entry_at="$(echo "${entry_context}" | cut -d'|' -f2)"
 
 # Count how many times it's been in In Progress (to detect first vs bounce)
-in_progress_count="$(printf '%s' "${history_json}" | jq '
-  [.data.issue.history.nodes[]
-   | select(.toState.name == "In Progress" and .fromState != null)]
+in_progress_count="$(printf '%s' "${context_json}" | jq '
+  [.history[]
+   | select(.to_state.name == "In Progress" and .from_state != null)]
   | length
 ')"
 
@@ -230,7 +248,7 @@ fi
 
 # ── Compute comment count ────────────────────────────────────────────
 
-comment_count="$(printf '%s' "${linear_json}" | jq '.data.issue.comments.nodes | length')"
+comment_count="$(printf '%s' "${context_json}" | jq '.comments_count // 0')"
 
 # ── Build the brief ─────────────────────────────────────────────────
 
@@ -239,7 +257,7 @@ build_brief() {
   echo ""
   echo "**Title**: ${issue_title}"
   echo "**State**: In Progress"
-  echo "**URL**: $(printf '%s' "${linear_json}" | jq -r '.data.issue.url // ""')"
+  echo "**URL**: $(printf '%s' "${context_json}" | jq -r '.issue.url // ""')"
   echo ""
 
   # Section 1: Entry context
@@ -299,7 +317,7 @@ build_brief() {
   # Section 2: Issue description
   echo "## 2. Issue Description"
   echo ""
-  printf '%s' "${linear_json}" | jq -r '.data.issue.description // "No description provided."'
+  printf '%s' "${context_json}" | jq -r '.issue.description // "No description provided."'
   echo ""
 
   # Section 3: All comments
@@ -310,11 +328,11 @@ build_brief() {
     echo "No comments on this issue."
     echo ""
   else
-    printf '%s' "${linear_json}" | jq -r '
-      .data.issue.comments.nodes
-      | sort_by(.createdAt)
+    printf '%s' "${context_json}" | jq -r '
+      .comments
+      | sort_by(.created_at)
       | to_entries[]
-      | "### Comment \(.key + 1) — \(.value.user.name // "Unknown") (\(.value.createdAt // "unknown time"))\n\n\(.value.body)\n"
+      | "### Comment \(.key + 1) — \(.value.user_name // "Unknown") (\(.value.created_at // "unknown time"))\n\n\(.value.body)\n"
     '
   fi
 
