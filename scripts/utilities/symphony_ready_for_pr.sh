@@ -220,23 +220,23 @@ INST
     cat <<INST
 READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${loop_round:-1}/${loop_max:-3}). YOU MUST:
 1. Read the full Claude review report at: ${CLAUDE_REPORT_FILE}
-2. Check whether the review is non-blocking:
-   - If the overall review status is 'Approve' AND there are zero critical or warning findings,
-     the review is non-blocking. Write a short workpad note confirming this, then proceed to
-     gate GitHub checks and move to Human Review Prep. Do NOT bounce to In Progress.
+2. Check whether the review is truly clean:
+   - A review is clean ONLY if it is 'Approve' with zero findings of any kind — no critical
+     issues, no warnings, no suggestions, no improvement ideas. Pure approval with no comments.
    - If all findings in the report were already addressed in prior runs (check the workpad
      for existing 'Claude Feedback Disposition' entries), the review is already resolved.
-     Write a short workpad note confirming this, then proceed to gate GitHub checks and
-     move to Human Review Prep. Do NOT bounce to In Progress.
-3. If the review contains actionable findings (critical, warning, or non-trivial suggestions):
-   a. For EACH comment, decide: fix it, or skip it with a concrete reason.
-      Default posture: fix most suggestions. Claude is usually right about code quality,
-      missing edge cases, and style issues. Only skip if the suggestion is incorrect,
-      redundant, or clearly outside the ticket scope.
-   b. Write your decisions into the workpad as a 'Claude Feedback Disposition' section:
-      - For each comment: one line with 'fixed', 'deferred', or 'not taken' plus the reason.
+   - Only in these two cases: write a short workpad note confirming, then proceed to gate
+     GitHub checks and move to Human Review Prep. Do NOT bounce to In Progress.
+3. If the review contains ANY findings — critical, warning, suggestion, or improvement idea:
+   a. Default posture: FIX THEM. Claude suggestions improve code quality and polish.
+      Treat suggestions the same as warnings — they are work items, not optional notes.
+      Only skip a suggestion if it is factually incorrect, contradicts the ticket scope,
+      or would introduce a regression. "Non-blocking" does not mean "optional."
+   b. Write your plan into the workpad as a 'Claude Feedback Disposition' section:
+      - For each finding: one line with 'will fix' or 'not taken: <concrete reason>'.
+      - Do not use 'deferred' — either fix it now or explain why it is wrong/out of scope.
    c. Move the issue to In Progress and stop this run.
-   d. The next In Progress agent will read the workpad and the PR comments, then implement your decisions.
+   d. The next In Progress agent will read the workpad and the PR comments, then implement.
 INST
   elif [[ "${CLAUDE_STATUS}" == "maxed_out" ]]; then
     cat <<INST

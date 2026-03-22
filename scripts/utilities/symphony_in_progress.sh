@@ -272,6 +272,20 @@ build_brief() {
       echo "**Sent back from Human Review.** Chris reviewed this and sent it back."
       echo "Check the Comments section below for the latest human feedback and address it."
       ;;
+    Finalizing)
+      echo "**Bounced from Finalizing — PR merge conflict.** The PR was approved and ready"
+      echo "to merge, but another ticket landed on \`main\` first and introduced conflicts."
+      echo ""
+      echo "The finalize helper identified the conflict details and wrote them to the workpad."
+      echo "Check the Comments section below for:"
+      echo "- Which files conflict"
+      echo "- Which sibling ticket(s) caused the conflict"
+      echo "- The merge error output"
+      echo ""
+      echo "Your job: rebase this branch against \`main\`, resolve the conflicts while"
+      echo "preserving both this ticket's scope and the sibling's changes, push, and"
+      echo "move to Needs Review. Do not expand into sibling scope during resolution."
+      ;;
     *)
       echo "**Entry from: ${entry_from}** (at ${entry_at})"
       echo "Check the workpad and comments for context on why this is back in progress."
@@ -385,6 +399,11 @@ build_brief() {
     "Human Review")
       echo "5. **Address Chris's feedback** from the latest comment, push, and"
       echo "   move to Needs Review."
+      ;;
+    Finalizing)
+      echo "5. **Resolve the merge conflict**: rebase against \`main\`, resolve"
+      echo "   conflicting files using the workpad details, push, and move to"
+      echo "   Needs Review. Keep both tickets' changes — do not drop sibling work."
       ;;
     *)
       echo "5. **Address whatever caused the bounce**, push, and move to Needs Review."
