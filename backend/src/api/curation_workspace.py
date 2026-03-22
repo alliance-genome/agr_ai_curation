@@ -19,6 +19,11 @@ from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
     run_chat_curation_prep,
 )
+from src.lib.curation_workspace.evidence_service import (
+    create_manual_evidence,
+    recompute_evidence,
+    resolve_evidence,
+)
 from src.lib.curation_workspace.session_service import (
     get_next_session,
     get_session_detail,
@@ -37,8 +42,14 @@ from src.schemas.curation_workspace import (
     CurationDateRange,
     CurationDocumentBootstrapRequest,
     CurationDocumentBootstrapResponse,
+    CurationEvidenceRecomputeRequest,
+    CurationEvidenceRecomputeResponse,
+    CurationEvidenceResolveRequest,
+    CurationEvidenceResolveResponse,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
+    CurationManualEvidenceCreateRequest,
+    CurationManualEvidenceCreateResponse,
     CurationQueueNavigationDirection,
     CurationReviewSession,
     CurationSessionFilters,
@@ -222,6 +233,52 @@ async def patch_review_session(
 ) -> CurationSessionUpdateResponse:
     set_global_user_from_cognito(db, user)
     return update_session(db, session_id, request, user)
+
+
+@router.post("/evidence/recompute", response_model=CurationEvidenceRecomputeResponse)
+async def post_evidence_recompute(
+    request: CurationEvidenceRecomputeRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationEvidenceRecomputeResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+    return recompute_evidence(
+        request,
+        current_user_id=user_id,
+        actor_claims=user,
+        db=db,
+    )
+
+
+@router.post("/evidence/manual", response_model=CurationManualEvidenceCreateResponse)
+async def post_manual_evidence(
+    request: CurationManualEvidenceCreateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationManualEvidenceCreateResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return create_manual_evidence(
+        request,
+        actor_claims=user,
+        db=db,
+    )
+
+
+@router.post("/evidence/resolve", response_model=CurationEvidenceResolveResponse)
+async def post_evidence_resolve(
+    request: CurationEvidenceResolveRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationEvidenceResolveResponse:
+    set_global_user_from_cognito(db, user)
+    user_id = _require_current_user_id(user)
+    return resolve_evidence(
+        request,
+        current_user_id=user_id,
+        db=db,
+    )
 
 
 @router.post(

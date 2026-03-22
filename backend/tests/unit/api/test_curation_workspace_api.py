@@ -10,8 +10,36 @@ from src.schemas.curation_prep import (
 )
 from src.schemas.curation_workspace import (
     CurationDocumentBootstrapRequest,
+    CurationEvidenceRecomputeRequest,
+    CurationEvidenceResolveRequest,
+    CurationManualEvidenceCreateRequest,
     CurationSessionCreateRequest,
+    EvidenceAnchor,
+    EvidenceAnchorKind,
+    EvidenceLocatorQuality,
+    EvidenceSupportsDecision,
 )
+
+
+def _anchor() -> EvidenceAnchor:
+    return EvidenceAnchor(
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
+        supports_decision=EvidenceSupportsDecision.SUPPORTS,
+        snippet_text="Example quote.",
+        sentence_text="Example quote.",
+        normalized_text=None,
+        viewer_search_text=None,
+        pdfx_markdown_offset_start=None,
+        pdfx_markdown_offset_end=None,
+        page_number=2,
+        page_label=None,
+        section_title="Results",
+        subsection_title=None,
+        figure_reference=None,
+        table_reference=None,
+        chunk_ids=[],
+    )
 
 
 @pytest.mark.asyncio
@@ -174,6 +202,120 @@ async def test_post_document_bootstrap_propagates_no_extraction_results_error(mo
     assert exc.value.detail == (
         "No persisted curation prep extraction results were found for document document-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _recompute(request, *, current_user_id, actor_claims, db):
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        captured["actor_claims"] = actor_claims
+        captured["db"] = db
+        return expected
+
+    monkeypatch.setattr(module, "recompute_evidence", _recompute)
+
+    request = CurationEvidenceRecomputeRequest(
+        session_id="session-1",
+        candidate_ids=["candidate-1"],
+        force=True,
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.post_evidence_recompute(
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "request": request,
+        "current_user_id": "user-1",
+        "actor_claims": user,
+        "db": db,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_manual_evidence_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _create_manual_evidence(request, *, actor_claims, db):
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        captured["db"] = db
+        return expected
+
+    monkeypatch.setattr(module, "create_manual_evidence", _create_manual_evidence)
+
+    request = CurationManualEvidenceCreateRequest(
+        session_id="session-1",
+        candidate_id="candidate-1",
+        field_keys=["gene.symbol"],
+        anchor=_anchor(),
+        is_primary=True,
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.post_manual_evidence(
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "request": request,
+        "actor_claims": user,
+        "db": db,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _resolve_evidence(request, *, current_user_id, db):
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        captured["db"] = db
+        return expected
+
+    monkeypatch.setattr(module, "resolve_evidence", _resolve_evidence)
+
+    request = CurationEvidenceResolveRequest(
+        session_id="session-1",
+        candidate_id="candidate-1",
+        field_key="gene.symbol",
+        anchor=_anchor(),
+        replace_existing=True,
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.post_evidence_resolve(
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "request": request,
+        "current_user_id": "user-1",
+        "db": db,
+    }
 
 
 @pytest.mark.asyncio
