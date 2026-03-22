@@ -1051,18 +1051,52 @@ def _flow_run_summary_statement(filters: CurationSessionFilters) -> Any:
 
 def _flow_run_summaries(db: Session, filters: CurationSessionFilters) -> list[CurationFlowRunSummary]:
     group_rows = db.execute(_flow_run_summary_statement(filters)).mappings().all()
-    return [
-        CurationFlowRunSummary(
-            flow_run_id=row["flow_run_id"],
-            display_label=row["flow_run_id"],
-            session_count=row["session_count"],
-            reviewed_count=row["reviewed_count"],
-            pending_count=row["pending_count"],
-            submitted_count=row["submitted_count"],
-            last_activity_at=row["last_activity_at"],
+    return [_flow_run_summary_from_row(row) for row in group_rows]
+
+
+def _flow_run_summary_from_row(row: Mapping[str, Any]) -> CurationFlowRunSummary:
+    return CurationFlowRunSummary(
+        flow_run_id=row["flow_run_id"],
+        display_label=row["flow_run_id"],
+        session_count=row["session_count"],
+        reviewed_count=row["reviewed_count"],
+        pending_count=row["pending_count"],
+        submitted_count=row["submitted_count"],
+        last_activity_at=row["last_activity_at"],
+    )
+
+
+def _flow_run_summary(db: Session, filters: CurationSessionFilters) -> CurationFlowRunSummary | None:
+    if not filters.flow_run_id:
+        return None
+
+    filtered_ids_subquery = _filtered_session_id_select(filters).subquery()
+    last_activity_at = func.max(
+        func.coalesce(ReviewSessionModel.last_worked_at, ReviewSessionModel.prepared_at)
+    ).label("last_activity_at")
+    row = db.execute(
+        select(
+            func.max(ReviewSessionModel.flow_run_id).label("flow_run_id"),
+            func.count(ReviewSessionModel.id).label("session_count"),
+            func.count(ReviewSessionModel.id)
+            .filter(ReviewSessionModel.reviewed_candidates > 0)
+            .label("reviewed_count"),
+            func.count(ReviewSessionModel.id)
+            .filter(ReviewSessionModel.pending_candidates > 0)
+            .label("pending_count"),
+            func.count(ReviewSessionModel.id)
+            .filter(ReviewSessionModel.status == CurationSessionStatus.SUBMITTED)
+            .label("submitted_count"),
+            last_activity_at,
         )
-        for row in group_rows
-    ]
+        .where(ReviewSessionModel.id.in_(select(filtered_ids_subquery.c.id)))
+        .where(ReviewSessionModel.flow_run_id.is_not(None))
+    ).mappings().one()
+
+    if row["session_count"] == 0 or row["flow_run_id"] is None:
+        return None
+
+    return _flow_run_summary_from_row(row)
 
 
 def _list_session_summaries(
@@ -1073,9 +1107,11 @@ def _list_session_summaries(
     sort_direction: CurationSortDirection,
     page: int,
     page_size: int,
+    total_items: int | None = None,
 ) -> tuple[list[CurationSessionSummary], CurationPageInfo]:
     filtered_ids_select = _filtered_session_id_select(filters)
-    total_items = db.scalar(select(func.count()).select_from(filtered_ids_select.subquery())) or 0
+    if total_items is None:
+        total_items = db.scalar(select(func.count()).select_from(filtered_ids_select.subquery())) or 0
     ordered_id_select = _ordered_session_id_select(filters, sort_by, sort_direction)
     offset = (page - 1) * page_size
     session_ids = list(db.scalars(ordered_id_select.offset(offset).limit(page_size)).all())
@@ -1121,8 +1157,8 @@ def list_flow_run_sessions(
     request: CurationFlowRunSessionsRequest,
 ) -> CurationFlowRunSessionsResponse:
     filters = request.filters.model_copy(update={"flow_run_id": request.flow_run_id})
-    flow_runs = _flow_run_summaries(db, filters)
-    if not flow_runs:
+    flow_run = _flow_run_summary(db, filters)
+    if flow_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Flow run {request.flow_run_id} not found",
@@ -1135,10 +1171,11 @@ def list_flow_run_sessions(
         sort_direction=CurationSortDirection.DESC,
         page=request.page,
         page_size=request.page_size,
+        total_items=flow_run.session_count,
     )
 
     return CurationFlowRunSessionsResponse(
-        flow_run=flow_runs[0],
+        flow_run=flow_run,
         sessions=summaries,
         page_info=page_info,
     )

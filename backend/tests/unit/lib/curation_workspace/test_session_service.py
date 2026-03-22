@@ -460,6 +460,58 @@ def test_list_flow_run_sessions_returns_paginated_summaries(db_session):
     assert [session.session_id for session in response.sessions] == [str(newest_session.id)]
 
 
+def test_list_flow_run_sessions_reuses_flow_run_summary_count_for_page_info(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    now = _now()
+    newest_session = _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=now.replace(hour=18),
+        last_worked_at=now.replace(hour=19),
+        reviewed_candidates=1,
+        pending_candidates=1,
+    )
+    _create_review_session(
+        db_session,
+        document_id=document_id,
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.NEW,
+        prepared_at=now.replace(hour=14),
+        last_worked_at=now.replace(hour=15),
+        reviewed_candidates=0,
+        pending_candidates=2,
+    )
+
+    captured_total_items: list[int | None] = []
+    original_list_session_summaries = module._list_session_summaries
+
+    def wrapped_list_session_summaries(*args, **kwargs):
+        captured_total_items.append(kwargs.get("total_items"))
+        return original_list_session_summaries(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_list_session_summaries", wrapped_list_session_summaries)
+
+    response = module.list_flow_run_sessions(
+        db_session,
+        CurationFlowRunSessionsRequest(
+            flow_run_id="flow-alpha",
+            page=1,
+            page_size=1,
+        ),
+    )
+
+    assert captured_total_items == [response.flow_run.session_count]
+    assert response.flow_run.session_count == 2
+    assert response.page_info.total_items == 2
+    assert [session.session_id for session in response.sessions] == [str(newest_session.id)]
+
+
 def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
     document = _create_document(db_session)
     document_id = str(document.id)
