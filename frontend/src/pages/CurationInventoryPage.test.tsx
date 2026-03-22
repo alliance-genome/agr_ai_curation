@@ -25,6 +25,19 @@ function jsonResponse(payload: unknown): Response {
   })
 }
 
+function deferredResponse(payload: unknown) {
+  let resolve: ((response: Response) => void) | undefined
+
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+
+  return {
+    promise,
+    resolve: () => resolve?.(jsonResponse(payload)),
+  }
+}
+
 function SessionDestination() {
   const params = useParams()
   const location = useLocation()
@@ -298,6 +311,8 @@ describe('CurationInventoryPage', () => {
     renderPage()
 
     expect(await screen.findByText('Curation Inventory')).toBeInTheDocument()
+    expect(await screen.findByText('Total Sessions')).toBeInTheDocument()
+    expect(screen.getByText('across 2 domains')).toBeInTheDocument()
     expect(await screen.findByText('Alpha paper')).toBeInTheDocument()
     expect(screen.getByText('Gene Adapter / Alpha Profile')).toBeInTheDocument()
     expect(screen.getByText('Alex Curator')).toBeInTheDocument()
@@ -403,5 +418,51 @@ describe('CurationInventoryPage', () => {
     await user.click(screen.getByText('Flow run flow-1'))
 
     expect(await screen.findByText('Grouped alpha paper')).toBeInTheDocument()
+  })
+
+  it('shows stats skeletons while a filtered stats refetch is pending', async () => {
+    const user = userEvent.setup()
+    const pendingStatsResponse = deferredResponse(statsResponse)
+    let statsRequestCount = 0
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+
+        if (url.startsWith('/api/curation-workspace/sessions/stats')) {
+          statsRequestCount += 1
+
+          if (statsRequestCount === 1) {
+            return jsonResponse(statsResponse)
+          }
+
+          return pendingStatsResponse.promise
+        }
+
+        if (url.startsWith('/api/curation-workspace/sessions')) {
+          return jsonResponse(listResponse)
+        }
+
+        if (url === '/api/curation-workspace/views') {
+          return jsonResponse(savedViewResponse)
+        }
+
+        throw new Error(`Unexpected request: ${url}`)
+      })
+    )
+
+    renderPage()
+
+    await screen.findByText('Total Sessions')
+    await user.click(screen.getByRole('button', { name: 'Gene Adapter' }))
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('inventory-stats-card-skeleton')).toHaveLength(5)
+    })
+
+    pendingStatsResponse.resolve()
+
+    expect(await screen.findByText('Total Sessions')).toBeInTheDocument()
   })
 })
