@@ -47,6 +47,7 @@ function buildSaveRequestFilters(filters: CurationSessionFilters): CurationSessi
     domain_keys: [...(filters.domain_keys ?? [])],
     curator_ids: [...(filters.curator_ids ?? [])],
     tags: [...(filters.tags ?? [])],
+    origin_session_id: null,
     saved_view_id: null,
   }
 }

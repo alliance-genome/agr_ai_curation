@@ -23,6 +23,7 @@ function buildSavedView(overrides: Partial<CurationSavedView> = {}): CurationSav
       curator_ids: ['user-1'],
       tags: [],
       flow_run_id: null,
+      origin_session_id: null,
       document_id: null,
       search: 'pending',
       prepared_between: null,
@@ -71,6 +72,7 @@ function renderSelector(props: Partial<ComponentProps<typeof SavedViewSelector>>
             curator_ids: [],
             tags: [],
             flow_run_id: null,
+            origin_session_id: null,
             document_id: null,
             search: null,
             prepared_between: null,
@@ -190,6 +192,7 @@ describe('SavedViewSelector', () => {
         curator_ids: [],
         tags: [],
         flow_run_id: null,
+        origin_session_id: 'chat-session-12',
         document_id: null,
         search: 'pending',
         prepared_between: null,
@@ -229,6 +232,7 @@ describe('SavedViewSelector', () => {
       sort_direction: 'desc',
       is_default: true,
     })
+    expect(requestBody.filters.origin_session_id).toBeNull()
     expect(requestBody.filters.saved_view_id).toBeNull()
     expect(requestBody.filters.statuses).toEqual(['in_progress'])
   }, 10_000)

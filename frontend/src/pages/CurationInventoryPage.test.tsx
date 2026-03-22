@@ -149,6 +149,7 @@ describe('CurationInventoryPage', () => {
       curator_ids: [],
       tags: [],
       flow_run_id: null,
+      origin_session_id: null,
       document_id: null,
       search: null,
       prepared_between: null,
@@ -191,6 +192,7 @@ describe('CurationInventoryPage', () => {
           curator_ids: [],
           tags: [],
           flow_run_id: null,
+          origin_session_id: 'chat-session-7',
           document_id: null,
           search: 'pending',
           prepared_between: null,
@@ -321,7 +323,8 @@ describe('CurationInventoryPage', () => {
           url.includes('search=pending') &&
           url.includes('sort_by=adapter') &&
           url.includes('sort_direction=asc') &&
-          url.includes('saved_view_id=saved-view-1')
+          url.includes('saved_view_id=saved-view-1') &&
+          !url.includes('origin_session_id=')
         )
       ).toBe(true)
     })

@@ -49,6 +49,7 @@ def _actor_ref(user_map: dict[str, User], actor_id: str | None) -> CurationActor
 
 def _saved_view_filters(filters: dict[str, Any] | None) -> CurationSessionFilters:
     payload = dict(filters or {})
+    payload["origin_session_id"] = None
     payload["saved_view_id"] = None
     return CurationSessionFilters.model_validate(payload)
 
@@ -106,7 +107,12 @@ def create_saved_view(
         )
 
     normalized_description = request.description.strip() if request.description else None
-    normalized_filters = request.filters.model_copy(update={"saved_view_id": None})
+    normalized_filters = request.filters.model_copy(
+        update={
+            "origin_session_id": None,
+            "saved_view_id": None,
+        }
+    )
     now = datetime.now(timezone.utc)
 
     if request.is_default:

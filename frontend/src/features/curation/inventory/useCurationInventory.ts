@@ -56,7 +56,7 @@ function normalizeFilters(filters?: CurationSessionFilters): CurationSessionFilt
     curator_ids: [...(filters?.curator_ids ?? [])],
     tags: [...(filters?.tags ?? [])],
     flow_run_id: filters?.flow_run_id ?? null,
-    origin_session_id: filters?.origin_session_id ?? null,
+    origin_session_id: null,
     document_id: filters?.document_id ?? null,
     search: filters?.search?.trim() || null,
     prepared_between: filters?.prepared_between

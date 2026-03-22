@@ -115,6 +115,7 @@ def _create_saved_view(
             "curator_ids": [],
             "tags": [],
             "flow_run_id": None,
+            "origin_session_id": "chat-session-7",
             "document_id": None,
             "search": None,
             "prepared_between": None,
@@ -133,7 +134,7 @@ def _create_saved_view(
     return saved_view
 
 
-def test_create_saved_view_persists_view_and_sanitizes_saved_view_id(db_session):
+def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
     _create_user(db_session, "user-1", name="Curator One")
 
     response = module.create_saved_view(
@@ -149,6 +150,7 @@ def test_create_saved_view_persists_view_and_sanitizes_saved_view_id(db_session)
                 "curator_ids": ["user-1"],
                 "tags": [],
                 "flow_run_id": None,
+                "origin_session_id": "chat-session-1",
                 "document_id": None,
                 "search": "pending",
                 "prepared_between": None,
@@ -167,9 +169,11 @@ def test_create_saved_view_persists_view_and_sanitizes_saved_view_id(db_session)
     assert saved_view.name == "My pending sessions"
     assert saved_view.description == "Sessions assigned to me"
     assert saved_view.created_by_id == "user-1"
+    assert saved_view.filters["origin_session_id"] is None
     assert saved_view.filters["saved_view_id"] is None
 
     assert response.view.name == "My pending sessions"
+    assert response.view.filters.origin_session_id is None
     assert response.view.filters.saved_view_id is None
     assert response.view.created_by is not None
     assert response.view.created_by.display_name == "Curator One"
@@ -238,6 +242,7 @@ def test_list_saved_views_returns_current_user_views_default_first(db_session):
     assert [view.name for view in response.views] == ["alpha queue", "zeta queue"]
     assert response.views[0].is_default is True
     assert all(view.created_by and view.created_by.actor_id == "user-1" for view in response.views)
+    assert all(view.filters.origin_session_id is None for view in response.views)
     assert all(view.filters.saved_view_id is None for view in response.views)
 
 
