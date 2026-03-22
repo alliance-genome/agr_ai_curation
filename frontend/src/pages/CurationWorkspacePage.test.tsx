@@ -27,23 +27,23 @@ vi.mock('@/components/pdfViewer/PdfViewer', () => ({
 
 function buildWorkspace(): CurationWorkspace {
   return {
-      session: {
-        session_id: 'session-1',
-        status: 'in_progress',
-        adapter: {
-          adapter_key: 'gene',
-          display_label: 'Gene',
-          profile_label: 'Human',
-          color_token: 'green',
-          metadata: {},
-        },
-        document: {
-          document_id: 'document-1',
-          title: 'Workspace Document',
-          pmid: '123456',
-          pdf_url: '/api/documents/document-1.pdf',
-          viewer_url: '/api/documents/document-1.pdf',
-        },
+    session: {
+      session_id: 'session-1',
+      status: 'in_progress',
+      adapter: {
+        adapter_key: 'gene',
+        display_label: 'Gene',
+        profile_label: 'Human',
+        color_token: 'green',
+        metadata: {},
+      },
+      document: {
+        document_id: 'document-1',
+        title: 'Workspace Document',
+        pmid: '123456',
+        pdf_url: '/api/documents/document-1.pdf',
+        viewer_url: '/api/documents/document-1.pdf',
+      },
       progress: {
         total_candidates: 2,
         reviewed_candidates: 1,
