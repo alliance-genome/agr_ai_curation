@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -288,7 +288,7 @@ describe('CurationInventoryPage', () => {
       expect(sessionListCalls.some((url) => url.includes('sort_by=adapter'))).toBe(true)
     })
 
-    await user.type(screen.getByLabelText('Search sessions'), 'beta')
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'beta' } })
     await waitFor(() => {
       const sessionListCalls = vi
         .mocked(global.fetch)
