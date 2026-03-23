@@ -55,7 +55,11 @@ function isSameEvidence(
   left: CurationEvidenceRecord | null,
   right: CurationEvidenceRecord | null
 ): boolean {
-  return left?.anchor_id === right?.anchor_id
+  if (left === null || right === null) {
+    return left === right
+  }
+
+  return left.anchor_id === right.anchor_id
 }
 
 function evidenceNavigationReducer(

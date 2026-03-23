@@ -4,47 +4,11 @@ import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it } from 'vitest'
 
-import type { CurationEvidenceRecord } from '../types'
 import theme from '@/theme'
 import EvidenceChipGroup from './EvidenceChipGroup'
 import EvidencePanel from './EvidencePanel'
 import { useEvidenceNavigation } from './useEvidenceNavigation'
-
-type EvidenceRecordOverrides = Partial<Omit<CurationEvidenceRecord, 'anchor'>> & {
-  anchor?: Partial<CurationEvidenceRecord['anchor']>
-}
-
-function createEvidenceRecord(
-  anchorId: string,
-  overrides: EvidenceRecordOverrides = {}
-): CurationEvidenceRecord {
-  const { anchor: anchorOverrides, ...recordOverrides } = overrides
-
-  return {
-    anchor_id: anchorId,
-    candidate_id: 'candidate-1',
-    source: 'extracted',
-    field_keys: ['gene_symbol'],
-    field_group_keys: ['identity'],
-    is_primary: anchorId === 'anchor-1',
-    anchor: {
-      anchor_kind: 'snippet',
-      locator_quality: 'exact_quote',
-      supports_decision: 'supports',
-      snippet_text: `Snippet for ${anchorId}`,
-      sentence_text: `Sentence for ${anchorId}`,
-      viewer_search_text: `Search text for ${anchorId}`,
-      page_number: anchorId === 'anchor-1' ? 3 : 7,
-      section_title: anchorId === 'anchor-1' ? 'Results' : 'Discussion',
-      chunk_ids: [`chunk-${anchorId}`],
-      ...anchorOverrides,
-    },
-    created_at: '2026-03-20T12:00:00Z',
-    updated_at: '2026-03-20T12:00:00Z',
-    warnings: [],
-    ...recordOverrides,
-  }
-}
+import { createEvidenceRecord } from './testFactories'
 
 const candidateEvidence = [
   createEvidenceRecord('anchor-1'),
