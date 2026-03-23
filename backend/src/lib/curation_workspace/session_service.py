@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import ceil
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Protocol, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -217,6 +217,13 @@ class PreparedSessionUpsertResult:
     session_id: str
     created: bool
     candidate_ids: list[str] = field(default_factory=list)
+
+
+class CandidateProgressCountsInput(Protocol):
+    """Minimal candidate shape required for session progress counters."""
+
+    source: CurationCandidateSource
+    status: CurationCandidateStatus
 
 
 @dataclass(frozen=True)
@@ -2127,9 +2134,9 @@ def _reset_candidate_state(
 
     if manual_evidence_ids:
         candidate.evidence_anchors = [
-        evidence_row
-        for evidence_row in candidate.evidence_anchors
-        if str(evidence_row.id) not in manual_evidence_ids
+            evidence_row
+            for evidence_row in candidate.evidence_anchors
+            if str(evidence_row.id) not in manual_evidence_ids
         ]
         for evidence_row in manual_evidence_rows:
             db.delete(evidence_row)
@@ -2720,6 +2727,11 @@ def _persist_session_validation_snapshot(
 def _apply_progress_counts(
     session_row: ReviewSessionModel,
     candidates: Sequence[PreparedCandidateInput],
+) -> None:
+    _apply_candidate_progress_counts(session_row, candidates)
+def _apply_candidate_progress_counts(
+    session_row: ReviewSessionModel,
+    candidates: Sequence[CandidateProgressCountsInput],
 ) -> None:
     total_candidates = len(candidates)
     pending_candidates = sum(
