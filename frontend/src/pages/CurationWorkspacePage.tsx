@@ -30,18 +30,12 @@ import type {
 import {
   CurationWorkspaceProvider,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
+import CandidateQueue from '@/features/curation/workspace/CandidateQueue'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
-
-function formatLabel(value: string): string {
-  return value
-    .split('_')
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ')
-}
 
 function findCandidate(
   candidates: CurationCandidate[],
@@ -83,20 +77,6 @@ export function resolveActiveCandidateId(
   }
 
   return candidates[0]?.candidate_id ?? null
-}
-
-function getCandidateStatusColor(
-  status?: CurationCandidate['status'] | null,
-): 'warning' | 'success' | 'error' {
-  switch (status) {
-    case 'accepted':
-      return 'success'
-    case 'rejected':
-      return 'error'
-    case 'pending':
-    default:
-      return 'warning'
-  }
 }
 
 function getCandidateEvidenceSummary(candidate: CurationCandidate | null): string {
@@ -350,39 +330,7 @@ function CurationWorkspacePage() {
     )
   }
 
-  const queueSlot = (
-    <WorkspaceSlotPlaceholder
-      description="Compact queue cards and selection controls land in ALL-119. The active candidate stays visible here so the shell can be exercised before that ticket merges."
-      eyebrow="Candidate Queue"
-      title={activeCandidate?.display_label ?? 'Queue placeholder'}
-    >
-      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
-        <Chip label={`${workspace.candidates.length} total`} size="small" />
-        <Chip
-          label={`${workspace.session.progress.pending_candidates} pending`}
-          size="small"
-          variant="outlined"
-        />
-        <Chip
-          color={getCandidateStatusColor(activeCandidate?.status)}
-          label={`Active: ${formatLabel(activeCandidate?.status ?? 'pending')}`}
-          size="small"
-        />
-      </Stack>
-      <Typography variant="body2">
-        {activeCandidate
-          ? `Current candidate: ${activeCandidate.display_label ?? activeCandidate.candidate_id}`
-          : 'This session does not currently expose an active candidate.'}
-      </Typography>
-      <Typography color="text.secondary" variant="body2">
-        Reviewed {workspace.session.progress.reviewed_candidates} of
-        {' '}
-        {workspace.session.progress.total_candidates}
-        {' '}
-        candidates in this session.
-      </Typography>
-    </WorkspaceSlotPlaceholder>
-  )
+  const queueSlot = <CandidateQueue />
 
   const toolbarSlot = (
     <WorkspaceSlotPlaceholder
