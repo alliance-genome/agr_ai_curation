@@ -119,7 +119,6 @@ function buildWorkspace(): CurationWorkspace {
             is_primary: true,
             anchor: {
               anchor_kind: 'snippet',
-              chunk_ids: [],
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
               chunk_ids: [],
@@ -222,7 +221,7 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText('Candidates (2)')).toBeInTheDocument()
     expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
     expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
-    expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
+    expect(screen.getAllByText('1/2 reviewed')).toHaveLength(2)
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
@@ -266,6 +265,13 @@ describe('CurationWorkspacePage', () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...buildWorkspace().session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
 
     renderPage('/curation/session-1')
 

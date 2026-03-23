@@ -9,8 +9,7 @@ import {
 import { purple } from '@mui/material/colors'
 import { alpha, type Theme, useTheme } from '@mui/material/styles'
 
-import { getValidationBuckets } from '@/features/curation/inventory/inventoryPresentation'
-import type {
+import {
   CurationCandidate,
   CurationSessionProgress,
   CurationValidationSummary,
@@ -32,7 +31,7 @@ function formatCandidateLabel(candidate: CurationCandidate): string {
 
 function getValidationBadgeLabel(validation?: CurationValidationSummary | null): string {
   if (!validation) {
-    return 'No validation'
+    return '0/0 ✓'
   }
 
   if (validation.state === 'pending') {
@@ -43,20 +42,23 @@ function getValidationBadgeLabel(validation?: CurationValidationSummary | null):
     return 'Validation failed'
   }
 
-  const buckets = getValidationBuckets(validation)
+  const validCount = validation.counts.validated
+  const warningCount = validation.counts.ambiguous + validation.counts.conflict
+  const errorCount = validation.counts.not_found + validation.counts.invalid_format
+  const totalCount = validCount + warningCount + errorCount
 
-  if (buckets.total === 0) {
-    return 'No results'
+  if (totalCount === 0) {
+    return '0/0 ✓'
   }
 
-  const parts = [`${buckets.success}/${buckets.total} ✓`]
+  const parts = [`${validCount}/${totalCount} ✓`]
 
-  if (buckets.warning > 0) {
-    parts.push(`${buckets.warning}⚠`)
+  if (warningCount > 0) {
+    parts.push(`${warningCount}⚠`)
   }
 
-  if (buckets.error > 0) {
-    parts.push(`${buckets.error}✕`)
+  if (errorCount > 0) {
+    parts.push(`${errorCount}✕`)
   }
 
   return parts.join(' ')
@@ -229,7 +231,7 @@ export default function CandidateQueue() {
       >
         <Stack alignItems="center" direction="row" justifyContent="space-between" spacing={1}>
           <Typography variant="subtitle2">
-            Candidates ({orderedCandidates.length})
+            Candidates ({session.progress.total_candidates})
           </Typography>
           <Typography color="text.secondary" variant="caption">
             {session.progress.reviewed_candidates}
