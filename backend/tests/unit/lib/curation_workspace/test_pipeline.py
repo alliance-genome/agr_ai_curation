@@ -36,6 +36,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationExtractionSourceKind,
+    CurationActionType,
     CurationSessionStatus,
     CurationValidationCounts,
     CurationValidationScope,
@@ -523,10 +524,36 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert draft_row.fields[0]["evidence_anchor_ids"] == [str(evidence_row.id)]
     assert "normalized_payload" not in draft_row.draft_metadata
 
-    snapshots = db_session.scalars(
-        select(ValidationSnapshotModel).where(ValidationSnapshotModel.session_id == session_row.id)
+    session_snapshots = db_session.scalars(
+        select(ValidationSnapshotModel).where(
+            ValidationSnapshotModel.session_id == session_row.id,
+            ValidationSnapshotModel.candidate_id.is_(None),
+        )
     ).all()
-    assert len(snapshots) == 2
+    candidate_snapshots = db_session.scalars(
+        select(ValidationSnapshotModel).where(
+            ValidationSnapshotModel.session_id == session_row.id,
+            ValidationSnapshotModel.candidate_id == candidate_row.id,
+        )
+    ).all()
+    assert len(session_snapshots) == 1
+    assert len(candidate_snapshots) == 1
+    session_snapshot = session_snapshots[0]
+    candidate_snapshot = candidate_snapshots[0]
+    assert session_snapshot.state is CurationValidationSnapshotState.COMPLETED
+    assert candidate_snapshot.state is CurationValidationSnapshotState.COMPLETED
+    assert candidate_snapshot.summary["counts"]["skipped"] == 3
+
+    action_log_entries = db_session.scalars(
+        select(SessionActionLogModel).where(
+            SessionActionLogModel.session_id == session_row.id,
+        )
+    ).all()
+    assert len(action_log_entries) == 2
+    assert {entry.action_type for entry in action_log_entries} == {
+        CurationActionType.SESSION_CREATED,
+        CurationActionType.VALIDATION_COMPLETED,
+    }
 
 
 def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(
