@@ -33,6 +33,13 @@ export interface HighlightSettingsDetail {
 
 export type HighlightSettingsChangedEvent = CustomEvent<HighlightSettingsDetail>
 
+export interface PDFViewerEvidenceAnchorSelectedDetail {
+  anchorId: string
+}
+
+export type PDFViewerEvidenceAnchorSelectedEvent =
+  CustomEvent<PDFViewerEvidenceAnchorSelectedDetail>
+
 export function dispatchPDFDocumentChanged(
   documentId: string,
   viewerUrl: string,
@@ -113,4 +120,23 @@ export function onHighlightSettingsChanged(
   const listener = (event: Event) => handler(event as HighlightSettingsChangedEvent)
   window.addEventListener('highlight-settings-changed', listener)
   return () => window.removeEventListener('highlight-settings-changed', listener)
+}
+
+export function dispatchPDFViewerEvidenceAnchorSelected(anchorId: string): void {
+  window.dispatchEvent(
+    new CustomEvent<PDFViewerEvidenceAnchorSelectedDetail>(
+      'pdf-viewer-evidence-anchor-selected',
+      {
+        detail: { anchorId },
+      },
+    ),
+  )
+}
+
+export function onPDFViewerEvidenceAnchorSelected(
+  handler: (event: PDFViewerEvidenceAnchorSelectedEvent) => void,
+): () => void {
+  const listener = (event: Event) => handler(event as PDFViewerEvidenceAnchorSelectedEvent)
+  window.addEventListener('pdf-viewer-evidence-anchor-selected', listener)
+  return () => window.removeEventListener('pdf-viewer-evidence-anchor-selected', listener)
 }

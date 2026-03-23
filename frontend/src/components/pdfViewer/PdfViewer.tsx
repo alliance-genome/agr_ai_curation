@@ -24,6 +24,7 @@ import {
   ClearHighlightsEvent,
   HighlightSettingsChangedEvent,
   PDFViewerDocumentChangedEvent,
+  dispatchPDFViewerEvidenceAnchorSelected,
   onApplyHighlights,
   onClearHighlights,
   onHighlightSettingsChanged,
@@ -185,6 +186,7 @@ interface UploadDialogState {
 }
 
 interface EvidenceTextLayerHighlight {
+  anchorId: string
   kind: 'quote' | 'section'
   mode: EvidenceNavigationCommand['mode']
   pageNumber: number
@@ -655,6 +657,7 @@ const buildEvidenceSpikeAnchor = (input: PdfEvidenceSpikeInput): EvidenceAnchor 
 
 const buildNavigationCommandKey = (command: EvidenceNavigationCommand): string => {
   return JSON.stringify([
+    command.anchorId,
     command.anchor.anchor_kind,
     command.anchor.locator_quality,
     command.anchor.supports_decision,
@@ -1530,6 +1533,7 @@ export function PdfViewer({
 
         const locatorQuality = resolveQuoteMatchLocatorQuality(anchor.locator_quality, candidate.reason)
         setEvidenceHighlight({
+          anchorId: command.anchorId,
           kind: 'quote',
           mode: command.mode,
           pageNumber: matchedPage,
@@ -1571,6 +1575,7 @@ export function PdfViewer({
 
         if (textLayerRects.length > 0 && matchedPage !== null) {
           setEvidenceHighlight({
+            anchorId: command.anchorId,
             kind: 'section',
             mode: command.mode,
             pageNumber: matchedPage,
@@ -2393,6 +2398,7 @@ export function PdfViewer({
 
     const highlightLayer = iframeDoc.createElement('div')
     highlightLayer.className = 'pdf-evidence-highlight-layer'
+    highlightLayer.dataset.anchorId = evidenceHighlight.anchorId
     highlightLayer.dataset.mode = evidenceHighlight.mode
     highlightLayer.dataset.kind = evidenceHighlight.kind
     highlightLayer.style.position = 'absolute'
@@ -2401,9 +2407,15 @@ export function PdfViewer({
     highlightLayer.style.zIndex = '6'
 
     const rectStyles = getEvidenceHighlightRectStyles(evidenceHighlight)
+    const rectCleanupFns: Array<() => void> = []
+    const handleAnchorSelection = () => {
+      dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
+    }
+
     rects.forEach((rect) => {
       const rectNode = iframeDoc.createElement('div')
       rectNode.className = 'pdf-evidence-highlight-rect'
+      rectNode.dataset.anchorId = evidenceHighlight.anchorId
       rectNode.dataset.mode = evidenceHighlight.mode
       rectNode.dataset.kind = evidenceHighlight.kind
       rectNode.style.position = 'absolute'
@@ -2412,14 +2424,36 @@ export function PdfViewer({
       rectNode.style.width = `${rect.width}px`
       rectNode.style.height = `${rect.height}px`
       rectNode.style.borderRadius = '2px'
-      rectNode.style.pointerEvents = 'none'
+      rectNode.style.cursor = 'pointer'
+      rectNode.style.pointerEvents = 'auto'
       Object.assign(rectNode.style, rectStyles)
+
+      rectNode.setAttribute('aria-label', 'Jump to linked annotation field')
+      rectNode.setAttribute('role', 'button')
+      rectNode.tabIndex = 0
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+          return
+        }
+
+        event.preventDefault()
+        handleAnchorSelection()
+      }
+
+      rectNode.addEventListener('click', handleAnchorSelection)
+      rectNode.addEventListener('keydown', handleKeyDown)
+      rectCleanupFns.push(() => {
+        rectNode.removeEventListener('click', handleAnchorSelection)
+        rectNode.removeEventListener('keydown', handleKeyDown)
+      })
       highlightLayer.appendChild(rectNode)
     })
 
     pageContainer.appendChild(highlightLayer)
 
     return () => {
+      rectCleanupFns.forEach((cleanup) => cleanup())
       highlightLayer.remove()
     }
   }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status])

@@ -8,7 +8,10 @@ import PdfViewer, {
   normalizeEvidenceSpikePageHints,
   type PdfEvidenceSpikeInput,
 } from './PdfViewer'
-import { dispatchPDFDocumentChanged } from './pdfEvents'
+import {
+  dispatchPDFDocumentChanged,
+  onPDFViewerEvidenceAnchorSelected,
+} from './pdfEvents'
 
 interface MockFindResponse {
   state: number
@@ -299,6 +302,7 @@ const getEvidenceHighlightRects = (iframe: HTMLIFrameElement): HTMLElement[] => 
 const buildNavigationCommand = (
   overrides: Partial<EvidenceNavigationCommand> = {},
 ): EvidenceNavigationCommand => ({
+  anchorId: 'anchor-1',
   anchor: {
     anchor_kind: 'snippet',
     locator_quality: 'exact_quote',
@@ -479,6 +483,45 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('select')
     expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('solid')
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
+  })
+
+  it('dispatches the selected anchor id when a highlight rect is clicked', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onAnchorSelected = vi.fn()
+    const unsubscribe = onPDFViewerEvidenceAnchorSelected(onAnchorSelected)
+
+    render(<PdfViewer pendingNavigation={buildNavigationCommand({ anchorId: 'anchor-click' })} />)
+
+    dispatchPDFDocumentChanged('doc-click', '/fixtures/sample.pdf', 'clickable.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('clickable.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query === 'Exact quote from PDFX markdown' ? 0 : 1,
+        total: query === 'Exact quote from PDFX markdown' ? 1 : 0,
+        current: query === 'Exact quote from PDFX markdown' ? 1 : 0,
+        pageIdx: query === 'Exact quote from PDFX markdown' ? 2 : null,
+      }),
+      pages: buildDefaultPages(),
+    })
+
+    fireEvent.load(iframe)
+
+    const highlightRect = await waitFor(() => {
+      const [rect] = getEvidenceHighlightRects(iframe)
+      expect(rect).toBeDefined()
+      return rect
+    })
+
+    highlightRect.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+    expect(onAnchorSelected).toHaveBeenCalledTimes(1)
+    expect(onAnchorSelected.mock.calls[0][0].detail.anchorId).toBe('anchor-click')
+
+    unsubscribe()
   })
 
   it('derives highlight rects from the matched substring instead of the whole text span', async () => {

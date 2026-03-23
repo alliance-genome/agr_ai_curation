@@ -8,6 +8,7 @@ import type {
 
 export interface UseEvidenceNavigationOptions {
   evidence: CurationEvidenceRecord[]
+  allEvidence?: CurationEvidenceRecord[]
 }
 
 export interface UseEvidenceNavigationReturn extends EvidenceNavigationState {
@@ -43,6 +44,7 @@ function buildNavigationCommand(
   mode: EvidenceNavigationCommand['mode']
 ): EvidenceNavigationCommand {
   return {
+    anchorId: evidence.anchor_id,
     anchor: evidence.anchor,
     searchText: evidence.anchor.viewer_search_text ?? null,
     pageNumber: evidence.anchor.page_number ?? null,
@@ -167,6 +169,7 @@ function buildEvidenceIndex(
 
 export function useEvidenceNavigation({
   evidence,
+  allEvidence,
 }: UseEvidenceNavigationOptions): UseEvidenceNavigationReturn {
   const [navigationState, dispatch] = useReducer(
     evidenceNavigationReducer,
@@ -194,12 +197,12 @@ export function useEvidenceNavigation({
   )
   const evidenceByAnchorId = useMemo(
     () =>
-      evidence.reduce<Record<string, CurationEvidenceRecord>>((index, record) => {
+      (allEvidence ?? evidence).reduce<Record<string, CurationEvidenceRecord>>((index, record) => {
         index[record.anchor_id] = record
 
         return index
       }, {}),
-    [evidence]
+    [allEvidence, evidence]
   )
   const evidenceByGroup = useMemo(
     () => buildEvidenceIndex(evidence, (record) => record.field_group_keys),

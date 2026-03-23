@@ -37,6 +37,7 @@ import CandidateQueue from '@/features/curation/workspace/CandidateQueue'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
+import { usePdfToFormLinking } from '@/features/curation/workspace/usePdfToFormLinking'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
@@ -96,12 +97,29 @@ function CurationWorkspacePageContent({
 }: {
   queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
 }) {
-  const { activeCandidate, workspace } = useCurationWorkspaceContext()
+  const {
+    activeCandidate,
+    activeCandidateId,
+    candidates,
+    setActiveCandidate,
+    workspace,
+  } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const hydration = useCurationWorkspaceHydration()
   const runtimeWarning = autosave.warning ?? hydration.warning
+  const workspaceEvidence = useMemo(
+    () => candidates.flatMap((candidate) => candidate.evidence_anchors ?? []),
+    [candidates],
+  )
   const evidenceNavigation = useEvidenceNavigation({
     evidence: activeCandidate?.evidence_anchors ?? [],
+    allEvidence: workspaceEvidence,
+  })
+  usePdfToFormLinking({
+    activeCandidateId,
+    candidates,
+    evidenceByAnchorId: evidenceNavigation.evidenceByAnchorId,
+    setActiveCandidate,
   })
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
