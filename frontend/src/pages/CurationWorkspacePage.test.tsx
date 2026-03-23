@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
@@ -35,9 +36,9 @@ function buildWorkspace(): CurationWorkspace {
       session_id: 'session-1',
       status: 'in_progress',
       adapter: {
-        adapter_key: 'gene',
-        display_label: 'Gene',
-        profile_label: 'Human',
+        adapter_key: 'entity_adapter',
+        display_label: 'Entity',
+        profile_label: 'Default',
         color_token: 'green',
         metadata: {},
       },
@@ -70,13 +71,13 @@ function buildWorkspace(): CurationWorkspace {
         source: 'extracted',
         status: 'accepted',
         order: 0,
-        adapter_key: 'gene',
+        adapter_key: 'entity_adapter',
         display_label: 'Accepted candidate',
         unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-accepted',
           candidate_id: 'candidate-accepted',
-          adapter_key: 'gene',
+          adapter_key: 'entity_adapter',
           version: 1,
           fields: [],
           created_at: '2026-03-20T12:01:00Z',
@@ -94,14 +95,14 @@ function buildWorkspace(): CurationWorkspace {
         source: 'manual',
         status: 'pending',
         order: 1,
-        adapter_key: 'gene',
+        adapter_key: 'entity_adapter',
         display_label: 'Pending candidate',
         conversation_summary: 'Needs curator review',
         unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-pending',
           candidate_id: 'candidate-pending',
-          adapter_key: 'gene',
+          adapter_key: 'entity_adapter',
           version: 1,
           fields: [],
           created_at: '2026-03-20T12:03:00Z',
@@ -113,11 +114,12 @@ function buildWorkspace(): CurationWorkspace {
             anchor_id: 'anchor-1',
             candidate_id: 'candidate-pending',
             source: 'manual',
-            field_keys: ['gene_symbol'],
+            field_keys: ['field_a'],
             field_group_keys: ['primary'],
             is_primary: true,
             anchor: {
               anchor_kind: 'snippet',
+              chunk_ids: [],
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
               chunk_ids: [],
@@ -202,7 +204,7 @@ describe('CurationWorkspacePage', () => {
     vi.clearAllMocks()
   })
 
-  it('restores the session-selected candidate when the workspace already has one', async () => {
+  it('restores the session-selected candidate by default and renders the queue', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -217,8 +219,7 @@ describe('CurationWorkspacePage', () => {
       )
     })
 
-    expect(screen.getAllByText('Accepted candidate')).toHaveLength(2)
-    expect(screen.getByText('Candidate Queue')).toBeInTheDocument()
+    expect(screen.getByText('Candidates (2)')).toBeInTheDocument()
     expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
     expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
     expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
@@ -261,7 +262,29 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('falls back to the first pending candidate and preserves location state when no prior selection exists', async () => {
+  it('updates the route when a queue card is selected', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-accepted',
+      )
+    })
+
+    await user.click(screen.getByTestId('candidate-queue-card-candidate-pending'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+    })
+  })
+
+  it('preserves location state when it normalizes the candidate route', async () => {
     const workspace = buildWorkspace()
     workspace.active_candidate_id = null
     workspace.session.current_candidate_id = null
