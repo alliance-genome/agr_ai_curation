@@ -248,15 +248,18 @@ describe('EvidencePanel', () => {
     const documentOnlyEvidence = createEvidenceRecord('anchor-document-only', {
       anchor: { locator_quality: 'document_only' },
     })
+    const unresolvedEvidence = createEvidenceRecord('anchor-unresolved', {
+      anchor: { locator_quality: 'unresolved' },
+    })
 
     renderEvidencePanel({
-      candidateEvidence: [pageOnlyEvidence, documentOnlyEvidence],
+      candidateEvidence: [pageOnlyEvidence, documentOnlyEvidence, unresolvedEvidence],
     })
 
     expect(
       screen.getAllByText(
         'Could not resolve exact quote - will jump to best available location',
       ),
-    ).toHaveLength(2)
+    ).toHaveLength(3)
   })
 })
