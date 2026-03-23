@@ -77,10 +77,12 @@ function renderEvidencePanel(
     }),
   ]
   const selectEvidence = props.selectEvidence ?? vi.fn()
+  const hoverEvidence = props.hoverEvidence ?? vi.fn()
 
   const resolvedProps: EvidencePanelProps = {
     candidateEvidence,
     evidenceByGroup: props.evidenceByGroup ?? buildEvidenceByGroup(candidateEvidence),
+    hoverEvidence,
     hoveredEvidence: props.hoveredEvidence ?? null,
     selectedEvidence: props.selectedEvidence ?? null,
     selectEvidence,
@@ -94,6 +96,7 @@ function renderEvidencePanel(
 
   return {
     ...renderResult,
+    hoverEvidence,
     props: resolvedProps,
     selectEvidence,
   }
@@ -259,6 +262,25 @@ describe('EvidencePanel', () => {
 
     expect(selectEvidence).toHaveBeenCalledTimes(1)
     expect(selectEvidence).toHaveBeenCalledWith(clickableEvidence)
+  })
+
+  it('dispatches transient hover state when an evidence card is hovered', async () => {
+    const user = userEvent.setup()
+    const hoverableEvidence = createEvidenceRecord('anchor-hoverable')
+    const hoverEvidence = vi.fn()
+
+    renderEvidencePanel({
+      candidateEvidence: [hoverableEvidence],
+      hoverEvidence,
+    })
+
+    const card = screen.getByTestId('evidence-card-anchor-hoverable')
+
+    await user.hover(card)
+    expect(hoverEvidence).toHaveBeenNthCalledWith(1, hoverableEvidence)
+
+    await user.unhover(card)
+    expect(hoverEvidence).toHaveBeenNthCalledWith(2, null)
   })
 
   it('shows the degraded locator warning for page-level and unresolved anchors', () => {

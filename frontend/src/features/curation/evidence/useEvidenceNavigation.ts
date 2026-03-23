@@ -159,6 +159,15 @@ export function useEvidenceNavigation({
     () => buildEvidenceIndex(evidence, (record) => record.field_keys),
     [evidence]
   )
+  const evidenceByAnchorId = useMemo(
+    () =>
+      evidence.reduce<Record<string, CurationEvidenceRecord>>((index, record) => {
+        index[record.anchor_id] = record
+
+        return index
+      }, {}),
+    [evidence]
+  )
   const evidenceByGroup = useMemo(
     () => buildEvidenceIndex(evidence, (record) => record.field_group_keys),
     [evidence]
@@ -169,6 +178,7 @@ export function useEvidenceNavigation({
     hoveredEvidence: visibleNavigationState.hoveredEvidence,
     pendingNavigation: visibleNavigationState.pendingNavigation,
     candidateEvidence: evidence,
+    evidenceByAnchorId,
     evidenceByField,
     evidenceByGroup,
     selectEvidence: (selectedEvidence) =>
