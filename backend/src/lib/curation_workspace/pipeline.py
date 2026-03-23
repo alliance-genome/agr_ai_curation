@@ -13,6 +13,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.lib.curation_adapters.reference import (
+    REFERENCE_ADAPTER_KEY,
+    ReferenceCandidateNormalizer,
+)
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
 from src.lib.curation_workspace.evidence_quality import (
     evidence_anchor_payload_with_quality,
@@ -59,6 +63,14 @@ PREP_EVIDENCE_REFERENCES_METADATA_KEY = "prep_evidence_references"
 PREP_UNRESOLVED_AMBIGUITIES_METADATA_KEY = "prep_unresolved_ambiguities"
 NORMALIZER_METADATA_KEY = "normalizer"
 EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
+
+
+def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer]:
+    """Build the default adapter registry for candidate normalization."""
+
+    return {
+        REFERENCE_ADAPTER_KEY: ReferenceCandidateNormalizer(),
+    }
 
 
 class PipelineExecutionMode(str, Enum):
@@ -388,7 +400,7 @@ class PostCurationPipelineDependencies:
         default_factory=PassthroughCandidateNormalizer
     )
     candidate_normalizers: Mapping[str, CurationCandidateNormalizer] = field(
-        default_factory=dict
+        default_factory=_default_candidate_normalizers
     )
     evidence_resolver: EvidenceAnchorResolver = field(
         default_factory=DeterministicEvidenceAnchorResolver

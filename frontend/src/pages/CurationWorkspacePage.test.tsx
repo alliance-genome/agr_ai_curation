@@ -201,6 +201,156 @@ function buildWorkspace(): CurationWorkspace {
   }
 }
 
+function buildReferenceWorkspace(): CurationWorkspace {
+  return {
+    session: {
+      session_id: 'session-1',
+      status: 'in_progress',
+      adapter: {
+        adapter_key: 'reference',
+        display_label: 'Reference',
+        profile_label: null,
+        color_token: 'teal',
+        metadata: {},
+      },
+      document: {
+        document_id: 'document-1',
+        title: 'Reference Workspace Document',
+        pmid: '123456',
+        pdf_url: '/api/documents/document-1.pdf',
+        viewer_url: '/api/documents/document-1.pdf',
+      },
+      progress: {
+        total_candidates: 1,
+        reviewed_candidates: 0,
+        pending_candidates: 1,
+        accepted_candidates: 0,
+        rejected_candidates: 0,
+        manual_candidates: 0,
+      },
+      current_candidate_id: 'candidate-reference',
+      prepared_at: '2026-03-20T12:00:00Z',
+      warnings: [],
+      tags: [],
+      session_version: 1,
+      extraction_results: [],
+    },
+    candidates: [
+      {
+        candidate_id: 'candidate-reference',
+        session_id: 'session-1',
+        source: 'extracted',
+        status: 'pending',
+        order: 0,
+        adapter_key: 'reference',
+        display_label: 'Adapter-owned reference scaffold in practice',
+        conversation_summary: 'Reference adapter owns the editor pack and field layout.',
+        unresolved_ambiguities: [],
+        draft: {
+          draft_id: 'draft-reference',
+          candidate_id: 'candidate-reference',
+          adapter_key: 'reference',
+          version: 1,
+          title: 'Reference draft',
+          fields: [
+            {
+              field_key: 'citation.title',
+              label: 'Title',
+              value: 'Adapter-owned reference scaffold in practice',
+              seed_value: 'Adapter-owned reference scaffold in practice',
+              field_type: 'string',
+              group_key: 'citation_details',
+              group_label: 'Citation details',
+              order: 0,
+              required: true,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              metadata: {},
+            },
+            {
+              field_key: 'citation.authors',
+              label: 'Authors',
+              value: ['Ada Lovelace', 'Grace Hopper'],
+              seed_value: ['Ada Lovelace', 'Grace Hopper'],
+              field_type: 'json',
+              group_key: 'citation_details',
+              group_label: 'Citation details',
+              order: 10,
+              required: false,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              metadata: {
+                widget: 'reference_author_list',
+                helper_text: 'One author per line.',
+                placeholder: 'Ada Lovelace\nGrace Hopper',
+              },
+            },
+            {
+              field_key: 'citation.reference_type',
+              label: 'Reference type',
+              value: 'journal_article',
+              seed_value: 'journal_article',
+              field_type: 'string',
+              group_key: 'citation_details',
+              group_label: 'Citation details',
+              order: 40,
+              required: true,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              metadata: {
+                options: [
+                  {
+                    label: 'Journal article',
+                    value: 'journal_article',
+                  },
+                  {
+                    label: 'Review article',
+                    value: 'review_article',
+                  },
+                ],
+              },
+            },
+            {
+              field_key: 'identifiers.doi',
+              label: 'DOI',
+              value: '10.1000/reference-1',
+              seed_value: '10.1000/reference-1',
+              field_type: 'string',
+              group_key: 'identifiers',
+              group_label: 'Identifiers',
+              order: 100,
+              required: false,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              metadata: {},
+            },
+          ],
+          created_at: '2026-03-20T12:01:00Z',
+          updated_at: '2026-03-20T12:02:00Z',
+          metadata: {},
+        },
+        evidence_anchors: [],
+        created_at: '2026-03-20T12:01:00Z',
+        updated_at: '2026-03-20T12:02:00Z',
+        metadata: {},
+      },
+    ],
+    active_candidate_id: 'candidate-reference',
+    queue_context: null,
+    action_log: [],
+    submission_history: [],
+    saved_view_context: null,
+  }
+}
+
 function LocationProbe() {
   const location = useLocation()
   return (
@@ -326,6 +476,19 @@ describe('CurationWorkspacePage', () => {
         undefined,
       )
     })
+  })
+
+  it('uses the reference adapter editor pack for adapter-owned author widgets', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildReferenceWorkspace())
+
+    renderPage('/curation/session-1/candidate-reference')
+
+    const authorsInput = await screen.findByLabelText('Authors')
+
+    expect(screen.getByText('CITATION DETAILS')).toBeInTheDocument()
+    expect(screen.getByText('IDENTIFIERS')).toBeInTheDocument()
+    expect(screen.getByText('One author per line.')).toBeInTheDocument()
+    expect(authorsInput).toHaveValue('Ada Lovelace\nGrace Hopper')
   })
 
   it('updates the route when a queue card is selected and forwards hover/select navigation to the PDF viewer', async () => {
