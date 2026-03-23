@@ -1,4 +1,6 @@
 import type {
+  CurationManualCandidateCreateRequest,
+  CurationManualCandidateCreateResponse,
   CurationCandidateDraftUpdateRequest,
   CurationCandidateDraftUpdateResponse,
   CurationSessionUpdateRequest,
@@ -50,6 +52,20 @@ export async function updateCurationSession(
     `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}`,
     {
       method: 'PATCH',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function createManualCurationCandidate(
+  request: CurationManualCandidateCreateRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationManualCandidateCreateResponse> {
+  return fetchCurationWorkspaceJson<CurationManualCandidateCreateResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/candidates`,
+    {
+      method: 'POST',
       body: JSON.stringify(request),
       keepalive: options.keepalive,
     },

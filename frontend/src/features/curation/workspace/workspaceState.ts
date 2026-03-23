@@ -1,4 +1,5 @@
 import type {
+  CurationActionLogEntry,
   CurationCandidate,
   CurationCandidateDraftUpdateResponse,
   CurationDraftField,
@@ -80,6 +81,51 @@ export function replaceWorkspaceCandidate(
     candidates: workspace.candidates.map((currentCandidate) =>
       currentCandidate.candidate_id === candidate.candidate_id ? candidate : currentCandidate,
     ),
+  }
+}
+
+export function replaceWorkspaceCandidateById(
+  workspace: CurationWorkspace,
+  previousCandidateId: string,
+  candidate: CurationCandidate,
+): CurationWorkspace {
+  return {
+    ...workspace,
+    candidates: workspace.candidates.map((currentCandidate) =>
+      currentCandidate.candidate_id === previousCandidateId ? candidate : currentCandidate,
+    ),
+  }
+}
+
+export function appendWorkspaceCandidate(
+  workspace: CurationWorkspace,
+  candidate: CurationCandidate,
+): CurationWorkspace {
+  return {
+    ...workspace,
+    candidates: [...workspace.candidates, candidate],
+  }
+}
+
+export function removeWorkspaceCandidate(
+  workspace: CurationWorkspace,
+  candidateId: string,
+): CurationWorkspace {
+  return {
+    ...workspace,
+    candidates: workspace.candidates.filter(
+      (candidate) => candidate.candidate_id !== candidateId,
+    ),
+  }
+}
+
+export function appendWorkspaceActionLog(
+  workspace: CurationWorkspace,
+  actionLogEntry: CurationActionLogEntry,
+): CurationWorkspace {
+  return {
+    ...workspace,
+    action_log: [...workspace.action_log, actionLogEntry],
   }
 }
 

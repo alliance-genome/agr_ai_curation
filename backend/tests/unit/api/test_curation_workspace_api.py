@@ -16,6 +16,7 @@ from src.schemas.curation_workspace import (
     CurationEvidenceResolveRequest,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
+    CurationManualCandidateCreateRequest,
     CurationManualEvidenceCreateRequest,
     CurationSavedViewCreateRequest,
     CurationSessionCreateRequest,
@@ -388,6 +389,77 @@ async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
         "current_user_id": "user-1",
         "actor_claims": user,
         "db": db,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_manual_candidate_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _create_manual_candidate(db, session_id, request, *, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "create_manual_candidate", _create_manual_candidate)
+
+    session_id = uuid4()
+    request = CurationManualCandidateCreateRequest(
+        session_id=str(session_id),
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        source="manual",
+        display_label="Manual candidate",
+        draft={
+            "draft_id": "draft-temp-1",
+            "candidate_id": "candidate-temp-1",
+            "adapter_key": "reference_adapter",
+            "version": 1,
+            "title": "Manual candidate",
+            "fields": [
+                {
+                    "field_key": "field_a",
+                    "label": "Field A",
+                    "value": "value alpha",
+                    "seed_value": "value alpha",
+                    "field_type": "string",
+                    "group_key": "group_one",
+                    "group_label": "Group One",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                }
+            ],
+            "created_at": "2026-03-21T10:00:00Z",
+            "updated_at": "2026-03-21T10:00:00Z",
+            "metadata": {},
+        },
+        evidence_anchors=[],
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.post_manual_candidate(
+        session_id,
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "request": request,
+        "actor_claims": user,
     }
 
 

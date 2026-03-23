@@ -11,6 +11,7 @@ import CurationWorkspacePage from './CurationWorkspacePage'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
+  createManualCurationCandidate: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
@@ -19,6 +20,7 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
+  createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
@@ -404,6 +406,7 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
 describe('CurationWorkspacePage', () => {
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
+    serviceMocks.createManualCurationCandidate.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()

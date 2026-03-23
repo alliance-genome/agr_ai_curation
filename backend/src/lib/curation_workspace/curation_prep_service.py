@@ -178,6 +178,10 @@ def _build_persistence_request(
         metadata={
             "final_run_metadata": final_output.run_metadata.model_dump(mode="json"),
             "raw_response_ids": _extract_raw_response_ids(getattr(result, "raw_responses", None)),
+            "adapter_metadata": [
+                metadata.model_dump(mode="json")
+                for metadata in agent_input.adapter_metadata
+            ],
             "scope_confirmed": agent_input.scope_confirmation.confirmed,
             "scope_adapter_keys": list(agent_input.scope_confirmation.adapter_keys),
             "scope_profile_keys": list(agent_input.scope_confirmation.profile_keys),

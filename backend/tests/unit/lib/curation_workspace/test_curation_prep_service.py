@@ -229,6 +229,10 @@ async def test_run_curation_prep_populates_usage_and_persists_raw_output(monkeyp
     assert persisted_request.user_id == "user-upstream"
     assert persisted_request.candidate_count == 1
     assert persisted_request.payload_json["run_metadata"]["model_name"] == "service-populated"
+    assert persisted_request.metadata["adapter_metadata"] == [
+        metadata.model_dump(mode="json")
+        for metadata in agent_input.adapter_metadata
+    ]
     assert persisted_request.metadata["final_run_metadata"]["model_name"] == "gpt-5-mini"
     assert persisted_request.metadata["raw_response_ids"] == ["resp-1", "resp-2"]
 

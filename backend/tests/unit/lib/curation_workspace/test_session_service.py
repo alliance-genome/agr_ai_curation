@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.ext.compiler import compiles
@@ -27,11 +27,13 @@ from src.lib.curation_workspace.models import (
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
+    CurationActionType,
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
+    CurationManualCandidateCreateRequest,
     CurationSessionFilters,
     CurationSessionListRequest,
     CurationSessionSortField,
@@ -130,6 +132,8 @@ def _create_extraction_result(
     domain_key: str,
     origin_session_id: str = "chat-session-1",
     flow_run_id: str = "flow-1",
+    candidate_count: int = 1,
+    metadata: dict | None = None,
 ) -> ExtractionResultModel:
     record = ExtractionResultModel(
         id=uuid4(),
@@ -143,7 +147,7 @@ def _create_extraction_result(
         trace_id=f"trace-{domain_key}",
         flow_run_id=flow_run_id,
         user_id="user-1",
-        candidate_count=1,
+        candidate_count=candidate_count,
         conversation_summary=f"Prep summary for {domain_key}.",
         payload_json={
             "candidates": [],
@@ -158,7 +162,7 @@ def _create_extraction_result(
                 "warnings": [],
             },
         },
-        extraction_metadata={"final_run_metadata": {"model_name": "gpt-5-mini"}},
+        extraction_metadata=metadata or {"final_run_metadata": {"model_name": "gpt-5-mini"}},
         created_at=_now(),
     )
     db_session.add(record)
@@ -256,6 +260,98 @@ def _create_review_session(
     return session_row
 
 
+def _build_manual_candidate_request(
+    *,
+    session_id: str,
+    source: CurationCandidateSource = CurationCandidateSource.MANUAL,
+) -> CurationManualCandidateCreateRequest:
+    timestamp = _now()
+
+    return CurationManualCandidateCreateRequest(
+        session_id=session_id,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        source=source,
+        display_label="Manual candidate",
+        draft={
+            "draft_id": "draft-temp-1",
+            "candidate_id": "candidate-temp-1",
+            "adapter_key": "reference_adapter",
+            "version": 1,
+            "title": "Manual candidate",
+            "fields": [
+                {
+                    "field_key": "field_a",
+                    "label": "Field A",
+                    "value": "value alpha",
+                    "seed_value": None,
+                    "field_type": "string",
+                    "group_key": "group_one",
+                    "group_label": "Group One",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                },
+                {
+                    "field_key": "field_b",
+                    "label": "Field B",
+                    "value": None,
+                    "seed_value": None,
+                    "field_type": "string",
+                    "group_key": "group_two",
+                    "group_label": "Group Two",
+                    "order": 1,
+                    "required": False,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                },
+            ],
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "metadata": {},
+        },
+        evidence_anchors=[
+            {
+                "anchor_id": "anchor-temp-1",
+                "candidate_id": "candidate-temp-1",
+                "source": "manual",
+                "field_keys": ["field_a"],
+                "field_group_keys": ["group_one"],
+                "is_primary": False,
+                "anchor": {
+                    "anchor_kind": "snippet",
+                    "locator_quality": "exact_quote",
+                    "supports_decision": "supports",
+                    "snippet_text": "Quoted support text",
+                    "sentence_text": "Quoted support text",
+                    "normalized_text": None,
+                    "viewer_search_text": "Quoted support text",
+                    "viewer_highlightable": True,
+                    "pdfx_markdown_offset_start": None,
+                    "pdfx_markdown_offset_end": None,
+                    "page_number": 4,
+                    "page_label": None,
+                    "section_title": "Results",
+                    "subsection_title": None,
+                    "figure_reference": None,
+                    "table_reference": None,
+                    "chunk_ids": [],
+                },
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "warnings": [],
+            }
+        ],
+    )
+
+
 def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
     document = _create_document(db_session)
     document_id = str(document.id)
@@ -297,6 +393,195 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
 
     assert matching is not None
     assert matching.session_id == str(session_alpha.id)
+
+
+def test_create_manual_candidate_persists_candidate_updates_session_and_logs_action(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session,
+        document_id=str(document.id),
+        domain_key="alpha",
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    response = module.create_manual_candidate(
+        db_session,
+        str(session_row.id),
+        _build_manual_candidate_request(session_id=str(session_row.id)),
+        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+    )
+
+    assert response.candidate.source == CurationCandidateSource.MANUAL
+    assert response.candidate.status == CurationCandidateStatus.PENDING
+    assert response.candidate.order == 1
+    assert response.candidate.display_label == "Manual candidate"
+    assert response.candidate.profile_key == "primary"
+    assert response.candidate.draft.title == "Manual candidate"
+    assert response.candidate.draft.fields[0].seed_value == "value alpha"
+    assert response.candidate.draft.fields[0].dirty is False
+    assert response.candidate.evidence_anchors[0].field_keys == ["field_a"]
+    assert response.session.current_candidate_id == response.candidate.candidate_id
+    assert response.session.progress.total_candidates == 2
+    assert response.session.progress.pending_candidates == 2
+    assert response.session.progress.manual_candidates == 1
+    assert response.action_log_entry.action_type == CurationActionType.CANDIDATE_CREATED
+    assert response.action_log_entry.candidate_id == response.candidate.candidate_id
+    assert response.action_log_entry.draft_id == response.candidate.draft.draft_id
+    assert response.action_log_entry.changed_field_keys == ["field_a", "field_b"]
+    assert response.action_log_entry.evidence_anchor_ids == [
+        response.candidate.evidence_anchors[0].anchor_id
+    ]
+
+    persisted_candidates = db_session.scalars(
+        select(CurationCandidate)
+        .where(CurationCandidate.session_id == session_row.id)
+        .order_by(CurationCandidate.order)
+    ).all()
+    assert len(persisted_candidates) == 2
+    assert persisted_candidates[-1].source == CurationCandidateSource.MANUAL
+
+    refreshed_session = db_session.get(ReviewSessionModel, session_row.id)
+    assert refreshed_session is not None
+    assert refreshed_session.current_candidate_id == UUID(response.candidate.candidate_id)
+
+    action_log_rows = db_session.scalars(
+        select(SessionActionLogModel)
+        .where(SessionActionLogModel.session_id == session_row.id)
+        .where(SessionActionLogModel.action_type == CurationActionType.CANDIDATE_CREATED)
+    ).all()
+    assert len(action_log_rows) == 1
+    assert action_log_rows[0].new_candidate_status == CurationCandidateStatus.PENDING
+
+
+def test_create_manual_candidate_rejects_non_manual_source(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session,
+        document_id=str(document.id),
+        domain_key="alpha",
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        module.create_manual_candidate(
+            db_session,
+            str(session_row.id),
+            _build_manual_candidate_request(
+                session_id=str(session_row.id),
+                source=CurationCandidateSource.IMPORTED,
+            ),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Manual candidate creation only supports source=manual"
+
+
+def test_get_session_detail_exposes_adapter_template_fields_for_zero_candidate_sessions(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session,
+        document_id=str(document.id),
+        domain_key="alpha",
+        candidate_count=0,
+        metadata={
+            "final_run_metadata": {"model_name": "gpt-5-mini"},
+            "adapter_metadata": [
+                {
+                    "adapter_key": "reference_adapter",
+                    "profile_key": "primary",
+                    "required_field_keys": ["field_a", "field_b"],
+                    "field_hints": [
+                        {
+                            "field_key": "field_a",
+                            "required": True,
+                            "label": "Field A",
+                            "value_type": "string",
+                            "description": "Primary field",
+                            "controlled_vocabulary": ["alpha"],
+                            "normalization_hints": ["Use canonical value."],
+                        }
+                    ],
+                    "notes": ["Adapter-owned field hints persisted from prep."],
+                }
+            ],
+        },
+    )
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=CurationSessionStatus.NEW,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        document_id=UUID(str(document.id)),
+        flow_run_id=extraction_result.flow_run_id,
+        session_version=1,
+        notes="Prepared empty session.",
+        tags=[],
+        total_candidates=0,
+        reviewed_candidates=0,
+        pending_candidates=0,
+        accepted_candidates=0,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=_now(),
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db_session.add(session_row)
+    db_session.commit()
+
+    response = module.get_session_detail(db_session, str(session_row.id))
+
+    assert response.progress.total_candidates == 0
+    assert response.adapter.metadata["manual_template_source"] == "prep_adapter_metadata"
+    assert response.adapter.metadata["manual_draft_fields"] == [
+        {
+            "field_key": "field_a",
+            "label": "Field A",
+            "value": None,
+            "seed_value": None,
+            "field_type": "string",
+            "group_key": None,
+            "group_label": None,
+            "order": 0,
+            "required": True,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": False,
+            "evidence_anchor_ids": [],
+            "metadata": {
+                "description": "Primary field",
+                "controlled_vocabulary": ["alpha"],
+                "normalization_hints": ["Use canonical value."],
+            },
+        },
+        {
+            "field_key": "field_b",
+            "label": "Field B",
+            "value": None,
+            "seed_value": None,
+            "field_type": None,
+            "group_key": None,
+            "group_label": None,
+            "order": 1,
+            "required": True,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": False,
+            "evidence_anchor_ids": [],
+            "metadata": {},
+        },
+    ]
+
 
 def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db_session):
     document = _create_document(db_session)
