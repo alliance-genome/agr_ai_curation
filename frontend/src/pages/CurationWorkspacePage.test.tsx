@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +13,7 @@ const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
+  renderPdfViewer: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
@@ -27,8 +28,27 @@ vi.mock('@/components/pdfViewer/pdfEvents', () => ({
 }))
 
 vi.mock('@/components/pdfViewer/PdfViewer', () => ({
-  default: () => <div data-testid="pdf-viewer">PDF viewer</div>,
+  default: (props: MockPdfViewerProps) => {
+    serviceMocks.renderPdfViewer(props)
+    return <div data-testid="pdf-viewer">PDF viewer</div>
+  },
 }))
+
+type MockPdfViewerProps = {
+  pendingNavigation?: {
+    mode?: string
+    pageNumber?: number | null
+    sectionTitle?: string | null
+    searchText?: string | null
+  } | null
+  onNavigationComplete?: () => void
+}
+
+function getLatestPdfViewerProps(): MockPdfViewerProps {
+  const latestCall = serviceMocks.renderPdfViewer.mock.lastCall
+
+  return (latestCall?.[0] as MockPdfViewerProps) ?? {}
+}
 
 function buildWorkspace(): CurationWorkspace {
   return {
@@ -121,7 +141,11 @@ function buildWorkspace(): CurationWorkspace {
               anchor_kind: 'snippet',
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
-              chunk_ids: [],
+              snippet_text: 'APOE evidence sentence',
+              viewer_search_text: 'APOE evidence sentence',
+              page_number: 3,
+              section_title: 'Results',
+              chunk_ids: ['chunk-1'],
             },
             created_at: '2026-03-20T12:03:00Z',
             updated_at: '2026-03-20T12:04:00Z',
@@ -196,6 +220,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
+    serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.updateCurationSession.mockReset()
   })
 
@@ -220,7 +245,10 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByText('Candidates (2)')).toBeInTheDocument()
     expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
-    expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
+    expect(screen.getByText('Evidence Anchors (0)')).toBeInTheDocument()
+    expect(
+      screen.getByText('No evidence anchors are available for this candidate.'),
+    ).toBeInTheDocument()
     expect(screen.getAllByText('1/2 reviewed')).toHaveLength(2)
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
@@ -238,7 +266,7 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(screen.getAllByText('Accepted candidate')).toHaveLength(2)
+      expect(screen.getAllByText('Accepted candidate')).toHaveLength(1)
     })
 
     expect(screen.getByTestId('location')).toHaveTextContent(
@@ -261,7 +289,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('updates the route when a queue card is selected', async () => {
+  it('updates the route when a queue card is selected and only forwards click navigation to the PDF viewer', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
@@ -287,6 +315,36 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByTestId('location')).toHaveTextContent(
         '/curation/session-1/candidate-pending',
       )
+    })
+
+    expect(screen.getByText('Evidence Anchors (1)')).toBeInTheDocument()
+    expect(screen.getByText('APOE evidence sentence')).toBeInTheDocument()
+
+    const evidenceCard = screen.getByTestId('evidence-card-anchor-1')
+
+    await user.hover(evidenceCard)
+    fireEvent.focus(evidenceCard)
+
+    expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+
+    await user.click(evidenceCard)
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+        mode: 'select',
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'APOE evidence sentence',
+      })
+      expect(getLatestPdfViewerProps().onNavigationComplete).toEqual(expect.any(Function))
+    })
+
+    await act(async () => {
+      getLatestPdfViewerProps().onNavigationComplete?.()
+    })
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
     })
   })
 
