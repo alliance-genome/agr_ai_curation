@@ -60,6 +60,8 @@ describe('useEvidenceNavigation', () => {
       primaryEvidence,
       diseaseEvidence,
     ])
+    expect(result.current.evidenceByAnchorId['anchor-1']).toBe(primaryEvidence)
+    expect(result.current.evidenceByAnchorId['anchor-2']).toBe(diseaseEvidence)
     expect(result.current.evidenceByField.gene_symbol).toEqual([primaryEvidence])
     expect(result.current.evidenceByField.disease_name).toEqual([
       primaryEvidence,
@@ -135,6 +137,32 @@ describe('useEvidenceNavigation', () => {
     })
   })
 
+  it('does not re-emit selection when hover end occurs without an active transient hover', () => {
+    const selectedEvidence = createEvidenceRecord('anchor-1')
+    const evidenceRecords = [selectedEvidence]
+    const { result } = renderHook(() =>
+      useEvidenceNavigation({ evidence: evidenceRecords })
+    )
+
+    act(() => {
+      result.current.selectEvidence(selectedEvidence)
+    })
+
+    act(() => {
+      result.current.acknowledgeNavigation()
+    })
+
+    expect(result.current.pendingNavigation).toBeNull()
+
+    act(() => {
+      result.current.hoverEvidence(null)
+    })
+
+    expect(result.current.selectedEvidence).toBe(selectedEvidence)
+    expect(result.current.hoveredEvidence).toBeNull()
+    expect(result.current.pendingNavigation).toBeNull()
+  })
+
   it('navigates without mutating selection state and clears stale commands after acknowledgement', () => {
     const evidence = createEvidenceRecord('anchor-1', {
       anchor: {
@@ -185,7 +213,7 @@ describe('useEvidenceNavigation', () => {
     })
 
     expect(result.current.selectedEvidence).toBe(currentEvidence[0])
-    expect(result.current.hoveredEvidence).toBe(currentEvidence[0])
+    expect(result.current.hoveredEvidence).toBeNull()
 
     act(() => {
       result.current.clearEvidence()
@@ -220,6 +248,12 @@ describe('useEvidenceNavigation', () => {
     > = []
     let latestHookValue: UseEvidenceNavigationReturn | null = null
 
+    function getLatestHookValue(): UseEvidenceNavigationReturn {
+      expect(latestHookValue).not.toBeNull()
+
+      return latestHookValue as UseEvidenceNavigationReturn
+    }
+
     function Probe({ evidence }: { evidence: CurationEvidenceRecord[] }) {
       const hookValue = useEvidenceNavigation({ evidence })
       latestHookValue = hookValue
@@ -238,7 +272,7 @@ describe('useEvidenceNavigation', () => {
       latestHookValue?.selectEvidence(currentEvidence[0])
     })
 
-    expect(latestHookValue?.selectedEvidence).toBe(currentEvidence[0])
+    expect(getLatestHookValue().selectedEvidence).toBe(currentEvidence[0])
 
     snapshots.length = 0
 
@@ -251,8 +285,8 @@ describe('useEvidenceNavigation', () => {
       hoveredEvidence: null,
       pendingNavigation: null,
     })
-    expect(latestHookValue?.selectedEvidence).toBeNull()
-    expect(latestHookValue?.hoveredEvidence).toBeNull()
-    expect(latestHookValue?.pendingNavigation).toBeNull()
+    expect(getLatestHookValue().selectedEvidence).toBeNull()
+    expect(getLatestHookValue().hoveredEvidence).toBeNull()
+    expect(getLatestHookValue().pendingNavigation).toBeNull()
   })
 })

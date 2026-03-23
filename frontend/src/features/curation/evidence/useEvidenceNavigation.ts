@@ -51,6 +51,17 @@ function buildNavigationCommand(
   }
 }
 
+function isSameEvidence(
+  left: CurationEvidenceRecord | null,
+  right: CurationEvidenceRecord | null
+): boolean {
+  if (left === null || right === null) {
+    return left === right
+  }
+
+  return left.anchor_id === right.anchor_id
+}
+
 function evidenceNavigationReducer(
   state: EvidenceNavigationRuntimeState,
   action: EvidenceNavigationAction
@@ -75,6 +86,10 @@ function evidenceNavigationReducer(
       }
     case 'hover':
       if (action.evidence === null) {
+        if (state.hoveredEvidence === null) {
+          return state
+        }
+
         return {
           ...state,
           hoveredEvidence: null,
@@ -82,6 +97,24 @@ function evidenceNavigationReducer(
             state.selectedEvidence === null
               ? null
               : buildNavigationCommand(state.selectedEvidence, 'select'),
+        }
+      }
+
+      if (
+        state.selectedEvidence !== null
+        && isSameEvidence(action.evidence, state.selectedEvidence)
+      ) {
+        if (state.hoveredEvidence === null) {
+          return state
+        }
+
+        return {
+          ...state,
+          hoveredEvidence: null,
+          pendingNavigation: buildNavigationCommand(
+            state.selectedEvidence,
+            'select'
+          ),
         }
       }
 
@@ -159,6 +192,15 @@ export function useEvidenceNavigation({
     () => buildEvidenceIndex(evidence, (record) => record.field_keys),
     [evidence]
   )
+  const evidenceByAnchorId = useMemo(
+    () =>
+      evidence.reduce<Record<string, CurationEvidenceRecord>>((index, record) => {
+        index[record.anchor_id] = record
+
+        return index
+      }, {}),
+    [evidence]
+  )
   const evidenceByGroup = useMemo(
     () => buildEvidenceIndex(evidence, (record) => record.field_group_keys),
     [evidence]
@@ -169,6 +211,7 @@ export function useEvidenceNavigation({
     hoveredEvidence: visibleNavigationState.hoveredEvidence,
     pendingNavigation: visibleNavigationState.pendingNavigation,
     candidateEvidence: evidence,
+    evidenceByAnchorId,
     evidenceByField,
     evidenceByGroup,
     selectEvidence: (selectedEvidence) =>

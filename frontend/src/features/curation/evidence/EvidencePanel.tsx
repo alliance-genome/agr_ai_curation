@@ -15,6 +15,7 @@ type EvidencePanelNavigationProps = Pick<
   UseEvidenceNavigationReturn,
   | 'candidateEvidence'
   | 'evidenceByGroup'
+  | 'hoverEvidence'
   | 'hoveredEvidence'
   | 'selectEvidence'
   | 'selectedEvidence'
@@ -84,6 +85,7 @@ function getSnippetText(
 export default function EvidencePanel({
   candidateEvidence,
   evidenceByGroup,
+  hoverEvidence,
   selectedEvidence,
   hoveredEvidence,
   selectEvidence,
@@ -210,7 +212,11 @@ export default function EvidencePanel({
                   data-hovered={isHovered ? 'true' : 'false'}
                   data-testid={`evidence-card-${record.anchor_id}`}
                   key={record.anchor_id}
+                  onBlur={() => hoverEvidence(null)}
                   onClick={() => selectEvidence(record)}
+                  onFocus={() => hoverEvidence(record)}
+                  onMouseEnter={() => hoverEvidence(record)}
+                  onMouseLeave={() => hoverEvidence(null)}
                   type="button"
                   sx={{
                     width: '100%',

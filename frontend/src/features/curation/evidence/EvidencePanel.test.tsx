@@ -6,42 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CurationEvidenceRecord } from '../types'
 import theme from '@/theme'
 import EvidencePanel, { type EvidencePanelProps } from './EvidencePanel'
-
-type EvidenceRecordOverrides = Partial<Omit<CurationEvidenceRecord, 'anchor'>> & {
-  anchor?: Partial<CurationEvidenceRecord['anchor']>
-}
-
-function createEvidenceRecord(
-  anchorId: string,
-  overrides: EvidenceRecordOverrides = {},
-): CurationEvidenceRecord {
-  const { anchor: anchorOverrides, ...recordOverrides } = overrides
-
-  return {
-    anchor_id: anchorId,
-    candidate_id: 'candidate-1',
-    source: 'extracted',
-    field_keys: ['gene_symbol'],
-    field_group_keys: ['identity'],
-    is_primary: anchorId === 'anchor-1',
-    anchor: {
-      anchor_kind: 'snippet',
-      locator_quality: 'exact_quote',
-      supports_decision: 'supports',
-      snippet_text: `Snippet for ${anchorId}`,
-      sentence_text: `Sentence for ${anchorId}`,
-      viewer_search_text: `Search text for ${anchorId}`,
-      page_number: 3,
-      section_title: 'Results',
-      chunk_ids: [`chunk-${anchorId}`],
-      ...anchorOverrides,
-    },
-    created_at: '2026-03-20T12:00:00Z',
-    updated_at: '2026-03-20T12:00:00Z',
-    warnings: [],
-    ...recordOverrides,
-  }
-}
+import { createEvidenceRecord } from './testFactories'
 
 function buildEvidenceByGroup(
   candidateEvidence: CurationEvidenceRecord[],
@@ -77,10 +42,12 @@ function renderEvidencePanel(
     }),
   ]
   const selectEvidence = props.selectEvidence ?? vi.fn()
+  const hoverEvidence = props.hoverEvidence ?? vi.fn()
 
   const resolvedProps: EvidencePanelProps = {
     candidateEvidence,
     evidenceByGroup: props.evidenceByGroup ?? buildEvidenceByGroup(candidateEvidence),
+    hoverEvidence,
     hoveredEvidence: props.hoveredEvidence ?? null,
     selectedEvidence: props.selectedEvidence ?? null,
     selectEvidence,
@@ -94,6 +61,7 @@ function renderEvidencePanel(
 
   return {
     ...renderResult,
+    hoverEvidence,
     props: resolvedProps,
     selectEvidence,
   }
@@ -259,6 +227,25 @@ describe('EvidencePanel', () => {
 
     expect(selectEvidence).toHaveBeenCalledTimes(1)
     expect(selectEvidence).toHaveBeenCalledWith(clickableEvidence)
+  })
+
+  it('dispatches transient hover state when an evidence card is hovered', async () => {
+    const user = userEvent.setup()
+    const hoverableEvidence = createEvidenceRecord('anchor-hoverable')
+    const hoverEvidence = vi.fn()
+
+    renderEvidencePanel({
+      candidateEvidence: [hoverableEvidence],
+      hoverEvidence,
+    })
+
+    const card = screen.getByTestId('evidence-card-anchor-hoverable')
+
+    await user.hover(card)
+    expect(hoverEvidence).toHaveBeenNthCalledWith(1, hoverableEvidence)
+
+    await user.unhover(card)
+    expect(hoverEvidence).toHaveBeenNthCalledWith(2, null)
   })
 
   it('shows the degraded locator warning for page-level and unresolved anchors', () => {

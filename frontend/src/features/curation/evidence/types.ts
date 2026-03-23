@@ -28,6 +28,7 @@ export interface EvidenceNavigationState {
   hoveredEvidence: CurationEvidenceRecord | null
   pendingNavigation: EvidenceNavigationCommand | null
   candidateEvidence: CurationEvidenceRecord[]
+  evidenceByAnchorId: Record<string, CurationEvidenceRecord>
   evidenceByField: Record<string, CurationEvidenceRecord[]>
   evidenceByGroup: Record<string, CurationEvidenceRecord[]>
 }
