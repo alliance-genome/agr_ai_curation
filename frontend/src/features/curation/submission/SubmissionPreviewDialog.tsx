@@ -214,8 +214,7 @@ export default function SubmissionPreviewDialog({
       && submitAvailable
       && onSubmit
       && response
-      && readyCount > 0
-      && blockingValidationIssues === 0,
+      && readyCount > 0,
   )
 
   async function handlePrimaryAction() {

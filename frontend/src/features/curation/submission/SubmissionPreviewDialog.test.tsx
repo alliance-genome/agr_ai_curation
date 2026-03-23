@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
@@ -197,7 +198,9 @@ function buildResponse({
   }
 }
 
-function renderDialog() {
+function renderDialog(
+  props: Partial<ComponentProps<typeof SubmissionPreviewDialog>> = {},
+) {
   return render(
     <ThemeProvider theme={theme}>
       <SubmissionPreviewDialog
@@ -205,6 +208,7 @@ function renderDialog() {
         onClose={vi.fn()}
         open
         session={buildSession()}
+        {...props}
       />
     </ThemeProvider>,
   )
@@ -308,7 +312,7 @@ describe('SubmissionPreviewDialog', () => {
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:submission-preview')
   })
 
-  it('gates submit mode when validation is blocking or no transport is available', async () => {
+  it('gates submit mode when no candidates are ready and no transport is available', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchSubmissionPreview
@@ -340,6 +344,46 @@ describe('SubmissionPreviewDialog', () => {
     expect(screen.getByText('No submission transport is configured for this adapter yet.')).toBeInTheDocument()
     expect(screen.getByText(/Session validation summary: 1 invalid/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+  })
+
+  it('allows direct submit when at least one candidate is ready even if other session validation issues remain', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    const submitResponse = buildResponse({
+      mode: 'direct_submit',
+      readyCandidateIds: ['candidate-ready'],
+      invalidCount: 1,
+    })
+
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildResponse())
+      .mockResolvedValueOnce(submitResponse)
+
+    renderDialog({
+      onSubmit,
+      submitAvailable: true,
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
+        session_id: 'session-1',
+        mode: 'direct_submit',
+        include_payload: true,
+      })
+    })
+
+    expect(screen.getByText(/Session validation summary: 1 invalid/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(onSubmit).toHaveBeenCalledWith(submitResponse)
   })
 
   it('renders service errors when preview loading fails', async () => {
