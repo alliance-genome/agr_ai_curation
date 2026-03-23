@@ -29,10 +29,11 @@ import type {
 } from '@/features/curation/types'
 import {
   CurationWorkspaceProvider,
+  useCurationWorkspaceAutosave,
   useCurationWorkspaceContext,
+  useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
-import { useAutosave } from '@/features/curation/workspace/useAutosave'
-import { useSessionHydration } from '@/features/curation/workspace/useSessionHydration'
+import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
@@ -133,14 +134,12 @@ function WorkspaceSlotPlaceholder({
 
 function CurationWorkspacePageContent({
   queueNavigationState,
-  routeCandidateId,
 }: {
   queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
-  routeCandidateId?: string
 }) {
   const { activeCandidate, workspace } = useCurationWorkspaceContext()
-  const autosave = useAutosave()
-  const hydration = useSessionHydration({ routeCandidateId })
+  const autosave = useCurationWorkspaceAutosave()
+  const hydration = useCurationWorkspaceHydration()
   const runtimeWarning = autosave.warning ?? hydration.warning
 
   useEffect(() => {
@@ -507,10 +506,9 @@ function CurationWorkspacePage() {
 
   return (
     <CurationWorkspaceProvider value={contextValue}>
-      <CurationWorkspacePageContent
-        queueNavigationState={queueNavigationState}
-        routeCandidateId={candidateId}
-      />
+      <CurationWorkspaceRuntimeProvider routeCandidateId={candidateId}>
+        <CurationWorkspacePageContent queueNavigationState={queueNavigationState} />
+      </CurationWorkspaceRuntimeProvider>
     </CurationWorkspaceProvider>
   )
 }
