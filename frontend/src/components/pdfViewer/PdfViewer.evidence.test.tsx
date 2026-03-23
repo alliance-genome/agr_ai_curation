@@ -143,6 +143,7 @@ const installMockPdfViewer = ({
 
   let currentPageNumber = 1
   const pageViews = new Map<number, { div: HTMLElement; viewport: { convertToViewportRectangle: (coords: number[]) => number[] } }>()
+  const textNodeLayouts = new WeakMap<Text, { rect: DOMRect; charWidth: number }>()
 
   pages.forEach((page, pageIndex) => {
     const pageTop = pageIndex * 900
@@ -157,12 +158,20 @@ const installMockPdfViewer = ({
     page.textSegments.forEach((segment, segmentIndex) => {
       const span = iframeDocument.createElement('span')
       span.textContent = segment
-      span.getBoundingClientRect = () => createMockRect(
+      const spanRect = createMockRect(
         32,
         pageTop + 48 + (segmentIndex * 28),
         Math.max(60, segment.length * 5),
         20,
       )
+      span.getBoundingClientRect = () => spanRect
+      const textNode = span.firstChild as Text | null
+      if (textNode) {
+        textNodeLayouts.set(textNode, {
+          rect: spanRect,
+          charWidth: segment.length > 0 ? spanRect.width / segment.length : spanRect.width,
+        })
+      }
       textLayer.appendChild(span)
     })
 
@@ -176,6 +185,49 @@ const installMockPdfViewer = ({
       },
     })
   })
+
+  iframeDocument.createRange = (() => {
+    let startNode: Text | null = null
+    let endNode: Text | null = null
+    let startOffset = 0
+    let endOffset = 0
+
+    const buildRangeRect = (): DOMRect | null => {
+      if (!startNode || !endNode || startNode !== endNode || endOffset <= startOffset) {
+        return null
+      }
+
+      const layout = textNodeLayouts.get(startNode)
+      if (!layout) {
+        return null
+      }
+
+      return createMockRect(
+        layout.rect.left + (startOffset * layout.charWidth),
+        layout.rect.top,
+        (endOffset - startOffset) * layout.charWidth,
+        layout.rect.height,
+      )
+    }
+
+    return () => ({
+      setStart(node: Node, offset: number) {
+        startNode = node as Text
+        startOffset = offset
+      },
+      setEnd(node: Node, offset: number) {
+        endNode = node as Text
+        endOffset = offset
+      },
+      getClientRects() {
+        const rect = buildRangeRect()
+        return rect ? [rect] : []
+      },
+      getBoundingClientRect() {
+        return buildRangeRect() ?? createMockRect(0, 0, 0, 0)
+      },
+    } as unknown as Range)
+  })()
 
   const pdfViewer = {
     get currentPageNumber() {
@@ -414,6 +466,80 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('select')
     expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('solid')
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
+  })
+
+  it('derives highlight rects from the matched substring instead of the whole text span', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const query = 'Exact quote from PDFX markdown'
+    const prefix = 'Prefix '
+    const suffix = ' suffix'
+
+    render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
+
+    dispatchPDFDocumentChanged('doc-2b', '/fixtures/sample.pdf', 'substring.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('substring.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 1 : 0,
+        current: candidate === query ? 1 : 0,
+        pageIdx: candidate === query ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: [`${prefix}${query}${suffix}`, 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+
+    const highlightRect = getEvidenceHighlightRects(iframe)[0]
+    expect(highlightRect.style.left).toBe(`${32 + (prefix.length * 5)}px`)
+    expect(highlightRect.style.width).toBe(`${query.length * 5}px`)
+  })
+
+  it('uses the selected repeated same-page match index for text-layer highlighting', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const query = 'Exact quote from PDFX markdown'
+
+    render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
+
+    dispatchPDFDocumentChanged('doc-2c', '/fixtures/sample.pdf', 'repeated.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('repeated.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 2 : 0,
+        current: candidate === query ? 2 : 0,
+        pageIdx: candidate === query ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: ['Header', query, 'gap', query, 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+
+    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
   })
 
   it('renders hover previews differently from selected evidence highlights', async () => {

@@ -189,6 +189,7 @@ interface EvidenceTextLayerHighlight {
   mode: EvidenceNavigationCommand['mode']
   pageNumber: number
   query: string
+  pageMatchIndex: number | null
 }
 
 export interface PdfViewerProps {
@@ -338,6 +339,11 @@ const getSelectedEvidenceSpikePage = (pdfApp: any): number | null => {
   return typeof pageIdx === 'number' && pageIdx >= 0 ? pageIdx + 1 : null
 }
 
+const getSelectedEvidenceSpikeMatchIndex = (pdfApp: any): number | null => {
+  const matchIdx = pdfApp?.findController?.selected?.matchIdx
+  return typeof matchIdx === 'number' && matchIdx >= 0 ? matchIdx : null
+}
+
 const setEvidenceSpikePage = (pdfApp: any, pageNumber: number): boolean => {
   const normalizedPage = Math.max(1, Math.floor(pageNumber))
 
@@ -381,6 +387,11 @@ interface TextLayerTextSegment {
   end: number
 }
 
+interface TextLayerMatchRange {
+  rawStart: number
+  rawEndExclusive: number
+}
+
 const getPageContainer = (iframeDoc: Document, pageNumber: number): HTMLElement | null => {
   return iframeDoc.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"]`)
 }
@@ -416,32 +427,147 @@ const buildTextLayerSegments = (textLayer: HTMLElement): {
   return { rawText, segments }
 }
 
-const buildRectsFromTextSegments = (
+const normalizeEvidenceTextLayerRect = (
+  pageContainer: HTMLElement,
+  rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>,
+): EvidenceTextLayerRect | null => {
+  const pageRect = pageContainer.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null
+  }
+
+  return {
+    left: rect.left - pageRect.left,
+    top: rect.top - pageRect.top,
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
+const pushUniqueEvidenceTextLayerRect = (
+  acc: EvidenceTextLayerRect[],
+  seen: Set<string>,
+  rect: EvidenceTextLayerRect | null,
+): void => {
+  if (!rect) {
+    return
+  }
+
+  const key = `${rect.left}:${rect.top}:${rect.width}:${rect.height}`
+  if (seen.has(key)) {
+    return
+  }
+
+  seen.add(key)
+  acc.push(rect)
+}
+
+const getSourceCodeUnitLength = (value: string, index: number): number => {
+  const codePoint = value.codePointAt(index)
+  return codePoint !== undefined && codePoint > 0xffff ? 2 : 1
+}
+
+const findTextLayerMatchRange = (
+  rawText: string,
+  query: string,
+  pageMatchIndex: number | null,
+): TextLayerMatchRange | null => {
+  const normalizedQuery = normalizeEvidenceSpikeText(query)
+  if (!normalizedQuery) {
+    return null
+  }
+
+  const sourceMap = buildNormalizedTextSourceMap(rawText)
+  const normalizedPageText = sourceMap.text.toLocaleLowerCase()
+  const normalizedCandidate = normalizedQuery.toLocaleLowerCase()
+  if (!normalizedPageText || !normalizedCandidate) {
+    return null
+  }
+
+  const matchRanges: TextLayerMatchRange[] = []
+  let searchStart = 0
+
+  while (searchStart <= normalizedPageText.length - normalizedCandidate.length) {
+    const matchIndex = normalizedPageText.indexOf(normalizedCandidate, searchStart)
+    if (matchIndex < 0) {
+      break
+    }
+
+    const rawStart = sourceMap.sourceIndices[matchIndex]
+    const rawEnd = sourceMap.sourceIndices[matchIndex + normalizedCandidate.length - 1]
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      matchRanges.push({
+        rawStart,
+        rawEndExclusive: rawEnd + getSourceCodeUnitLength(rawText, rawEnd),
+      })
+    }
+
+    searchStart = matchIndex + normalizedCandidate.length
+  }
+
+  if (matchRanges.length === 0) {
+    return null
+  }
+
+  const normalizedMatchIndex = pageMatchIndex ?? 0
+  return matchRanges[normalizedMatchIndex] ?? matchRanges[0]
+}
+
+const buildRectsFromTextRange = (
   pageContainer: HTMLElement,
   segments: TextLayerTextSegment[],
+  matchRange: TextLayerMatchRange,
 ): EvidenceTextLayerRect[] => {
-  const pageRect = pageContainer.getBoundingClientRect()
   const seen = new Set<string>()
 
   return segments.reduce<EvidenceTextLayerRect[]>((acc, segment) => {
-    const rect = segment.container.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0) {
+    const segmentStart = Math.max(matchRange.rawStart, segment.start)
+    const segmentEnd = Math.min(matchRange.rawEndExclusive, segment.end)
+    if (segmentStart >= segmentEnd) {
       return acc
     }
 
-    const nextRect = {
-      left: rect.left - pageRect.left,
-      top: rect.top - pageRect.top,
-      width: rect.width,
-      height: rect.height,
-    }
-    const key = `${nextRect.left}:${nextRect.top}:${nextRect.width}:${nextRect.height}`
-    if (seen.has(key)) {
-      return acc
+    const startOffset = segmentStart - segment.start
+    const endOffset = segmentEnd - segment.start
+    const createRange = segment.node.ownerDocument.createRange?.bind(segment.node.ownerDocument)
+
+    if (createRange) {
+      const range = createRange()
+      range.setStart(segment.node, startOffset)
+      range.setEnd(segment.node, endOffset)
+
+      const rangeClientRects = typeof (range as Range).getClientRects === 'function'
+        ? Array.from((range as Range).getClientRects())
+        : []
+      if (rangeClientRects.length > 0) {
+        rangeClientRects.forEach((rect) => {
+          pushUniqueEvidenceTextLayerRect(
+            acc,
+            seen,
+            normalizeEvidenceTextLayerRect(pageContainer, rect),
+          )
+        })
+        return acc
+      }
+
+      const rangeBoundingRect = typeof (range as Range).getBoundingClientRect === 'function'
+        ? (range as Range).getBoundingClientRect()
+        : null
+      const normalizedRangeRect = rangeBoundingRect
+        ? normalizeEvidenceTextLayerRect(pageContainer, rangeBoundingRect)
+        : null
+      if (normalizedRangeRect) {
+        pushUniqueEvidenceTextLayerRect(acc, seen, normalizedRangeRect)
+        return acc
+      }
     }
 
-    seen.add(key)
-    acc.push(nextRect)
+    const containerRect = segment.container.getBoundingClientRect()
+    pushUniqueEvidenceTextLayerRect(
+      acc,
+      seen,
+      normalizeEvidenceTextLayerRect(pageContainer, containerRect),
+    )
     return acc
   }, [])
 }
@@ -450,6 +576,7 @@ const findTextLayerMatchRects = (
   iframeDoc: Document,
   pageNumber: number,
   query: string,
+  pageMatchIndex: number | null = null,
 ): EvidenceTextLayerRect[] => {
   const pageContainer = getPageContainer(iframeDoc, pageNumber)
   const textLayer = getPageTextLayer(iframeDoc, pageNumber)
@@ -458,47 +585,29 @@ const findTextLayerMatchRects = (
     return []
   }
 
-  const normalizedQuery = normalizeEvidenceSpikeText(query)
-  if (!normalizedQuery) {
-    return []
-  }
-
   const { rawText, segments } = buildTextLayerSegments(textLayer)
   if (!rawText || segments.length === 0) {
     return []
   }
 
-  const sourceMap = buildNormalizedTextSourceMap(rawText)
-  const normalizedPageText = sourceMap.text.toLocaleLowerCase()
-  const normalizedCandidate = normalizedQuery.toLocaleLowerCase()
-  const matchIndex = normalizedPageText.indexOf(normalizedCandidate)
-
-  if (matchIndex < 0) {
+  const matchRange = findTextLayerMatchRange(rawText, query, pageMatchIndex)
+  if (!matchRange) {
     return []
   }
 
-  const rawStart = sourceMap.sourceIndices[matchIndex]
-  const rawEnd = sourceMap.sourceIndices[matchIndex + normalizedCandidate.length - 1]
-  if (rawStart === undefined || rawEnd === undefined) {
-    return []
-  }
-
-  const overlappingSegments = segments.filter((segment) => {
-    return segment.end > rawStart && segment.start < rawEnd + 1
-  })
-
-  return buildRectsFromTextSegments(pageContainer, overlappingSegments)
+  return buildRectsFromTextRange(pageContainer, segments, matchRange)
 }
 
 const waitForTextLayerMatch = async (
   iframeDoc: Document,
   pageNumber: number,
   query: string,
+  pageMatchIndex: number | null = null,
 ): Promise<EvidenceTextLayerRect[]> => {
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < 1000) {
-    const rects = findTextLayerMatchRects(iframeDoc, pageNumber, query)
+    const rects = findTextLayerMatchRects(iframeDoc, pageNumber, query, pageMatchIndex)
     if (rects.length > 0) {
       return rects
     }
@@ -656,6 +765,7 @@ const getNavigationBannerMessage = (
 }
 
 interface PdfEvidenceSpikeFindOutcome extends Pick<PdfEvidenceSpikeResult, 'matchedPage' | 'matchesTotal' | 'currentMatch'> {
+  pageMatchIndex: number | null
   found: boolean
   matchState: number | null
 }
@@ -672,6 +782,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
       matchedPage: getSelectedEvidenceSpikePage(pdfApp),
       matchesTotal: 0,
       currentMatch: 0,
+      pageMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
       found: false,
       matchState: null,
     })
@@ -683,7 +794,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
     let latestState: number | null = null
     let settleTimeoutId: number | null = null
 
-    const finish = (detail?: { currentMatch?: number; matchesTotal?: number; matchedPage?: number | null; matchState?: number | null }) => {
+    const finish = (detail?: { currentMatch?: number; matchesTotal?: number; matchedPage?: number | null; pageMatchIndex?: number | null; matchState?: number | null }) => {
       const matchState = detail?.matchState ?? latestState
       const found = isSuccessfulEvidenceSpikeFindState(matchState)
       const resolvedCurrent = detail?.currentMatch ?? latestCurrent
@@ -699,6 +810,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
         matchedPage: detail?.matchedPage ?? getSelectedEvidenceSpikePage(pdfApp),
         matchesTotal: found && resolvedTotal === 0 ? 1 : resolvedTotal,
         currentMatch: found && resolvedCurrent === 0 ? 1 : resolvedCurrent,
+        pageMatchIndex: detail?.pageMatchIndex ?? getSelectedEvidenceSpikeMatchIndex(pdfApp),
         found,
         matchState,
       })
@@ -738,6 +850,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
             currentMatch: latestCurrent,
             matchesTotal: latestTotal,
             matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+            pageMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
             matchState: latestState,
           })
         }, PDFJS_FIND_RESULT_SETTLE_MS)
@@ -749,6 +862,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
           currentMatch: latestCurrent,
           matchesTotal: latestTotal,
           matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+          pageMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
           matchState: latestState,
         })
         return
@@ -758,6 +872,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
         currentMatch: latestCurrent,
         matchesTotal: latestTotal,
         matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+        pageMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
         matchState: latestState,
       })
     }
@@ -767,6 +882,7 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
         currentMatch: latestCurrent,
         matchesTotal: latestTotal,
         matchedPage: getSelectedEvidenceSpikePage(pdfApp),
+        pageMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
       })
     }, PDFJS_FIND_TIMEOUT_MS)
 
@@ -1401,7 +1517,7 @@ export function PdfViewer({
       if (outcome.found || outcome.matchesTotal > 0) {
         const matchedPage = outcome.matchedPage ?? preferredPage
         const textLayerRects = iframeDoc && matchedPage !== null
-          ? await waitForTextLayerMatch(iframeDoc, matchedPage, candidate.query)
+          ? await waitForTextLayerMatch(iframeDoc, matchedPage, candidate.query, outcome.pageMatchIndex)
           : []
 
         if (textLayerRects.length === 0) {
@@ -1415,6 +1531,7 @@ export function PdfViewer({
           mode: command.mode,
           pageNumber: matchedPage,
           query: candidate.query,
+          pageMatchIndex: outcome.pageMatchIndex,
         })
         clearPdfJsFindHighlights(pdfApp)
         return {
@@ -1446,7 +1563,7 @@ export function PdfViewer({
       if (outcome.found || outcome.matchesTotal > 0) {
         const matchedPage = outcome.matchedPage ?? preferredPage
         const textLayerRects = iframeDoc && matchedPage !== null
-          ? await waitForTextLayerMatch(iframeDoc, matchedPage, candidate.query)
+          ? await waitForTextLayerMatch(iframeDoc, matchedPage, candidate.query, outcome.pageMatchIndex)
           : []
 
         if (textLayerRects.length > 0 && matchedPage !== null) {
@@ -1455,6 +1572,7 @@ export function PdfViewer({
             mode: command.mode,
             pageNumber: matchedPage,
             query: candidate.query,
+            pageMatchIndex: outcome.pageMatchIndex,
           })
         } else {
           setEvidenceHighlight(null)
@@ -2260,7 +2378,12 @@ export function PdfViewer({
     }
 
     const pageContainer = getPageContainer(iframeDoc, evidenceHighlight.pageNumber)
-    const rects = findTextLayerMatchRects(iframeDoc, evidenceHighlight.pageNumber, evidenceHighlight.query)
+    const rects = findTextLayerMatchRects(
+      iframeDoc,
+      evidenceHighlight.pageNumber,
+      evidenceHighlight.query,
+      evidenceHighlight.pageMatchIndex,
+    )
     if (!pageContainer || rects.length === 0) {
       return
     }
