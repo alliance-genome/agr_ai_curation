@@ -354,7 +354,6 @@ def _build_manual_candidate_request(
             }
         ],
     )
-)
 
 
 def _create_decision_session(
@@ -515,9 +514,6 @@ def _create_decision_session(
         "manual_evidence_id": str(manual_evidence.id) if manual_evidence is not None else None,
         "existing_action_log_id": str(existing_action_log.id) if existing_action_log is not None else None,
     }
-
-
-def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
 
 
 def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
