@@ -197,6 +197,7 @@ external_review_prompt.md
 /*_analysis*.md
 /*_working*.md
 /*_draft*.md
+/RESUME.md
 # Text files in root (response drafts, notes)
 /*.txt
 # Presentation files

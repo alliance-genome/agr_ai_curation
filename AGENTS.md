@@ -79,11 +79,15 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
    - **CRITICAL**: New scripts MUST be added to the `ensure_one` manifest in `symphony_ensure_workspace_runtime.sh` or workspaces will not have them. Existing workspaces get updated on the next `before_run` hook.
    - **CRITICAL**: After pushing to `origin/main`, you MUST also sync the VM's local source checkout. Symphony uses `SYMPHONY_LOCAL_SOURCE_ROOT` (set in `.symphony/run.sh`) which points to the VM's local checkout — NOT directly to GitHub. If the VM checkout is stale, `ensure_workspace_runtime.sh` will fail to find newly-added required scripts.
 
-2. **Gitignored orchestration files** (`.symphony/WORKFLOW.md`, `.symphony/*.sh`):
+2. **Gitignored orchestration/runtime files** (`.symphony/WORKFLOW.md`, `.symphony/*.sh`, `.symphony/elixir/**`):
    - `.symphony/` is in `.gitignore` — these files are NOT committed to the repo.
-   - Deployed by copying directly into the VM's local source root:
+   - Deployed by copying directly into the VM's local source root with `incus file push`.
+   - Important: this category is not limited to `WORKFLOW.md`. If you changed local Symphony runtime code under `.symphony/elixir/`, push those files into the VM too.
+   - Example:
      `incus file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
-   - The `ensure_workspace_runtime.sh` hook then copies them from the local source root into per-issue workspaces.
+   - Example for runtime code:
+     `incus file push .symphony/elixir/lib/symphony_elixir/config.ex symphony-main/<repo-path>/.symphony/elixir/lib/symphony_elixir/config.ex`
+   - The `ensure_workspace_runtime.sh` hook then copies workflow/helper files from the local source root into per-issue workspaces; Elixir runtime changes are picked up after rebuild/restart in the VM source tree.
 
 **Syncing the VM checkout** (required after pushing git-tracked changes):
 ```bash
@@ -96,14 +100,31 @@ incus exec symphony-main -- sudo --login --user ctabone bash -lc \
   'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && pkill -f "./bin/symphony" || true; sleep 2; nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
 ```
 
+**Important restart ownership quirk**:
+- The running `./bin/symphony` process in the VM is sometimes owned by a different user/session than the `ctabone` login shell used above.
+- Symptom: `pkill -f "./bin/symphony"` from `sudo --login --user ctabone` fails with `Operation not permitted`, or the command returns no useful output and the old process keeps holding port `4000`.
+- If that happens, stop the old process from the VM root shell first, then start Symphony again as `ctabone`:
+```bash
+incus exec symphony-main -- bash -lc 'pkill -f "./bin/symphony" || true; sleep 2; pgrep -af "[b]in/symphony" || true'
+incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+  'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
+```
+- Verify both the VM listener and the host-side proxy after restart:
+```bash
+incus exec symphony-main -- bash -lc 'ss -ltnp | grep :4000 || true'
+curl -i -sS -m 5 http://127.0.0.1:4000/ | head -n 5
+```
+- If the host check still gives `Empty reply from server`, wait a few seconds and retry before assuming the restart failed.
+
 **When adding a new Symphony lane helper**:
 1. Create the script in `scripts/utilities/symphony_<name>.sh` (git-tracked).
 2. Add an `ensure_one` line for it in `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
 3. Commit and push both files.
 4. **Sync the VM checkout**: `git pull origin main` inside the VM (see command above).
 5. **Restart Symphony** inside the VM so the running process uses the updated source root.
-6. If the script is referenced in WORKFLOW.md, update `.symphony/WORKFLOW.md` and push it to the VM via `incus file push`.
-7. Existing workspaces pick up the new script on their next `before_run` hook execution.
+6. If the script is referenced in `WORKFLOW.md`, update `.symphony/WORKFLOW.md` and push it to the VM via `incus file push`.
+7. If the change also touched local Symphony runtime code under `.symphony/elixir/`, push those changed files into the VM source tree too, then rebuild/restart Symphony there.
+8. Existing workspaces pick up the new script on their next `before_run` hook execution.
 
 ## 6) Expected Change Workflow
 
