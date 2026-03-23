@@ -32,8 +32,11 @@ from src.schemas.curation_workspace import (
     CurationActorType,
     CurationAdapterRef,
     CurationCandidate as CurationCandidatePayload,
+    CurationCandidateAction,
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationCandidateDecisionRequest,
+    CurationCandidateDecisionResponse,
     CurationDraft as CurationDraftPayload,
     CurationDraftField as CurationDraftFieldSchema,
     CurationDocumentRef,
@@ -1918,6 +1921,246 @@ def create_manual_candidate(
     )
     db.commit()
     return response
+
+
+def decide_candidate(
+    db: Session,
+    candidate_id: str | UUID,
+    request: CurationCandidateDecisionRequest,
+    actor_claims: dict[str, Any],
+) -> CurationCandidateDecisionResponse:
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    request_candidate_id = _normalize_uuid(request.candidate_id, field_name="candidate_id")
+    if normalized_candidate_id != request_candidate_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path candidate_id does not match request body candidate_id",
+        )
+
+    normalized_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+
+    session = sessions[0]
+    candidate = next(
+        (session_candidate for session_candidate in session.candidates if session_candidate.id == normalized_candidate_id),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation candidate {normalized_candidate_id} not found in session {normalized_session_id}",
+        )
+
+    now = datetime.now(timezone.utc)
+    previous_candidate_status = candidate.status
+    previous_session_status = session.status
+    reason = _normalize_optional_reason(request.reason)
+    changed_field_keys: list[str] = []
+    removed_manual_evidence_ids: list[str] = []
+    notes_reset = False
+
+    if request.action == CurationCandidateAction.RESET:
+        (
+            changed_field_keys,
+            removed_manual_evidence_ids,
+            notes_reset,
+        ) = _reset_candidate_state(candidate, db, occurred_at=now)
+        candidate.status = CurationCandidateStatus.PENDING
+    else:
+        candidate.status = _decision_candidate_status(request.action)
+
+    if session.status == CurationSessionStatus.NEW:
+        session.status = CurationSessionStatus.IN_PROGRESS
+
+    next_candidate_uuid = _next_pending_candidate_id(session, normalized_candidate_id) if (
+        request.advance_queue and request.action != CurationCandidateAction.RESET
+    ) else None
+
+    session.current_candidate_id = next_candidate_uuid or normalized_candidate_id
+    session.last_worked_at = now
+    session.updated_at = now
+    session.session_version += 1
+
+    candidate.last_reviewed_at = now
+    candidate.updated_at = now
+
+    _apply_candidate_progress_counts(session, session.candidates)
+
+    action_log_row = SessionActionLogModel(
+        session_id=session.id,
+        candidate_id=candidate.id,
+        draft_id=candidate.draft.id if candidate.draft is not None else None,
+        action_type=_decision_action_type(request.action),
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=now,
+        previous_session_status=(
+            previous_session_status if previous_session_status != session.status else None
+        ),
+        new_session_status=(
+            session.status if previous_session_status != session.status else None
+        ),
+        previous_candidate_status=previous_candidate_status,
+        new_candidate_status=candidate.status,
+        changed_field_keys=changed_field_keys,
+        evidence_anchor_ids=removed_manual_evidence_ids,
+        reason=reason,
+        message=_decision_action_message(request.action, candidate.status),
+        action_metadata={
+            "advance_queue": request.advance_queue,
+            "next_candidate_id": str(next_candidate_uuid) if next_candidate_uuid else None,
+            "manual_evidence_removed_count": len(removed_manual_evidence_ids),
+            "notes_reset": notes_reset,
+        },
+    )
+
+    db.add(session)
+    db.add(candidate)
+    if candidate.draft is not None:
+        db.add(candidate.draft)
+    db.add(action_log_row)
+    db.flush()
+
+    response = CurationCandidateDecisionResponse(
+        candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
+        session=get_session_detail(db, session.id),
+        next_candidate_id=str(next_candidate_uuid) if next_candidate_uuid else None,
+        action_log_entry=build_action_log_entry(action_log_row),
+    )
+    db.commit()
+    return response
+
+
+def _decision_candidate_status(action: CurationCandidateAction) -> CurationCandidateStatus:
+    if action == CurationCandidateAction.ACCEPT:
+        return CurationCandidateStatus.ACCEPTED
+    if action == CurationCandidateAction.REJECT:
+        return CurationCandidateStatus.REJECTED
+    return CurationCandidateStatus.PENDING
+
+
+def _decision_action_type(action: CurationCandidateAction) -> CurationActionType:
+    if action == CurationCandidateAction.ACCEPT:
+        return CurationActionType.CANDIDATE_ACCEPTED
+    if action == CurationCandidateAction.REJECT:
+        return CurationActionType.CANDIDATE_REJECTED
+    return CurationActionType.CANDIDATE_RESET
+
+
+def _decision_action_message(
+    action: CurationCandidateAction,
+    new_status: CurationCandidateStatus,
+) -> str:
+    if action == CurationCandidateAction.RESET:
+        return "Candidate reset to pending"
+    return f"Candidate marked as {new_status.value}"
+
+
+def _normalize_optional_reason(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    normalized = reason.strip()
+    return normalized or None
+
+
+def _reset_candidate_state(
+    candidate: CurationCandidate,
+    db: Session,
+    *,
+    occurred_at: datetime,
+) -> tuple[list[str], list[str], bool]:
+    draft = candidate.draft
+    changed_field_keys: list[str] = []
+    notes_reset = False
+    draft_fields_changed = False
+    manual_evidence_rows = [
+        evidence_row
+        for evidence_row in candidate.evidence_anchors
+        if evidence_row.source == CurationEvidenceSource.MANUAL
+    ]
+    manual_evidence_ids = {str(evidence_row.id) for evidence_row in manual_evidence_rows}
+
+    if draft is not None:
+        updated_fields: list[dict[str, Any]] = []
+        for field_payload in draft.fields or []:
+            next_field_payload = dict(field_payload)
+            seed_value = field_payload.get("seed_value")
+            field_changed = (
+                field_payload.get("value") != seed_value
+                or bool(field_payload.get("dirty"))
+                or bool(field_payload.get("stale_validation"))
+            )
+            if field_changed:
+                changed_field_keys.append(str(field_payload.get("field_key")))
+
+            next_field_payload["value"] = seed_value
+            next_field_payload["dirty"] = False
+            next_field_payload["stale_validation"] = False
+            existing_anchor_ids = [
+                str(anchor_id) for anchor_id in field_payload.get("evidence_anchor_ids") or []
+            ]
+            remaining_anchor_ids = [
+                anchor_id for anchor_id in existing_anchor_ids if anchor_id not in manual_evidence_ids
+            ]
+            if (
+                field_changed
+                or remaining_anchor_ids != existing_anchor_ids
+            ):
+                next_field_payload["evidence_anchor_ids"] = remaining_anchor_ids
+                draft_fields_changed = True
+            updated_fields.append(next_field_payload)
+
+        if draft.notes is not None:
+            draft.notes = None
+            notes_reset = True
+
+        if draft_fields_changed or notes_reset:
+            draft.fields = updated_fields
+            draft.version += 1
+            draft.updated_at = occurred_at
+            draft.last_saved_at = occurred_at
+
+    if manual_evidence_ids:
+        candidate.evidence_anchors = [
+        evidence_row
+        for evidence_row in candidate.evidence_anchors
+        if str(evidence_row.id) not in manual_evidence_ids
+        ]
+        for evidence_row in manual_evidence_rows:
+            db.delete(evidence_row)
+
+    return changed_field_keys, sorted(manual_evidence_ids), notes_reset
+
+
+def _next_pending_candidate_id(
+    session: ReviewSessionModel,
+    current_candidate_id: UUID,
+) -> UUID | None:
+    ordered_candidates = sorted(session.candidates, key=lambda candidate_row: candidate_row.order)
+    current_index = next(
+        (
+            index
+            for index, candidate_row in enumerate(ordered_candidates)
+            if candidate_row.id == current_candidate_id
+        ),
+        None,
+    )
+    if current_index is None or len(ordered_candidates) <= 1:
+        return None
+
+    candidate_count = len(ordered_candidates)
+    for offset in range(1, candidate_count):
+        next_index = (current_index + offset) % candidate_count
+        candidate_row = ordered_candidates[next_index]
+        if candidate_row.status == CurationCandidateStatus.PENDING:
+            return candidate_row.id
+
+    return None
 
 
 def get_session_stats(

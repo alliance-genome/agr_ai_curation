@@ -129,6 +129,21 @@ export function appendWorkspaceActionLog(
   }
 }
 
+export function appendWorkspaceActionLogEntry(
+  workspace: CurationWorkspace,
+  actionLogEntry: CurationActionLogEntry,
+): CurationWorkspace {
+  const nextActionLog = workspace.action_log.filter(
+    (entry) => entry.action_id !== actionLogEntry.action_id,
+  )
+  nextActionLog.push(actionLogEntry)
+
+  return {
+    ...workspace,
+    action_log: nextActionLog,
+  }
+}
+
 export function updateWorkspaceActiveCandidate(
   workspace: CurationWorkspace,
   candidateId: string | null,

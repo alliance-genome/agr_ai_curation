@@ -10,6 +10,7 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationCandidateDecisionRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationEvidenceRecomputeRequest,
@@ -498,6 +499,47 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
         "request": request,
         "actor_claims": user,
         "db": db,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_candidate_decision_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _decide_candidate(db, candidate_id, request, actor_claims):
+        captured["db"] = db
+        captured["candidate_id"] = candidate_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "decide_candidate", _decide_candidate)
+
+    candidate_id = uuid4()
+    request = CurationCandidateDecisionRequest(
+        session_id="session-1",
+        candidate_id=str(candidate_id),
+        action="accept",
+        advance_queue=True,
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.post_candidate_decision(
+        candidate_id,
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "candidate_id": candidate_id,
+        "request": request,
+        "actor_claims": user,
     }
 
 

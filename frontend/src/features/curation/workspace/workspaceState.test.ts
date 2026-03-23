@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import type { CurationWorkspace } from '../types'
-import { applyDraftFieldChangesToWorkspace } from './workspaceState'
+import {
+  appendWorkspaceActionLogEntry,
+  applyDraftFieldChangesToWorkspace,
+} from './workspaceState'
 
 function buildWorkspace(): CurationWorkspace {
   return {
@@ -124,6 +127,31 @@ describe('workspaceState', () => {
       value: 'BRCA1',
       dirty: false,
       stale_validation: false,
+    })
+  })
+
+  it('appends action-log entries without duplicating an existing action id', () => {
+    const workspace = buildWorkspace()
+    const actionLogEntry = {
+      action_id: 'action-1',
+      session_id: 'session-1',
+      candidate_id: 'candidate-1',
+      action_type: 'candidate_accepted' as const,
+      actor_type: 'user' as const,
+      occurred_at: '2026-03-20T13:00:00Z',
+      changed_field_keys: [],
+      evidence_anchor_ids: [],
+      metadata: {},
+    }
+
+    const firstAppend = appendWorkspaceActionLogEntry(workspace, actionLogEntry)
+    const secondAppend = appendWorkspaceActionLogEntry(firstAppend, actionLogEntry)
+
+    expect(firstAppend.action_log).toHaveLength(1)
+    expect(secondAppend.action_log).toHaveLength(1)
+    expect(secondAppend.action_log[0]).toMatchObject({
+      action_id: 'action-1',
+      action_type: 'candidate_accepted',
     })
   })
 })

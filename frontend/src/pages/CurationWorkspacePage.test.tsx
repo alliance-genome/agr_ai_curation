@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,7 @@ const serviceMocks = vi.hoisted(() => ({
   fetchCurationWorkspace: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
+  submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
@@ -23,6 +24,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
 
@@ -361,6 +363,134 @@ function buildReferenceWorkspace(): CurationWorkspace {
   }
 }
 
+function buildQueueWorkspace(): CurationWorkspace {
+  const workspace = buildWorkspace()
+
+  workspace.session.progress = {
+    total_candidates: 3,
+    reviewed_candidates: 1,
+    pending_candidates: 2,
+    accepted_candidates: 1,
+    rejected_candidates: 0,
+    manual_candidates: 1,
+  }
+  workspace.session.current_candidate_id = 'candidate-pending'
+  workspace.active_candidate_id = 'candidate-pending'
+  workspace.candidates.push({
+    candidate_id: 'candidate-next',
+    session_id: 'session-1',
+    source: 'extracted',
+    status: 'pending',
+    order: 2,
+    adapter_key: 'entity_adapter',
+    display_label: 'Next candidate',
+    unresolved_ambiguities: [],
+    draft: {
+      draft_id: 'draft-next',
+      candidate_id: 'candidate-next',
+      adapter_key: 'entity_adapter',
+      version: 1,
+      title: 'Next candidate draft',
+      fields: [
+        {
+          field_key: 'field_b',
+          label: 'Secondary term',
+          value: 'CLU',
+          seed_value: 'CLU',
+          field_type: 'string',
+          group_key: 'secondary',
+          group_label: 'Secondary',
+          order: 0,
+          required: false,
+          read_only: false,
+          dirty: false,
+          stale_validation: false,
+          evidence_anchor_ids: [],
+          metadata: {},
+        },
+      ],
+      created_at: '2026-03-20T12:05:00Z',
+      updated_at: '2026-03-20T12:06:00Z',
+      metadata: {},
+    },
+    evidence_anchors: [],
+    created_at: '2026-03-20T12:05:00Z',
+    updated_at: '2026-03-20T12:06:00Z',
+    metadata: {},
+  })
+
+  return workspace
+}
+
+function buildDecisionResponse({
+  workspace,
+  candidateId,
+  nextCandidateId,
+  actionType,
+  newStatus,
+  reason = null,
+}: {
+  workspace: CurationWorkspace
+  candidateId: string
+  nextCandidateId?: string | null
+  actionType: 'candidate_accepted' | 'candidate_rejected' | 'candidate_reset'
+  newStatus: 'accepted' | 'rejected' | 'pending'
+  reason?: string | null
+}) {
+  const updatedCandidates = workspace.candidates.map((candidate) =>
+    candidate.candidate_id === candidateId
+      ? {
+          ...candidate,
+          status: newStatus,
+          last_reviewed_at: '2026-03-21T09:00:00Z',
+          updated_at: '2026-03-21T09:00:00Z',
+        }
+      : candidate,
+  )
+  const pendingCount = updatedCandidates.filter((candidate) => candidate.status === 'pending').length
+  const acceptedCount = updatedCandidates.filter((candidate) => candidate.status === 'accepted').length
+  const rejectedCount = updatedCandidates.filter((candidate) => candidate.status === 'rejected').length
+  const updatedSession = {
+    ...workspace.session,
+    current_candidate_id: nextCandidateId ?? candidateId,
+    session_version: workspace.session.session_version + 1,
+    progress: {
+      ...workspace.session.progress,
+      reviewed_candidates: updatedCandidates.length - pendingCount,
+      pending_candidates: pendingCount,
+      accepted_candidates: acceptedCount,
+      rejected_candidates: rejectedCount,
+    },
+  }
+
+  return {
+    candidate: updatedCandidates.find((candidate) => candidate.candidate_id === candidateId)!,
+    session: updatedSession,
+    next_candidate_id: nextCandidateId ?? null,
+    action_log_entry: {
+      action_id: `action-${actionType}-${candidateId}`,
+      session_id: workspace.session.session_id,
+      candidate_id: candidateId,
+      action_type: actionType,
+      actor_type: 'user',
+      actor: {
+        actor_id: 'user-1',
+        display_name: 'Curator One',
+      },
+      occurred_at: '2026-03-21T09:00:00Z',
+      previous_candidate_status: workspace.candidates.find(
+        (candidate) => candidate.candidate_id === candidateId,
+      )?.status ?? 'pending',
+      new_candidate_status: newStatus,
+      changed_field_keys: [],
+      evidence_anchor_ids: [],
+      reason,
+      message: `Candidate marked as ${newStatus}`,
+      metadata: {},
+    },
+  }
+}
+
 function LocationProbe() {
   const location = useLocation()
   return (
@@ -421,6 +551,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
+    serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
     scrollIntoViewMock = vi.fn()
     HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
@@ -482,7 +613,10 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
     expect(screen.getByText('Workspace Document')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456')).toBeInTheDocument()
-    expect(screen.getByText('Decision Toolbar')).toBeInTheDocument()
+    expect(screen.getByText('Decision toolbar')).toBeInTheDocument()
+    expect(
+      screen.getByText('Candidate 1 of 2 — Entity / Accepted candidate'),
+    ).toBeInTheDocument()
 
     await waitFor(() => {
       expect(serviceMocks.dispatchPDFDocumentChanged).toHaveBeenCalledWith(
@@ -506,6 +640,177 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText('IDENTIFIERS')).toBeInTheDocument()
     expect(screen.getByText('One author per line.')).toBeInTheDocument()
     expect(authorsInput).toHaveValue('Ada Lovelace\nGrace Hopper')
+  })
+
+  it('submits accept decisions and advances to the next pending candidate', async () => {
+    const user = userEvent.setup()
+    const workspace = buildQueueWorkspace()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue(
+      buildDecisionResponse({
+        workspace,
+        candidateId: 'candidate-pending',
+        nextCandidateId: 'candidate-next',
+        actionType: 'candidate_accepted',
+        newStatus: 'accepted',
+      }),
+    )
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-next',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: '✓ Accept' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+        action: 'accept',
+        reason: undefined,
+        advance_queue: true,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-next',
+      )
+    })
+    expect(screen.getByText('Next candidate draft')).toBeInTheDocument()
+  })
+
+  it('skips to the next candidate without submitting any decision', async () => {
+    const user = userEvent.setup()
+    const workspace = buildQueueWorkspace()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-next',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Skip →' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-next',
+      )
+    })
+
+    expect(screen.getByText('Next candidate draft')).toBeInTheDocument()
+    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
+  })
+
+  it('collects an optional reject reason before submitting the decision', async () => {
+    const user = userEvent.setup()
+    const workspace = buildQueueWorkspace()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue(
+      buildDecisionResponse({
+        workspace,
+        candidateId: 'candidate-pending',
+        nextCandidateId: 'candidate-next',
+        actionType: 'candidate_rejected',
+        newStatus: 'rejected',
+        reason: 'Not supported by evidence.',
+      }),
+    )
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-next',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: '✕ Reject' }))
+
+    expect(screen.getByText('Reject candidate?')).toBeInTheDocument()
+
+    await user.type(
+      screen.getByLabelText('Reason (optional)'),
+      'Not supported by evidence.',
+    )
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^Reject$/ }),
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+        action: 'reject',
+        reason: 'Not supported by evidence.',
+        advance_queue: true,
+      })
+    })
+  })
+
+  it('requires reset confirmation before submitting the reset action', async () => {
+    const user = userEvent.setup()
+    const workspace = buildWorkspace()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue(
+      buildDecisionResponse({
+        workspace,
+        candidateId: 'candidate-accepted',
+        actionType: 'candidate_reset',
+        newStatus: 'pending',
+      }),
+    )
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(screen.getByText('Accepted candidate draft')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }))
+
+    expect(screen.getByText('Reset candidate?')).toBeInTheDocument()
+    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
+
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^Reset$/ }),
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-accepted',
+        action: 'reset',
+        reason: undefined,
+        advance_queue: false,
+      })
+    })
   })
 
   it('updates the route when a queue card is selected and forwards hover/select navigation to the PDF viewer', async () => {

@@ -580,6 +580,9 @@ def seeded_review_sessions(client: TestClient, test_db):
         "session_alpha_id": str(session_alpha_id),
         "session_beta_id": str(session_beta_id),
         "session_gamma_id": str(session_gamma_id),
+        "candidate_alpha_id": str(candidate_alpha_id),
+        "candidate_beta_id": str(candidate_beta_id),
+        "candidate_gamma_id": str(candidate_gamma_id),
         "current_user_auth_sub": current_user_auth_sub,
         "other_user_auth_sub": other_user_auth_sub,
     }
@@ -867,6 +870,55 @@ def test_patch_review_session_updates_status_and_notes(
     assert refreshed is not None
     assert refreshed.status == CurationSessionStatus.PAUSED
     assert refreshed.notes == "Paused for curator follow-up"
+
+
+def test_post_candidate_decision_updates_status_and_writes_action_log(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import (
+        CurationActionLogEntry as SessionActionLogModel,
+        CurationCandidate,
+    )
+    from src.schemas.curation_workspace import CurationCandidateStatus
+
+    response = client.post(
+        f"/api/curation-workspace/candidates/{seeded_review_sessions['candidate_alpha_id']}/decision",
+        json={
+            "session_id": seeded_review_sessions["session_alpha_id"],
+            "candidate_id": seeded_review_sessions["candidate_alpha_id"],
+            "action": "accept",
+            "advance_queue": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["candidate"]["status"] == "accepted"
+    assert payload["session"]["status"] == "in_progress"
+    assert payload["next_candidate_id"] is None
+    assert payload["action_log_entry"]["action_type"] == "candidate_accepted"
+    assert payload["action_log_entry"]["previous_candidate_status"] == "pending"
+    assert payload["action_log_entry"]["new_candidate_status"] == "accepted"
+
+    refreshed_candidate = test_db.get(
+        CurationCandidate,
+        UUID(seeded_review_sessions["candidate_alpha_id"]),
+    )
+    assert refreshed_candidate is not None
+    assert refreshed_candidate.status == CurationCandidateStatus.ACCEPTED
+
+    action_logs = (
+        test_db.query(SessionActionLogModel)
+        .filter(SessionActionLogModel.session_id == UUID(seeded_review_sessions["session_alpha_id"]))
+        .order_by(SessionActionLogModel.occurred_at.asc())
+        .all()
+    )
+
+    assert len(action_logs) == 1
+    assert action_logs[0].action_type.value == "candidate_accepted"
 
 
 def test_get_review_session_stats_returns_aggregate_counts(
