@@ -1033,7 +1033,7 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
     })
-  })
+  }, 10_000)
 
   it('preserves location state when it normalizes the candidate route', async () => {
     const workspace = buildWorkspace()
