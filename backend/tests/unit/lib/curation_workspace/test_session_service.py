@@ -28,8 +28,12 @@ from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
+    CurationActorType,
+    CurationCandidateAction,
     CurationCandidateSource,
+    CurationCandidateDecisionRequest,
     CurationCandidateStatus,
+    CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
@@ -350,6 +354,166 @@ def _build_manual_candidate_request(
             }
         ],
     )
+
+
+def _create_decision_session(
+    db_session,
+    *,
+    first_candidate_status: CurationCandidateStatus = CurationCandidateStatus.PENDING,
+    with_manual_evidence: bool = False,
+    with_existing_action_log: bool = False,
+):
+    document = _create_document(db_session)
+    now = _now()
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=CurationSessionStatus.NEW,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        document_id=document.id,
+        session_version=1,
+        total_candidates=2,
+        reviewed_candidates=0 if first_candidate_status == CurationCandidateStatus.PENDING else 1,
+        pending_candidates=2 if first_candidate_status == CurationCandidateStatus.PENDING else 1,
+        accepted_candidates=1 if first_candidate_status == CurationCandidateStatus.ACCEPTED else 0,
+        rejected_candidates=1 if first_candidate_status == CurationCandidateStatus.REJECTED else 0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(session_row)
+    db_session.flush()
+
+    first_candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=first_candidate_status,
+        order=0,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        display_label="Candidate one",
+        candidate_metadata={},
+        normalized_payload={"field_a": "seed-1"},
+        created_at=now,
+        updated_at=now,
+    )
+    second_candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=1,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        display_label="Candidate two",
+        candidate_metadata={},
+        normalized_payload={"field_a": "seed-2"},
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([first_candidate, second_candidate])
+    db_session.flush()
+
+    first_draft = DraftModel(
+        id=uuid4(),
+        candidate_id=first_candidate.id,
+        adapter_key="reference_adapter",
+        version=2,
+        title="Candidate one draft",
+        fields=[
+            {
+                "field_key": "field_a",
+                "label": "Field A",
+                "value": "edited-value",
+                "seed_value": "seed-1",
+                "order": 0,
+                "required": True,
+                "read_only": False,
+                "dirty": True,
+                "stale_validation": True,
+                "evidence_anchor_ids": [],
+                "metadata": {},
+            }
+        ],
+        notes="Curator note",
+        created_at=now,
+        updated_at=now,
+        last_saved_at=now,
+        draft_metadata={},
+    )
+    second_draft = DraftModel(
+        id=uuid4(),
+        candidate_id=second_candidate.id,
+        adapter_key="reference_adapter",
+        version=1,
+        title="Candidate two draft",
+        fields=[
+            {
+                "field_key": "field_a",
+                "label": "Field A",
+                "value": "seed-2",
+                "seed_value": "seed-2",
+                "order": 0,
+                "required": True,
+                "read_only": False,
+                "dirty": False,
+                "stale_validation": False,
+                "evidence_anchor_ids": [],
+                "metadata": {},
+            }
+        ],
+        notes=None,
+        created_at=now,
+        updated_at=now,
+        draft_metadata={},
+    )
+    db_session.add_all([first_draft, second_draft])
+
+    manual_evidence = None
+    if with_manual_evidence:
+        manual_evidence = EvidenceRecordModel(
+            id=uuid4(),
+            candidate_id=first_candidate.id,
+            source=CurationEvidenceSource.MANUAL,
+            field_keys=["field_a"],
+            field_group_keys=["group_a"],
+            is_primary=True,
+            anchor={"snippet_text": "Manual evidence"},
+            warnings=[],
+            created_at=now,
+            updated_at=now,
+        )
+        db_session.add(manual_evidence)
+        first_draft.fields[0]["evidence_anchor_ids"] = [str(manual_evidence.id)]
+
+    existing_action_log = None
+    if with_existing_action_log:
+        existing_action_log = SessionActionLogModel(
+            id=uuid4(),
+            session_id=session_row.id,
+            candidate_id=first_candidate.id,
+            draft_id=first_draft.id,
+            action_type=CurationActionType.CANDIDATE_UPDATED,
+            actor_type=CurationActorType.USER,
+            occurred_at=now.replace(minute=25),
+            message="Existing edit log",
+        )
+        db_session.add(existing_action_log)
+
+    session_row.current_candidate_id = first_candidate.id
+    db_session.commit()
+
+    return {
+        "session_id": str(session_row.id),
+        "first_candidate_id": str(first_candidate.id),
+        "second_candidate_id": str(second_candidate.id),
+        "first_draft_id": str(first_draft.id),
+        "manual_evidence_id": str(manual_evidence.id) if manual_evidence is not None else None,
+        "existing_action_log_id": str(existing_action_log.id) if existing_action_log is not None else None,
+    }
 
 
 def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
@@ -820,3 +984,89 @@ def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "Flow run flow-missing not found"
+
+
+def test_decide_candidate_accepts_and_advances_to_next_pending(db_session):
+    seeded = _create_decision_session(db_session)
+
+    response = module.decide_candidate(
+        db_session,
+        seeded["first_candidate_id"],
+        CurationCandidateDecisionRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["first_candidate_id"],
+            action=CurationCandidateAction.ACCEPT,
+            advance_queue=True,
+        ),
+        {
+            "sub": "user-1",
+            "email": "user-1@example.org",
+            "name": "Curator One",
+        },
+    )
+
+    assert response.candidate.status == CurationCandidateStatus.ACCEPTED
+    assert response.session.status == CurationSessionStatus.IN_PROGRESS
+    assert response.session.current_candidate_id == seeded["second_candidate_id"]
+    assert response.next_candidate_id == seeded["second_candidate_id"]
+    assert response.session.progress.model_dump() == {
+        "total_candidates": 2,
+        "reviewed_candidates": 1,
+        "pending_candidates": 1,
+        "accepted_candidates": 1,
+        "rejected_candidates": 0,
+        "manual_candidates": 0,
+    }
+    assert response.action_log_entry.action_type == CurationActionType.CANDIDATE_ACCEPTED
+    assert response.action_log_entry.previous_candidate_status == CurationCandidateStatus.PENDING
+    assert response.action_log_entry.new_candidate_status == CurationCandidateStatus.ACCEPTED
+
+
+def test_decide_candidate_reset_reverts_draft_and_keeps_existing_audit_entries(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+        with_manual_evidence=True,
+        with_existing_action_log=True,
+    )
+
+    response = module.decide_candidate(
+        db_session,
+        seeded["first_candidate_id"],
+        CurationCandidateDecisionRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["first_candidate_id"],
+            action=CurationCandidateAction.RESET,
+            advance_queue=False,
+        ),
+        {
+            "sub": "user-1",
+            "email": "user-1@example.org",
+        },
+    )
+
+    assert response.candidate.status == CurationCandidateStatus.PENDING
+    assert response.session.current_candidate_id == seeded["first_candidate_id"]
+    assert response.next_candidate_id is None
+    assert response.candidate.draft.fields[0].value == "seed-1"
+    assert response.candidate.draft.fields[0].dirty is False
+    assert response.candidate.draft.fields[0].stale_validation is False
+    assert response.candidate.draft.fields[0].evidence_anchor_ids == []
+    assert response.candidate.draft.notes is None
+    assert response.candidate.evidence_anchors == []
+    assert response.action_log_entry.action_type == CurationActionType.CANDIDATE_RESET
+    assert response.action_log_entry.previous_candidate_status == CurationCandidateStatus.ACCEPTED
+    assert response.action_log_entry.new_candidate_status == CurationCandidateStatus.PENDING
+    assert response.action_log_entry.evidence_anchor_ids == [seeded["manual_evidence_id"]]
+
+    action_logs = (
+        db_session.query(SessionActionLogModel)
+        .filter(SessionActionLogModel.session_id == UUID(seeded["session_id"]))
+        .order_by(SessionActionLogModel.occurred_at.asc(), SessionActionLogModel.id.asc())
+        .all()
+    )
+
+    assert len(action_logs) == 2
+    assert str(action_logs[0].id) == seeded["existing_action_log_id"]
+    assert action_logs[0].action_type == CurationActionType.CANDIDATE_UPDATED
+    assert action_logs[1].action_type == CurationActionType.CANDIDATE_RESET

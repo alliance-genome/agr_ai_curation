@@ -32,6 +32,7 @@ from src.lib.curation_workspace.saved_view_service import (
 )
 from src.lib.curation_workspace.session_service import (
     create_manual_candidate,
+    decide_candidate,
     get_next_session,
     get_session_detail,
     get_session_workspace,
@@ -48,6 +49,8 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationCandidateDecisionRequest,
+    CurationCandidateDecisionResponse,
     CurationDateRange,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
@@ -499,6 +502,26 @@ async def post_manual_candidate(
         session_id,
         request,
         actor_claims=user,
+    )
+
+
+@router.post(
+    "/candidates/{candidate_id}/decision",
+    response_model=CurationCandidateDecisionResponse,
+)
+async def post_candidate_decision(
+    candidate_id: UUID,
+    request: CurationCandidateDecisionRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationCandidateDecisionResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return decide_candidate(
+        db,
+        candidate_id,
+        request,
+        user,
     )
 
 

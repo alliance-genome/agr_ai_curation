@@ -1,4 +1,6 @@
 import type {
+  CurationCandidateDecisionRequest,
+  CurationCandidateDecisionResponse,
   CurationManualCandidateCreateRequest,
   CurationManualCandidateCreateResponse,
   CurationCandidateDraftUpdateRequest,
@@ -82,6 +84,20 @@ export async function autosaveCurationCandidateDraft(
     }/draft`,
     {
       method: 'PATCH',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function submitCurationCandidateDecision(
+  request: CurationCandidateDecisionRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationCandidateDecisionResponse> {
+  return fetchCurationWorkspaceJson<CurationCandidateDecisionResponse>(
+    `/api/curation-workspace/candidates/${encodeURIComponent(request.candidate_id)}/decision`,
+    {
+      method: 'POST',
       body: JSON.stringify(request),
       keepalive: options.keepalive,
     },

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -13,7 +13,10 @@ import {
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
 import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
-import { AnnotationEditor } from '@/features/curation/editor'
+import {
+  AnnotationEditor,
+  CuratorDecisionToolbar,
+} from '@/features/curation/editor'
 import {
   EvidenceChipGroup,
   EvidencePanel,
@@ -51,46 +54,6 @@ function findCandidate(
   }
 
   return candidates.find((candidate) => candidate.candidate_id === candidateId) ?? null
-}
-
-function WorkspaceSlotPlaceholder({
-  eyebrow,
-  title,
-  description,
-  children,
-}: {
-  eyebrow: string
-  title: string
-  description: string
-  children?: ReactNode
-}) {
-  return (
-    <Box
-      sx={{
-        flex: 1,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1.5,
-        p: 2,
-        overflow: 'auto',
-      }}
-    >
-      <Stack spacing={0.75}>
-        <Typography color="text.secondary" variant="overline">
-          {eyebrow}
-        </Typography>
-        <Typography variant="h6">
-          {title}
-        </Typography>
-        <Typography color="text.secondary" variant="body2">
-          {description}
-        </Typography>
-      </Stack>
-
-      {children}
-    </Box>
-  )
 }
 
 function CurationWorkspacePageContent({
@@ -164,30 +127,7 @@ function CurationWorkspacePageContent({
 
   const queueSlot = <CandidateQueue />
 
-  const toolbarSlot = (
-    <WorkspaceSlotPlaceholder
-      description="ALL-117 owns the real Review and Curate actions. These buttons are layout placeholders only in this shell pass."
-      eyebrow="Decision Toolbar"
-      title="Review controls"
-    >
-      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
-        <Button disabled size="small" variant="contained">
-          Accept
-        </Button>
-        <Button disabled size="small" variant="outlined">
-          Reject
-        </Button>
-        <Button disabled size="small" variant="outlined">
-          Reset
-        </Button>
-      </Stack>
-      <Typography color="text.secondary" variant="body2">
-        {activeCandidate
-          ? `Ready for ${activeCandidate.display_label ?? activeCandidate.candidate_id}`
-          : 'Select a candidate to review.'}
-      </Typography>
-    </WorkspaceSlotPlaceholder>
-  )
+  const toolbarSlot = <CuratorDecisionToolbar />
 
   const editorSlot = (
     <Box

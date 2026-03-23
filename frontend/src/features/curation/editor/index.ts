@@ -1,4 +1,5 @@
 export { default as AnnotationEditor } from './AnnotationEditor'
+export { default as CuratorDecisionToolbar } from './CuratorDecisionToolbar'
 export type {
   AnnotationEditorProps,
   AnnotationEditorRevertSlotProps,
