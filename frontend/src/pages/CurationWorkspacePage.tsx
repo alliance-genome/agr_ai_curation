@@ -27,6 +27,7 @@ import {
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
+import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import { fetchCurationWorkspace } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
@@ -98,6 +99,7 @@ function CurationWorkspacePageContent({
   const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
   const workspaceDocumentTitle = workspaceDocument.title
   const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
+  const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
@@ -207,11 +209,20 @@ function CurationWorkspacePageContent({
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
-              <WorkspaceSessionNavigation
-                currentSessionId={workspace.session.session_id}
-                queueContext={queueNavigationState?.queueContext}
-                queueRequest={queueNavigationState?.queueRequest}
-              />
+              <Stack spacing={1.5} alignItems={{ xs: 'stretch', lg: 'flex-end' }}>
+                <WorkspaceSessionNavigation
+                  currentSessionId={workspace.session.session_id}
+                  queueContext={queueNavigationState?.queueContext}
+                  queueRequest={queueNavigationState?.queueRequest}
+                />
+                <Button
+                  onClick={() => setSubmissionDialogOpen(true)}
+                  size="small"
+                  variant="contained"
+                >
+                  Preview submission
+                </Button>
+              </Stack>
             )}
             session={workspace.session}
           />
@@ -224,6 +235,13 @@ function CurationWorkspacePageContent({
         }
         queueSlot={queueSlot}
         toolbarSlot={toolbarSlot}
+      />
+
+      <SubmissionPreviewDialog
+        candidates={candidates}
+        onClose={() => setSubmissionDialogOpen(false)}
+        open={submissionDialogOpen}
+        session={workspace.session}
       />
     </Box>
   )

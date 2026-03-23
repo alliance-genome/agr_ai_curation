@@ -764,7 +764,7 @@ export interface CurationSessionValidationResponse {
 export interface CurationSubmissionPreviewRequest {
   session_id: string
   mode: SubmissionMode
-  target_key: SubmissionTargetKey
+  target_key?: SubmissionTargetKey
   candidate_ids?: string[]
   include_payload?: boolean
 }

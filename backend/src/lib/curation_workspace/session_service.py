@@ -41,6 +41,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateAction,
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
+    CurationCandidateSubmissionReadiness,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateDraftUpdateResponse,
     CurationCandidateValidationRequest,
@@ -82,7 +83,10 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
+    CurationSubmissionPreviewRequest,
+    CurationSubmissionPreviewResponse,
     CurationSubmissionRecord,
+    CurationSubmissionStatus,
     CurationValidationCounts,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
     CurationValidationScope,
@@ -92,6 +96,8 @@ from src.schemas.curation_workspace import (
     CurationWorkspaceResponse,
     EvidenceAnchor,
     FieldValidationResult,
+    SubmissionDomainAdapter,
+    SubmissionMode,
     SubmissionPayloadContract,
 )
 
@@ -2260,6 +2266,240 @@ def _prepared_validation_snapshot_schema(
     )
 
 
+def _submission_validation_blocking_reason(
+    field: CurationDraftFieldSchema | None,
+    validation_result: FieldValidationResult,
+) -> str | None:
+    field_label = field.label if field is not None else "A submission field"
+
+    if validation_result.status == "invalid_format":
+        return f"{field_label} is empty or invalid."
+    if validation_result.status == "ambiguous":
+        return f"{field_label} is still ambiguous."
+    if validation_result.status == "not_found":
+        return f"{field_label} could not be resolved."
+    if validation_result.status == "conflict":
+        return f"{field_label} has conflicting validation results."
+
+    return None
+
+
+def _candidate_submission_readiness(
+    candidate: CurationCandidate,
+    validation_snapshot: CurationValidationSnapshotSchema | None,
+) -> CurationCandidateSubmissionReadiness:
+    draft = _draft_detail(candidate.draft)
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} is missing its draft payload",
+        )
+
+    blocking_reasons: list[str] = []
+    warnings = list(candidate.unresolved_ambiguities or [])
+
+    if candidate.status == CurationCandidateStatus.PENDING:
+        blocking_reasons.append("Candidate is still pending curator review.")
+    elif candidate.status == CurationCandidateStatus.REJECTED:
+        blocking_reasons.append("Candidate was rejected and is excluded from submission.")
+    elif candidate.status != CurationCandidateStatus.ACCEPTED:
+        blocking_reasons.append(
+            f"Candidate status {candidate.status.value} is not eligible for submission."
+        )
+
+    field_map = {
+        field.field_key: field
+        for field in draft.fields
+    }
+    field_results = (
+        validation_snapshot.field_results
+        if validation_snapshot is not None
+        else {}
+    )
+    for field_key, validation_result in field_results.items():
+        blocking_reason = _submission_validation_blocking_reason(
+            field_map.get(field_key),
+            validation_result,
+        )
+        if blocking_reason is not None:
+            blocking_reasons.append(blocking_reason)
+        warnings.extend(validation_result.warnings)
+
+    return CurationCandidateSubmissionReadiness(
+        candidate_id=str(candidate.id),
+        ready=candidate.status == CurationCandidateStatus.ACCEPTED and not blocking_reasons,
+        blocking_reasons=dedupe(blocking_reasons),
+        warnings=dedupe(warnings),
+    )
+
+
+def _submission_candidate_bundle(
+    candidate: CurationCandidate,
+) -> dict[str, Any]:
+    draft = _draft_detail(candidate.draft)
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} is missing its draft payload",
+        )
+
+    return {
+        "candidate_id": str(candidate.id),
+        "adapter_key": candidate.adapter_key,
+        "profile_key": candidate.profile_key,
+        "display_label": candidate.display_label,
+        "secondary_label": candidate.secondary_label,
+        "fields": {
+            field.field_key: field.value
+            for field in draft.fields
+        },
+        "draft_fields": [
+            field.model_dump(mode="json")
+            for field in draft.fields
+        ],
+        "metadata": dict(candidate.candidate_metadata or {}),
+        "normalized_payload": dict(candidate.normalized_payload or {}),
+    }
+
+
+class _SharedSubmissionPreviewAdapter:
+    """Default adapter-owned payload builder used when no custom builder is registered yet."""
+
+    def __init__(self, adapter_key: str) -> None:
+        self.adapter_key = adapter_key
+        self.supported_submission_modes = tuple(SubmissionMode)
+        self.supported_target_keys: tuple[str, ...] = ()
+
+    def build_submission_payload(
+        self,
+        *,
+        mode: SubmissionMode,
+        target_key: str,
+        payload_context: Mapping[str, Any],
+    ) -> SubmissionPayloadContract:
+        payload_json: dict[str, Any] = {
+            "session_id": payload_context["session_id"],
+            "adapter_key": self.adapter_key,
+            "profile_key": payload_context["profile_key"],
+            "mode": mode.value,
+            "target_key": target_key,
+            "candidate_count": payload_context["candidate_count"],
+            "candidates": payload_context["candidates"],
+        }
+        document = payload_context.get("document")
+        if document is not None:
+            payload_json["document"] = document
+        session_validation = payload_context.get("session_validation")
+        if session_validation is not None:
+            payload_json["session_validation"] = session_validation
+
+        payload_kwargs: dict[str, Any] = {
+            "mode": mode,
+            "target_key": target_key,
+            "adapter_key": self.adapter_key,
+            "candidate_ids": payload_context["candidate_ids"],
+            "payload_json": payload_json,
+            "warnings": payload_context["warnings"],
+        }
+
+        return SubmissionPayloadContract(**payload_kwargs)
+
+
+def _resolve_submission_domain_adapter(adapter_key: str) -> SubmissionDomainAdapter:
+    return _SharedSubmissionPreviewAdapter(adapter_key)
+
+
+def _default_submission_target_key(adapter_key: str) -> str:
+    return f"{adapter_key}.default"
+
+
+def _resolve_submission_preview_target_key(
+    *,
+    adapter_key: str,
+    requested_target_key: str | None,
+) -> tuple[SubmissionDomainAdapter, str]:
+    submission_adapter = _resolve_submission_domain_adapter(adapter_key)
+    supported_target_keys = tuple(submission_adapter.supported_target_keys or ())
+
+    if requested_target_key:
+        if supported_target_keys and requested_target_key not in supported_target_keys:
+            supported_targets = ", ".join(supported_target_keys)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Unsupported submission target '{requested_target_key}' for "
+                    f"adapter '{adapter_key}'. Supported targets: {supported_targets}"
+                ),
+            )
+
+        return submission_adapter, requested_target_key
+
+    if supported_target_keys:
+        return submission_adapter, supported_target_keys[0]
+
+    # Keep the shared substrate target-agnostic even before adapters publish
+    # explicit target identifiers for preview/export flows.
+    return submission_adapter, _default_submission_target_key(adapter_key)
+
+
+def _submission_payload_context(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    ready_candidates: Sequence[CurationCandidate],
+    session_validation: CurationValidationSnapshotSchema | None,
+) -> dict[str, Any]:
+    document = db.get(PDFDocument, session_row.document_id)
+    warnings: list[str] = []
+    if not ready_candidates:
+        warnings.append("No accepted candidates are ready for submission.")
+
+    return {
+        "session_id": str(session_row.id),
+        "profile_key": session_row.profile_key,
+        "document": (
+            _document_ref(document).model_dump(mode="json")
+            if document is not None
+            else None
+        ),
+        "session_validation": (
+            session_validation.model_dump(mode="json")
+            if session_validation is not None
+            else None
+        ),
+        "candidate_ids": [str(candidate.id) for candidate in ready_candidates],
+        "candidate_count": len(ready_candidates),
+        "candidates": [
+            _submission_candidate_bundle(candidate)
+            for candidate in ready_candidates
+        ],
+        "warnings": dedupe(warnings),
+    }
+
+
+def _build_submission_preview_payload(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    submission_adapter: SubmissionDomainAdapter,
+    mode: SubmissionMode,
+    target_key: str,
+    ready_candidates: Sequence[CurationCandidate],
+    session_validation: CurationValidationSnapshotSchema | None,
+) -> SubmissionPayloadContract:
+    payload_context = _submission_payload_context(
+        db=db,
+        session_row=session_row,
+        ready_candidates=ready_candidates,
+        session_validation=session_validation,
+    )
+    return submission_adapter.build_submission_payload(
+        mode=mode,
+        target_key=target_key,
+        payload_context=payload_context,
+    )
+
+
 def update_candidate_draft(
     db: Session,
     session_id: str | UUID,
@@ -2542,6 +2782,94 @@ def validate_session(
         session=_session_detail(db, updated_session, document_map, user_map),
         session_validation=session_validation,
         candidate_validations=candidate_validations,
+    )
+
+
+def submission_preview(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationSubmissionPreviewRequest,
+) -> CurationSubmissionPreviewResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+
+    validation_response = validate_session(
+        db,
+        normalized_session_id,
+        CurationSessionValidationRequest(
+            session_id=request.session_id,
+            candidate_ids=request.candidate_ids,
+            force=False,
+        ),
+    )
+
+    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    submission_adapter, target_key = _resolve_submission_preview_target_key(
+        adapter_key=session_row.adapter_key,
+        requested_target_key=request.target_key,
+    )
+    candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
+    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    readiness = [
+        _candidate_submission_readiness(
+            candidate_map[candidate_id],
+            next(
+                (
+                    candidate_validation
+                    for candidate_validation in validation_response.candidate_validations
+                    if candidate_validation.candidate_id == candidate_id
+                ),
+                None,
+            ),
+        )
+        for candidate_id in target_candidate_ids
+    ]
+    ready_candidates = [
+        candidate_map[readiness_item.candidate_id]
+        for readiness_item in readiness
+        if readiness_item.ready
+    ]
+
+    payload = (
+        _build_submission_preview_payload(
+            db=db,
+            session_row=session_row,
+            submission_adapter=submission_adapter,
+            mode=request.mode,
+            target_key=target_key,
+            ready_candidates=ready_candidates,
+            session_validation=validation_response.session_validation,
+        )
+        if request.include_payload
+        else None
+    )
+    submission_warnings = list(payload.warnings) if payload is not None else []
+
+    return CurationSubmissionPreviewResponse(
+        submission=CurationSubmissionRecord(
+            submission_id=str(uuid4()),
+            session_id=str(session_row.id),
+            adapter_key=session_row.adapter_key,
+            mode=request.mode,
+            target_key=target_key,
+            status=(
+                CurationSubmissionStatus.EXPORT_READY
+                if request.mode == SubmissionMode.EXPORT
+                else CurationSubmissionStatus.PREVIEW_READY
+            ),
+            readiness=readiness,
+            payload=payload,
+            requested_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            validation_errors=[],
+            warnings=submission_warnings,
+        ),
+        session_validation=validation_response.session_validation,
     )
 
 
@@ -3391,6 +3719,7 @@ __all__ = [
     "PreparedSessionUpsertResult",
     "ReusablePreparedSessionContext",
     "PreparedValidationSnapshotInput",
+    "submission_preview",
     "upsert_prepared_session",
     "update_candidate_draft",
     "update_session",
