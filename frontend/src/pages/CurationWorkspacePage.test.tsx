@@ -14,6 +14,7 @@ const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
+  fetchSubmissionPreview: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
@@ -491,6 +493,74 @@ function buildDecisionResponse({
   }
 }
 
+function buildSubmissionPreviewResponse() {
+  return {
+    submission: {
+      submission_id: 'submission-preview-1',
+      session_id: 'session-1',
+      adapter_key: 'entity_adapter',
+      mode: 'preview',
+      target_key: 'review_export_bundle',
+      status: 'preview_ready',
+      readiness: [
+        {
+          candidate_id: 'candidate-accepted',
+          ready: true,
+          blocking_reasons: [],
+          warnings: [],
+        },
+        {
+          candidate_id: 'candidate-pending',
+          ready: false,
+          blocking_reasons: ['Candidate is still pending curator review.'],
+          warnings: [],
+        },
+      ],
+      payload: {
+        mode: 'preview',
+        target_key: 'review_export_bundle',
+        adapter_key: 'entity_adapter',
+        candidate_ids: ['candidate-accepted'],
+        payload_json: {
+          candidate_count: 1,
+          candidates: ['candidate-accepted'],
+        },
+        warnings: [],
+      },
+      requested_at: '2026-03-21T09:00:00Z',
+      completed_at: '2026-03-21T09:00:01Z',
+      validation_errors: [],
+      warnings: [],
+    },
+    session_validation: {
+      snapshot_id: 'session-validation-1',
+      scope: 'session',
+      session_id: 'session-1',
+      adapter_key: 'entity_adapter',
+      state: 'completed',
+      field_results: {},
+      summary: {
+        state: 'completed',
+        counts: {
+          validated: 0,
+          ambiguous: 0,
+          not_found: 0,
+          invalid_format: 0,
+          conflict: 0,
+          skipped: 1,
+          overridden: 0,
+        },
+        warnings: [],
+        stale_field_keys: [],
+        last_validated_at: '2026-03-21T09:00:00Z',
+      },
+      requested_at: '2026-03-21T09:00:00Z',
+      completed_at: '2026-03-21T09:00:01Z',
+      warnings: [],
+    },
+  }
+}
+
 function LocationProbe() {
   const location = useLocation()
   return (
@@ -549,6 +619,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
+    serviceMocks.fetchSubmissionPreview.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
@@ -1081,6 +1152,31 @@ describe('CurationWorkspacePage', () => {
       behavior: 'smooth',
       block: 'center',
       inline: 'nearest',
+    })
+  })
+
+  it('opens the submission preview dialog from the workspace header trigger', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+    serviceMocks.fetchSubmissionPreview.mockResolvedValue(buildSubmissionPreviewResponse())
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Preview submission' })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Preview submission' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Submission preview' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        mode: 'preview',
+        target_key: 'review_export_bundle',
+        include_payload: true,
+      })
     })
   })
 })

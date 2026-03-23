@@ -30,6 +30,7 @@ from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
     CurationCandidateAction,
+    CurationSubmissionPreviewRequest,
     CurationCandidateValidationRequest,
     CurationCandidateSource,
     CurationCandidateDecisionRequest,
@@ -44,6 +45,9 @@ from src.schemas.curation_workspace import (
     CurationSessionSortField,
     CurationSessionStatus,
     CurationSortDirection,
+    CurationSubmissionStatus,
+    SubmissionMode,
+    SubmissionPayloadContract,
 )
 
 
@@ -1176,3 +1180,150 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.validation_snapshot.field_results["field_b"].status == "ambiguous"
     assert response.candidate.validation is not None
     assert response.candidate.validation.stale_field_keys == ["field_b"]
+
+
+def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.PREVIEW,
+            target_key="review_export_bundle",
+        ),
+    )
+
+    readiness_by_candidate = {
+        readiness.candidate_id: readiness
+        for readiness in response.submission.readiness
+    }
+
+    assert response.submission.status == CurationSubmissionStatus.PREVIEW_READY
+    assert response.session_validation is not None
+    assert readiness_by_candidate[seeded["first_candidate_id"]].ready is True
+    assert readiness_by_candidate[seeded["first_candidate_id"]].blocking_reasons == []
+    assert readiness_by_candidate[seeded["second_candidate_id"]].ready is False
+    assert readiness_by_candidate[seeded["second_candidate_id"]].blocking_reasons == [
+        "Candidate is still pending curator review."
+    ]
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json is not None
+    assert response.submission.payload.payload_json["candidate_count"] == 1
+    assert response.submission.payload.payload_json["candidates"][0]["candidate_id"] == (
+        seeded["first_candidate_id"]
+    )
+    assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+    assert response.submission.payload.payload_text is None
+
+
+def test_submission_preview_routes_payload_generation_through_submission_adapter(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    captured: dict[str, object] = {}
+
+    class StubSubmissionAdapter:
+        adapter_key = "reference_adapter"
+        supported_submission_modes = (SubmissionMode.PREVIEW,)
+        supported_target_keys = ("review_export_bundle",)
+
+        def build_submission_payload(self, *, mode, target_key, payload_context):
+            captured["mode"] = mode
+            captured["target_key"] = target_key
+            captured["payload_context"] = payload_context
+            return SubmissionPayloadContract(
+                mode=mode,
+                target_key=target_key,
+                adapter_key=self.adapter_key,
+                candidate_ids=list(payload_context["candidate_ids"]),
+                payload_json={"adapter_owned": True},
+            )
+
+    monkeypatch.setattr(
+        module,
+        "_resolve_submission_domain_adapter",
+        lambda adapter_key: StubSubmissionAdapter(),
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.PREVIEW,
+            target_key="review_export_bundle",
+        ),
+    )
+
+    assert captured["mode"] == SubmissionMode.PREVIEW
+    assert captured["target_key"] == "review_export_bundle"
+    assert captured["payload_context"]["candidate_ids"] == [seeded["first_candidate_id"]]
+    assert captured["payload_context"]["candidate_count"] == 1
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json == {"adapter_owned": True}
+
+
+def test_submission_preview_builds_export_bundle_and_surfaces_validation_blockers(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    first_candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert first_candidate is not None
+    assert first_candidate.draft is not None
+
+    first_candidate.draft.fields = [
+        {
+            "field_key": "field_a",
+            "label": "Field A",
+            "value": None,
+            "seed_value": None,
+            "order": 0,
+            "required": True,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": True,
+            "evidence_anchor_ids": [],
+            "metadata": {},
+        }
+    ]
+    db_session.add(first_candidate.draft)
+    db_session.commit()
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key="review_export_bundle",
+        ),
+    )
+
+    readiness_by_candidate = {
+        readiness.candidate_id: readiness
+        for readiness in response.submission.readiness
+    }
+
+    assert response.submission.status == CurationSubmissionStatus.EXPORT_READY
+    assert readiness_by_candidate[seeded["first_candidate_id"]].ready is False
+    assert readiness_by_candidate[seeded["first_candidate_id"]].blocking_reasons == [
+        "Field A is empty or invalid."
+    ]
+    assert response.submission.payload is not None
+    assert response.submission.payload.candidate_ids == []
+    assert response.submission.payload.payload_text is not None
+    assert response.submission.payload.content_type == "application/json"
+    assert response.submission.payload.filename.endswith("-export.json")
+    assert response.submission.payload.warnings == [
+        "No accepted candidates are ready for submission."
+    ]

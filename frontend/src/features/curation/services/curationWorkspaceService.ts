@@ -11,6 +11,8 @@ import type {
   CurationSessionValidationResponse,
   CurationSessionUpdateRequest,
   CurationSessionUpdateResponse,
+  CurationSubmissionPreviewRequest,
+  CurationSubmissionPreviewResponse,
   CurationWorkspace,
   CurationWorkspaceResponse,
 } from '@/features/curation/types'
@@ -128,6 +130,20 @@ export async function validateAllCurationSessionCandidates(
 ): Promise<CurationSessionValidationResponse> {
   return fetchCurationWorkspaceJson<CurationSessionValidationResponse>(
     `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/validate-all`,
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function fetchSubmissionPreview(
+  request: CurationSubmissionPreviewRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationSubmissionPreviewResponse> {
+  return fetchCurationWorkspaceJson<CurationSubmissionPreviewResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/submission-preview`,
     {
       method: 'POST',
       body: JSON.stringify(request),

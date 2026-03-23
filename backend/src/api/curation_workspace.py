@@ -40,6 +40,7 @@ from src.lib.curation_workspace.session_service import (
     list_flow_run_sessions,
     list_flow_runs,
     list_sessions,
+    submission_preview,
     update_candidate_draft,
     update_session,
     validate_candidate,
@@ -91,6 +92,8 @@ from src.schemas.curation_workspace import (
     CurationSessionStatsRequest,
     CurationSessionStatsResponse,
     CurationSessionStatus,
+    CurationSubmissionPreviewRequest,
+    CurationSubmissionPreviewResponse,
     CurationSessionValidationRequest,
     CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
@@ -581,6 +584,20 @@ async def post_session_validation(
 ) -> CurationSessionValidationResponse:
     set_global_user_from_cognito(db, user)
     return validate_session(db, session_id, request)
+
+
+@router.post(
+    "/sessions/{session_id}/submission-preview",
+    response_model=CurationSubmissionPreviewResponse,
+)
+async def post_submission_preview(
+    session_id: UUID,
+    request: CurationSubmissionPreviewRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSubmissionPreviewResponse:
+    set_global_user_from_cognito(db, user)
+    return submission_preview(db, session_id, request)
 
 
 __all__ = ["router"]

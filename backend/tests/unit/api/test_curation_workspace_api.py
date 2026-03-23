@@ -12,6 +12,7 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDraftUpdateRequest,
+    CurationSubmissionPreviewRequest,
     CurationCandidateValidationRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
@@ -659,6 +660,45 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
     db = object()
 
     response = await module.post_session_validation(
+        session_id,
+        request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "request": request,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_submission_preview_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _submission_preview(db, session_id, request):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["request"] = request
+        return expected
+
+    monkeypatch.setattr(module, "submission_preview", _submission_preview)
+
+    session_id = uuid4()
+    request = CurationSubmissionPreviewRequest(
+        session_id=str(session_id),
+        mode="preview",
+        target_key="review_export_bundle",
+        candidate_ids=[str(uuid4())],
+        include_payload=True,
+    )
+    db = object()
+
+    response = await module.post_submission_preview(
         session_id,
         request,
         user={"sub": "user-1"},
