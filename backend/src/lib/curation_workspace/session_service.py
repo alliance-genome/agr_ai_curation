@@ -368,6 +368,8 @@ def _stable_serialize(value: Any) -> str:
         return "null"
     return json.dumps(
         value,
+        # Draft comparisons should remain stable for unexpected passthrough values
+        # rather than failing during dirty-field detection.
         default=str,
         ensure_ascii=True,
         separators=(",", ":"),
@@ -2096,41 +2098,41 @@ def _compute_candidate_validation(
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
 
-    for field in draft_fields:
-        existing_result = _existing_result(field)
+    for draft_field in draft_fields:
+        existing_result = _existing_result(draft_field)
         field_is_targeted = (
             not requested_field_keys
-            or field.field_key in requested_field_keys
+            or draft_field.field_key in requested_field_keys
         )
         should_refresh = (
             field_is_targeted
             and (
                 force
-                or field.stale_validation
+                or draft_field.stale_validation
                 or existing_result is None
                 or snapshot_missing_or_incomplete
             )
         )
         next_result = (
-            _validation_result_for_field(field)
+            _validation_result_for_field(draft_field)
             if should_refresh
             else existing_result
         )
         if next_result is None:
-            next_result = _validation_result_for_field(field)
+            next_result = _validation_result_for_field(draft_field)
 
-        field_results[field.field_key] = next_result
+        field_results[draft_field.field_key] = next_result
         increment_validation_count(counts, next_result.status)
         warnings.extend(next_result.warnings)
         next_field = (
-            field.model_copy(
+            draft_field.model_copy(
                 update={
                     "stale_validation": False,
                     "validation_result": next_result,
                 }
             )
             if field_is_targeted
-            else field
+            else draft_field
         )
         if next_field.stale_validation:
             stale_field_keys.append(next_field.field_key)
