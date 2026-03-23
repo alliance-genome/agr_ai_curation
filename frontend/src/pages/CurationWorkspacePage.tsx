@@ -16,9 +16,12 @@ import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
 import {
   getAdapterLabel,
-  getEvidenceLabel,
   getValidationLabel,
 } from '@/features/curation/inventory/inventoryPresentation'
+import {
+  EvidencePanel,
+  useEvidenceNavigation,
+} from '@/features/curation/evidence'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
@@ -97,18 +100,6 @@ function getCandidateStatusColor(
     default:
       return 'warning'
   }
-}
-
-function getCandidateEvidenceSummary(candidate: CurationCandidate | null): string {
-  if (!candidate) {
-    return 'No evidence available.'
-  }
-
-  if (candidate.evidence_summary) {
-    return getEvidenceLabel(candidate.evidence_summary)
-  }
-
-  return `${candidate.evidence_anchors.length} anchors`
 }
 
 function getCandidateValidationSummary(candidate: CurationCandidate | null): string {
@@ -240,6 +231,9 @@ function CurationWorkspacePage() {
     () => findCandidate(workspace?.candidates ?? [], activeCandidateId),
     [activeCandidateId, workspace?.candidates],
   )
+  const evidenceNavigation = useEvidenceNavigation({
+    evidence: activeCandidate?.evidence_anchors ?? [],
+  })
 
   useEffect(() => {
     const document = workspace?.session.document
@@ -443,29 +437,13 @@ function CurationWorkspacePage() {
   )
 
   const evidenceSlot = (
-    <WorkspaceSlotPlaceholder
-      description="ALL-121 will supply evidence cards in this region. Until then, the shell exposes counts and source metadata so the layout is fully wired."
-      eyebrow="Evidence Panel"
-      title={activeCandidate?.display_label ?? 'Evidence placeholder'}
-    >
-      <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
-        <Chip
-          label={getCandidateEvidenceSummary(activeCandidate)}
-          size="small"
-          variant="outlined"
-        />
-        <Chip
-          label={`PDF: ${workspace.session.document.pdf_url ? 'Available' : 'Unavailable'}`}
-          size="small"
-          variant="outlined"
-        />
-      </Stack>
-      <Typography color="text.secondary" variant="body2">
-        {activeCandidate
-          ? `${activeCandidate.evidence_anchors.length} evidence anchors are attached to this candidate.`
-          : 'Evidence details appear once a candidate is selected.'}
-      </Typography>
-    </WorkspaceSlotPlaceholder>
+    <EvidencePanel
+      candidateEvidence={evidenceNavigation.candidateEvidence}
+      evidenceByGroup={evidenceNavigation.evidenceByGroup}
+      hoveredEvidence={evidenceNavigation.hoveredEvidence}
+      selectEvidence={evidenceNavigation.selectEvidence}
+      selectedEvidence={evidenceNavigation.selectedEvidence}
+    />
   )
 
   return (
