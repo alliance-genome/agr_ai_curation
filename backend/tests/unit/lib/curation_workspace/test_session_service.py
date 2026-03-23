@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -1272,6 +1273,50 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
     assert response.submission.payload.payload_json == {"adapter_owned": True}
 
 
+def test_submission_preview_handles_candidates_without_matching_validation_snapshots(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "validate_session",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            candidate_validations=[],
+            session_validation=None,
+        ),
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.PREVIEW,
+            target_key="review_export_bundle",
+            include_payload=False,
+        ),
+    )
+
+    readiness_by_candidate = {
+        readiness.candidate_id: readiness
+        for readiness in response.submission.readiness
+    }
+
+    assert readiness_by_candidate[seeded["first_candidate_id"]].ready is True
+    assert readiness_by_candidate[seeded["first_candidate_id"]].blocking_reasons == []
+    assert readiness_by_candidate[seeded["second_candidate_id"]].ready is False
+    assert readiness_by_candidate[seeded["second_candidate_id"]].blocking_reasons == [
+        "Candidate is still pending curator review."
+    ]
+    assert response.submission.payload is None
+    assert response.session_validation is None
+
+
 def test_submission_preview_keeps_export_mode_in_preview_state_when_no_exporter_is_configured(
     db_session,
 ):
@@ -1331,3 +1376,25 @@ def test_submission_preview_keeps_export_mode_in_preview_state_when_no_exporter_
     assert response.submission.payload.warnings == [
         "No accepted candidates are ready for submission."
     ]
+
+
+def test_submission_preview_rejects_unknown_candidate_ids(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        module.submission_preview(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionPreviewRequest(
+                session_id=seeded["session_id"],
+                mode=SubmissionMode.PREVIEW,
+                target_key="review_export_bundle",
+                candidate_ids=[str(uuid4())],
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert "Unknown candidate(s) for session" in exc.value.detail

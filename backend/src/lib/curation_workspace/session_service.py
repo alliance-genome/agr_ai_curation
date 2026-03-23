@@ -2311,7 +2311,12 @@ def _candidate_submission_readiness(
         field.field_key: field
         for field in draft.fields
     }
-    for field_key, validation_result in (validation_snapshot.field_results or {}).items():
+    field_results = (
+        validation_snapshot.field_results
+        if validation_snapshot is not None
+        else {}
+    )
+    for field_key, validation_result in field_results.items():
         blocking_reason = _submission_validation_blocking_reason(
             field_map.get(field_key),
             validation_result,
