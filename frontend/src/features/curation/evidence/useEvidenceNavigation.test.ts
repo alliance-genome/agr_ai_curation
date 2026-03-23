@@ -71,6 +71,34 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.evidenceByGroup.clinical).toEqual([diseaseEvidence])
   })
 
+  it('can resolve anchor ids across all workspace evidence while keeping field and group indexes candidate-scoped', () => {
+    const activeEvidence = createEvidenceRecord('anchor-active', {
+      candidate_id: 'candidate-1',
+      field_keys: ['field_a'],
+      field_group_keys: ['primary'],
+    })
+    const inactiveEvidence = createEvidenceRecord('anchor-inactive', {
+      candidate_id: 'candidate-2',
+      field_keys: ['field_b'],
+      field_group_keys: ['secondary'],
+    })
+
+    const { result } = renderHook(() =>
+      useEvidenceNavigation({
+        evidence: [activeEvidence],
+        allEvidence: [activeEvidence, inactiveEvidence],
+      })
+    )
+
+    expect(result.current.candidateEvidence).toEqual([activeEvidence])
+    expect(result.current.evidenceByAnchorId['anchor-active']).toBe(activeEvidence)
+    expect(result.current.evidenceByAnchorId['anchor-inactive']).toBe(inactiveEvidence)
+    expect(result.current.evidenceByField.field_a).toEqual([activeEvidence])
+    expect(result.current.evidenceByField.field_b).toBeUndefined()
+    expect(result.current.evidenceByGroup.primary).toEqual([activeEvidence])
+    expect(result.current.evidenceByGroup.secondary).toBeUndefined()
+  })
+
   it('locks selection and emits a select navigation command', () => {
     const evidence = createEvidenceRecord('anchor-1')
     const evidenceRecords = [evidence]
@@ -85,6 +113,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.selectedEvidence).toBe(evidence)
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
+      anchorId: evidence.anchor_id,
       anchor: evidence.anchor,
       searchText: 'Search text for anchor-1',
       pageNumber: 3,
@@ -116,6 +145,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.selectedEvidence).toBe(selectedEvidence)
     expect(result.current.hoveredEvidence).toBe(hoveredEvidence)
     expect(result.current.pendingNavigation).toEqual({
+      anchorId: hoveredEvidence.anchor_id,
       anchor: hoveredEvidence.anchor,
       searchText: 'Search text for anchor-2',
       pageNumber: 8,
@@ -129,6 +159,7 @@ describe('useEvidenceNavigation', () => {
 
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
+      anchorId: selectedEvidence.anchor_id,
       anchor: selectedEvidence.anchor,
       searchText: 'Search text for anchor-1',
       pageNumber: 3,
@@ -183,6 +214,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.selectedEvidence).toBeNull()
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
+      anchorId: evidence.anchor_id,
       anchor: evidence.anchor,
       searchText: null,
       pageNumber: 5,

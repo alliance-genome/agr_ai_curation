@@ -33,3 +33,9 @@ code {
   display: flex;
   flex-direction: column;
 }
+
+.pdf-to-form-linked-field {
+  background-color: rgba(21, 101, 192, 0.12);
+  box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.38);
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}

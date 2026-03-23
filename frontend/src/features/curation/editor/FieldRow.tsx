@@ -264,6 +264,7 @@ export default function FieldRow({
 
   return (
     <Box
+      data-field-key={field.field_key}
       data-testid={`field-row-${field.field_key}`}
       sx={{
         display: 'grid',

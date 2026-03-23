@@ -62,7 +62,10 @@ describe('FieldRow', () => {
       revertSlot: <button type="button">Revert</button>,
     })
 
-    expect(screen.getByTestId('field-row-gene_symbol')).toBeInTheDocument()
+    expect(screen.getByTestId('field-row-gene_symbol')).toHaveAttribute(
+      'data-field-key',
+      'gene_symbol',
+    )
     expect(screen.getByText('Gene symbol')).toBeInTheDocument()
     expect(screen.getByLabelText('Gene symbol')).toHaveValue('BRCA1')
     expect(screen.getByText('Validated')).toBeInTheDocument()

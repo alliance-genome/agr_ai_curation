@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { dispatchPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/pdfEvents'
 import type { CurationWorkspace } from '@/features/curation/types'
 import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
@@ -25,9 +26,16 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
 
-vi.mock('@/components/pdfViewer/pdfEvents', () => ({
-  dispatchPDFDocumentChanged: serviceMocks.dispatchPDFDocumentChanged,
-}))
+vi.mock('@/components/pdfViewer/pdfEvents', async () => {
+  const actual = await vi.importActual<typeof import('@/components/pdfViewer/pdfEvents')>(
+    '@/components/pdfViewer/pdfEvents',
+  )
+
+  return {
+    ...actual,
+    dispatchPDFDocumentChanged: serviceMocks.dispatchPDFDocumentChanged,
+  }
+})
 
 vi.mock('@/components/pdfViewer/PdfViewer', () => ({
   default: (props: MockPdfViewerProps) => {
@@ -404,6 +412,9 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
 }
 
 describe('CurationWorkspacePage', () => {
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+  let scrollIntoViewMock: ReturnType<typeof vi.fn>
+
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
@@ -411,9 +422,12 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.updateCurationSession.mockReset()
+    scrollIntoViewMock = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
   })
 
   afterEach(() => {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     vi.clearAllMocks()
   })
 
@@ -680,5 +694,48 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByTestId('location-state')).toHaveTextContent('"launchedFromInventory":true')
     expect(screen.getByTestId('location-state')).toHaveTextContent('"note":"preserve-this-state"')
+  })
+
+  it('switches candidates and scrolls the linked field row when the PDF viewer selects an anchor', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-accepted',
+      )
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    act(() => {
+      dispatchPDFViewerEvidenceAnchorSelected('anchor-1')
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+      expect(screen.getByTestId('field-row-field_a')).toHaveClass(
+        'pdf-to-form-linked-field',
+      )
+    })
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'center',
+      inline: 'nearest',
+    })
   })
 })

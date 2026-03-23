@@ -16,6 +16,7 @@ export interface EvidenceChipProps {
 }
 
 export interface EvidenceNavigationCommand {
+  anchorId: string
   anchor: EvidenceAnchor
   searchText: string | null
   pageNumber: number | null
