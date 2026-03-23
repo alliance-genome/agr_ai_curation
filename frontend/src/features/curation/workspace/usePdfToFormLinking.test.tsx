@@ -111,7 +111,6 @@ function LinkingHarness({
       {activeCandidate?.draft.fields.map((field) => (
         <div
           data-field-key={field.field_key}
-          data-testid={`linking-harness-row-${field.field_key}`}
           key={field.field_key}
         >
           {field.label}
