@@ -51,6 +51,13 @@ function buildNavigationCommand(
   }
 }
 
+function isSameEvidence(
+  left: CurationEvidenceRecord | null,
+  right: CurationEvidenceRecord | null
+): boolean {
+  return left?.anchor_id === right?.anchor_id
+}
+
 function evidenceNavigationReducer(
   state: EvidenceNavigationRuntimeState,
   action: EvidenceNavigationAction
@@ -75,6 +82,10 @@ function evidenceNavigationReducer(
       }
     case 'hover':
       if (action.evidence === null) {
+        if (state.hoveredEvidence === null) {
+          return state
+        }
+
         return {
           ...state,
           hoveredEvidence: null,
@@ -82,6 +93,24 @@ function evidenceNavigationReducer(
             state.selectedEvidence === null
               ? null
               : buildNavigationCommand(state.selectedEvidence, 'select'),
+        }
+      }
+
+      if (
+        state.selectedEvidence !== null
+        && isSameEvidence(action.evidence, state.selectedEvidence)
+      ) {
+        if (state.hoveredEvidence === null) {
+          return state
+        }
+
+        return {
+          ...state,
+          hoveredEvidence: null,
+          pendingNavigation: buildNavigationCommand(
+            state.selectedEvidence,
+            'select'
+          ),
         }
       }
 

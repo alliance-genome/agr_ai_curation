@@ -84,6 +84,16 @@ function EvidenceInteractionHarness() {
         <Typography data-testid="pending-mode">
           {navigation.pendingNavigation?.mode ?? 'none'}
         </Typography>
+        <button
+          data-testid="acknowledge-navigation"
+          onClick={() => navigation.acknowledgeNavigation()}
+          type="button"
+        >
+          Acknowledge navigation
+        </button>
+        <button data-testid="outside-focus-target" type="button">
+          Outside focus target
+        </button>
       </Stack>
     </ThemeProvider>
   )
@@ -155,6 +165,49 @@ describe('Evidence interaction sync', () => {
 
     await user.unhover(secondCard)
 
+    expect(screen.getByTestId('hovered-anchor')).toHaveTextContent('none')
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('none')
+  })
+
+  it('does not requeue selected-chip navigation after mouse leave once the selection is acknowledged', async () => {
+    const user = userEvent.setup()
+
+    render(<EvidenceInteractionHarness />)
+
+    const firstChip = screen.getByTestId('evidence-chip-anchor-1')
+    const acknowledgeNavigation = screen.getByTestId('acknowledge-navigation')
+
+    await user.click(firstChip)
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('select')
+
+    await user.click(acknowledgeNavigation)
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('none')
+
+    await user.unhover(firstChip)
+
+    expect(screen.getByTestId('selected-anchor')).toHaveTextContent('anchor-1')
+    expect(screen.getByTestId('hovered-anchor')).toHaveTextContent('none')
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('none')
+  })
+
+  it('does not requeue selected-card navigation after blur once the selection is acknowledged', async () => {
+    const user = userEvent.setup()
+
+    render(<EvidenceInteractionHarness />)
+
+    const secondCard = screen.getByTestId('evidence-card-anchor-2')
+    const acknowledgeNavigation = screen.getByTestId('acknowledge-navigation')
+    const outsideFocusTarget = screen.getByTestId('outside-focus-target')
+
+    await user.click(secondCard)
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('select')
+
+    await user.click(acknowledgeNavigation)
+    expect(screen.getByTestId('pending-mode')).toHaveTextContent('none')
+
+    await user.click(outsideFocusTarget)
+
+    expect(screen.getByTestId('selected-anchor')).toHaveTextContent('anchor-2')
     expect(screen.getByTestId('hovered-anchor')).toHaveTextContent('none')
     expect(screen.getByTestId('pending-mode')).toHaveTextContent('none')
   })

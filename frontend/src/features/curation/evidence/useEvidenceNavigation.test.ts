@@ -137,6 +137,32 @@ describe('useEvidenceNavigation', () => {
     })
   })
 
+  it('does not re-emit selection when hover end occurs without an active transient hover', () => {
+    const selectedEvidence = createEvidenceRecord('anchor-1')
+    const evidenceRecords = [selectedEvidence]
+    const { result } = renderHook(() =>
+      useEvidenceNavigation({ evidence: evidenceRecords })
+    )
+
+    act(() => {
+      result.current.selectEvidence(selectedEvidence)
+    })
+
+    act(() => {
+      result.current.acknowledgeNavigation()
+    })
+
+    expect(result.current.pendingNavigation).toBeNull()
+
+    act(() => {
+      result.current.hoverEvidence(null)
+    })
+
+    expect(result.current.selectedEvidence).toBe(selectedEvidence)
+    expect(result.current.hoveredEvidence).toBeNull()
+    expect(result.current.pendingNavigation).toBeNull()
+  })
+
   it('navigates without mutating selection state and clears stale commands after acknowledgement', () => {
     const evidence = createEvidenceRecord('anchor-1', {
       anchor: {
@@ -187,7 +213,7 @@ describe('useEvidenceNavigation', () => {
     })
 
     expect(result.current.selectedEvidence).toBe(currentEvidence[0])
-    expect(result.current.hoveredEvidence).toBe(currentEvidence[0])
+    expect(result.current.hoveredEvidence).toBeNull()
 
     act(() => {
       result.current.clearEvidence()
