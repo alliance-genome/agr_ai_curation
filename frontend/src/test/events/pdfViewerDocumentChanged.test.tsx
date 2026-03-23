@@ -10,6 +10,7 @@ const sampleEvent = {
   viewerUrl: '/uploads/11111111-2222-3333-4444-555555555555/sample.pdf',
   filename: 'sample.pdf',
   pageCount: 12,
+  viewerState: undefined,
 }
 
 describe('pdf-viewer-document-changed event contract', () => {
@@ -57,5 +58,33 @@ describe('pdf-viewer-document-changed event contract', () => {
     )
 
     expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('passes optional viewer resume state through the document change event', () => {
+    const handler = vi.fn()
+    const unsubscribe = onPDFDocumentChanged((event) => {
+      handler(event.detail)
+    })
+
+    dispatchPDFDocumentChanged(
+      sampleEvent.documentId,
+      sampleEvent.viewerUrl,
+      sampleEvent.filename,
+      sampleEvent.pageCount,
+      {
+        viewerState: {
+          scrollPosition: 240,
+        },
+      },
+    )
+
+    expect(handler).toHaveBeenCalledWith({
+      ...sampleEvent,
+      viewerState: {
+        scrollPosition: 240,
+      },
+    })
+
+    unsubscribe()
   })
 })

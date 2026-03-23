@@ -9,12 +9,16 @@ import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
 
 const serviceMocks = vi.hoisted(() => ({
+  autosaveCurationCandidateDraft: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
+  updateCurationSession: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
+  autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  updateCurationSession: serviceMocks.updateCurationSession,
 }))
 
 vi.mock('@/components/pdfViewer/pdfEvents', () => ({
@@ -116,6 +120,7 @@ function buildWorkspace(): CurationWorkspace {
               anchor_kind: 'snippet',
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
+              chunk_ids: [],
             },
             created_at: '2026-03-20T12:03:00Z',
             updated_at: '2026-03-20T12:04:00Z',
@@ -187,15 +192,17 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
 
 describe('CurationWorkspacePage', () => {
   beforeEach(() => {
+    serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
+    serviceMocks.updateCurationSession.mockReset()
   })
 
   afterEach(() => {
     vi.clearAllMocks()
   })
 
-  it('defaults to the first pending candidate and rewrites the route', async () => {
+  it('restores the session-selected candidate when the workspace already has one', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -206,11 +213,11 @@ describe('CurationWorkspacePage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('location')).toHaveTextContent(
-        '/curation/session-1/candidate-pending',
+        '/curation/session-1/candidate-accepted',
       )
     })
 
-    expect(screen.getAllByText('Pending candidate')).toHaveLength(2)
+    expect(screen.getAllByText('Accepted candidate')).toHaveLength(2)
     expect(screen.getByText('Candidate Queue')).toBeInTheDocument()
     expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
     expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
@@ -249,12 +256,24 @@ describe('CurationWorkspacePage', () => {
         '/api/documents/document-1.pdf',
         'Workspace Document',
         0,
+        undefined,
       )
     })
   })
 
-  it('preserves location state when it normalizes the candidate route', async () => {
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+  it('falls back to the first pending candidate and preserves location state when no prior selection exists', async () => {
+    const workspace = buildWorkspace()
+    workspace.active_candidate_id = null
+    workspace.session.current_candidate_id = null
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
 
     renderPage({
       pathname: '/curation/session-1',
@@ -268,6 +287,12 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByTestId('location')).toHaveTextContent(
         '/curation/session-1/candidate-pending',
       )
+    })
+    await waitFor(() => {
+      expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        current_candidate_id: 'candidate-pending',
+      })
     })
 
     expect(screen.getByTestId('location-state')).toHaveTextContent('"launchedFromInventory":true')

@@ -9,6 +9,11 @@ import type {
 
 export interface CurationWorkspaceContextValue {
   workspace: CurationWorkspace
+  setWorkspace: (
+    nextWorkspace:
+      | CurationWorkspace
+      | ((currentWorkspace: CurationWorkspace) => CurationWorkspace),
+  ) => void
   session: CurationReviewSession
   candidates: CurationCandidate[]
   activeCandidateId: string | null
