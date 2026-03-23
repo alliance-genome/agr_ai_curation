@@ -289,7 +289,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('updates the route when a queue card is selected and only forwards click navigation to the PDF viewer', async () => {
+  it('updates the route when a queue card is selected and forwards hover/select navigation to the PDF viewer', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
@@ -325,9 +325,100 @@ describe('CurationWorkspacePage', () => {
     await user.hover(evidenceCard)
     fireEvent.focus(evidenceCard)
 
-    expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+    expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+      mode: 'hover',
+      pageNumber: 3,
+      sectionTitle: 'Results',
+      searchText: 'APOE evidence sentence',
+    })
 
     await user.click(evidenceCard)
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+        mode: 'select',
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'APOE evidence sentence',
+      })
+      expect(getLatestPdfViewerProps().onNavigationComplete).toEqual(expect.any(Function))
+    })
+
+    await act(async () => {
+      getLatestPdfViewerProps().onNavigationComplete?.()
+    })
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+    })
+  })
+
+  it('forwards chip hover and click events to PDF navigation', async () => {
+    const user = userEvent.setup()
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[1]
+    candidate.draft.fields = [
+      {
+        field_key: 'field-a',
+        label: 'Field A',
+        order: 0,
+        required: false,
+        read_only: false,
+        dirty: false,
+        stale_validation: false,
+        evidence_anchor_ids: ['anchor-1'],
+        validation_result: null,
+        metadata: {},
+      },
+    ]
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-accepted',
+      )
+    })
+
+    await user.click(screen.getByTestId('candidate-queue-card-candidate-pending'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Evidence Anchors (1)')).toBeInTheDocument()
+      expect(screen.getByText('APOE evidence sentence')).toBeInTheDocument()
+      expect(screen.getByTestId('evidence-chip-anchor-1')).toBeInTheDocument()
+    })
+
+    const chip = screen.getByTestId('evidence-chip-anchor-1')
+
+    await user.hover(chip)
+
+    expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+      mode: 'hover',
+      pageNumber: 3,
+      sectionTitle: 'Results',
+      searchText: 'APOE evidence sentence',
+    })
+
+    await user.unhover(chip)
+
+    expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+
+    await user.click(chip)
 
     await waitFor(() => {
       expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
