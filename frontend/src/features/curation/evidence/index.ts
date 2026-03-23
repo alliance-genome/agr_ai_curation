@@ -3,6 +3,7 @@ export type {
   EvidenceNavigationCommand,
   EvidenceNavigationState,
 } from './types'
+export { default as EvidencePanel, type EvidencePanelProps } from './EvidencePanel'
 export {
   useEvidenceNavigation,
   type UseEvidenceNavigationOptions,

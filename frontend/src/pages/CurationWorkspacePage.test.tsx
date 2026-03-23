@@ -116,6 +116,11 @@ function buildWorkspace(): CurationWorkspace {
               anchor_kind: 'snippet',
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
+              snippet_text: 'APOE evidence sentence',
+              viewer_search_text: 'APOE evidence sentence',
+              page_number: 3,
+              section_title: 'Results',
+              chunk_ids: ['chunk-1'],
             },
             created_at: '2026-03-20T12:03:00Z',
             updated_at: '2026-03-20T12:04:00Z',
@@ -210,10 +215,11 @@ describe('CurationWorkspacePage', () => {
       )
     })
 
-    expect(screen.getAllByText('Pending candidate')).toHaveLength(2)
+    expect(screen.getAllByText('Pending candidate')).toHaveLength(1)
     expect(screen.getByText('Candidate Queue')).toBeInTheDocument()
     expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
-    expect(screen.getByText('Evidence Panel')).toBeInTheDocument()
+    expect(screen.getByText('Evidence Anchors (1)')).toBeInTheDocument()
+    expect(screen.getByText('APOE evidence sentence')).toBeInTheDocument()
     expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
@@ -231,7 +237,7 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(screen.getAllByText('Accepted candidate')).toHaveLength(2)
+      expect(screen.getAllByText('Accepted candidate')).toHaveLength(1)
     })
 
     expect(screen.getByTestId('location')).toHaveTextContent(
