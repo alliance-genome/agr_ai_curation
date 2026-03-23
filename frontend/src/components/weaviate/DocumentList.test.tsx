@@ -235,10 +235,6 @@ describe('DocumentList', () => {
   });
 
   it('opens Review & Curate from the document action column', async () => {
-    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
-      existingSessionId: 'session-1',
-      canBootstrap: true,
-    });
     openCurationWorkspaceMock.mockResolvedValue('session-1');
 
     render(
@@ -253,19 +249,14 @@ describe('DocumentList', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionId: 'session-1',
+          sessionId: null,
           documentId: 'doc-review',
         })
       );
     });
   });
 
-  it('hides Review & Curate when the document has no prepared session', async () => {
-    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
-      existingSessionId: null,
-      canBootstrap: false,
-    });
-
+  it('always renders Review & Curate button regardless of availability', () => {
     render(
       <DocumentList
         {...defaultProps}
@@ -273,15 +264,8 @@ describe('DocumentList', () => {
       />
     );
 
-    await waitFor(() => {
-      expect(getCurationWorkspaceLaunchAvailabilityMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: 'doc-without-session',
-        })
-      );
-    });
-
-    expect(screen.queryByRole('button', { name: /review & curate/i })).not.toBeInTheDocument();
+    // Button is always visible — availability is resolved at click time, not on mount
+    expect(screen.getByRole('button', { name: /review & curate/i })).toBeInTheDocument();
   });
 
   it('disables re-embed button for processing documents', () => {
