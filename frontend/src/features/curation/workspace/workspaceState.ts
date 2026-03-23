@@ -46,7 +46,7 @@ function applyDraftFieldChange(
     ...field,
     value: nextValue,
     dirty: nextDirty,
-    stale_validation: nextDirty || field.stale_validation,
+    stale_validation: nextDirty,
   }
 }
 
