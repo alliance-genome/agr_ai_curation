@@ -1597,8 +1597,12 @@ export function PdfViewer({
       }
       console.debug('[PDF DEBUG] beginDocumentLoad called with', nextDoc)
 
-      // Always start fresh: page 1, auto zoom, no scroll
-      viewerStateRef.current = { ...DEFAULT_STATE, lastInteraction: new Date().toISOString() }
+      viewerStateRef.current = {
+        ...DEFAULT_STATE,
+        currentPage: event.detail.viewerState?.currentPage ?? DEFAULT_STATE.currentPage,
+        scrollPosition: event.detail.viewerState?.scrollPosition ?? DEFAULT_STATE.scrollPosition,
+        lastInteraction: new Date().toISOString(),
+      }
       highlightTermsRef.current = []
       setHighlightTerms([])
       beginDocumentLoad(nextDoc)

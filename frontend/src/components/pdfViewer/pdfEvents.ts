@@ -3,6 +3,10 @@ export interface PDFViewerDocumentChangedDetail {
   viewerUrl: string
   filename: string
   pageCount: number
+  viewerState?: {
+    currentPage?: number
+    scrollPosition?: number
+  }
 }
 
 export type PDFViewerDocumentChangedEvent = CustomEvent<PDFViewerDocumentChangedDetail>
@@ -34,10 +38,19 @@ export function dispatchPDFDocumentChanged(
   viewerUrl: string,
   filename: string,
   pageCount: number,
+  options?: {
+    viewerState?: PDFViewerDocumentChangedDetail['viewerState']
+  },
 ): void {
   window.dispatchEvent(
     new CustomEvent<PDFViewerDocumentChangedDetail>('pdf-viewer-document-changed', {
-      detail: { documentId, viewerUrl, filename, pageCount },
+      detail: {
+        documentId,
+        viewerUrl,
+        filename,
+        pageCount,
+        viewerState: options?.viewerState,
+      },
     }),
   )
 }

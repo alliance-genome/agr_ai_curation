@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
   Box,
@@ -29,7 +29,11 @@ import type {
 } from '@/features/curation/types'
 import {
   CurationWorkspaceProvider,
+  useCurationWorkspaceAutosave,
+  useCurationWorkspaceContext,
+  useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
+import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
@@ -52,37 +56,6 @@ function findCandidate(
   }
 
   return candidates.find((candidate) => candidate.candidate_id === candidateId) ?? null
-}
-
-export function resolveActiveCandidateId(
-  workspace: CurationWorkspace,
-  candidateIdParam?: string | null,
-): string | null {
-  const candidates = workspace.candidates
-  const routeCandidate = findCandidate(candidates, candidateIdParam)
-  if (routeCandidate) {
-    return routeCandidate.candidate_id
-  }
-
-  const firstPendingCandidate = candidates.find((candidate) => candidate.status === 'pending')
-  if (firstPendingCandidate) {
-    return firstPendingCandidate.candidate_id
-  }
-
-  const workspaceActiveCandidate = findCandidate(candidates, workspace.active_candidate_id)
-  if (workspaceActiveCandidate) {
-    return workspaceActiveCandidate.candidate_id
-  }
-
-  const sessionActiveCandidate = findCandidate(
-    candidates,
-    workspace.session.current_candidate_id,
-  )
-  if (sessionActiveCandidate) {
-    return sessionActiveCandidate.candidate_id
-  }
-
-  return candidates[0]?.candidate_id ?? null
 }
 
 function getCandidateStatusColor(
@@ -159,92 +132,20 @@ function WorkspaceSlotPlaceholder({
   )
 }
 
-function CurationWorkspacePage() {
-  const location = useLocation()
-  const navigate = useNavigate()
-  const { sessionId, candidateId } = useParams<{
-    sessionId: string
-    candidateId?: string
-  }>()
-  const [activeCandidateId, setActiveCandidateId] = useState<string | null>(null)
-  const workspaceSessionId = typeof sessionId === 'string' && sessionId.length > 0
-    ? sessionId
-    : null
-  const queueNavigationState = readCurationQueueNavigationState(location.state)
-
-  const workspaceQuery = useQuery({
-    queryKey: ['curation-workspace', workspaceSessionId],
-    queryFn: async () => {
-      if (!workspaceSessionId) {
-        throw new Error('Missing curation session identifier.')
-      }
-
-      return fetchCurationWorkspace(workspaceSessionId)
-    },
-    enabled: workspaceSessionId !== null,
-    staleTime: WORKSPACE_STALE_TIME_MS,
-  })
-
-  const workspace = workspaceQuery.data ?? null
-  const resolvedCandidateId = useMemo(
-    () => (workspace ? resolveActiveCandidateId(workspace, candidateId) : null),
-    [candidateId, workspace],
-  )
+function CurationWorkspacePageContent({
+  queueNavigationState,
+}: {
+  queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
+}) {
+  const { activeCandidate, workspace } = useCurationWorkspaceContext()
+  const autosave = useCurationWorkspaceAutosave()
+  const hydration = useCurationWorkspaceHydration()
+  const runtimeWarning = autosave.warning ?? hydration.warning
 
   useEffect(() => {
-    setActiveCandidateId(resolvedCandidateId)
-  }, [resolvedCandidateId])
-
-  useEffect(() => {
-    if (!sessionId || !workspace) {
-      return
-    }
-
-    if (resolvedCandidateId && candidateId !== resolvedCandidateId) {
-      navigate(`/curation/${sessionId}/${resolvedCandidateId}`, {
-        replace: true,
-        state: location.state,
-      })
-      return
-    }
-
-    if (!resolvedCandidateId && candidateId) {
-      navigate(`/curation/${sessionId}`, {
-        replace: true,
-        state: location.state,
-      })
-    }
-  }, [candidateId, location.state, navigate, resolvedCandidateId, sessionId, workspace])
-
-  const setActiveCandidate = useCallback(
-    (nextCandidateId: string | null, options?: { replace?: boolean }) => {
-      if (!sessionId) {
-        return
-      }
-
-      setActiveCandidateId(nextCandidateId)
-      navigate(
-        nextCandidateId
-          ? `/curation/${sessionId}/${nextCandidateId}`
-          : `/curation/${sessionId}`,
-        {
-          replace: options?.replace ?? false,
-          state: location.state,
-        },
-      )
-    },
-    [location.state, navigate, sessionId],
-  )
-
-  const activeCandidate = useMemo(
-    () => findCandidate(workspace?.candidates ?? [], activeCandidateId),
-    [activeCandidateId, workspace?.candidates],
-  )
-
-  useEffect(() => {
-    const document = workspace?.session.document
+    const document = workspace.session.document
     const pdfUrl = document?.pdf_url ?? document?.viewer_url
-    if (!document?.document_id || !pdfUrl) {
+    if (!hydration.isHydrated || !document?.document_id || !pdfUrl) {
       return
     }
 
@@ -253,102 +154,22 @@ function CurationWorkspacePage() {
       pdfUrl,
       document.title,
       0,
+      hydration.restoredScrollPosition === null
+        ? undefined
+        : {
+            viewerState: {
+              scrollPosition: hydration.restoredScrollPosition,
+            },
+          },
     )
   }, [
-    workspace?.session.document.document_id,
-    workspace?.session.document.pdf_url,
-    workspace?.session.document.title,
-    workspace?.session.document.viewer_url,
+    hydration.isHydrated,
+    hydration.restoredScrollPosition,
+    workspace.session.document.document_id,
+    workspace.session.document.pdf_url,
+    workspace.session.document.title,
+    workspace.session.document.viewer_url,
   ])
-
-  const contextValue = useMemo(() => {
-    if (!workspace) {
-      return null
-    }
-
-    return {
-      workspace,
-      session: workspace.session,
-      candidates: workspace.candidates,
-      activeCandidateId,
-      activeCandidate,
-      setActiveCandidate,
-    }
-  }, [activeCandidate, activeCandidateId, setActiveCandidate, workspace])
-
-  if (!sessionId) {
-    return (
-      <Box
-        sx={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: 3,
-        }}
-      >
-        <Alert
-          severity="error"
-          action={(
-            <Button color="inherit" component={RouterLink} to="/curation">
-              Back to inventory
-            </Button>
-          )}
-        >
-          Missing curation session identifier.
-        </Alert>
-      </Box>
-    )
-  }
-
-  if (workspaceQuery.isLoading) {
-    return (
-      <Box
-        sx={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Stack spacing={2} alignItems="center">
-          <CircularProgress />
-          <Typography color="text.secondary">
-            Loading curation workspace...
-          </Typography>
-        </Stack>
-      </Box>
-    )
-  }
-
-  if (!workspace || contextValue === null) {
-    const message = workspaceQuery.error instanceof Error
-      ? workspaceQuery.error.message
-      : 'Unable to load this curation workspace.'
-
-    return (
-      <Box
-        sx={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: 3,
-        }}
-      >
-        <Alert
-          severity="error"
-          action={(
-            <Button color="inherit" onClick={() => void workspaceQuery.refetch()}>
-              Retry
-            </Button>
-          )}
-        >
-          {message}
-        </Alert>
-      </Box>
-    )
-  }
 
   const queueSlot = (
     <WorkspaceSlotPlaceholder
@@ -469,37 +290,225 @@ function CurationWorkspacePage() {
   )
 
   return (
-    <CurationWorkspaceProvider value={contextValue}>
+    <Box
+      sx={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        p: 2,
+        overflow: 'hidden',
+        gap: 2,
+      }}
+    >
+      {runtimeWarning ? (
+        <Alert severity="warning">
+          {runtimeWarning}
+        </Alert>
+      ) : null}
+
+      <WorkspaceShell
+        editorSlot={editorSlot}
+        evidenceSlot={evidenceSlot}
+        headerSlot={(
+          <WorkspaceHeader
+            navigationSlot={(
+              <WorkspaceSessionNavigation
+                currentSessionId={workspace.session.session_id}
+                queueContext={queueNavigationState?.queueContext}
+                queueRequest={queueNavigationState?.queueRequest}
+              />
+            )}
+            session={workspace.session}
+          />
+        )}
+        pdfSlot={<PdfViewer />}
+        queueSlot={queueSlot}
+        toolbarSlot={toolbarSlot}
+      />
+    </Box>
+  )
+}
+
+function CurationWorkspacePage() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { sessionId, candidateId } = useParams<{
+    sessionId: string
+    candidateId?: string
+  }>()
+  const [activeCandidateId, setActiveCandidateId] = useState<string | null>(null)
+  const workspaceSessionId = typeof sessionId === 'string' && sessionId.length > 0
+    ? sessionId
+    : null
+  const queueNavigationState = readCurationQueueNavigationState(location.state)
+
+  const workspaceQuery = useQuery({
+    queryKey: ['curation-workspace', workspaceSessionId],
+    queryFn: async () => {
+      if (!workspaceSessionId) {
+        throw new Error('Missing curation session identifier.')
+      }
+
+      return fetchCurationWorkspace(workspaceSessionId)
+    },
+    enabled: workspaceSessionId !== null,
+    staleTime: WORKSPACE_STALE_TIME_MS,
+  })
+
+  const workspace = workspaceQuery.data ?? null
+
+  const setActiveCandidate = useCallback(
+    (nextCandidateId: string | null, options?: { replace?: boolean }) => {
+      if (!sessionId) {
+        return
+      }
+
+      setActiveCandidateId(nextCandidateId)
+      navigate(
+        nextCandidateId
+          ? `/curation/${sessionId}/${nextCandidateId}`
+          : `/curation/${sessionId}`,
+        {
+          replace: options?.replace ?? false,
+          state: location.state,
+        },
+      )
+    },
+    [location.state, navigate, sessionId],
+  )
+
+  const activeCandidate = useMemo(
+    () => findCandidate(workspace?.candidates ?? [], activeCandidateId),
+    [activeCandidateId, workspace?.candidates],
+  )
+
+  useEffect(() => {
+    setActiveCandidateId(null)
+  }, [workspaceSessionId])
+
+  const setWorkspace = useCallback(
+    (
+      nextWorkspace:
+        | CurationWorkspace
+        | ((currentWorkspace: CurationWorkspace) => CurationWorkspace),
+    ) => {
+      if (!workspaceSessionId) {
+        return
+      }
+
+      queryClient.setQueryData<CurationWorkspace | null>(
+        ['curation-workspace', workspaceSessionId],
+        (currentWorkspace) => {
+          if (!currentWorkspace) {
+            return currentWorkspace
+          }
+
+          return typeof nextWorkspace === 'function'
+            ? nextWorkspace(currentWorkspace)
+            : nextWorkspace
+        },
+      )
+    },
+    [queryClient, workspaceSessionId],
+  )
+
+  const contextValue = useMemo(() => {
+    if (!workspace) {
+      return null
+    }
+
+    return {
+      workspace,
+      setWorkspace,
+      session: workspace.session,
+      candidates: workspace.candidates,
+      activeCandidateId,
+      activeCandidate,
+      setActiveCandidate,
+    }
+  }, [activeCandidate, activeCandidateId, setActiveCandidate, setWorkspace, workspace])
+
+  if (!sessionId) {
+    return (
       <Box
         sx={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          p: 2,
-          overflow: 'hidden',
+          alignItems: 'center',
+          justifyContent: 'center',
+          p: 3,
         }}
       >
-        <WorkspaceShell
-          editorSlot={editorSlot}
-          evidenceSlot={evidenceSlot}
-          headerSlot={(
-            <WorkspaceHeader
-              navigationSlot={(
-                <WorkspaceSessionNavigation
-                  currentSessionId={workspace.session.session_id}
-                  queueContext={queueNavigationState?.queueContext}
-                  queueRequest={queueNavigationState?.queueRequest}
-                />
-              )}
-              session={workspace.session}
-            />
+        <Alert
+          severity="error"
+          action={(
+            <Button color="inherit" component={RouterLink} to="/curation">
+              Back to inventory
+            </Button>
           )}
-          pdfSlot={<PdfViewer />}
-          queueSlot={queueSlot}
-          toolbarSlot={toolbarSlot}
-        />
+        >
+          Missing curation session identifier.
+        </Alert>
       </Box>
+    )
+  }
+
+  if (workspaceQuery.isLoading) {
+    return (
+      <Box
+        sx={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Stack spacing={2} alignItems="center">
+          <CircularProgress />
+          <Typography color="text.secondary">
+            Loading curation workspace...
+          </Typography>
+        </Stack>
+      </Box>
+    )
+  }
+
+  if (!workspace || contextValue === null) {
+    const message = workspaceQuery.error instanceof Error
+      ? workspaceQuery.error.message
+      : 'Unable to load this curation workspace.'
+
+    return (
+      <Box
+        sx={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          p: 3,
+        }}
+      >
+        <Alert
+          severity="error"
+          action={(
+            <Button color="inherit" onClick={() => void workspaceQuery.refetch()}>
+              Retry
+            </Button>
+          )}
+        >
+          {message}
+        </Alert>
+      </Box>
+    )
+  }
+
+  return (
+    <CurationWorkspaceProvider value={contextValue}>
+      <CurationWorkspaceRuntimeProvider routeCandidateId={candidateId}>
+        <CurationWorkspacePageContent queueNavigationState={queueNavigationState} />
+      </CurationWorkspaceRuntimeProvider>
     </CurationWorkspaceProvider>
   )
 }

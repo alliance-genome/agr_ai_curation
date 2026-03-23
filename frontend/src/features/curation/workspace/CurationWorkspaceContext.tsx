@@ -6,9 +6,16 @@ import type {
   CurationReviewSession,
   CurationWorkspace,
 } from '@/features/curation/types'
+import type { UseAutosaveReturn } from './useAutosave'
+import type { UseSessionHydrationReturn } from './useSessionHydration'
 
-export interface CurationWorkspaceContextValue {
+export interface CurationWorkspaceBaseContextValue {
   workspace: CurationWorkspace
+  setWorkspace: (
+    nextWorkspace:
+      | CurationWorkspace
+      | ((currentWorkspace: CurationWorkspace) => CurationWorkspace),
+  ) => void
   session: CurationReviewSession
   candidates: CurationCandidate[]
   activeCandidateId: string | null
@@ -18,6 +25,14 @@ export interface CurationWorkspaceContextValue {
     options?: { replace?: boolean },
   ) => void
 }
+
+export interface CurationWorkspaceRuntimeContextValue {
+  autosave: UseAutosaveReturn
+  hydration: UseSessionHydrationReturn
+}
+
+export type CurationWorkspaceContextValue =
+  CurationWorkspaceBaseContextValue & Partial<CurationWorkspaceRuntimeContextValue>
 
 const CurationWorkspaceContext = createContext<CurationWorkspaceContextValue | null>(null)
 
@@ -42,4 +57,26 @@ export function useCurationWorkspaceContext(): CurationWorkspaceContextValue {
   }
 
   return context
+}
+
+export function useCurationWorkspaceAutosave(): UseAutosaveReturn {
+  const context = useCurationWorkspaceContext()
+  if (!context.autosave) {
+    throw new Error(
+      'useCurationWorkspaceAutosave must be used within a CurationWorkspaceRuntimeProvider',
+    )
+  }
+
+  return context.autosave
+}
+
+export function useCurationWorkspaceHydration(): UseSessionHydrationReturn {
+  const context = useCurationWorkspaceContext()
+  if (!context.hydration) {
+    throw new Error(
+      'useCurationWorkspaceHydration must be used within a CurationWorkspaceRuntimeProvider',
+    )
+  }
+
+  return context.hydration
 }
