@@ -209,6 +209,7 @@ function CurationWorkspacePageContent({
       candidateEvidence={evidenceNavigation.candidateEvidence}
       evidenceByGroup={evidenceNavigation.evidenceByGroup}
       hoveredEvidence={evidenceNavigation.hoveredEvidence}
+      hoverEvidence={evidenceNavigation.hoverEvidence}
       selectEvidence={evidenceNavigation.selectEvidence}
       selectedEvidence={evidenceNavigation.selectedEvidence}
     />
@@ -247,7 +248,12 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        pdfSlot={<PdfViewer />}
+        pdfSlot={
+          <PdfViewer
+            onNavigationComplete={evidenceNavigation.acknowledgeNavigation}
+            pendingNavigation={evidenceNavigation.pendingNavigation}
+          />
+        }
         queueSlot={queueSlot}
         toolbarSlot={toolbarSlot}
       />
@@ -308,10 +314,6 @@ function CurationWorkspacePage() {
     () => findCandidate(workspace?.candidates ?? [], activeCandidateId),
     [activeCandidateId, workspace?.candidates],
   )
-  const evidenceNavigation = useEvidenceNavigation({
-    evidence: activeCandidate?.evidence_anchors ?? [],
-  })
-
   useEffect(() => {
     setActiveCandidateId(null)
   }, [workspaceSessionId])

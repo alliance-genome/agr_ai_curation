@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +13,7 @@ const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
+  renderPdfViewer: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
@@ -27,8 +28,27 @@ vi.mock('@/components/pdfViewer/pdfEvents', () => ({
 }))
 
 vi.mock('@/components/pdfViewer/PdfViewer', () => ({
-  default: () => <div data-testid="pdf-viewer">PDF viewer</div>,
+  default: (props: MockPdfViewerProps) => {
+    serviceMocks.renderPdfViewer(props)
+    return <div data-testid="pdf-viewer">PDF viewer</div>
+  },
 }))
+
+type MockPdfViewerProps = {
+  pendingNavigation?: {
+    mode?: string
+    pageNumber?: number | null
+    sectionTitle?: string | null
+    searchText?: string | null
+  } | null
+  onNavigationComplete?: () => void
+}
+
+function getLatestPdfViewerProps(): MockPdfViewerProps {
+  const latestCall = serviceMocks.renderPdfViewer.mock.lastCall
+
+  return (latestCall?.[0] as MockPdfViewerProps) ?? {}
+}
 
 function buildWorkspace(): CurationWorkspace {
   return {
@@ -200,6 +220,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
+    serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.updateCurationSession.mockReset()
   })
 
@@ -268,7 +289,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('updates the route when a queue card is selected', async () => {
+  it('updates the route when a queue card is selected and forwards evidence navigation to the PDF viewer', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
@@ -298,6 +319,26 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByText('Evidence Anchors (1)')).toBeInTheDocument()
     expect(screen.getByText('APOE evidence sentence')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('evidence-card-anchor-1'))
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+        mode: 'select',
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'APOE evidence sentence',
+      })
+      expect(getLatestPdfViewerProps().onNavigationComplete).toEqual(expect.any(Function))
+    })
+
+    await act(async () => {
+      getLatestPdfViewerProps().onNavigationComplete?.()
+    })
+
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+    })
   })
 
   it('preserves location state when it normalizes the candidate route', async () => {

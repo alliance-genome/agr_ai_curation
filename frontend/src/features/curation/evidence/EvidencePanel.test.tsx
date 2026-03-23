@@ -77,12 +77,14 @@ function renderEvidencePanel(
     }),
   ]
   const selectEvidence = props.selectEvidence ?? vi.fn()
+  const hoverEvidence = props.hoverEvidence ?? vi.fn()
 
   const resolvedProps: EvidencePanelProps = {
     candidateEvidence,
     evidenceByGroup: props.evidenceByGroup ?? buildEvidenceByGroup(candidateEvidence),
     hoveredEvidence: props.hoveredEvidence ?? null,
     selectedEvidence: props.selectedEvidence ?? null,
+    hoverEvidence,
     selectEvidence,
   }
 
@@ -96,6 +98,7 @@ function renderEvidencePanel(
     ...renderResult,
     props: resolvedProps,
     selectEvidence,
+    hoverEvidence,
   }
 }
 
@@ -172,6 +175,48 @@ describe('EvidencePanel', () => {
         .getByText('unresolved')
         .closest('[data-quality-tone]'),
     ).toHaveAttribute('data-quality-tone', 'error')
+  })
+
+  it('renders snippet from snippet_text or sentence_text fallback order', () => {
+    renderEvidencePanel({
+      candidateEvidence: [
+        createEvidenceRecord('anchor-snippet-first', {
+          anchor: {
+            snippet_text: 'Explicit snippet text',
+            sentence_text: 'Fallback sentence text',
+          },
+        }),
+        createEvidenceRecord('anchor-sentence-fallback', {
+          anchor: {
+            snippet_text: null,
+            sentence_text: 'Fallback sentence text',
+          },
+        }),
+      ],
+    })
+
+    expect(screen.getByText('Explicit snippet text')).toBeInTheDocument()
+    expect(screen.getByText('Fallback sentence text')).toBeInTheDocument()
+  })
+
+  it('calls hoverEvidence when a card receives hover or focus interaction', async () => {
+    const user = userEvent.setup()
+    const hoverEvidence = vi.fn()
+
+    renderEvidencePanel({
+      candidateEvidence: [createEvidenceRecord('anchor-hover')],
+      hoverEvidence,
+    })
+
+    const hoveredCard = screen.getByTestId('evidence-card-anchor-hover')
+
+    await user.hover(hoveredCard)
+    expect(hoverEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ anchor_id: 'anchor-hover' }),
+    )
+
+    await user.unhover(hoveredCard)
+    expect(hoverEvidence).toHaveBeenLastCalledWith(null)
   })
 
   it('filters evidence cards by adapter-defined group', async () => {

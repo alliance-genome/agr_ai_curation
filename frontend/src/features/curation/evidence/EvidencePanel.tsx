@@ -16,6 +16,7 @@ type EvidencePanelNavigationProps = Pick<
   | 'candidateEvidence'
   | 'evidenceByGroup'
   | 'hoveredEvidence'
+  | 'hoverEvidence'
   | 'selectEvidence'
   | 'selectedEvidence'
 >
@@ -86,6 +87,7 @@ export default function EvidencePanel({
   evidenceByGroup,
   selectedEvidence,
   hoveredEvidence,
+  hoverEvidence,
   selectEvidence,
 }: EvidencePanelProps) {
   const theme = useTheme()
@@ -211,6 +213,10 @@ export default function EvidencePanel({
                   data-testid={`evidence-card-${record.anchor_id}`}
                   key={record.anchor_id}
                   onClick={() => selectEvidence(record)}
+                  onFocus={() => hoverEvidence(record)}
+                  onBlur={() => hoverEvidence(null)}
+                  onMouseEnter={() => hoverEvidence(record)}
+                  onMouseLeave={() => hoverEvidence(null)}
                   type="button"
                   sx={{
                     width: '100%',
