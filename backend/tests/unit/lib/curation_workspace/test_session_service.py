@@ -1195,7 +1195,6 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
         CurationSubmissionPreviewRequest(
             session_id=seeded["session_id"],
             mode=SubmissionMode.PREVIEW,
-            target_key="review_export_bundle",
         ),
     )
 
@@ -1205,6 +1204,7 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
     }
 
     assert response.submission.status == CurationSubmissionStatus.PREVIEW_READY
+    assert response.submission.target_key == "reference_adapter.default"
     assert response.session_validation is not None
     assert readiness_by_candidate[seeded["first_candidate_id"]].ready is True
     assert readiness_by_candidate[seeded["first_candidate_id"]].blocking_reasons == []
@@ -1213,6 +1213,7 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
         "Candidate is still pending curator review."
     ]
     assert response.submission.payload is not None
+    assert response.submission.payload.target_key == "reference_adapter.default"
     assert response.submission.payload.payload_json is not None
     assert response.submission.payload.payload_json["candidate_count"] == 1
     assert response.submission.payload.payload_json["candidates"][0]["candidate_id"] == (
@@ -1235,7 +1236,7 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
     class StubSubmissionAdapter:
         adapter_key = "reference_adapter"
         supported_submission_modes = (SubmissionMode.PREVIEW,)
-        supported_target_keys = ("review_export_bundle",)
+        supported_target_keys = ("adapter_owned_preview_target",)
 
         def build_submission_payload(self, *, mode, target_key, payload_context):
             captured["mode"] = mode
@@ -1261,12 +1262,11 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
         CurationSubmissionPreviewRequest(
             session_id=seeded["session_id"],
             mode=SubmissionMode.PREVIEW,
-            target_key="review_export_bundle",
         ),
     )
 
     assert captured["mode"] == SubmissionMode.PREVIEW
-    assert captured["target_key"] == "review_export_bundle"
+    assert captured["target_key"] == "adapter_owned_preview_target"
     assert captured["payload_context"]["candidate_ids"] == [seeded["first_candidate_id"]]
     assert captured["payload_context"]["candidate_count"] == 1
     assert response.submission.payload is not None

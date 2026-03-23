@@ -29,8 +29,6 @@ import type {
   SubmissionMode,
 } from '@/features/curation/types'
 
-const DEFAULT_SUBMISSION_TARGET_KEY = 'review_export_bundle'
-
 const MODE_COPY: Record<
   SubmissionMode,
   {
@@ -169,7 +167,6 @@ export default function SubmissionPreviewDialog({
     void fetchSubmissionPreview({
       session_id: session.session_id,
       mode,
-      target_key: DEFAULT_SUBMISSION_TARGET_KEY,
       include_payload: true,
     })
       .then((nextResponse) => {

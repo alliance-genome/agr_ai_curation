@@ -1174,7 +1174,6 @@ describe('CurationWorkspacePage', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledWith({
         session_id: 'session-1',
         mode: 'preview',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })

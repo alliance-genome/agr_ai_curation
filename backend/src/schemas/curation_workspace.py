@@ -1731,8 +1731,12 @@ class CurationSubmissionPreviewRequest(CurationWorkspaceBaseModel):
 
     session_id: str = Field(description="Session identifier")
     mode: SubmissionMode = Field(description="Preview or export mode")
-    target_key: SubmissionTargetKey = Field(
-        description="Adapter-owned key naming the downstream preview or export target"
+    target_key: Optional[SubmissionTargetKey] = Field(
+        default=None,
+        description=(
+            "Optional adapter-owned key naming the downstream preview or export "
+            "target; when omitted the backend resolves the adapter default"
+        ),
     )
     candidate_ids: list[str] = Field(
         default_factory=list,

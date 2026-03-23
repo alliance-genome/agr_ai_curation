@@ -692,7 +692,6 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
     request = CurationSubmissionPreviewRequest(
         session_id=str(session_id),
         mode="preview",
-        target_key="review_export_bundle",
         candidate_ids=[str(uuid4())],
         include_payload=True,
     )

@@ -227,7 +227,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledWith({
         session_id: 'session-1',
         mode: 'preview',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })
@@ -258,7 +257,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'export',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })
@@ -299,7 +297,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'export',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })
@@ -336,7 +333,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'direct_submit',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })

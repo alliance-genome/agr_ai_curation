@@ -2409,6 +2409,39 @@ def _resolve_submission_domain_adapter(adapter_key: str) -> SubmissionDomainAdap
     return _SharedSubmissionPreviewAdapter(adapter_key)
 
 
+def _default_submission_target_key(adapter_key: str) -> str:
+    return f"{adapter_key}.default"
+
+
+def _resolve_submission_preview_target_key(
+    *,
+    adapter_key: str,
+    requested_target_key: str | None,
+) -> tuple[SubmissionDomainAdapter, str]:
+    submission_adapter = _resolve_submission_domain_adapter(adapter_key)
+    supported_target_keys = tuple(submission_adapter.supported_target_keys or ())
+
+    if requested_target_key:
+        if supported_target_keys and requested_target_key not in supported_target_keys:
+            supported_targets = ", ".join(supported_target_keys)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Unsupported submission target '{requested_target_key}' for "
+                    f"adapter '{adapter_key}'. Supported targets: {supported_targets}"
+                ),
+            )
+
+        return submission_adapter, requested_target_key
+
+    if supported_target_keys:
+        return submission_adapter, supported_target_keys[0]
+
+    # Keep the shared substrate target-agnostic even before adapters publish
+    # explicit target identifiers for preview/export flows.
+    return submission_adapter, _default_submission_target_key(adapter_key)
+
+
 def _submission_payload_context(
     *,
     db: Session,
@@ -2448,12 +2481,12 @@ def _build_submission_preview_payload(
     *,
     db: Session,
     session_row: ReviewSessionModel,
+    submission_adapter: SubmissionDomainAdapter,
     mode: SubmissionMode,
     target_key: str,
     ready_candidates: Sequence[CurationCandidate],
     session_validation: CurationValidationSnapshotSchema | None,
 ) -> SubmissionPayloadContract:
-    submission_adapter = _resolve_submission_domain_adapter(session_row.adapter_key)
     payload_context = _submission_payload_context(
         db=db,
         session_row=session_row,
@@ -2776,6 +2809,10 @@ def submission_preview(
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    submission_adapter, target_key = _resolve_submission_preview_target_key(
+        adapter_key=session_row.adapter_key,
+        requested_target_key=request.target_key,
+    )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
     readiness = [
@@ -2802,8 +2839,9 @@ def submission_preview(
         _build_submission_preview_payload(
             db=db,
             session_row=session_row,
+            submission_adapter=submission_adapter,
             mode=request.mode,
-            target_key=request.target_key,
+            target_key=target_key,
             ready_candidates=ready_candidates,
             session_validation=validation_response.session_validation,
         )
@@ -2818,7 +2856,7 @@ def submission_preview(
             session_id=str(session_row.id),
             adapter_key=session_row.adapter_key,
             mode=request.mode,
-            target_key=request.target_key,
+            target_key=target_key,
             status=(
                 CurationSubmissionStatus.EXPORT_READY
                 if request.mode == SubmissionMode.EXPORT
