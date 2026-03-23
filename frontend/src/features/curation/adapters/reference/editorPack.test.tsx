@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { fireEvent, render, screen } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
@@ -53,6 +55,31 @@ function renderInput(field: CurationDraftField = createField()) {
   return { onChange }
 }
 
+function ControlledReferenceFieldInput({
+  field,
+}: {
+  field: CurationDraftField
+}) {
+  const [value, setValue] = useState(field.value)
+
+  return renderReferenceFieldInput({
+    ariaLabel: field.label,
+    disabled: field.read_only,
+    field,
+    inputId: `input-${field.field_key}`,
+    onChange: setValue,
+    value,
+  })
+}
+
+function renderControlledInput(field: CurationDraftField = createField()) {
+  render(
+    <ThemeProvider theme={theme}>
+      <ControlledReferenceFieldInput field={field} />
+    </ThemeProvider>,
+  )
+}
+
 describe('referenceEditorPack', () => {
   it('registers the reference adapter editor pack by adapter key', () => {
     const editorPack = getCurationAdapterEditorPack(REFERENCE_ADAPTER_KEY)
@@ -70,9 +97,26 @@ describe('referenceEditorPack', () => {
     expect(screen.getByText('One author per line.')).toBeInTheDocument()
 
     fireEvent.change(authorsInput, {
-      target: { value: 'Ada Lovelace\nKatherine Johnson' },
+      target: { value: 'Ada Lovelace\n\nKatherine Johnson' },
     })
 
-    expect(onChange).toHaveBeenCalledWith(['Ada Lovelace', 'Katherine Johnson'])
+    expect(onChange).toHaveBeenCalledWith(['Ada Lovelace', '', 'Katherine Johnson'])
+  })
+
+  it('preserves blank lines when authors are edited in the textarea', () => {
+    renderControlledInput(
+      createField({
+        value: ['Ada Lovelace', '', 'Katherine Johnson'],
+      }),
+    )
+
+    const authorsInput = screen.getByLabelText('Authors')
+    expect(authorsInput).toHaveValue('Ada Lovelace\n\nKatherine Johnson')
+
+    fireEvent.change(authorsInput, {
+      target: { value: 'Ada Lovelace\n\nKatherine Johnson\nMarie Curie' },
+    })
+
+    expect(authorsInput).toHaveValue('Ada Lovelace\n\nKatherine Johnson\nMarie Curie')
   })
 })

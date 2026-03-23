@@ -120,7 +120,6 @@ function stringifyAuthorList(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-      .filter((entry) => entry.length > 0)
       .join('\n')
   }
 
@@ -132,10 +131,7 @@ function stringifyAuthorList(value: unknown): string {
 }
 
 function parseAuthorList(value: string): string[] {
-  return value
-    .split('\n')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
+  return value.split('\n').map((entry) => entry.trim())
 }
 
 function renderAuthorListInput({
@@ -300,4 +296,3 @@ export const referenceEditorPack: CurationAdapterEditorPack = {
   fieldLayout: REFERENCE_FIELD_LAYOUT,
   renderFieldInput: renderReferenceFieldInput,
 }
-
