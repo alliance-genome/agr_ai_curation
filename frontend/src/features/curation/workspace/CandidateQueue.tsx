@@ -34,18 +34,15 @@ function getValidationBadgeLabel(validation?: CurationValidationSummary | null):
     return '0/0 ✓'
   }
 
-  if (validation.state === 'pending') {
-    return 'Validating'
-  }
-
-  if (validation.state === 'failed') {
-    return 'Validation failed'
+  if (validation.state === 'pending' || validation.state === 'not_requested') {
+    return '0/0 ✓'
   }
 
   const validCount = validation.counts.validated
   const warningCount = validation.counts.ambiguous + validation.counts.conflict
   const errorCount = validation.counts.not_found + validation.counts.invalid_format
-  const totalCount = validCount + warningCount + errorCount
+  const neutralCount = validation.counts.skipped + validation.counts.overridden
+  const totalCount = validCount + warningCount + errorCount + neutralCount
 
   if (totalCount === 0) {
     return '0/0 ✓'
