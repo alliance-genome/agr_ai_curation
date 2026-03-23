@@ -77,14 +77,12 @@ function renderEvidencePanel(
     }),
   ]
   const selectEvidence = props.selectEvidence ?? vi.fn()
-  const hoverEvidence = props.hoverEvidence ?? vi.fn()
 
   const resolvedProps: EvidencePanelProps = {
     candidateEvidence,
     evidenceByGroup: props.evidenceByGroup ?? buildEvidenceByGroup(candidateEvidence),
     hoveredEvidence: props.hoveredEvidence ?? null,
     selectedEvidence: props.selectedEvidence ?? null,
-    hoverEvidence,
     selectEvidence,
   }
 
@@ -98,7 +96,6 @@ function renderEvidencePanel(
     ...renderResult,
     props: resolvedProps,
     selectEvidence,
-    hoverEvidence,
   }
 }
 
@@ -197,26 +194,6 @@ describe('EvidencePanel', () => {
 
     expect(screen.getByText('Explicit snippet text')).toBeInTheDocument()
     expect(screen.getByText('Fallback sentence text')).toBeInTheDocument()
-  })
-
-  it('calls hoverEvidence when a card receives hover or focus interaction', async () => {
-    const user = userEvent.setup()
-    const hoverEvidence = vi.fn()
-
-    renderEvidencePanel({
-      candidateEvidence: [createEvidenceRecord('anchor-hover')],
-      hoverEvidence,
-    })
-
-    const hoveredCard = screen.getByTestId('evidence-card-anchor-hover')
-
-    await user.hover(hoveredCard)
-    expect(hoverEvidence).toHaveBeenCalledWith(
-      expect.objectContaining({ anchor_id: 'anchor-hover' }),
-    )
-
-    await user.unhover(hoveredCard)
-    expect(hoverEvidence).toHaveBeenLastCalledWith(null)
   })
 
   it('filters evidence cards by adapter-defined group', async () => {

@@ -209,7 +209,6 @@ function CurationWorkspacePageContent({
       candidateEvidence={evidenceNavigation.candidateEvidence}
       evidenceByGroup={evidenceNavigation.evidenceByGroup}
       hoveredEvidence={evidenceNavigation.hoveredEvidence}
-      hoverEvidence={evidenceNavigation.hoverEvidence}
       selectEvidence={evidenceNavigation.selectEvidence}
       selectedEvidence={evidenceNavigation.selectedEvidence}
     />

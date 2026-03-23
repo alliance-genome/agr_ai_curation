@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -289,7 +289,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('updates the route when a queue card is selected and forwards evidence navigation to the PDF viewer', async () => {
+  it('updates the route when a queue card is selected and only forwards click navigation to the PDF viewer', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
@@ -320,7 +320,14 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText('Evidence Anchors (1)')).toBeInTheDocument()
     expect(screen.getByText('APOE evidence sentence')).toBeInTheDocument()
 
-    await user.click(screen.getByTestId('evidence-card-anchor-1'))
+    const evidenceCard = screen.getByTestId('evidence-card-anchor-1')
+
+    await user.hover(evidenceCard)
+    fireEvent.focus(evidenceCard)
+
+    expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+
+    await user.click(evidenceCard)
 
     await waitFor(() => {
       expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
