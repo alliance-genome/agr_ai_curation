@@ -1521,6 +1521,9 @@ export function PdfViewer({
           : []
 
         if (textLayerRects.length === 0) {
+          // PDF.js can report a textual match before the text layer yields
+          // trustworthy client rects. Keep searching and degrade only through
+          // the ranked fallback chain instead of claiming a false highlight.
           clearPdfJsFindHighlights(pdfApp)
           continue
         }

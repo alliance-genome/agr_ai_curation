@@ -143,7 +143,35 @@ const installMockPdfViewer = ({
 
   let currentPageNumber = 1
   const pageViews = new Map<number, { div: HTMLElement; viewport: { convertToViewportRectangle: (coords: number[]) => number[] } }>()
+  const textLayers = new Map<number, HTMLElement>()
   const textNodeLayouts = new WeakMap<Text, { rect: DOMRect; charWidth: number }>()
+
+  const appendTextSegment = (pageNumber: number, segment: string) => {
+    const textLayer = textLayers.get(pageNumber)
+    if (!textLayer) {
+      throw new Error(`Missing text layer for page ${pageNumber}`)
+    }
+
+    const pageIndex = pageNumber - 1
+    const segmentIndex = textLayer.querySelectorAll('span').length
+    const span = iframeDocument.createElement('span')
+    span.textContent = segment
+    const spanRect = createMockRect(
+      32,
+      (pageIndex * 900) + 48 + (segmentIndex * 28),
+      Math.max(60, segment.length * 5),
+      20,
+    )
+    span.getBoundingClientRect = () => spanRect
+    const textNode = span.firstChild as Text | null
+    if (textNode) {
+      textNodeLayouts.set(textNode, {
+        rect: spanRect,
+        charWidth: segment.length > 0 ? spanRect.width / segment.length : spanRect.width,
+      })
+    }
+    textLayer.appendChild(span)
+  }
 
   pages.forEach((page, pageIndex) => {
     const pageTop = pageIndex * 900
@@ -154,25 +182,10 @@ const installMockPdfViewer = ({
 
     const textLayer = iframeDocument.createElement('div')
     textLayer.className = 'textLayer'
+    textLayers.set(page.pageNumber, textLayer)
 
-    page.textSegments.forEach((segment, segmentIndex) => {
-      const span = iframeDocument.createElement('span')
-      span.textContent = segment
-      const spanRect = createMockRect(
-        32,
-        pageTop + 48 + (segmentIndex * 28),
-        Math.max(60, segment.length * 5),
-        20,
-      )
-      span.getBoundingClientRect = () => spanRect
-      const textNode = span.firstChild as Text | null
-      if (textNode) {
-        textNodeLayouts.set(textNode, {
-          rect: spanRect,
-          charWidth: segment.length > 0 ? spanRect.width / segment.length : spanRect.width,
-        })
-      }
-      textLayer.appendChild(span)
+    page.textSegments.forEach((segment) => {
+      appendTextSegment(page.pageNumber, segment)
     })
 
     pageDiv.appendChild(textLayer)
@@ -274,7 +287,7 @@ const installMockPdfViewer = ({
     },
   })
 
-  return { iframe, eventBus, pdfViewer }
+  return { iframe, eventBus, pdfViewer, appendTextSegment }
 }
 
 const getEvidenceHighlightRects = (iframe: HTMLIFrameElement): HTMLElement[] => {
@@ -542,6 +555,45 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
   })
 
+  it('waits for delayed text-layer rendering before degrading a successful quote match', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const query = 'Exact quote from PDFX markdown'
+
+    render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
+
+    dispatchPDFDocumentChanged('doc-2d', '/fixtures/sample.pdf', 'delayed-text-layer.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('delayed-text-layer.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, appendTextSegment } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 1 : 0,
+        current: candidate === query ? 1 : 0,
+        pageIdx: candidate === query ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: [] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    window.setTimeout(() => {
+      appendTextSegment(3, query)
+    }, 150)
+
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+
+    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
+  })
+
   it('renders hover previews differently from selected evidence highlights', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -710,6 +762,79 @@ describe('PdfViewer evidence navigation', () => {
       degraded: true,
       matchedPage: 3,
     }))
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(
+      screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
+    ).toHaveLength(2)
+  })
+
+  it('degrades to page fallback when PDF.js finds a quote but no reliable text-layer rects can be derived', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: 'Raw quote with “smart” punctuation',
+        normalized_text: 'Raw quote with "smart" punctuation',
+        viewer_search_text: 'Raw quote with “smart” punctuation',
+        page_number: 3,
+        section_title: null,
+        subsection_title: null,
+        chunk_ids: ['chunk-strict-gate'],
+      },
+      searchText: 'Raw quote with “smart” punctuation',
+      pageNumber: 3,
+      sectionTitle: null,
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-5b', '/fixtures/sample.pdf', 'strict-gate.pdf', 10)
+    await waitFor(() => {
+      expect(screen.getByText('strict-gate.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query.includes('quote') ? 0 : 1,
+        total: query.includes('quote') ? 1 : 0,
+        current: query.includes('quote') ? 1 : 0,
+        pageIdx: query.includes('quote') ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: ['Completely different visible text', 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    }, { timeout: 2500 })
+
+    expect(onNavigationStateChange).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'page-fallback',
+      locatorQuality: 'page_only',
+      degraded: true,
+      matchedPage: 3,
+    }))
+
+    expect(eventBus.findQueries).toEqual([
+      'Raw quote with “smart” punctuation',
+      'Raw quote with "smart" punctuation',
+    ])
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(
       screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
