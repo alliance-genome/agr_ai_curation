@@ -2396,16 +2396,6 @@ class _SharedSubmissionPreviewAdapter:
             "payload_json": payload_json,
             "warnings": payload_context["warnings"],
         }
-        if mode == SubmissionMode.EXPORT:
-            payload_kwargs["payload_text"] = json.dumps(
-                payload_json,
-                default=str,
-                ensure_ascii=True,
-                indent=2,
-                sort_keys=True,
-            )
-            payload_kwargs["content_type"] = "application/json"
-            payload_kwargs["filename"] = f"curation-{payload_context['session_id']}-export.json"
 
         return SubmissionPayloadContract(**payload_kwargs)
 

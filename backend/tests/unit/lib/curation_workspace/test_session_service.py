@@ -1272,7 +1272,9 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
     assert response.submission.payload.payload_json == {"adapter_owned": True}
 
 
-def test_submission_preview_builds_export_bundle_and_surfaces_validation_blockers(db_session):
+def test_submission_preview_keeps_export_mode_in_preview_state_when_no_exporter_is_configured(
+    db_session,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -1321,9 +1323,11 @@ def test_submission_preview_builds_export_bundle_and_surfaces_validation_blocker
     ]
     assert response.submission.payload is not None
     assert response.submission.payload.candidate_ids == []
-    assert response.submission.payload.payload_text is not None
-    assert response.submission.payload.content_type == "application/json"
-    assert response.submission.payload.filename.endswith("-export.json")
+    assert response.submission.payload.payload_json is not None
+    assert response.submission.payload.payload_json["candidate_count"] == 0
+    assert response.submission.payload.payload_text is None
+    assert response.submission.payload.content_type is None
+    assert response.submission.payload.filename is None
     assert response.submission.payload.warnings == [
         "No accepted candidates are ready for submission."
     ]

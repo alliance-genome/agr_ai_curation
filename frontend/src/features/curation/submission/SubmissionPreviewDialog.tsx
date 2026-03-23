@@ -46,7 +46,7 @@ const MODE_COPY: Record<
   },
   export: {
     title: 'Export bundle',
-    description: 'Review the generated export bundle and download it when a bundle is available.',
+    description: 'Inspect the assembled export payload. Download stays disabled until an adapter-owned exporter is configured.',
     footerLabel: 'Download bundle',
   },
   direct_submit: {
@@ -206,7 +206,12 @@ export default function SubmissionPreviewDialog({
   const readyCount = readiness.filter((item) => item.ready).length
   const blockingValidationIssues = countBlockingValidationIssues(response)
   const validationSummary = formatValidationSummary(response)
-  const canDownload = mode === 'export' && !loading && readyCount > 0 && Boolean(response?.submission.payload)
+  const exportPayload = response?.submission.payload
+  const hasExportBundle = Boolean(
+    exportPayload
+      && (exportPayload.payload_text || exportPayload.filename || exportPayload.content_type),
+  )
+  const canDownload = mode === 'export' && !loading && readyCount > 0 && hasExportBundle
   const canSubmit = Boolean(
     mode === 'direct_submit'
       && submitAvailable
@@ -298,7 +303,14 @@ export default function SubmissionPreviewDialog({
             </Alert>
           ) : null}
 
-          {mode === 'export' && !canDownload && !loading ? (
+          {mode === 'export' && !loading && response && !hasExportBundle ? (
+            <Alert severity="info">
+              No exporter is configured for this adapter yet. You can still inspect the assembled
+              payload below.
+            </Alert>
+          ) : null}
+
+          {mode === 'export' && !loading && response && hasExportBundle && !canDownload ? (
             <Alert severity="warning">
               No export bundle is available until at least one candidate is submission-ready.
             </Alert>

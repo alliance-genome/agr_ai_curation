@@ -239,7 +239,41 @@ describe('SubmissionPreviewDialog', () => {
     expect(screen.getByRole('button', { name: 'Refresh preview' })).toBeEnabled()
   })
 
-  it('switches to export mode and downloads the assembled bundle', async () => {
+  it('switches to export mode and disables download when no exporter is configured', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildResponse())
+      .mockResolvedValueOnce(buildResponse({ mode: 'export' }))
+
+    renderDialog()
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export mode' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
+        session_id: 'session-1',
+        mode: 'export',
+        target_key: 'review_export_bundle',
+        include_payload: true,
+      })
+    })
+
+    expect(screen.getByText(
+      'Inspect the assembled export payload. Download stays disabled until an adapter-owned exporter is configured.',
+    )).toBeInTheDocument()
+    expect(screen.getByText(
+      'No exporter is configured for this adapter yet. You can still inspect the assembled payload below.',
+    )).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download bundle' })).toBeDisabled()
+    expect(global.URL.createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('downloads an adapter-owned export bundle when the response includes one', async () => {
     const user = userEvent.setup()
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
