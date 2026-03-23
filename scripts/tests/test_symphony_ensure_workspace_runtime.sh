@@ -21,6 +21,7 @@ make_source_root() {
   mkdir -p \
     "${source_root}/.git/hooks" \
     "${source_root}/.symphony" \
+    "${source_root}/docs/plans/screenshots" \
     "${source_root}/scripts/lib" \
     "${source_root}/scripts/utilities"
 
@@ -68,6 +69,7 @@ EOF
     symphony_claude_review_loop.sh \
     symphony_in_review.sh \
     symphony_in_progress.sh \
+    symphony_issue_branch.sh \
     symphony_finalize_issue.sh \
     symphony_request_claude_rereview.sh \
     symphony_wait_for_claude_review.sh \
@@ -95,6 +97,9 @@ services:
       - ./packages:/runtime/packages:ro
       - ./config:/runtime/config:ro
 EOF
+
+  printf 'workspace-mockup-v1\n' > "${source_root}/docs/plans/screenshots/curation-workspace-mockup.png"
+  printf 'inventory-mockup-v1\n' > "${source_root}/docs/plans/screenshots/curation-inventory-mockup.png"
 }
 
 test_default_mode_preserves_existing_files() {
@@ -115,7 +120,7 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=27" "${output}"
+  assert_contains "SYNC_ENV_COPIED=30" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
@@ -128,6 +133,10 @@ EOF
   }
   [[ "$(bash "${workspace}/.symphony/with_github_pat.sh")" == "with-github-pat-v1" ]] || {
     echo "Expected default mode to seed .symphony/with_github_pat.sh" >&2
+    exit 1
+  }
+  [[ "$(cat "${workspace}/docs/plans/screenshots/curation-workspace-mockup.png")" == "workspace-mockup-v1" ]] || {
+    echo "Expected default mode to seed the workspace mockup screenshot" >&2
     exit 1
   }
 }
@@ -160,7 +169,7 @@ EOF
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
-  assert_contains "SYNC_ENV_COPIED=25" "${output}"
+  assert_contains "SYNC_ENV_COPIED=28" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
     echo "Expected refresh mode to overwrite docker-compose.yml" >&2
     exit 1
@@ -171,6 +180,10 @@ EOF
   }
   [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "workflow-v1" ]] || {
     echo "Expected refresh mode to overwrite .symphony/WORKFLOW.md" >&2
+    exit 1
+  }
+  [[ "$(cat "${workspace}/docs/plans/screenshots/curation-inventory-mockup.png")" == "inventory-mockup-v1" ]] || {
+    echo "Expected refresh mode to seed the inventory mockup screenshot" >&2
     exit 1
   }
 }

@@ -9,6 +9,7 @@ Usage:
 Behavior:
   - Attempts issue-local docker teardown before merge.
   - Removes issue-local Docker images after containers are gone.
+  - Prunes Docker build cache (keeps most recent layers up to SYMPHONY_CLEANUP_BUILD_CACHE_KEEP, default 5GB).
   - Applies bounded self-healing (ownership fix + docker config fallback).
   - Emits machine-parsable summary lines:
       CLEANUP_STATUS=success|partial
@@ -20,6 +21,7 @@ Behavior:
       CLEANUP_LEFTOVER_VOLUMES=<n>
       CLEANUP_LEFTOVER_NETWORKS=<n>
       CLEANUP_LEFTOVER_IMAGES=<n>
+      CLEANUP_BUILD_CACHE_PRUNED=<bytes or 0>
       CLEANUP_FIXES=<comma-separated or none>
       CLEANUP_FIRST_ERROR=<single-line message or none>
   - Exits 0 on success, 42 on partial cleanup.
@@ -32,6 +34,7 @@ env_file=""
 remove_workspace=0
 max_attempts=2
 retry_sleep_seconds="${SYMPHONY_CLEANUP_RETRY_SLEEP_SECONDS:-5}"
+build_cache_keep_storage="${SYMPHONY_CLEANUP_BUILD_CACHE_KEEP:-5GB}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -436,6 +439,18 @@ else
   fi
 fi
 
+# Prune Docker build cache to prevent unbounded growth across workspaces.
+# Each workspace build creates duplicate layers (COPY ., pip install, npm ci);
+# --keep-storage retains the most recently used base layers for fast rebuilds.
+build_cache_pruned_bytes=0
+if command -v docker >/dev/null 2>&1; then
+  prune_output="$(docker builder prune --keep-storage="${build_cache_keep_storage}" -f 2>&1 || true)"
+  build_cache_pruned_bytes="$(printf '%s\n' "${prune_output}" | sed -n 's/^Total:[[:space:]]*//p' | tail -n 1)"
+  if [[ -z "${build_cache_pruned_bytes}" ]]; then
+    build_cache_pruned_bytes=0
+  fi
+fi
+
 if [[ "${remove_workspace}" -eq 1 ]]; then
   remove_workspace_requested="true"
   if [[ -d "${workspace_dir}" ]]; then
@@ -509,6 +524,7 @@ echo "CLEANUP_LEFTOVER_CONTAINERS=${leftover_containers_count}"
 echo "CLEANUP_LEFTOVER_VOLUMES=${leftover_volumes_count}"
 echo "CLEANUP_LEFTOVER_NETWORKS=${leftover_networks_count}"
 echo "CLEANUP_LEFTOVER_IMAGES=${leftover_images_count}"
+echo "CLEANUP_BUILD_CACHE_PRUNED=${build_cache_pruned_bytes}"
 echo "CLEANUP_FIXES=${fixes}"
 echo "CLEANUP_FIRST_ERROR=${first_error}"
 

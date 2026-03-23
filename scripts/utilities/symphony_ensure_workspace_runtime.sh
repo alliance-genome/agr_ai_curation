@@ -56,7 +56,6 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/../.." && pwd -P)"
 
 hooks_source="${SYMPHONY_HOOKS_SOURCE:-${repo_root}/.git/hooks}"
-local_dev_source="${SYMPHONY_LOCAL_DEV_SCRIPT_SOURCE:-${repo_root}/scripts}"
 local_source_root="${SYMPHONY_LOCAL_SOURCE_ROOT:-${repo_root}}"
 
 copied=0
@@ -117,6 +116,7 @@ ensure_one "${local_source_root}/scripts/utilities/symphony_ready_for_pr.sh" "sc
 ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_loop.sh" "scripts/utilities/symphony_claude_review_loop.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_review.sh" "scripts/utilities/symphony_in_review.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_progress.sh" "scripts/utilities/symphony_in_progress.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_issue_branch.sh" "scripts/utilities/symphony_issue_branch.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_context.sh" "scripts/utilities/symphony_linear_issue_context.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_linear_workpad.sh" "scripts/utilities/symphony_linear_workpad.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_state.sh" "scripts/utilities/symphony_linear_issue_state.sh" "0755" "required"
@@ -139,6 +139,8 @@ ensure_one "${local_source_root}/.symphony/github_pat_env.sh" ".symphony/github_
 ensure_one "${local_source_root}/.symphony/configure_github_pat_git.sh" ".symphony/configure_github_pat_git.sh" "0755" "optional"
 ensure_one "${local_source_root}/scripts/utilities/check_services.sh" "scripts/utilities/check_services.sh" "0755" "optional"
 ensure_one "${local_source_root}/scripts/utilities/ensure_postgres_db_exists.sh" "scripts/utilities/ensure_postgres_db_exists.sh" "0755" "optional"
+ensure_one "${local_source_root}/docs/plans/screenshots/curation-workspace-mockup.png" "docs/plans/screenshots/curation-workspace-mockup.png" "0644" "optional"
+ensure_one "${local_source_root}/docs/plans/screenshots/curation-inventory-mockup.png" "docs/plans/screenshots/curation-inventory-mockup.png" "0644" "optional"
 
 missing_required_joined="none"
 if [[ ${#missing_required[@]} -gt 0 ]]; then

@@ -117,6 +117,31 @@ test_missing_pr_reports_nonzero() {
   assert_contains "READY_FOR_PR_STATUS=missing_pr" "${output}"
 }
 
+test_base_branch_is_rejected() {
+  local temp_dir output_file rc output
+  temp_dir="$(mktemp -d)"
+  output_file="${temp_dir}/out.txt"
+
+  set +e
+  bash "${SCRIPT_PATH}" \
+    --delivery-mode pr \
+    --issue-identifier ALL-53 \
+    --branch main \
+    > "${output_file}"
+  rc=$?
+  set -e
+
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "21" ]] || {
+    echo "Expected exit code 21, got ${rc}" >&2
+    exit 1
+  }
+
+  assert_contains "READY_FOR_PR_STATUS=invalid_branch" "${output}"
+  assert_contains "READY_FOR_PR_NEXT_STATE=In Progress" "${output}"
+}
+
 test_dry_run_create_reports_title() {
   local temp_dir pr_json output
   temp_dir="$(mktemp -d)"
@@ -201,6 +226,7 @@ test_no_pr_skips_lane
 test_existing_pr_is_reported
 test_conflicted_pr_routes_back_to_in_progress
 test_missing_pr_reports_nonzero
+test_base_branch_is_rejected
 test_dry_run_create_reports_title
 test_create_pr_uses_plain_cli_output_and_view_json
 

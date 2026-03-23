@@ -229,6 +229,16 @@ case "${1:-}" in
     done
     exit 0
     ;;
+  builder)
+    shift
+    case "${1:-}" in
+      prune)
+        echo "Total:	0B"
+        exit 0
+        ;;
+    esac
+    exit 0
+    ;;
   compose)
     shift
     project=""
@@ -326,6 +336,7 @@ EOF
   assert_contains "CLEANUP_PROJECTS=all58,all58proof" "${output}"
   assert_contains "CLEANUP_LEFTOVER_CONTAINERS=0" "${output}"
   assert_contains "CLEANUP_LEFTOVER_IMAGES=0" "${output}"
+  assert_contains "CLEANUP_BUILD_CACHE_PRUNED=" "${output}"
   [[ ! -s "${temp_dir}/state/containers" ]]
   [[ ! -s "${temp_dir}/state/volumes" ]]
   [[ ! -s "${temp_dir}/state/networks" ]]

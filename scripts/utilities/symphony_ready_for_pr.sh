@@ -133,6 +133,19 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+is_base_like_branch() {
+  local branch_name="$1"
+
+  case "${branch_name}" in
+    ""|HEAD|main|master|trunk|develop|development)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # ── Claude review check via unified loop script ─────────────────────
 #
 # Called after a PR is successfully found or created. Delegates to
@@ -144,9 +157,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   CLAUDE_REPORT_FILE  path to the report file (empty if quiet)
 
 emit_pr_success_with_claude_check() {
-  local status="$1"
-  local pr_num="$2"
-  local pr_created_at="${3:-}"
+  local pr_num="$1"
+  local pr_created_at="${2:-}"
 
   CLAUDE_STATUS="quiet"
   CLAUDE_REPORT_FILE=""
@@ -197,7 +209,6 @@ INST
     --wait-seconds "${wait_for_review_seconds}" \
     --poll-seconds "${review_poll_seconds}" \
     --max-rounds 3)"
-  local loop_rc=$?
   set -e
 
   # Extract variables from loop output
@@ -260,11 +271,22 @@ INST
   exit 0
 fi
 
+if is_base_like_branch "${branch}"; then
+  echo "READY_FOR_PR_STATUS=invalid_branch"
+  echo "READY_FOR_PR_NEXT_STATE=In Progress"
+  echo "READY_FOR_PR_BRANCH=${branch}"
+  echo "READY_FOR_PR_MESSAGE=Current branch ${branch} is a base branch, not an issue branch. Create or switch to the issue branch before running PR prep."
+  cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Current branch ${branch} is a base branch. Create or switch to the issue branch for ${issue_identifier}, commit/push the ticket changes there, then re-run this script.
+INST
+  exit 21
+fi
+
 fetch_pr_json() {
   if [[ -n "${pr_json_file}" ]]; then
     cat "${pr_json_file}"
   else
-    local -a cmd=(gh pr list --state open --head "${branch}" --json number,title,url,headRefName)
+    local -a cmd=(gh pr list --state open --head "${branch}" --json "number,title,url,headRefName")
     if [[ -n "${repo}" ]]; then
       cmd+=(--repo "${repo}")
     fi
@@ -277,7 +299,7 @@ fetch_pr_view_json() {
   if [[ -n "${pr_view_json_file}" ]]; then
     cat "${pr_view_json_file}"
   else
-    local -a cmd=(gh pr view "${pr_number}" --json number,title,url,mergeable,mergeStateStatus,headRefOid,headRefName,baseRefName,createdAt)
+    local -a cmd=(gh pr view "${pr_number}" --json "number,title,url,mergeable,mergeStateStatus,headRefOid,headRefName,baseRefName,createdAt")
     if [[ -n "${repo}" ]]; then
       cmd+=(--repo "${repo}")
     fi
@@ -334,7 +356,7 @@ INST
   echo "READY_FOR_PR_PR_HEAD_SHA=${PR_HEAD_SHA}"
   echo "READY_FOR_PR_PR_MERGEABLE=${PR_MERGEABLE}"
   echo "READY_FOR_PR_PR_MERGE_STATE_STATUS=${PR_MERGE_STATE_STATUS}"
-  emit_pr_success_with_claude_check "existing_pr" "${PR_NUMBER}" "${PR_CREATED_AT}"
+  emit_pr_success_with_claude_check "${PR_NUMBER}" "${PR_CREATED_AT}"
   exit 0
 fi
 
@@ -402,4 +424,4 @@ echo "READY_FOR_PR_BRANCH=${branch}"
 echo "READY_FOR_PR_PR_NUMBER=${PR_NUMBER}"
 echo "READY_FOR_PR_PR_TITLE=${PR_TITLE}"
 echo "READY_FOR_PR_PR_URL=${PR_URL}"
-emit_pr_success_with_claude_check "created_pr" "${PR_NUMBER}" "${PR_CREATED_AT}"
+emit_pr_success_with_claude_check "${PR_NUMBER}" "${PR_CREATED_AT}"
