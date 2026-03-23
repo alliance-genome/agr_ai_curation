@@ -8,6 +8,8 @@ interface EditorState {
   fields: CurationDraftField[]
 }
 
+const EMPTY_FIELDS: CurationDraftField[] = []
+
 type EditorAction =
   | {
       type: 'hydrate'
@@ -58,7 +60,7 @@ function applyFieldValue(
     ...field,
     value: resolvedValue,
     dirty: nextDirty,
-    stale_validation: nextDirty || field.stale_validation,
+    stale_validation: nextDirty,
   }
 }
 
@@ -104,7 +106,7 @@ export function useEditorState(
   options: UseEditorStateOptions = {},
 ): UseEditorStateReturn {
   const candidateId = options.candidateId ?? null
-  const fields = options.fields ?? []
+  const fields = options.fields ?? EMPTY_FIELDS
   const [state, dispatch] = useReducer(editorReducer, createState(candidateId, fields))
 
   useEffect(() => {
