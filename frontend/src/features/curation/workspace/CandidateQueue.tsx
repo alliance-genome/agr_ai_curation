@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 import {
   Box,
+  Button,
   ButtonBase,
   Stack,
   Typography,
@@ -14,6 +15,7 @@ import {
   CurationSessionProgress,
   CurationValidationSummary,
 } from '@/features/curation/types'
+import ManualAnnotationDialog from '@/features/curation/editor/ManualAnnotationDialog'
 
 import { useCurationWorkspaceContext } from './CurationWorkspaceContext'
 
@@ -190,6 +192,7 @@ function SummaryBadge({
 
 export default function CandidateQueue() {
   const theme = useTheme()
+  const [manualDialogOpen, setManualDialogOpen] = useState(false)
   const {
     activeCandidate,
     activeCandidateId,
@@ -230,13 +233,23 @@ export default function CandidateQueue() {
           <Typography variant="subtitle2">
             Candidates ({session.progress.total_candidates})
           </Typography>
-          <Typography color="text.secondary" variant="caption">
-            {session.progress.reviewed_candidates}
-            /
-            {session.progress.total_candidates}
-            {' '}
-            reviewed
-          </Typography>
+          <Stack alignItems="center" direction="row" spacing={1}>
+            <Button
+              data-testid="candidate-queue-add-annotation-button"
+              onClick={() => setManualDialogOpen(true)}
+              size="small"
+              variant="outlined"
+            >
+              Add annotation
+            </Button>
+            <Typography color="text.secondary" variant="caption">
+              {session.progress.reviewed_candidates}
+              /
+              {session.progress.total_candidates}
+              {' '}
+              reviewed
+            </Typography>
+          </Stack>
         </Stack>
 
         <Stack direction="row" flexWrap="wrap" spacing={0.75} useFlexGap>
@@ -400,6 +413,10 @@ export default function CandidateQueue() {
           </Typography>
         ) : null}
       </Stack>
+      <ManualAnnotationDialog
+        onClose={() => setManualDialogOpen(false)}
+        open={manualDialogOpen}
+      />
     </Box>
   )
 }

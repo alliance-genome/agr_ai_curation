@@ -46,6 +46,8 @@ from src.schemas.curation_workspace import (
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
     CurationFlowRunSummary,
+    CurationManualCandidateCreateRequest,
+    CurationManualCandidateCreateResponse,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationPageInfo,
@@ -103,6 +105,11 @@ CANDIDATE_DETAIL_LOAD_OPTIONS = (
     selectinload(CurationCandidate.evidence_anchors),
     selectinload(CurationCandidate.validation_snapshots),
 )
+
+_CURATION_PREP_AGENT_KEY = "curation_prep"
+_MANUAL_TEMPLATE_FIELDS_METADATA_KEY = "manual_draft_fields"
+_MANUAL_TEMPLATE_SOURCE_METADATA_KEY = "manual_template_source"
+_PREP_ADAPTER_METADATA_KEY = "adapter_metadata"
 
 
 @dataclass(frozen=True)
@@ -284,6 +291,30 @@ def normalize_uuid(value: str | UUID, *, field_name: str) -> UUID:
     """Public UUID normalization helper shared across curation workspace services."""
 
     return _normalize_uuid(value, field_name=field_name)
+
+
+def _normalized_optional_string(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} must not be empty",
+        )
+
+    return normalized
+
+
+def _normalized_required_string(value: str, *, field_name: str) -> str:
+    normalized = _normalized_optional_string(value, field_name=field_name)
+    if normalized is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} is required",
+        )
+    return normalized
 
 
 def _ordered_clause(expression: Any, direction: CurationSortDirection, *, nulls_last: bool = False) -> Any:
@@ -541,7 +572,193 @@ def _actor_ref(user_map: dict[str, User], actor_id: str | None) -> CurationActor
     )
 
 
-def _adapter_ref(session: ReviewSessionModel) -> CurationAdapterRef:
+def _humanize_field_key(value: str) -> str:
+    return " ".join(
+        segment.capitalize()
+        for segment in str(value).replace(".", " ").replace("_", " ").split()
+        if segment
+    )
+
+
+def _coerce_metadata_string(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _coerce_metadata_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized_values: list[str] = []
+    for item in value:
+        normalized = _coerce_metadata_string(item)
+        if normalized is None:
+            continue
+        normalized_values.append(normalized)
+    return normalized_values
+
+
+def _manual_template_fields_from_prep_metadata(
+    session: ReviewSessionModel,
+    extraction_metadata: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    adapter_metadata_payload = extraction_metadata.get(_PREP_ADAPTER_METADATA_KEY)
+    if not isinstance(adapter_metadata_payload, list):
+        return []
+
+    matched_metadata: Mapping[str, Any] | None = None
+    fallback_metadata: Mapping[str, Any] | None = None
+
+    for raw_metadata in adapter_metadata_payload:
+        if not isinstance(raw_metadata, dict):
+            continue
+
+        adapter_key = _coerce_metadata_string(raw_metadata.get("adapter_key"))
+        if adapter_key != session.adapter_key:
+            continue
+
+        profile_key = _coerce_metadata_string(raw_metadata.get("profile_key"))
+        if profile_key == session.profile_key:
+            matched_metadata = raw_metadata
+            break
+        if profile_key is None and fallback_metadata is None:
+            fallback_metadata = raw_metadata
+
+    metadata = matched_metadata or fallback_metadata
+    if metadata is None:
+        return []
+
+    required_field_keys = set(_coerce_metadata_string_list(metadata.get("required_field_keys")))
+    field_hints = metadata.get("field_hints")
+    if not isinstance(field_hints, list):
+        field_hints = []
+
+    fields: list[dict[str, Any]] = []
+    seen_field_keys: set[str] = set()
+
+    for index, raw_hint in enumerate(field_hints):
+        if not isinstance(raw_hint, dict):
+            continue
+
+        field_key = _coerce_metadata_string(raw_hint.get("field_key"))
+        if field_key is None or field_key in seen_field_keys:
+            continue
+
+        label = (
+            _coerce_metadata_string(raw_hint.get("label"))
+            or _humanize_field_key(field_key)
+        )
+        field_type = _coerce_metadata_string(raw_hint.get("value_type"))
+        field_metadata: dict[str, Any] = {}
+
+        description = _coerce_metadata_string(raw_hint.get("description"))
+        if description is not None:
+            field_metadata["description"] = description
+
+        controlled_vocabulary = _coerce_metadata_string_list(
+            raw_hint.get("controlled_vocabulary")
+        )
+        if controlled_vocabulary:
+            field_metadata["controlled_vocabulary"] = controlled_vocabulary
+
+        normalization_hints = _coerce_metadata_string_list(
+            raw_hint.get("normalization_hints")
+        )
+        if normalization_hints:
+            field_metadata["normalization_hints"] = normalization_hints
+
+        fields.append(
+            {
+                "field_key": field_key,
+                "label": label,
+                "value": None,
+                "seed_value": None,
+                "field_type": field_type,
+                "group_key": None,
+                "group_label": None,
+                "order": index,
+                "required": bool(raw_hint.get("required")) or field_key in required_field_keys,
+                "read_only": False,
+                "dirty": False,
+                "stale_validation": False,
+                "evidence_anchor_ids": [],
+                "metadata": field_metadata,
+            }
+        )
+        seen_field_keys.add(field_key)
+
+    for field_key in sorted(required_field_keys):
+        if field_key in seen_field_keys:
+            continue
+        fields.append(
+            {
+                "field_key": field_key,
+                "label": _humanize_field_key(field_key),
+                "value": None,
+                "seed_value": None,
+                "field_type": None,
+                "group_key": None,
+                "group_label": None,
+                "order": len(fields),
+                "required": True,
+                "read_only": False,
+                "dirty": False,
+                "stale_validation": False,
+                "evidence_anchor_ids": [],
+                "metadata": {},
+            }
+        )
+
+    return fields
+
+
+def _session_adapter_metadata(
+    db: Session,
+    session: ReviewSessionModel,
+) -> dict[str, Any]:
+    statement = (
+        select(ExtractionResultModel)
+        .where(ExtractionResultModel.agent_key == _CURATION_PREP_AGENT_KEY)
+        .where(ExtractionResultModel.document_id == session.document_id)
+        .where(ExtractionResultModel.adapter_key == session.adapter_key)
+        .where(ExtractionResultModel.created_at <= session.prepared_at)
+        .order_by(ExtractionResultModel.created_at.desc(), ExtractionResultModel.id.desc())
+    )
+
+    if session.profile_key is None:
+        statement = statement.where(ExtractionResultModel.profile_key.is_(None))
+    else:
+        statement = statement.where(
+            or_(
+                ExtractionResultModel.profile_key == session.profile_key,
+                ExtractionResultModel.profile_key.is_(None),
+            )
+        )
+
+    if session.flow_run_id is None:
+        statement = statement.where(ExtractionResultModel.flow_run_id.is_(None))
+    else:
+        statement = statement.where(ExtractionResultModel.flow_run_id == session.flow_run_id)
+
+    for extraction_result in db.scalars(statement).all():
+        template_fields = _manual_template_fields_from_prep_metadata(
+            session,
+            dict(extraction_result.extraction_metadata or {}),
+        )
+        if not template_fields:
+            continue
+        return {
+            _MANUAL_TEMPLATE_FIELDS_METADATA_KEY: template_fields,
+            _MANUAL_TEMPLATE_SOURCE_METADATA_KEY: "prep_adapter_metadata",
+        }
+
+    return {}
+
+
+def _adapter_ref(
+    session: ReviewSessionModel,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> CurationAdapterRef:
     display_label = session.adapter_key.replace("_", " ").title()
     profile_label = (
         session.profile_key.replace("_", " ").title()
@@ -553,7 +770,7 @@ def _adapter_ref(session: ReviewSessionModel) -> CurationAdapterRef:
         profile_key=session.profile_key,
         display_label=display_label,
         profile_label=profile_label,
-        metadata={},
+        metadata=dict(metadata or {}),
     )
 
 
@@ -845,14 +1062,24 @@ def _session_summary(
 
 
 def _session_detail(
+    db: Session,
     session: ReviewSessionModel,
     document_map: dict[UUID, PDFDocument],
     user_map: dict[str, User],
 ) -> CurationReviewSession:
     summary = _session_summary(session, document_map, user_map)
     latest_submission = _submission_record(session.submissions[-1]) if session.submissions else None
+    summary_payload = summary.model_dump()
+    if session.total_candidates == 0:
+        summary_payload["adapter"] = _adapter_ref(
+            session,
+            metadata=_session_adapter_metadata(db, session),
+        )
+    else:
+        summary_payload["adapter"] = _adapter_ref(session)
+
     return CurationReviewSession(
-        **summary.model_dump(),
+        **summary_payload,
         session_version=session.session_version,
         extraction_results=_extraction_records(session),
         latest_submission=latest_submission,
@@ -1191,7 +1418,7 @@ def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSes
         )
     session = sessions[0]
     document_map, user_map = _session_context_maps(db, [session])
-    return _session_detail(session, document_map, user_map)
+    return _session_detail(db, session, document_map, user_map)
 
 
 def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorkspaceResponse:
@@ -1206,7 +1433,7 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
     session = sessions[0]
     document_map, user_map = _session_context_maps(db, [session])
     workspace = CurationWorkspacePayload(
-        session=_session_detail(session, document_map, user_map),
+        session=_session_detail(db, session, document_map, user_map),
         candidates=[_candidate_payload(candidate) for candidate in session.candidates],
         active_candidate_id=(
             str(session.current_candidate_id)
@@ -1419,9 +1646,278 @@ def update_session(
     updated_session = updated_sessions[0]
     document_map, user_map = _session_context_maps(db, [updated_session])
     return CurationSessionUpdateResponse(
-        session=_session_detail(updated_session, document_map, user_map),
+        session=_session_detail(db, updated_session, document_map, user_map),
         action_log_entry=_action_log_entry(action_log_row),
     )
+
+
+def _dedupe_non_empty_strings(values: Sequence[str], *, field_name: str) -> list[str]:
+    normalized_values: list[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        normalized = _normalized_optional_string(value, field_name=field_name)
+        if normalized is None or normalized in seen:
+            continue
+        normalized_values.append(normalized)
+        seen.add(normalized)
+
+    return normalized_values
+
+
+def _manual_candidate_field_inputs(
+    fields: Sequence[CurationDraftFieldSchema],
+) -> list[PreparedDraftFieldInput]:
+    return [
+        PreparedDraftFieldInput(
+            field_key=_normalized_required_string(field.field_key, field_name="draft.fields.field_key"),
+            label=_normalized_required_string(field.label, field_name="draft.fields.label"),
+            value=field.value,
+            seed_value=field.value,
+            field_type=_normalized_optional_string(field.field_type, field_name="draft.fields.field_type"),
+            group_key=_normalized_optional_string(field.group_key, field_name="draft.fields.group_key"),
+            group_label=_normalized_optional_string(
+                field.group_label,
+                field_name="draft.fields.group_label",
+            ),
+            order=field.order,
+            required=field.required,
+            read_only=field.read_only,
+            dirty=False,
+            stale_validation=False,
+            metadata=dict(field.metadata),
+        )
+        for field in fields
+    ]
+
+
+def _manual_candidate_evidence_inputs(
+    evidence_records: Sequence[CurationEvidenceRecordPayload],
+) -> list[PreparedEvidenceRecordInput]:
+    prepared_records: list[PreparedEvidenceRecordInput] = []
+
+    for evidence_record in evidence_records:
+        field_keys = _dedupe_non_empty_strings(
+            evidence_record.field_keys,
+            field_name="evidence_anchors.field_keys",
+        )
+        field_group_keys = _dedupe_non_empty_strings(
+            evidence_record.field_group_keys,
+            field_name="evidence_anchors.field_group_keys",
+        )
+
+        if not field_keys and not field_group_keys:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Manual candidate evidence must include at least one field_key "
+                    "or field_group_key"
+                ),
+            )
+
+        prepared_records.append(
+            PreparedEvidenceRecordInput(
+                source=evidence_record.source,
+                field_keys=field_keys,
+                field_group_keys=field_group_keys,
+                is_primary=evidence_record.is_primary,
+                anchor=evidence_record.anchor.model_dump(mode="json"),
+                warnings=list(evidence_record.warnings or []),
+            )
+        )
+
+    return prepared_records
+
+
+def _manual_candidate_normalized_payload(
+    fields: Sequence[PreparedDraftFieldInput],
+) -> dict[str, Any]:
+    return {
+        field.field_key: field.value
+        for field in sorted(fields, key=lambda item: (item.order, item.field_key))
+    }
+
+
+def create_manual_candidate(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationManualCandidateCreateRequest,
+    *,
+    actor_claims: dict[str, Any],
+) -> CurationManualCandidateCreateResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+
+    if request.source != CurationCandidateSource.MANUAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Manual candidate creation only supports source=manual",
+        )
+
+    adapter_key = _normalized_required_string(request.adapter_key, field_name="adapter_key")
+    profile_key = _normalized_optional_string(request.profile_key, field_name="profile_key")
+    display_label = _normalized_optional_string(request.display_label, field_name="display_label")
+    draft_adapter_key = _normalized_required_string(
+        request.draft.adapter_key,
+        field_name="draft.adapter_key",
+    )
+
+    if draft_adapter_key != adapter_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="draft.adapter_key must match adapter_key",
+        )
+
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+    session_row = sessions[0]
+
+    if session_row.adapter_key != adapter_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="adapter_key must match the session adapter",
+        )
+
+    resolved_profile_key = profile_key if profile_key is not None else session_row.profile_key
+    field_inputs = _manual_candidate_field_inputs(request.draft.fields)
+    evidence_inputs = _manual_candidate_evidence_inputs(request.evidence_anchors)
+    available_field_keys = {
+        field_input.field_key
+        for field_input in field_inputs
+    }
+    missing_evidence_field_keys = sorted(
+        {
+            field_key
+            for evidence_input in evidence_inputs
+            for field_key in evidence_input.field_keys
+            if field_key not in available_field_keys
+        }
+    )
+    if missing_evidence_field_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Manual candidate evidence references unknown field(s): "
+                f"{', '.join(missing_evidence_field_keys)}"
+            ),
+        )
+
+    now = datetime.now(timezone.utc)
+    next_order = max((candidate.order for candidate in session_row.candidates), default=-1) + 1
+    resolved_display_label = (
+        display_label
+        or _normalized_optional_string(request.draft.title, field_name="draft.title")
+        or f"Manual candidate {next_order + 1}"
+    )
+
+    candidate_row = CurationCandidate(
+        session_id=session_row.id,
+        source=CurationCandidateSource.MANUAL,
+        status=CurationCandidateStatus.PENDING,
+        order=next_order,
+        adapter_key=adapter_key,
+        profile_key=resolved_profile_key,
+        display_label=resolved_display_label,
+        secondary_label=None,
+        confidence=None,
+        conversation_summary=None,
+        unresolved_ambiguities=[],
+        extraction_result_id=None,
+        normalized_payload=_manual_candidate_normalized_payload(field_inputs),
+        candidate_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(candidate_row)
+    db.flush()
+
+    evidence_anchor_ids_by_field = _persist_candidate_evidence_records(
+        db,
+        candidate_row,
+        evidence_inputs,
+        created_at=now,
+    )
+
+    draft_row = DraftModel(
+        candidate_id=candidate_row.id,
+        adapter_key=adapter_key,
+        version=1,
+        title=resolved_display_label,
+        summary=_normalized_optional_string(request.draft.summary, field_name="draft.summary"),
+        fields=[
+            _draft_field_payload(
+                field_input,
+                evidence_anchor_ids_by_field=evidence_anchor_ids_by_field,
+                field_results={},
+            )
+            for field_input in field_inputs
+        ],
+        notes=_normalized_optional_string(request.draft.notes, field_name="draft.notes"),
+        created_at=now,
+        updated_at=now,
+        last_saved_at=now,
+        draft_metadata=dict(request.draft.metadata),
+    )
+    db.add(draft_row)
+    db.flush()
+
+    session_row.total_candidates += 1
+    session_row.pending_candidates += 1
+    session_row.manual_candidates += 1
+    session_row.current_candidate_id = candidate_row.id
+    session_row.session_version += 1
+    session_row.updated_at = now
+    session_row.last_worked_at = now
+    db.add(session_row)
+
+    evidence_anchor_ids = [
+        anchor_id
+        for anchor_ids in evidence_anchor_ids_by_field.values()
+        for anchor_id in anchor_ids
+    ]
+    action_log_row = SessionActionLogModel(
+        session_id=session_row.id,
+        candidate_id=candidate_row.id,
+        draft_id=draft_row.id,
+        action_type=CurationActionType.CANDIDATE_CREATED,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=now,
+        new_candidate_status=CurationCandidateStatus.PENDING,
+        changed_field_keys=[field_input.field_key for field_input in field_inputs],
+        evidence_anchor_ids=evidence_anchor_ids,
+        message="Manual candidate created",
+        action_metadata={
+            "adapter_key": adapter_key,
+            "profile_key": resolved_profile_key,
+            "source": CurationCandidateSource.MANUAL.value,
+            "display_label": resolved_display_label,
+            "evidence_count": len(request.evidence_anchors),
+        },
+    )
+    db.add(action_log_row)
+    db.flush()
+
+    response = CurationManualCandidateCreateResponse(
+        candidate=get_candidate_detail(
+            db,
+            candidate_row.id,
+            session_id=session_row.id,
+        ),
+        session=get_session_detail(db, session_row.id),
+        action_log_entry=build_action_log_entry(action_log_row),
+    )
+    db.commit()
+    return response
 
 
 def get_session_stats(
@@ -2008,6 +2504,7 @@ __all__ = [
     "build_action_log_entry",
     "build_actor_claims_payload",
     "build_evidence_record",
+    "create_manual_candidate",
     "get_next_session",
     "get_candidate_detail",
     "find_reusable_prepared_session",

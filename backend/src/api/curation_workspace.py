@@ -31,6 +31,7 @@ from src.lib.curation_workspace.saved_view_service import (
     list_saved_views as list_saved_view_records,
 )
 from src.lib.curation_workspace.session_service import (
+    create_manual_candidate,
     get_next_session,
     get_session_detail,
     get_session_workspace,
@@ -59,6 +60,8 @@ from src.schemas.curation_workspace import (
     CurationFlowRunListResponse,
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
+    CurationManualCandidateCreateRequest,
+    CurationManualCandidateCreateResponse,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationManualEvidenceCreateRequest,
@@ -477,6 +480,26 @@ async def trigger_chat_prep(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/sessions/{session_id}/candidates",
+    response_model=CurationManualCandidateCreateResponse,
+)
+async def post_manual_candidate(
+    session_id: UUID,
+    request: CurationManualCandidateCreateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationManualCandidateCreateResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return create_manual_candidate(
+        db,
+        session_id,
+        request,
+        actor_claims=user,
+    )
 
 
 __all__ = ["router"]

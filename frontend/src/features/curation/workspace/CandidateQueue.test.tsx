@@ -190,6 +190,9 @@ describe('CandidateQueue', () => {
     renderQueue()
 
     expect(screen.getByText('Candidates (4)')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Add annotation' }),
+    ).toBeInTheDocument()
     expect(screen.getByText('2/4 reviewed')).toBeInTheDocument()
     expect(screen.getByText('1✓ accepted')).toBeInTheDocument()
     expect(screen.getByText('1✎ editing')).toBeInTheDocument()
@@ -249,5 +252,17 @@ describe('CandidateQueue', () => {
     await user.click(screen.getByTestId('candidate-queue-card-candidate-accepted'))
 
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-accepted')
+  })
+
+  it('opens the manual annotation dialog from the queue header', async () => {
+    const user = userEvent.setup()
+
+    renderQueue()
+
+    await user.click(screen.getByRole('button', { name: 'Add annotation' }))
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Add Manual Annotation')).toBeInTheDocument()
+    expect(screen.getByLabelText('Annotation label')).toBeInTheDocument()
   })
 })
