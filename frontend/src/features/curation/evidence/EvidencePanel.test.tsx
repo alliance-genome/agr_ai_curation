@@ -141,21 +141,31 @@ describe('EvidencePanel', () => {
     const sectionEvidence = createEvidenceRecord('anchor-section', {
       anchor: { locator_quality: 'section_only' },
     })
+    const normalizedEvidence = createEvidenceRecord('anchor-normalized', {
+      anchor: { locator_quality: 'normalized_quote' },
+    })
     const unresolvedEvidence = createEvidenceRecord('anchor-unresolved', {
       anchor: { locator_quality: 'unresolved' },
+    })
+    const pageEvidence = createEvidenceRecord('anchor-page', {
+      anchor: { locator_quality: 'page_only' },
     })
 
     renderEvidencePanel({
       candidateEvidence: [
         exactQuoteEvidence,
         sectionEvidence,
+        normalizedEvidence,
         unresolvedEvidence,
+        pageEvidence,
       ],
     })
 
     const exactCard = screen.getByTestId('evidence-card-anchor-exact')
     const warningCard = screen.getByTestId('evidence-card-anchor-section')
-    const errorCard = screen.getByTestId('evidence-card-anchor-unresolved')
+    const normalizedCard = screen.getByTestId('evidence-card-anchor-normalized')
+    const unresolvedCard = screen.getByTestId('evidence-card-anchor-unresolved')
+    const pageCard = screen.getByTestId('evidence-card-anchor-page')
 
     expect(
       within(exactCard)
@@ -168,8 +178,18 @@ describe('EvidencePanel', () => {
         .closest('[data-quality-tone]'),
     ).toHaveAttribute('data-quality-tone', 'warning')
     expect(
-      within(errorCard)
+      within(normalizedCard)
+        .getByText('normalized_quote')
+        .closest('[data-quality-tone]'),
+    ).toHaveAttribute('data-quality-tone', 'warning')
+    expect(
+      within(unresolvedCard)
         .getByText('unresolved')
+        .closest('[data-quality-tone]'),
+    ).toHaveAttribute('data-quality-tone', 'error')
+    expect(
+      within(pageCard)
+        .getByText('page_only')
         .closest('[data-quality-tone]'),
     ).toHaveAttribute('data-quality-tone', 'error')
   })
