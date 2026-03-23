@@ -99,7 +99,25 @@ function buildWorkspace(): CurationWorkspace {
           candidate_id: 'candidate-accepted',
           adapter_key: 'entity_adapter',
           version: 1,
-          fields: [],
+          title: 'Accepted candidate draft',
+          fields: [
+            {
+              field_key: 'gene_symbol',
+              label: 'Gene symbol',
+              value: 'BRCA1',
+              seed_value: 'BRCA1',
+              field_type: 'string',
+              group_key: 'primary_data',
+              group_label: 'Primary data',
+              order: 0,
+              required: true,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              metadata: {},
+            },
+          ],
           created_at: '2026-03-20T12:01:00Z',
           updated_at: '2026-03-20T12:02:00Z',
           metadata: {},
@@ -124,7 +142,25 @@ function buildWorkspace(): CurationWorkspace {
           candidate_id: 'candidate-pending',
           adapter_key: 'entity_adapter',
           version: 1,
-          fields: [],
+          title: 'Pending candidate draft',
+          fields: [
+            {
+              field_key: 'field_a',
+              label: 'Primary term',
+              value: 'APOE',
+              seed_value: 'APOE',
+              field_type: 'string',
+              group_key: 'primary',
+              group_label: 'Primary',
+              order: 0,
+              required: true,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: ['anchor-1'],
+              metadata: {},
+            },
+          ],
           created_at: '2026-03-20T12:03:00Z',
           updated_at: '2026-03-20T12:04:00Z',
           metadata: {},
@@ -244,7 +280,10 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getByText('Candidates (2)')).toBeInTheDocument()
-    expect(screen.getByText('Annotation Editor')).toBeInTheDocument()
+    expect(screen.getByText('Accepted candidate draft')).toBeInTheDocument()
+    expect(screen.getByText('PRIMARY DATA')).toBeInTheDocument()
+    expect(screen.getByLabelText('Gene symbol')).toHaveValue('BRCA1')
+    expect(screen.getByTestId('workspace-shell-editor-panel')).toBeInTheDocument()
     expect(screen.getByText('Evidence Anchors (0)')).toBeInTheDocument()
     expect(
       screen.getByText('No evidence anchors are available for this candidate.'),

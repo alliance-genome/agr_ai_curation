@@ -6,31 +6,24 @@ import {
   Box,
   Button,
   CircularProgress,
-  Divider,
   Stack,
   Typography,
 } from '@mui/material'
-import { alpha, useTheme } from '@mui/material/styles'
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import { AnnotationEditor } from '@/features/curation/editor'
 import {
   EvidenceChipGroup,
   EvidencePanel,
   useEvidenceNavigation,
-  type UseEvidenceNavigationReturn,
 } from '@/features/curation/evidence'
-import {
-  getAdapterLabel,
-  getValidationLabel,
-} from '@/features/curation/inventory/inventoryPresentation'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
 import { fetchCurationWorkspace } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
-  CurationDraftField,
   CurationWorkspace,
 } from '@/features/curation/types'
 import {
@@ -56,14 +49,6 @@ function findCandidate(
   }
 
   return candidates.find((candidate) => candidate.candidate_id === candidateId) ?? null
-}
-
-function getCandidateValidationSummary(candidate: CurationCandidate | null): string {
-  if (!candidate?.validation) {
-    return 'Validation details load into the editor panel in a later ticket.'
-  }
-
-  return getValidationLabel(candidate.validation)
 }
 
 function WorkspaceSlotPlaceholder({
@@ -103,134 +88,6 @@ function WorkspaceSlotPlaceholder({
 
       {children}
     </Box>
-  )
-}
-
-interface DraftFieldGroup {
-  key: string
-  label: string
-  fields: CurationDraftField[]
-}
-
-function formatDraftFieldValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') {
-    return 'Not set'
-  }
-
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-
-  return JSON.stringify(value)
-}
-
-function buildDraftFieldGroups(fields: CurationDraftField[]): DraftFieldGroup[] {
-  const groups = new Map<string, DraftFieldGroup>()
-
-  for (const field of [...fields].sort((left, right) => left.order - right.order)) {
-    const groupKey = field.group_key?.trim() || 'ungrouped'
-    const groupLabel = field.group_label?.trim() || 'Other fields'
-    const existingGroup = groups.get(groupKey)
-
-    if (existingGroup) {
-      existingGroup.fields.push(field)
-      continue
-    }
-
-    groups.set(groupKey, {
-      key: groupKey,
-      label: groupLabel,
-      fields: [field],
-    })
-  }
-
-  return Array.from(groups.values())
-}
-
-function DraftFieldEvidencePreview({
-  activeCandidate,
-  evidenceNavigation,
-}: {
-  activeCandidate: CurationCandidate | null
-  evidenceNavigation: Pick<
-    UseEvidenceNavigationReturn,
-    | 'evidenceByAnchorId'
-    | 'hoverEvidence'
-    | 'hoveredEvidence'
-    | 'selectEvidence'
-    | 'selectedEvidence'
-  >
-}) {
-  const theme = useTheme()
-  const fieldGroups = useMemo(
-    () => buildDraftFieldGroups(activeCandidate?.draft.fields ?? []),
-    [activeCandidate?.draft.fields]
-  )
-
-  if (!activeCandidate) {
-    return (
-      <Typography color="text.secondary" variant="body2">
-        Select a candidate to view field-level evidence anchors.
-      </Typography>
-    )
-  }
-
-  if (fieldGroups.length === 0) {
-    return (
-      <Typography color="text.secondary" variant="body2">
-        No draft fields are available for this candidate yet.
-      </Typography>
-    )
-  }
-
-  return (
-    <Stack spacing={1.5}>
-      {fieldGroups.map((group) => (
-        <Stack key={group.key} spacing={1}>
-          <Typography color="text.secondary" variant="overline">
-            {group.label}
-          </Typography>
-
-          {group.fields.map((field) => (
-            <Box
-              key={field.field_key}
-              sx={{
-                borderRadius: 1.5,
-                border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
-                backgroundColor: alpha(theme.palette.background.paper, 0.52),
-                px: 1.5,
-                py: 1.25,
-              }}
-            >
-              <Stack spacing={0.9}>
-                <Stack
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                  direction={{ xs: 'column', md: 'row' }}
-                  justifyContent="space-between"
-                  spacing={1}
-                >
-                  <Typography sx={{ fontWeight: 600 }} variant="body2">
-                    {field.label}
-                  </Typography>
-                  <EvidenceChipGroup
-                    evidenceAnchorIds={field.evidence_anchor_ids}
-                    evidenceByAnchorId={evidenceNavigation.evidenceByAnchorId}
-                    hoverEvidence={evidenceNavigation.hoverEvidence}
-                    hoveredEvidence={evidenceNavigation.hoveredEvidence}
-                    selectEvidence={evidenceNavigation.selectEvidence}
-                    selectedEvidence={evidenceNavigation.selectedEvidence}
-                  />
-                </Stack>
-
-                <Typography variant="body2">
-                  {formatDraftFieldValue(field.value ?? field.seed_value)}
-                </Typography>
-              </Stack>
-            </Box>
-          ))}
-        </Stack>
-      ))}
-    </Stack>
   )
 }
 
@@ -308,43 +165,37 @@ function CurationWorkspacePageContent({
   )
 
   const editorSlot = (
-    <WorkspaceSlotPlaceholder
-      description="Field-level evidence chips stay synchronized with the evidence panel and PDF viewer in this temporary editor placeholder."
-      eyebrow="Annotation Editor"
-      title={activeCandidate?.draft.draft_id ?? 'Editor placeholder'}
+    <Box
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
     >
-      <Stack spacing={1}>
-        <Typography variant="body2">
-          Adapter: {getAdapterLabel(workspace.session.adapter)}
-        </Typography>
-        <Typography variant="body2">
-          Draft version: {activeCandidate?.draft.version ?? 'Unavailable'}
-        </Typography>
-        <Typography variant="body2">
-          Session version: {workspace.session.session_version}
-        </Typography>
-        <Typography variant="body2">
-          Validation: {getCandidateValidationSummary(activeCandidate)}
-        </Typography>
-      </Stack>
-
-      <Divider />
-
-      <DraftFieldEvidencePreview
-        activeCandidate={activeCandidate}
-        evidenceNavigation={evidenceNavigation}
+      <AnnotationEditor
+        onFieldChange={autosave.queueFieldChange}
+        renderEvidence={(field) => (
+          <EvidenceChipGroup
+            evidenceAnchorIds={field.evidence_anchor_ids}
+            evidenceByAnchorId={evidenceNavigation.evidenceByAnchorId}
+            hoverEvidence={evidenceNavigation.hoverEvidence}
+            hoveredEvidence={evidenceNavigation.hoveredEvidence}
+            selectEvidence={evidenceNavigation.selectEvidence}
+            selectedEvidence={evidenceNavigation.selectedEvidence}
+          />
+        )}
       />
 
       {workspace.session.warnings.length > 0 ? (
-        <>
-          <Divider />
+        <Box sx={{ px: 2, pb: 1.5 }}>
           <Typography color="text.secondary" variant="body2">
             {workspace.session.warnings.length} session warning
             {workspace.session.warnings.length === 1 ? '' : 's'} available for review.
           </Typography>
-        </>
+        </Box>
       ) : null}
-    </WorkspaceSlotPlaceholder>
+    </Box>
   )
 
   const evidenceSlot = (
