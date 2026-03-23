@@ -77,15 +77,28 @@ export function useAutosave(
   const timerRef = useRef<number | null>(null)
   const scheduledCandidateIdRef = useRef<string | null>(null)
   const pendingDraftsRef = useRef<Map<string, PendingDraftAutosave>>(new Map())
+  const inFlightDraftsRef = useRef<Map<string, PendingDraftAutosave>>(new Map())
+  const draftVersionsRef = useRef<Map<string, number | null>>(new Map())
   const previousActiveCandidateIdRef = useRef<string | null>(activeCandidateId)
   const mountedRef = useRef(true)
   const saveSequenceRef = useRef<Promise<boolean>>(Promise.resolve(true))
   const inProgressRequestRef = useRef<Promise<boolean> | null>(null)
   const pauseInFlightRef = useRef(false)
+  const sessionStatusRef = useRef(session.status)
   const flushAllPendingChangesRef = useRef<
     ((options?: FlushOptions) => Promise<boolean>) | null
   >(null)
   const pauseSessionRef = useRef<((options?: FlushOptions) => Promise<boolean>) | null>(null)
+
+  useEffect(() => {
+    draftVersionsRef.current = new Map(
+      workspace.candidates.map((candidate) => [candidate.candidate_id, candidate.draft.version]),
+    )
+  }, [workspace.candidates])
+
+  useEffect(() => {
+    sessionStatusRef.current = session.status
+  }, [session.status])
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -114,6 +127,7 @@ export function useAutosave(
       }
 
       pendingDraftsRef.current.delete(candidateId)
+      inFlightDraftsRef.current.set(candidateId, pendingDraft)
       if (scheduledCandidateIdRef.current === candidateId) {
         clearTimer()
       }
@@ -144,16 +158,49 @@ export function useAutosave(
           })
         }
 
+        const nextPendingDraft = pendingDraftsRef.current.get(candidateId)
         if (options?.updateState !== false && mountedRef.current) {
-          setWorkspace((currentWorkspace) =>
-            mergeSavedDraftIntoWorkspace(currentWorkspace, response),
-          )
+          setWorkspace((currentWorkspace) => {
+            const mergedWorkspace = mergeSavedDraftIntoWorkspace(currentWorkspace, response)
+            if (!nextPendingDraft) {
+              return mergedWorkspace
+            }
+
+            return applyDraftFieldChangesToWorkspace(
+              mergedWorkspace,
+              candidateId,
+              Array.from(nextPendingDraft.fieldChanges.values()),
+            )
+          })
           setWarning(null)
+        }
+
+        draftVersionsRef.current.set(candidateId, response.draft.version)
+        if (nextPendingDraft) {
+          upsertPendingDraft(pendingDraftsRef.current, {
+            ...nextPendingDraft,
+            draftId: response.draft.draft_id,
+            expectedVersion: response.draft.version,
+          })
         }
 
         return true
       } catch {
-        upsertPendingDraft(pendingDraftsRef.current, pendingDraft)
+        const nextPendingDraft = pendingDraftsRef.current.get(candidateId)
+        if (nextPendingDraft) {
+          upsertPendingDraft(
+            pendingDraftsRef.current,
+            mergePendingFieldChanges(
+              {
+                ...pendingDraft,
+                draftId: nextPendingDraft.draftId,
+              },
+              Array.from(nextPendingDraft.fieldChanges.values()),
+            ),
+          )
+        } else {
+          upsertPendingDraft(pendingDraftsRef.current, pendingDraft)
+        }
 
         if (options?.updateState !== false && mountedRef.current) {
           setWarning(
@@ -163,6 +210,7 @@ export function useAutosave(
 
         return false
       } finally {
+        inFlightDraftsRef.current.delete(candidateId)
         if (options?.updateState !== false && mountedRef.current) {
           setIsSaving(false)
         }
@@ -222,6 +270,7 @@ export function useAutosave(
       current_candidate_id: activeCandidateId,
     })
       .then((response) => {
+        sessionStatusRef.current = response.session.status
         if (mountedRef.current) {
           setWorkspace((currentWorkspace) =>
             updateWorkspaceActiveCandidate(
@@ -249,13 +298,24 @@ export function useAutosave(
 
   const pauseSession = useCallback(
     async (options?: FlushOptions): Promise<boolean> => {
-      if (workspace.session.status !== 'in_progress' || pauseInFlightRef.current) {
+      if (pauseInFlightRef.current) {
         return true
       }
 
       pauseInFlightRef.current = true
 
       try {
+        if (sessionStatusRef.current !== 'in_progress' && inProgressRequestRef.current) {
+          const advancedToInProgress = await inProgressRequestRef.current
+          if (!advancedToInProgress) {
+            return true
+          }
+        }
+
+        if (sessionStatusRef.current !== 'in_progress') {
+          return true
+        }
+
         const response = await updateCurationSession(
           {
             session_id: workspace.session.session_id,
@@ -274,6 +334,8 @@ export function useAutosave(
           )
         }
 
+        sessionStatusRef.current = response.session.status
+
         return true
       } catch {
         if (options?.updateState !== false && mountedRef.current) {
@@ -285,7 +347,7 @@ export function useAutosave(
         pauseInFlightRef.current = false
       }
     },
-    [activeCandidateId, setWorkspace, workspace.session.session_id, workspace.session.status],
+    [activeCandidateId, setWorkspace, workspace.session.session_id],
   )
 
   const scheduleAutosave = useCallback(
@@ -315,20 +377,26 @@ export function useAutosave(
         ),
       )
 
-      const existingPendingDraft = pendingDraftsRef.current.get(activeCandidate.candidate_id) ?? {
+      const candidateId = activeCandidate.candidate_id
+      const existingPendingDraft = pendingDraftsRef.current.get(candidateId)
+      const inFlightDraft = inFlightDraftsRef.current.get(candidateId)
+      const knownDraftVersion =
+        draftVersionsRef.current.get(candidateId) ?? activeCandidate.draft.version
+
+      const nextPendingDraft = existingPendingDraft ?? {
         sessionId: session.session_id,
-        candidateId: activeCandidate.candidate_id,
+        candidateId,
         draftId: activeCandidate.draft.draft_id,
-        expectedVersion: activeCandidate.draft.version,
+        expectedVersion: inFlightDraft?.expectedVersion ?? knownDraftVersion,
         fieldChanges: new Map<string, CurationDraftFieldChange>(),
       }
 
       upsertPendingDraft(
         pendingDraftsRef.current,
-        mergePendingFieldChanges(existingPendingDraft, fieldChanges),
+        mergePendingFieldChanges(nextPendingDraft, fieldChanges),
       )
 
-      scheduleAutosave(activeCandidate.candidate_id)
+      scheduleAutosave(candidateId)
     },
     [
       activeCandidate,

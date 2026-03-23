@@ -1,5 +1,5 @@
 import { createElement, type ReactNode, useCallback, useMemo, useState } from 'react'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -101,18 +101,27 @@ function buildWorkspace(
   }
 }
 
-function buildSavedWorkspaceResponse() {
+function buildSavedWorkspaceResponse({
+  status = 'in_progress',
+  value = 'BRCA2',
+  version = 2,
+}: {
+  status?: CurationReviewSession['status']
+  value?: string
+  version?: number
+} = {}) {
+  const lastSavedMinute = String(version).padStart(2, '0')
   const workspace = buildWorkspace('in_progress')
   const savedCandidate = {
     ...workspace.candidates[0],
     draft: {
       ...workspace.candidates[0].draft,
-      version: 2,
-      last_saved_at: '2026-03-20T12:05:00Z',
+      version,
+      last_saved_at: `2026-03-20T12:${lastSavedMinute}:00Z`,
       fields: [
         {
           ...workspace.candidates[0].draft.fields[0],
-          value: 'BRCA2',
+          value,
           dirty: false,
         },
       ],
@@ -124,6 +133,26 @@ function buildSavedWorkspaceResponse() {
     draft: savedCandidate.draft,
     validation_snapshot: null,
     action_log_entry: null,
+    session: {
+      ...workspace.session,
+      status,
+    },
+  }
+}
+
+function createDeferred<T>() {
+  let resolvePromise!: (value: T) => void
+  let rejectPromise!: (reason?: unknown) => void
+
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+  })
+
+  return {
+    promise,
+    resolve: resolvePromise,
+    reject: rejectPromise,
   }
 }
 
@@ -263,6 +292,80 @@ describe('useAutosave', () => {
     expect(result.current.autosave.warning).toBeNull()
   })
 
+  it('keeps newer queued edits dirty and advances expected_version after an in-flight save completes', async () => {
+    const firstAutosave = createDeferred<ReturnType<typeof buildSavedWorkspaceResponse>>()
+
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockImplementationOnce(() => firstAutosave.promise)
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse({ value: 'BRCA3', version: 3 }))
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls[0]?.[0]).toMatchObject({
+      expected_version: 1,
+      field_changes: [
+        {
+          field_key: 'gene_symbol',
+          value: 'BRCA2',
+        },
+      ],
+    })
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    await act(async () => {
+      firstAutosave.resolve(buildSavedWorkspaceResponse({ value: 'BRCA2', version: 2 }))
+      await firstAutosave.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA3')
+      expect(result.current.autosave.isDirty).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls[1]?.[0]).toMatchObject({
+      expected_version: 2,
+      field_changes: [
+        {
+          field_key: 'gene_symbol',
+          value: 'BRCA3',
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.version).toBe(3)
+      expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA3')
+      expect(result.current.autosave.isDirty).toBe(false)
+    })
+  })
+
   it('flushes pending autosave work during unmount', async () => {
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
       buildSavedWorkspaceResponse(),
@@ -287,6 +390,75 @@ describe('useAutosave', () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('pauses a new session on unmount after the in-progress transition settles', async () => {
+    const inProgressRequest = createDeferred<{
+      session: CurationReviewSession
+      action_log_entry: null
+    }>()
+
+    serviceMocks.updateCurationSession
+      .mockImplementationOnce(() => inProgressRequest.promise)
+      .mockResolvedValueOnce({
+        session: {
+          ...buildWorkspace('paused').session,
+          current_candidate_id: 'candidate-1',
+        },
+        action_log_entry: null,
+      })
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
+      buildSavedWorkspaceResponse(),
+    )
+
+    const { result, unmount } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace('new')),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      status: 'in_progress',
+      current_candidate_id: 'candidate-1',
+    })
+
+    act(() => {
+      unmount()
+    })
+    expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      inProgressRequest.resolve({
+        session: {
+          ...buildWorkspace('in_progress').session,
+          current_candidate_id: 'candidate-1',
+        },
+        action_log_entry: null,
+      })
+      await inProgressRequest.promise
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.updateCurationSession).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.updateCurationSession.mock.calls[1]).toEqual([
+      {
+        session_id: 'session-1',
+        status: 'paused',
+        current_candidate_id: 'candidate-1',
+      },
+      {
+        keepalive: true,
+      },
+    ])
   })
 
   it('retries a failed autosave request once before succeeding', async () => {
