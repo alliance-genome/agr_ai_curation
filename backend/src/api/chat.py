@@ -561,13 +561,16 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         )
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
-    except Exception:
-        logger.warning(
-            "Failed to resolve supervisor tool map; extraction persistence disabled for chat run",
+    except Exception as exc:
+        logger.error(
+            "Supervisor tool-map resolution failed; aborting chat run to prevent silent extraction data loss",
             extra={"session_id": session_id, "user_id": user_id},
             exc_info=True,
         )
-        tool_agent_map = {}
+        raise HTTPException(
+            status_code=500,
+            detail=f"Supervisor tool-map resolution failed: {exc}",
+        ) from exc
 
     try:
         # Retrieve conversation history for multi-turn context
@@ -703,13 +706,16 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         )
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
-    except Exception:
-        logger.warning(
-            "Failed to resolve supervisor tool map; extraction persistence disabled for chat stream",
+    except Exception as exc:
+        logger.error(
+            "Supervisor tool-map resolution failed; aborting chat stream to prevent silent extraction data loss",
             extra={"session_id": session_id, "user_id": user_id},
             exc_info=True,
         )
-        tool_agent_map = {}
+        raise HTTPException(
+            status_code=500,
+            detail=f"Supervisor tool-map resolution failed: {exc}",
+        ) from exc
 
     # Create local cancellation event (for immediate same-worker cancellation)
     stream_claim_token = str(uuid.uuid4())
