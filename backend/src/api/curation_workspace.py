@@ -40,7 +40,10 @@ from src.lib.curation_workspace.session_service import (
     list_flow_run_sessions,
     list_flow_runs,
     list_sessions,
+    update_candidate_draft,
     update_session,
+    validate_candidate,
+    validate_session,
 )
 from src.models.sql.database import get_db
 from src.schemas.curation_prep import (
@@ -51,6 +54,10 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
+    CurationCandidateDraftUpdateRequest,
+    CurationCandidateDraftUpdateResponse,
+    CurationCandidateValidationRequest,
+    CurationCandidateValidationResponse,
     CurationDateRange,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
@@ -84,6 +91,8 @@ from src.schemas.curation_workspace import (
     CurationSessionStatsRequest,
     CurationSessionStatsResponse,
     CurationSessionStatus,
+    CurationSessionValidationRequest,
+    CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
@@ -505,6 +514,27 @@ async def post_manual_candidate(
     )
 
 
+@router.patch(
+    "/sessions/{session_id}/candidates/{candidate_id}/draft",
+    response_model=CurationCandidateDraftUpdateResponse,
+)
+async def patch_review_candidate_draft(
+    session_id: UUID,
+    candidate_id: UUID,
+    request: CurationCandidateDraftUpdateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationCandidateDraftUpdateResponse:
+    set_global_user_from_cognito(db, user)
+    return update_candidate_draft(
+        db,
+        session_id,
+        candidate_id,
+        request,
+        user,
+    )
+
+
 @router.post(
     "/candidates/{candidate_id}/decision",
     response_model=CurationCandidateDecisionResponse,
@@ -523,6 +553,34 @@ async def post_candidate_decision(
         request,
         user,
     )
+
+
+@router.post(
+    "/candidates/{candidate_id}/validate",
+    response_model=CurationCandidateValidationResponse,
+)
+async def post_candidate_validation(
+    candidate_id: UUID,
+    request: CurationCandidateValidationRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationCandidateValidationResponse:
+    set_global_user_from_cognito(db, user)
+    return validate_candidate(db, candidate_id, request)
+
+
+@router.post(
+    "/sessions/{session_id}/validate-all",
+    response_model=CurationSessionValidationResponse,
+)
+async def post_session_validation(
+    session_id: UUID,
+    request: CurationSessionValidationRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSessionValidationResponse:
+    set_global_user_from_cognito(db, user)
+    return validate_session(db, session_id, request)
 
 
 __all__ = ["router"]

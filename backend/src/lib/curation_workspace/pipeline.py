@@ -22,6 +22,11 @@ from src.lib.curation_workspace.evidence_quality import (
     evidence_anchor_payload_with_quality,
     summarize_evidence_records,
 )
+from src.lib.curation_workspace.validation_runtime import (
+    dedupe,
+    field_validation_status,
+    increment_validation_count,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -826,42 +831,14 @@ def _collect_scalar_display_values(payload: Any, values: list[str]) -> None:
 
 
 def _field_validation_status(value: Any) -> tuple[FieldValidationStatus, list[str]]:
-    if value is None:
-        return (
-            FieldValidationStatus.INVALID_FORMAT,
-            ["Extracted field is empty and needs curator review."],
-        )
-    if isinstance(value, str) and not value.strip():
-        return (
-            FieldValidationStatus.INVALID_FORMAT,
-            ["Extracted field is blank and needs curator review."],
-        )
-    if isinstance(value, (list, dict)) and not value:
-        return (
-            FieldValidationStatus.INVALID_FORMAT,
-            ["Extracted field is empty and needs curator review."],
-        )
-    return (FieldValidationStatus.SKIPPED, [])
+    return field_validation_status(value)
 
 
 def _increment_validation_count(
     counts: CurationValidationCounts,
     status: FieldValidationStatus,
 ) -> None:
-    if status == FieldValidationStatus.VALIDATED:
-        counts.validated += 1
-    elif status == FieldValidationStatus.AMBIGUOUS:
-        counts.ambiguous += 1
-    elif status == FieldValidationStatus.NOT_FOUND:
-        counts.not_found += 1
-    elif status == FieldValidationStatus.INVALID_FORMAT:
-        counts.invalid_format += 1
-    elif status == FieldValidationStatus.CONFLICT:
-        counts.conflict += 1
-    elif status == FieldValidationStatus.SKIPPED:
-        counts.skipped += 1
-    elif status == FieldValidationStatus.OVERRIDDEN:
-        counts.overridden += 1
+    increment_validation_count(counts, status)
 
 
 def _serialize_evidence_reference(
@@ -876,14 +853,7 @@ def _ambiguity_message(ambiguity: Any) -> str:
 
 
 def _dedupe(values: Sequence[str]) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            continue
-        deduped.append(value)
-        seen.add(value)
-    return deduped
+    return dedupe(values)
 
 
 __all__ = [

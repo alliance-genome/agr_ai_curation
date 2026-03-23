@@ -583,6 +583,9 @@ def seeded_review_sessions(client: TestClient, test_db):
         "candidate_alpha_id": str(candidate_alpha_id),
         "candidate_beta_id": str(candidate_beta_id),
         "candidate_gamma_id": str(candidate_gamma_id),
+        "draft_alpha_id": str(drafts[0].id),
+        "draft_beta_id": str(drafts[1].id),
+        "draft_gamma_id": str(drafts[2].id),
         "current_user_auth_sub": current_user_auth_sub,
         "other_user_auth_sub": other_user_auth_sub,
     }
@@ -982,3 +985,168 @@ def test_get_next_review_session_returns_queue_navigation_context(
         "previous_session_id": seeded_review_sessions["session_alpha_id"],
         "next_session_id": seeded_review_sessions["session_gamma_id"],
     }
+
+
+def test_patch_review_candidate_draft_revalidates_changed_fields(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.patch(
+        (
+            "/api/curation-workspace/sessions/"
+            f"{seeded_review_sessions['session_beta_id']}/candidates/"
+            f"{seeded_review_sessions['candidate_beta_id']}/draft"
+        ),
+        json={
+            "session_id": seeded_review_sessions["session_beta_id"],
+            "candidate_id": seeded_review_sessions["candidate_beta_id"],
+            "draft_id": seeded_review_sessions["draft_beta_id"],
+            "expected_version": 2,
+            "field_changes": [
+                {
+                    "field_key": "gene_symbol",
+                    "value": "BETA2",
+                }
+            ],
+            "autosave": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["draft"]["version"] == 3
+    assert payload["draft"]["fields"][0]["value"] == "BETA2"
+    assert payload["draft"]["fields"][0]["dirty"] is True
+    assert payload["draft"]["fields"][0]["stale_validation"] is False
+    assert payload["draft"]["fields"][0]["validation_result"]["status"] == "overridden"
+    assert payload["validation_snapshot"]["scope"] == "candidate"
+    assert payload["validation_snapshot"]["field_results"]["gene_symbol"]["status"] == "overridden"
+    assert payload["candidate"]["validation"]["counts"]["overridden"] == 1
+    assert payload["action_log_entry"]["action_type"] == "candidate_updated"
+
+
+def test_post_candidate_validation_returns_completed_snapshot(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.post(
+        (
+            "/api/curation-workspace/candidates/"
+            f"{seeded_review_sessions['candidate_alpha_id']}/validate"
+        ),
+        json={
+            "session_id": seeded_review_sessions["session_alpha_id"],
+            "candidate_id": seeded_review_sessions["candidate_alpha_id"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["candidate"]["candidate_id"] == seeded_review_sessions["candidate_alpha_id"]
+    assert payload["validation_snapshot"]["scope"] == "candidate"
+    assert payload["validation_snapshot"]["state"] == "completed"
+    assert payload["validation_snapshot"]["field_results"]["disease_term"]["status"] == "skipped"
+    assert payload["candidate"]["draft"]["fields"][0]["validation_result"]["status"] == "skipped"
+    assert payload["candidate"]["draft"]["fields"][0]["stale_validation"] is False
+
+
+def test_post_candidate_validation_only_updates_requested_field_keys(
+    client: TestClient,
+    test_db,
+    seeded_review_sessions,
+):
+    from src.lib.curation_workspace.models import CurationDraft
+
+    draft = (
+        test_db.query(CurationDraft)
+        .filter(CurationDraft.id == UUID(seeded_review_sessions["draft_beta_id"]))
+        .one()
+    )
+    draft.fields = [
+        {
+            "field_key": "field_a",
+            "label": "Field A",
+            "value": "Alpha",
+            "seed_value": "Alpha",
+            "order": 0,
+            "required": True,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": True,
+            "evidence_anchor_ids": [],
+            "metadata": {},
+        },
+        {
+            "field_key": "field_b",
+            "label": "Field B",
+            "value": "Beta",
+            "seed_value": "Beta",
+            "order": 1,
+            "required": False,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": True,
+            "evidence_anchor_ids": [],
+            "validation_result": {
+                "status": "ambiguous",
+                "resolver": "fixture",
+                "candidate_matches": [],
+                "warnings": ["Needs follow-up"],
+            },
+            "metadata": {},
+        },
+    ]
+    test_db.add(draft)
+    test_db.commit()
+
+    response = client.post(
+        (
+            "/api/curation-workspace/candidates/"
+            f"{seeded_review_sessions['candidate_beta_id']}/validate"
+        ),
+        json={
+            "session_id": seeded_review_sessions["session_beta_id"],
+            "candidate_id": seeded_review_sessions["candidate_beta_id"],
+            "field_keys": ["field_a"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    fields_by_key = {
+        field["field_key"]: field
+        for field in payload["candidate"]["draft"]["fields"]
+    }
+    assert fields_by_key["field_a"]["stale_validation"] is False
+    assert fields_by_key["field_a"]["validation_result"]["status"] == "skipped"
+    assert fields_by_key["field_b"]["stale_validation"] is True
+    assert fields_by_key["field_b"]["validation_result"]["status"] == "ambiguous"
+    assert payload["validation_snapshot"]["field_results"]["field_b"]["status"] == "ambiguous"
+    assert payload["validation_snapshot"]["summary"]["stale_field_keys"] == ["field_b"]
+    assert payload["candidate"]["validation"]["counts"]["skipped"] == 1
+    assert payload["candidate"]["validation"]["counts"]["ambiguous"] == 1
+
+
+def test_post_session_validation_returns_session_and_candidate_snapshots(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    response = client.post(
+        (
+            "/api/curation-workspace/sessions/"
+            f"{seeded_review_sessions['session_alpha_id']}/validate-all"
+        ),
+        json={
+            "session_id": seeded_review_sessions["session_alpha_id"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["session"]["session_id"] == seeded_review_sessions["session_alpha_id"]
+    assert payload["session_validation"]["scope"] == "session"
+    assert payload["session_validation"]["state"] == "completed"
+    assert payload["session_validation"]["summary"]["counts"]["skipped"] == 1
+    assert len(payload["candidate_validations"]) == 1
+    assert payload["candidate_validations"][0]["candidate_id"] == seeded_review_sessions["candidate_alpha_id"]
+    assert payload["candidate_validations"][0]["field_results"]["disease_term"]["status"] == "skipped"

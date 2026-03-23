@@ -14,3 +14,7 @@ export type {
   UseEditorStateOptions,
   UseEditorStateReturn,
 } from './useEditorState'
+export { default as RevertButton } from './RevertButton'
+export type { RevertButtonProps } from './RevertButton'
+export { default as ValidationBadge } from './ValidationBadge'
+export type { ValidationBadgeProps } from './ValidationBadge'

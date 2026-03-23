@@ -559,6 +559,7 @@ describe('CurationWorkspacePage', () => {
 
   afterEach(() => {
     HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+    vi.useRealTimers()
     vi.clearAllMocks()
   })
 
@@ -999,6 +1000,45 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByTestId('location-state')).toHaveTextContent('"launchedFromInventory":true')
     expect(screen.getByTestId('location-state')).toHaveTextContent('"note":"preserve-this-state"')
+  })
+
+  it('renders validation badges and revert actions through the editor slots', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[0].draft.fields = [
+      {
+        field_key: 'gene_symbol',
+        label: 'Gene symbol',
+        value: 'BRCA2',
+        seed_value: 'BRCA1',
+        field_type: 'string',
+        group_key: 'primary_data',
+        group_label: 'Primary data',
+        order: 0,
+        required: true,
+        read_only: false,
+        dirty: true,
+        stale_validation: false,
+        evidence_anchor_ids: [],
+        validation_result: {
+          status: 'overridden',
+          resolver: 'curator_override',
+          candidate_matches: [],
+          warnings: [],
+        },
+        metadata: {},
+      },
+    ]
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(screen.getByText('Overridden')).toBeInTheDocument()
+      expect(screen.getByText('Edited')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /revert to ai/i })).toBeInTheDocument()
+    })
+
+    expect(screen.getByLabelText('Gene symbol')).toHaveValue('BRCA2')
   })
 
   it('switches candidates and scrolls the linked field row when the PDF viewer selects an anchor', async () => {

@@ -16,6 +16,8 @@ import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
   AnnotationEditor,
   CuratorDecisionToolbar,
+  RevertButton,
+  ValidationBadge,
 } from '@/features/curation/editor'
 import {
   EvidenceChipGroup,
@@ -151,6 +153,12 @@ function CurationWorkspacePageContent({
           />
         )}
         renderFieldInput={editorPack?.renderFieldInput}
+        renderRevert={(_field, { canRevert, revert }) => (
+          <RevertButton canRevert={canRevert} onRevert={revert} />
+        )}
+        renderValidation={(field) => (
+          <ValidationBadge field={field} />
+        )}
       />
 
       {workspace.session.warnings.length > 0 ? (
