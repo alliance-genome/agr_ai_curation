@@ -1,5 +1,6 @@
-import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { act, render, renderHook } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { CurationDraftField } from '../types'
 import { useEditorState } from './useEditorState'
@@ -56,5 +57,58 @@ describe('useEditorState', () => {
       dirty: false,
       stale_validation: false,
     })
+  })
+
+  it('renders the latest candidate fields immediately when the active candidate changes', () => {
+    const renderSpy = vi.fn()
+    const firstFields = [createField()]
+    const secondFields = [
+      createField({
+        field_key: 'disease_term',
+        label: 'Disease term',
+        value: 'Alzheimer disease',
+        seed_value: 'Alzheimer disease',
+        group_key: 'context',
+        group_label: 'Context',
+      }),
+    ]
+
+    function EditorStateProbe({
+      candidateId,
+      fields,
+    }: {
+      candidateId: string | null
+      fields: CurationDraftField[]
+    }) {
+      const state = useEditorState({
+        candidateId,
+        fields,
+      })
+
+      renderSpy(state.fields.map((field) => field.field_key))
+
+      return null
+    }
+
+    const { rerender } = render(
+      createElement(EditorStateProbe, {
+        candidateId: 'candidate-1',
+        fields: firstFields,
+      }),
+    )
+
+    renderSpy.mockClear()
+
+    rerender(
+      createElement(EditorStateProbe, {
+        candidateId: 'candidate-2',
+        fields: secondFields,
+      }),
+    )
+
+    expect(renderSpy.mock.calls.map(([fieldKeys]) => fieldKeys)).not.toContainEqual([
+      'gene_symbol',
+    ])
+    expect(renderSpy.mock.calls.at(-1)).toEqual([['disease_term']])
   })
 })

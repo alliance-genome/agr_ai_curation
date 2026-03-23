@@ -16,8 +16,13 @@ function buildWorkspace(
   overrides: {
     activeCandidateId?: string | null
     candidateFields?: CurationCandidate['draft']['fields']
+    workspace?: CurationWorkspace
   } = {},
 ): CurationWorkspace {
+  if (overrides.workspace) {
+    return overrides.workspace
+  }
+
   const activeCandidateId = Object.prototype.hasOwnProperty.call(overrides, 'activeCandidateId')
     ? overrides.activeCandidateId ?? null
     : 'candidate-1'
@@ -142,17 +147,11 @@ function buildWorkspace(
   }
 }
 
-function renderAnnotationEditor(
+function buildAnnotationEditorTree(
+  workspace: CurationWorkspace,
   props: Partial<AnnotationEditorProps> = {},
-  options: {
-    activeCandidateId?: string | null
-    candidateFields?: CurationCandidate['draft']['fields']
-  } = {},
 ) {
-  const workspace = buildWorkspace(options)
-  const activeCandidateId = Object.prototype.hasOwnProperty.call(options, 'activeCandidateId')
-    ? options.activeCandidateId ?? null
-    : workspace.active_candidate_id ?? null
+  const activeCandidateId = workspace.active_candidate_id ?? null
   const activeCandidate =
     workspace.candidates.find((candidate) => candidate.candidate_id === activeCandidateId) ?? null
   const resolvedProps: AnnotationEditorProps = {
@@ -164,7 +163,7 @@ function renderAnnotationEditor(
     renderValidation: props.renderValidation,
   }
 
-  return render(
+  return (
     <ThemeProvider theme={theme}>
       <CurationWorkspaceProvider
         value={{
@@ -181,6 +180,19 @@ function renderAnnotationEditor(
       </CurationWorkspaceProvider>
     </ThemeProvider>,
   )
+}
+
+function renderAnnotationEditor(
+  props: Partial<AnnotationEditorProps> = {},
+  options: {
+    activeCandidateId?: string | null
+    candidateFields?: CurationCandidate['draft']['fields']
+    workspace?: CurationWorkspace
+  } = {},
+) {
+  const workspace = buildWorkspace(options)
+
+  return render(buildAnnotationEditorTree(workspace, props))
 }
 
 describe('AnnotationEditor', () => {
@@ -255,5 +267,98 @@ describe('AnnotationEditor', () => {
     renderAnnotationEditor({}, { activeCandidateId: null })
 
     expect(screen.getByText('Select a candidate to begin editing.')).toBeInTheDocument()
+  })
+
+  it('renders new candidate field slots immediately when the active candidate changes', () => {
+    const slotSpy = vi.fn((field: CurationCandidate['draft']['fields'][number]) => (
+      <span>{`slot-${field.field_key}`}</span>
+    ))
+    const firstWorkspace = buildWorkspace()
+    const firstCandidate = firstWorkspace.candidates[0]
+    const secondCandidate: CurationCandidate = {
+      ...firstCandidate,
+      candidate_id: 'candidate-2',
+      display_label: 'Candidate 2',
+      conversation_summary: 'Second candidate summary',
+      draft: {
+        ...firstCandidate.draft,
+        draft_id: 'draft-2',
+        candidate_id: 'candidate-2',
+        title: 'Candidate 2 draft',
+        summary: 'Second editor summary',
+        fields: [
+          {
+            field_key: 'disease_term',
+            label: 'Disease term',
+            value: 'Alzheimer disease',
+            seed_value: 'Alzheimer disease',
+            field_type: 'string',
+            group_key: 'context',
+            group_label: 'Context',
+            order: 0,
+            required: true,
+            read_only: false,
+            dirty: false,
+            stale_validation: false,
+            evidence_anchor_ids: [],
+            validation_result: null,
+            metadata: {},
+          },
+        ],
+        updated_at: '2026-03-20T12:05:00Z',
+      },
+    }
+    const initialWorkspace: CurationWorkspace = {
+      ...firstWorkspace,
+      session: {
+        ...firstWorkspace.session,
+        current_candidate_id: 'candidate-1',
+        progress: {
+          ...firstWorkspace.session.progress,
+          total_candidates: 2,
+          pending_candidates: 2,
+        },
+      },
+      candidates: [
+        firstCandidate,
+        secondCandidate,
+      ],
+      active_candidate_id: 'candidate-1',
+    }
+    const nextWorkspace: CurationWorkspace = {
+      ...initialWorkspace,
+      session: {
+        ...initialWorkspace.session,
+        current_candidate_id: 'candidate-2',
+      },
+      active_candidate_id: 'candidate-2',
+    }
+    const { rerender } = renderAnnotationEditor(
+      {
+        renderValidation: slotSpy,
+      },
+      {
+        workspace: initialWorkspace,
+      },
+    )
+
+    slotSpy.mockClear()
+
+    rerender(
+      buildAnnotationEditorTree(nextWorkspace, {
+        renderValidation: slotSpy,
+      }),
+    )
+
+    expect(screen.getByText('Candidate 2 draft')).toBeInTheDocument()
+    expect(screen.getByText('Second editor summary')).toBeInTheDocument()
+    expect(screen.getByLabelText('Disease term')).toHaveValue('Alzheimer disease')
+    expect(screen.queryByLabelText('Gene symbol')).not.toBeInTheDocument()
+    expect(slotSpy.mock.calls.map(([field]) => field.field_key)).not.toContain('gene_symbol')
+    expect(slotSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        field_key: 'disease_term',
+      }),
+    )
   })
 })

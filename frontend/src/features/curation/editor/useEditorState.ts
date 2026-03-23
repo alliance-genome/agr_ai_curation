@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useReducer } from 'react'
+import { useLayoutEffect, useMemo, useReducer } from 'react'
 
 import type { CurationDraftField } from '../types'
 import { areDraftFieldValuesEqual } from '../workspace/workspaceState'
 
 interface EditorState {
   candidateId: string | null
+  sourceFields: CurationDraftField[]
   fields: CurationDraftField[]
 }
 
@@ -70,6 +71,7 @@ function createState(
 ): EditorState {
   return {
     candidateId,
+    sourceFields: fields,
     fields: sortFields(fields),
   }
 }
@@ -107,27 +109,41 @@ export function useEditorState(
 ): UseEditorStateReturn {
   const candidateId = options.candidateId ?? null
   const fields = options.fields ?? EMPTY_FIELDS
-  const [state, dispatch] = useReducer(editorReducer, createState(candidateId, fields))
+  const incomingState = useMemo(
+    () => createState(candidateId, fields),
+    [candidateId, fields],
+  )
+  const [state, dispatch] = useReducer(editorReducer, incomingState)
+  const needsHydration =
+    state.candidateId !== incomingState.candidateId ||
+    state.sourceFields !== incomingState.sourceFields
+  const resolvedState = needsHydration ? incomingState : state
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!needsHydration) {
+      return
+    }
+
     dispatch({
       type: 'hydrate',
-      candidateId,
-      fields,
+      candidateId: incomingState.candidateId,
+      fields: incomingState.sourceFields,
     })
-  }, [candidateId, fields])
+  }, [incomingState, needsHydration])
 
   const fieldByKey = useMemo(
-    () => new Map(state.fields.map((field) => [field.field_key, field])),
-    [state.fields],
+    () => new Map(resolvedState.fields.map((field) => [field.field_key, field])),
+    [resolvedState.fields],
   )
   const dirtyFieldKeys = useMemo(
-    () => state.fields.filter((field) => field.dirty).map((field) => field.field_key),
-    [state.fields],
+    () => resolvedState.fields
+      .filter((field) => field.dirty)
+      .map((field) => field.field_key),
+    [resolvedState.fields],
   )
 
   return {
-    fields: state.fields,
+    fields: resolvedState.fields,
     dirtyFieldKeys,
     isDirty: dirtyFieldKeys.length > 0,
     getField: (fieldKey) => fieldByKey.get(fieldKey),
