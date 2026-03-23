@@ -11,6 +11,8 @@ from src.schemas.curation_prep import (
 )
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
+    CurationCandidateDraftUpdateRequest,
+    CurationCandidateValidationRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationEvidenceRecomputeRequest,
@@ -20,6 +22,7 @@ from src.schemas.curation_workspace import (
     CurationManualCandidateCreateRequest,
     CurationManualEvidenceCreateRequest,
     CurationSavedViewCreateRequest,
+    CurationSessionValidationRequest,
     CurationSessionCreateRequest,
     EvidenceAnchor,
     EvidenceAnchorKind,
@@ -540,6 +543,133 @@ async def test_post_candidate_decision_delegates_to_service(monkeypatch):
         "candidate_id": candidate_id,
         "request": request,
         "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _update_candidate_draft(db, session_id, candidate_id, request, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["candidate_id"] = candidate_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "update_candidate_draft", _update_candidate_draft)
+
+    session_id = uuid4()
+    candidate_id = uuid4()
+    request = CurationCandidateDraftUpdateRequest(
+        session_id=str(session_id),
+        candidate_id=str(candidate_id),
+        draft_id=str(uuid4()),
+        expected_version=2,
+        field_changes=[
+            {
+                "field_key": "field_a",
+                "value": "updated",
+            }
+        ],
+        autosave=True,
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.patch_review_candidate_draft(
+        session_id,
+        candidate_id,
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "candidate_id": candidate_id,
+        "request": request,
+        "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_candidate_validation_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _validate_candidate(db, candidate_id, request):
+        captured["db"] = db
+        captured["candidate_id"] = candidate_id
+        captured["request"] = request
+        return expected
+
+    monkeypatch.setattr(module, "validate_candidate", _validate_candidate)
+
+    candidate_id = uuid4()
+    request = CurationCandidateValidationRequest(
+        session_id=str(uuid4()),
+        candidate_id=str(candidate_id),
+        field_keys=["field_a"],
+        force=True,
+    )
+    db = object()
+
+    response = await module.post_candidate_validation(
+        candidate_id,
+        request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "candidate_id": candidate_id,
+        "request": request,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_session_validation_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _validate_session(db, session_id, request):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["request"] = request
+        return expected
+
+    monkeypatch.setattr(module, "validate_session", _validate_session)
+
+    session_id = uuid4()
+    request = CurationSessionValidationRequest(
+        session_id=str(session_id),
+        candidate_ids=[str(uuid4())],
+        force=True,
+    )
+    db = object()
+
+    response = await module.post_session_validation(
+        session_id,
+        request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "request": request,
     }
 
 

@@ -1,10 +1,14 @@
 import type {
   CurationCandidateDecisionRequest,
   CurationCandidateDecisionResponse,
+  CurationCandidateValidationRequest,
+  CurationCandidateValidationResponse,
   CurationManualCandidateCreateRequest,
   CurationManualCandidateCreateResponse,
   CurationCandidateDraftUpdateRequest,
   CurationCandidateDraftUpdateResponse,
+  CurationSessionValidationRequest,
+  CurationSessionValidationResponse,
   CurationSessionUpdateRequest,
   CurationSessionUpdateResponse,
   CurationWorkspace,
@@ -96,6 +100,34 @@ export async function submitCurationCandidateDecision(
 ): Promise<CurationCandidateDecisionResponse> {
   return fetchCurationWorkspaceJson<CurationCandidateDecisionResponse>(
     `/api/curation-workspace/candidates/${encodeURIComponent(request.candidate_id)}/decision`,
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function validateCurationCandidate(
+  request: CurationCandidateValidationRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationCandidateValidationResponse> {
+  return fetchCurationWorkspaceJson<CurationCandidateValidationResponse>(
+    `/api/curation-workspace/candidates/${encodeURIComponent(request.candidate_id)}/validate`,
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function validateAllCurationSessionCandidates(
+  request: CurationSessionValidationRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationSessionValidationResponse> {
+  return fetchCurationWorkspaceJson<CurationSessionValidationResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/validate-all`,
     {
       method: 'POST',
       body: JSON.stringify(request),

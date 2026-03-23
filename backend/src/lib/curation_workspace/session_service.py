@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Any, Iterable, Mapping, Protocol, Sequence
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import String, asc, case, delete, desc, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
+from src.lib.curation_workspace.validation_runtime import (
+    dedupe,
+    field_validation_status,
+    increment_validation_count,
+)
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -33,10 +39,14 @@ from src.schemas.curation_workspace import (
     CurationAdapterRef,
     CurationCandidate as CurationCandidatePayload,
     CurationCandidateAction,
-    CurationCandidateSource,
-    CurationCandidateStatus,
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
+    CurationCandidateDraftUpdateRequest,
+    CurationCandidateDraftUpdateResponse,
+    CurationCandidateValidationRequest,
+    CurationCandidateValidationResponse,
+    CurationCandidateSource,
+    CurationCandidateStatus,
     CurationDraft as CurationDraftPayload,
     CurationDraftField as CurationDraftFieldSchema,
     CurationDocumentRef,
@@ -67,10 +77,13 @@ from src.schemas.curation_workspace import (
     CurationSessionStatsResponse,
     CurationSessionStatus,
     CurationSessionSummary,
+    CurationSessionValidationRequest,
+    CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
     CurationSubmissionRecord,
+    CurationValidationCounts,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
     CurationValidationScope,
     CurationValidationSnapshotState,
@@ -158,6 +171,15 @@ class PreparedValidationSnapshotInput:
     requested_at: datetime | None = None
     completed_at: datetime | None = None
     adapter_key: str | None = None
+
+
+@dataclass(frozen=True)
+class CandidateValidationComputation:
+    """Validation computation result for one persisted candidate draft."""
+
+    snapshot: PreparedValidationSnapshotInput | None = None
+    updated_fields: list[dict[str, Any]] | None = None
+    existing_snapshot: ValidationSnapshotModel | None = None
 
 
 @dataclass(frozen=True)
@@ -339,6 +361,37 @@ def _escape_like_pattern(value: str) -> str:
     escaped = escaped.replace("%", f"{LIKE_ESCAPE_CHAR}%")
     escaped = escaped.replace("_", f"{LIKE_ESCAPE_CHAR}_")
     return escaped
+
+
+def _stable_serialize(value: Any) -> str:
+    if value is None:
+        return "null"
+    return json.dumps(
+        value,
+        default=str,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _draft_values_equal(left: Any, right: Any) -> bool:
+    return _stable_serialize(left) == _stable_serialize(right)
+
+
+def _latest_snapshot_record(
+    snapshots: Sequence[ValidationSnapshotModel],
+) -> ValidationSnapshotModel | None:
+    if not snapshots:
+        return None
+
+    ordered_snapshots = sorted(
+        snapshots,
+        key=lambda snapshot: snapshot.completed_at
+        or snapshot.requested_at
+        or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return ordered_snapshots[-1]
 
 
 def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
@@ -814,16 +867,10 @@ def _session_progress(session: ReviewSessionModel) -> CurationSessionProgress:
 def _validation_summary(
     snapshots: Sequence[ValidationSnapshotModel],
 ) -> CurationValidationSummary | None:
-    if not snapshots:
+    snapshot = _latest_snapshot_record(snapshots)
+    if snapshot is None:
         return None
 
-    ordered_snapshots = sorted(
-        snapshots,
-        key=lambda snapshot: snapshot.completed_at
-        or snapshot.requested_at
-        or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    snapshot = ordered_snapshots[-1]
     summary_payload = dict(snapshot.summary or {})
     summary_payload.setdefault("state", snapshot.state)
     summary_payload.setdefault("counts", {})
@@ -1930,12 +1977,442 @@ def create_manual_candidate(
     return response
 
 
-def decide_candidate(
+def _load_candidate_for_write(
+    db: Session,
+    *,
+    session_id: str | UUID,
+    candidate_id: str | UUID,
+) -> CurationCandidate:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    candidate = db.scalars(
+        select(CurationCandidate)
+        .where(CurationCandidate.id == normalized_candidate_id)
+        .where(CurationCandidate.session_id == normalized_session_id)
+        .options(
+            selectinload(CurationCandidate.session).selectinload(
+                ReviewSessionModel.validation_snapshots
+            ),
+            selectinload(CurationCandidate.draft),
+            selectinload(CurationCandidate.evidence_anchors),
+            selectinload(CurationCandidate.validation_snapshots),
+        )
+    ).first()
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Curation candidate {normalized_candidate_id} not found in session "
+                f"{normalized_session_id}"
+            ),
+        )
+    if candidate.draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {normalized_candidate_id} is missing its draft payload",
+        )
+    return candidate
+
+
+def _load_session_for_validation(
+    db: Session,
+    *,
+    session_id: str | UUID,
+) -> ReviewSessionModel:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    session_row = db.scalars(
+        select(ReviewSessionModel)
+        .where(ReviewSessionModel.id == normalized_session_id)
+        .options(*DETAIL_LOAD_OPTIONS)
+    ).first()
+    if session_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+    return session_row
+
+
+def _validation_result_for_field(field: CurationDraftFieldSchema) -> FieldValidationResult:
+    if field.dirty:
+        return FieldValidationResult(
+            status="overridden",
+            resolver="curator_override",
+            warnings=["Curator value differs from the AI-seeded draft."],
+        )
+
+    field_status, field_warnings = field_validation_status(field.value)
+    return FieldValidationResult(
+        status=field_status,
+        resolver="deterministic_structural_validation",
+        warnings=field_warnings,
+    )
+
+
+def _compute_candidate_validation(
+    candidate: CurationCandidate,
+    *,
+    force: bool,
+    validated_at: datetime,
+    field_keys: Sequence[str] | None = None,
+) -> CandidateValidationComputation:
+    requested_field_keys = set(field_keys or [])
+    draft_fields = [
+        CurationDraftFieldSchema.model_validate(field_payload)
+        for field_payload in (candidate.draft.fields or [])
+    ]
+    latest_snapshot = _latest_snapshot_record(candidate.validation_snapshots)
+    latest_results = (
+        {
+            field_key: FieldValidationResult.model_validate(result_payload)
+            for field_key, result_payload in (latest_snapshot.field_results or {}).items()
+        }
+        if latest_snapshot is not None
+        else {}
+    )
+
+    def _existing_result(field: CurationDraftFieldSchema) -> FieldValidationResult | None:
+        return latest_results.get(field.field_key) or field.validation_result
+
+    if (
+        not requested_field_keys
+        and not force
+        and latest_snapshot is not None
+        and latest_snapshot.state == CurationValidationSnapshotState.COMPLETED
+        and all(
+            not field.stale_validation and _existing_result(field) is not None
+            for field in draft_fields
+        )
+    ):
+        return CandidateValidationComputation(existing_snapshot=latest_snapshot)
+
+    counts = CurationValidationCounts()
+    warnings: list[str] = []
+    field_results: dict[str, FieldValidationResult] = {}
+    updated_fields: list[dict[str, Any]] = []
+    stale_field_keys: list[str] = []
+    snapshot_missing_or_incomplete = (
+        latest_snapshot is None
+        or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
+    )
+
+    for field in draft_fields:
+        existing_result = _existing_result(field)
+        field_is_targeted = (
+            not requested_field_keys
+            or field.field_key in requested_field_keys
+        )
+        should_refresh = (
+            field_is_targeted
+            and (
+                force
+                or field.stale_validation
+                or existing_result is None
+                or snapshot_missing_or_incomplete
+            )
+        )
+        next_result = (
+            _validation_result_for_field(field)
+            if should_refresh
+            else existing_result
+        )
+        if next_result is None:
+            next_result = _validation_result_for_field(field)
+
+        field_results[field.field_key] = next_result
+        increment_validation_count(counts, next_result.status)
+        warnings.extend(next_result.warnings)
+        next_field = (
+            field.model_copy(
+                update={
+                    "stale_validation": False,
+                    "validation_result": next_result,
+                }
+            )
+            if field_is_targeted
+            else field
+        )
+        if next_field.stale_validation:
+            stale_field_keys.append(next_field.field_key)
+        updated_fields.append(next_field.model_dump(mode="json"))
+
+    snapshot = PreparedValidationSnapshotInput(
+        scope=CurationValidationScope.CANDIDATE,
+        state=CurationValidationSnapshotState.COMPLETED,
+        summary=CurationValidationSummary(
+            state=CurationValidationSnapshotState.COMPLETED,
+            counts=counts,
+            last_validated_at=validated_at,
+            stale_field_keys=stale_field_keys,
+            warnings=dedupe(warnings),
+        ),
+        field_results=field_results,
+        warnings=dedupe(warnings),
+        requested_at=validated_at,
+        completed_at=validated_at,
+        adapter_key=candidate.adapter_key,
+    )
+
+    return CandidateValidationComputation(
+        snapshot=snapshot,
+        updated_fields=updated_fields,
+    )
+
+
+def _apply_candidate_validation(
+    db: Session,
+    candidate: CurationCandidate,
+    *,
+    force: bool,
+    validated_at: datetime,
+    field_keys: Sequence[str] | None = None,
+) -> tuple[CurationValidationSnapshotSchema, bool]:
+    computation = _compute_candidate_validation(
+        candidate,
+        force=force,
+        validated_at=validated_at,
+        field_keys=field_keys,
+    )
+    if computation.existing_snapshot is not None:
+        return _validation_snapshot(computation.existing_snapshot), False
+
+    if computation.snapshot is None or computation.updated_fields is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Candidate {candidate.id} validation could not be materialized",
+        )
+
+    candidate.draft.fields = computation.updated_fields
+    candidate.draft.updated_at = validated_at
+    candidate.updated_at = validated_at
+
+    snapshot_row = _validation_snapshot_row(
+        session_row=candidate.session,
+        candidate_id=candidate.id,
+        snapshot=computation.snapshot,
+    )
+    db.add(snapshot_row)
+    db.flush()
+    candidate.validation_snapshots.append(snapshot_row)
+    return _validation_snapshot(snapshot_row), True
+
+
+def _aggregate_session_validation_snapshot(
+    *,
+    session_row: ReviewSessionModel,
+    candidate_validations: Sequence[CurationValidationSnapshotSchema],
+    validated_at: datetime,
+) -> PreparedValidationSnapshotInput:
+    counts = CurationValidationCounts()
+    warnings: list[str] = []
+
+    for candidate_validation in candidate_validations:
+        candidate_counts = candidate_validation.summary.counts
+        counts.validated += candidate_counts.validated
+        counts.ambiguous += candidate_counts.ambiguous
+        counts.not_found += candidate_counts.not_found
+        counts.invalid_format += candidate_counts.invalid_format
+        counts.conflict += candidate_counts.conflict
+        counts.skipped += candidate_counts.skipped
+        counts.overridden += candidate_counts.overridden
+        warnings.extend(candidate_validation.warnings)
+        warnings.extend(candidate_validation.summary.warnings)
+
+    deduped_warnings = dedupe(warnings)
+    return PreparedValidationSnapshotInput(
+        scope=CurationValidationScope.SESSION,
+        state=CurationValidationSnapshotState.COMPLETED,
+        summary=CurationValidationSummary(
+            state=CurationValidationSnapshotState.COMPLETED,
+            counts=counts,
+            last_validated_at=validated_at,
+            stale_field_keys=[],
+            warnings=deduped_warnings,
+        ),
+        field_results={},
+        warnings=deduped_warnings,
+        requested_at=validated_at,
+        completed_at=validated_at,
+        adapter_key=session_row.adapter_key,
+    )
+
+
+def _prepared_validation_snapshot_schema(
+    *,
+    session_id: UUID,
+    candidate_id: UUID | None,
+    snapshot: PreparedValidationSnapshotInput,
+) -> CurationValidationSnapshotSchema:
+    return CurationValidationSnapshotSchema(
+        snapshot_id=str(uuid4()),
+        scope=snapshot.scope,
+        session_id=str(session_id),
+        candidate_id=str(candidate_id) if candidate_id is not None else None,
+        adapter_key=snapshot.adapter_key,
+        state=snapshot.state,
+        field_results=snapshot.field_results,
+        summary=snapshot.summary,
+        requested_at=snapshot.requested_at,
+        completed_at=snapshot.completed_at,
+        warnings=list(snapshot.warnings),
+    )
+
+
+def update_candidate_draft(
+    db: Session,
+    session_id: str | UUID,
+    candidate_id: str | UUID,
+    request: CurationCandidateDraftUpdateRequest,
+    actor_claims: dict[str, Any],
+) -> CurationCandidateDraftUpdateResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    request_candidate_id = _normalize_uuid(request.candidate_id, field_name="candidate_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+    if normalized_candidate_id != request_candidate_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path candidate_id does not match request body candidate_id",
+        )
+
+    candidate = _load_candidate_for_write(
+        db,
+        session_id=normalized_session_id,
+        candidate_id=normalized_candidate_id,
+    )
+    draft_row = candidate.draft
+    request_draft_id = _normalize_uuid(request.draft_id, field_name="draft_id")
+    if draft_row.id != request_draft_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request draft_id does not match the candidate draft",
+        )
+    if request.expected_version is not None and draft_row.version != request.expected_version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Draft version mismatch: expected {request.expected_version}, "
+                f"found {draft_row.version}"
+            ),
+        )
+
+    draft_fields = [
+        CurationDraftFieldSchema.model_validate(field_payload)
+        for field_payload in (draft_row.fields or [])
+    ]
+    field_index = {
+        field.field_key: index
+        for index, field in enumerate(draft_fields)
+    }
+    changed_field_keys: list[str] = []
+
+    for field_change in request.field_changes:
+        field_position = field_index.get(field_change.field_key)
+        if field_position is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown draft field {field_change.field_key}",
+            )
+
+        current_field = draft_fields[field_position]
+        next_value = (
+            current_field.seed_value
+            if field_change.revert_to_seed
+            else field_change.value
+        )
+        next_dirty = not _draft_values_equal(next_value, current_field.seed_value)
+        next_field = current_field.model_copy(
+            update={
+                "value": next_value,
+                "dirty": next_dirty,
+                "stale_validation": next_dirty,
+            }
+        )
+
+        if current_field != next_field:
+            draft_fields[field_position] = next_field
+            changed_field_keys.append(current_field.field_key)
+
+    notes_changed = (
+        "notes" in request.model_fields_set
+        and request.notes != draft_row.notes
+    )
+    if not changed_field_keys and not notes_changed:
+        return CurationCandidateDraftUpdateResponse(
+            candidate=_candidate_payload(candidate),
+            draft=_draft_payload(candidate),
+            validation_snapshot=None,
+            action_log_entry=None,
+        )
+
+    now = datetime.now(timezone.utc)
+    draft_row.fields = [
+        field.model_dump(mode="json")
+        for field in draft_fields
+    ]
+    if notes_changed:
+        draft_row.notes = request.notes
+    draft_row.version += 1
+    draft_row.updated_at = now
+    draft_row.last_saved_at = now
+    candidate.updated_at = now
+    candidate.session.updated_at = now
+    candidate.session.last_worked_at = now
+
+    validation_snapshot: CurationValidationSnapshotSchema | None = None
+    if changed_field_keys:
+        validation_snapshot, _ = _apply_candidate_validation(
+            db,
+            candidate,
+            force=True,
+            validated_at=now,
+            field_keys=changed_field_keys,
+        )
+
+    action_log_row = SessionActionLogModel(
+        session_id=candidate.session_id,
+        candidate_id=candidate.id,
+        draft_id=draft_row.id,
+        action_type=CurationActionType.CANDIDATE_UPDATED,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=now,
+        changed_field_keys=changed_field_keys,
+        message=(
+            "Autosaved candidate draft changes"
+            if request.autosave
+            else "Candidate draft updated"
+        ),
+    )
+    db.add(action_log_row)
+    db.add(candidate.session)
+    db.add(candidate)
+    db.add(draft_row)
+    db.commit()
+
+    updated_candidate = _load_candidate_for_write(
+        db,
+        session_id=normalized_session_id,
+        candidate_id=normalized_candidate_id,
+    )
+    return CurationCandidateDraftUpdateResponse(
+        candidate=_candidate_payload(updated_candidate),
+        draft=_draft_payload(updated_candidate),
+        validation_snapshot=validation_snapshot,
+        action_log_entry=_action_log_entry(action_log_row),
+    )
+
+
+def validate_candidate(
     db: Session,
     candidate_id: str | UUID,
-    request: CurationCandidateDecisionRequest,
-    actor_claims: dict[str, Any],
-) -> CurationCandidateDecisionResponse:
+    request: CurationCandidateValidationRequest,
+) -> CurationCandidateValidationResponse:
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     request_candidate_id = _normalize_uuid(request.candidate_id, field_name="candidate_id")
     if normalized_candidate_id != request_candidate_id:
@@ -1944,6 +2421,135 @@ def decide_candidate(
             detail="Path candidate_id does not match request body candidate_id",
         )
 
+    candidate = _load_candidate_for_write(
+        db,
+        session_id=request.session_id,
+        candidate_id=normalized_candidate_id,
+    )
+    available_field_keys = {
+        field_payload.get("field_key")
+        for field_payload in (candidate.draft.fields or [])
+        if isinstance(field_payload, dict)
+    }
+    unknown_field_keys = [
+        field_key
+        for field_key in request.field_keys
+        if field_key not in available_field_keys
+    ]
+    if unknown_field_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown draft field(s): {', '.join(sorted(unknown_field_keys))}",
+        )
+
+    validated_at = datetime.now(timezone.utc)
+    validation_snapshot, changed = _apply_candidate_validation(
+        db,
+        candidate,
+        force=request.force,
+        validated_at=validated_at,
+        field_keys=request.field_keys,
+    )
+    if changed:
+        candidate.session.updated_at = validated_at
+        db.add(candidate.session)
+        db.add(candidate)
+        db.add(candidate.draft)
+        db.commit()
+
+    updated_candidate = _load_candidate_for_write(
+        db,
+        session_id=request.session_id,
+        candidate_id=normalized_candidate_id,
+    )
+    return CurationCandidateValidationResponse(
+        candidate=_candidate_payload(updated_candidate),
+        validation_snapshot=validation_snapshot,
+    )
+
+
+def validate_session(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationSessionValidationRequest,
+) -> CurationSessionValidationResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
+    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    unknown_candidate_ids = [
+        candidate_id
+        for candidate_id in target_candidate_ids
+        if candidate_id not in candidate_map
+    ]
+    if unknown_candidate_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown candidate(s) for session: {', '.join(sorted(unknown_candidate_ids))}",
+        )
+
+    validated_at = datetime.now(timezone.utc)
+    candidate_validations: list[CurationValidationSnapshotSchema] = []
+    changed = False
+
+    for target_candidate_id in target_candidate_ids:
+        validation_snapshot, candidate_changed = _apply_candidate_validation(
+            db,
+            candidate_map[target_candidate_id],
+            force=request.force,
+            validated_at=validated_at,
+        )
+        candidate_validations.append(validation_snapshot)
+        changed |= candidate_changed
+
+    session_snapshot_input = _aggregate_session_validation_snapshot(
+        session_row=session_row,
+        candidate_validations=candidate_validations,
+        validated_at=validated_at,
+    )
+
+    if not request.candidate_ids:
+        session_snapshot_row = _validation_snapshot_row(
+            session_row=session_row,
+            candidate_id=None,
+            snapshot=session_snapshot_input,
+        )
+        session_row.updated_at = validated_at
+        db.add(session_snapshot_row)
+        db.add(session_row)
+        db.commit()
+        session_validation = _validation_snapshot(session_snapshot_row)
+    else:
+        if changed:
+            db.commit()
+        session_validation = _prepared_validation_snapshot_schema(
+            session_id=session_row.id,
+            candidate_id=None,
+            snapshot=session_snapshot_input,
+        )
+
+    updated_session = _load_session_for_validation(db, session_id=normalized_session_id)
+    document_map, user_map = _session_context_maps(db, [updated_session])
+    return CurationSessionValidationResponse(
+        session=_session_detail(db, updated_session, document_map, user_map),
+        session_validation=session_validation,
+        candidate_validations=candidate_validations,
+    )
+
+
+def decide_candidate(
+    db: Session,
+    candidate_id: str | UUID,
+    request: CurationCandidateDecisionRequest,
+    actor_claims: dict[str, Any],
+) -> CurationCandidateDecisionResponse:
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     normalized_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
     if not sessions:
@@ -1954,13 +2560,20 @@ def decide_candidate(
 
     session = sessions[0]
     candidate = next(
-        (session_candidate for session_candidate in session.candidates if session_candidate.id == normalized_candidate_id),
+        (
+            session_candidate
+            for session_candidate in session.candidates
+            if session_candidate.id == normalized_candidate_id
+        ),
         None,
     )
     if candidate is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Curation candidate {normalized_candidate_id} not found in session {normalized_session_id}",
+            detail=(
+                f"Curation candidate {normalized_candidate_id} not found in session "
+                f"{normalized_session_id}"
+            ),
         )
 
     now = datetime.now(timezone.utc)
@@ -1984,9 +2597,11 @@ def decide_candidate(
     if session.status == CurationSessionStatus.NEW:
         session.status = CurationSessionStatus.IN_PROGRESS
 
-    next_candidate_uuid = _next_pending_candidate_id(session, normalized_candidate_id) if (
-        request.advance_queue and request.action != CurationCandidateAction.RESET
-    ) else None
+    next_candidate_uuid = (
+        _next_pending_candidate_id(session, normalized_candidate_id)
+        if request.advance_queue and request.action != CurationCandidateAction.RESET
+        else None
+    )
 
     session.current_candidate_id = next_candidate_uuid or normalized_candidate_id
     session.last_worked_at = now
@@ -2112,12 +2727,11 @@ def _reset_candidate_state(
                 str(anchor_id) for anchor_id in field_payload.get("evidence_anchor_ids") or []
             ]
             remaining_anchor_ids = [
-                anchor_id for anchor_id in existing_anchor_ids if anchor_id not in manual_evidence_ids
+                anchor_id
+                for anchor_id in existing_anchor_ids
+                if anchor_id not in manual_evidence_ids
             ]
-            if (
-                field_changed
-                or remaining_anchor_ids != existing_anchor_ids
-            ):
+            if field_changed or remaining_anchor_ids != existing_anchor_ids:
                 next_field_payload["evidence_anchor_ids"] = remaining_anchor_ids
                 draft_fields_changed = True
             updated_fields.append(next_field_payload)
@@ -2776,5 +3390,8 @@ __all__ = [
     "ReusablePreparedSessionContext",
     "PreparedValidationSnapshotInput",
     "upsert_prepared_session",
+    "update_candidate_draft",
     "update_session",
+    "validate_candidate",
+    "validate_session",
 ]

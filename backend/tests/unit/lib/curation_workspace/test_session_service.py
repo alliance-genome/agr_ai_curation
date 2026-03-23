@@ -30,6 +30,7 @@ from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
     CurationCandidateAction,
+    CurationCandidateValidationRequest,
     CurationCandidateSource,
     CurationCandidateDecisionRequest,
     CurationCandidateStatus,
@@ -1070,3 +1071,108 @@ def test_decide_candidate_reset_reverts_draft_and_keeps_existing_audit_entries(d
     assert str(action_logs[0].id) == seeded["existing_action_log_id"]
     assert action_logs[0].action_type == CurationActionType.CANDIDATE_UPDATED
     assert action_logs[1].action_type == CurationActionType.CANDIDATE_RESET
+
+
+def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
+    document = _create_document(db_session)
+    session_row = _create_review_session(
+        db_session,
+        document_id=str(document.id),
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=_now(),
+        last_worked_at=_now(),
+        reviewed_candidates=0,
+        pending_candidates=1,
+    )
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="test",
+        profile_key="primary",
+        display_label="Candidate",
+        normalized_payload={},
+        candidate_metadata={},
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db_session.add(candidate)
+    db_session.flush()
+    draft = DraftModel(
+        id=uuid4(),
+        candidate_id=candidate.id,
+        adapter_key="test",
+        version=1,
+        title="Candidate draft",
+        summary="Candidate summary",
+        fields=[
+            {
+                "field_key": "field_a",
+                "label": "Field A",
+                "value": "Alpha",
+                "seed_value": "Alpha",
+                "order": 0,
+                "required": True,
+                "read_only": False,
+                "dirty": False,
+                "stale_validation": True,
+                "evidence_anchor_ids": [],
+                "metadata": {},
+            },
+            {
+                "field_key": "field_b",
+                "label": "Field B",
+                "value": "Beta",
+                "seed_value": "Beta",
+                "order": 1,
+                "required": False,
+                "read_only": False,
+                "dirty": False,
+                "stale_validation": True,
+                "evidence_anchor_ids": [],
+                "validation_result": {
+                    "status": "ambiguous",
+                    "resolver": "fixture",
+                    "candidate_matches": [],
+                    "warnings": ["Needs follow-up"],
+                },
+                "metadata": {},
+            },
+        ],
+        notes="Test draft",
+        created_at=_now(),
+        updated_at=_now(),
+        draft_metadata={},
+    )
+    db_session.add(draft)
+    db_session.commit()
+
+    response = module.validate_candidate(
+        db_session,
+        candidate.id,
+        CurationCandidateValidationRequest(
+            session_id=str(session_row.id),
+            candidate_id=str(candidate.id),
+            field_keys=["field_a"],
+        ),
+    )
+
+    fields_by_key = {
+        field.field_key: field
+        for field in response.candidate.draft.fields
+    }
+    assert fields_by_key["field_a"].stale_validation is False
+    assert fields_by_key["field_a"].validation_result is not None
+    assert fields_by_key["field_a"].validation_result.status == "skipped"
+    assert fields_by_key["field_b"].stale_validation is True
+    assert fields_by_key["field_b"].validation_result is not None
+    assert fields_by_key["field_b"].validation_result.status == "ambiguous"
+    assert response.validation_snapshot.summary.stale_field_keys == ["field_b"]
+    assert response.validation_snapshot.summary.counts.skipped == 1
+    assert response.validation_snapshot.summary.counts.ambiguous == 1
+    assert response.validation_snapshot.field_results["field_b"].status == "ambiguous"
+    assert response.candidate.validation is not None
+    assert response.candidate.validation.stale_field_keys == ["field_b"]
