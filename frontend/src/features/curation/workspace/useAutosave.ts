@@ -418,6 +418,10 @@ export function useAutosave(
     return flushAllPendingChanges()
   }, [flushAllPendingChanges])
 
+  const clearWarning = useCallback(() => {
+    setWarning(null)
+  }, [])
+
   useEffect(() => {
     flushAllPendingChangesRef.current = flushAllPendingChanges
   }, [flushAllPendingChanges])
@@ -468,6 +472,6 @@ export function useAutosave(
     queueFieldChange,
     queueFieldChanges,
     flush,
-    clearWarning: () => setWarning(null),
+    clearWarning,
   }
 }
