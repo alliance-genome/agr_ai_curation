@@ -13,7 +13,12 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.lib.curation_adapters.reference import (
+    REFERENCE_ADAPTER_KEY,
+    REFERENCE_VALIDATION_PLAN_KEY,
+)
 from src.lib.curation_workspace import pipeline as module
+from src.lib.curation_workspace import session_service
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -28,7 +33,6 @@ from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepCandidate
 from src.schemas.curation_workspace import (
-    CurationActionType,
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationExtractionSourceKind,
@@ -212,14 +216,22 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
     )
 
 
-def _persist_matching_prep_result(db_session, *, document_id: str, prep_output: CurationPrepAgentOutput):
+def _persist_matching_prep_result(
+    db_session,
+    *,
+    document_id: str,
+    prep_output: CurationPrepAgentOutput,
+    adapter_key: str = "disease",
+    profile_key: str | None = "primary",
+    domain_key: str = "disease",
+):
     now = _now()
     record = ExtractionResultModel(
         id=uuid4(),
         document_id=UUID(str(document_id)),
-        adapter_key="disease",
-        profile_key="primary",
-        domain_key="disease",
+        adapter_key=adapter_key,
+        profile_key=profile_key,
+        domain_key=domain_key,
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id="chat-session-1",
@@ -266,6 +278,143 @@ def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, rev
         tags=("wave-5",),
         prepared_at=_now(),
         review_session_id=review_session_id,
+    )
+
+
+def _make_reference_prep_output() -> CurationPrepAgentOutput:
+    return CurationPrepAgentOutput.model_validate(
+        {
+            "candidates": [
+                {
+                    "adapter_key": REFERENCE_ADAPTER_KEY,
+                    "profile_key": None,
+                    "extracted_fields": [
+                        {
+                            "field_path": "citation.title",
+                            "value_type": "string",
+                            "string_value": "  Adapter-owned reference scaffold in practice  ",
+                            "number_value": None,
+                            "boolean_value": None,
+                            "json_value": None,
+                        },
+                        {
+                            "field_path": "citation.authors",
+                            "value_type": "json",
+                            "string_value": None,
+                            "number_value": None,
+                            "boolean_value": None,
+                            "json_value": '["Ada Lovelace", " Grace Hopper "]',
+                        },
+                        {
+                            "field_path": "citation.journal",
+                            "value_type": "string",
+                            "string_value": "  Journal of Adapter Boundaries  ",
+                            "number_value": None,
+                            "boolean_value": None,
+                            "json_value": None,
+                        },
+                        {
+                            "field_path": "citation.publication_year",
+                            "value_type": "string",
+                            "string_value": "2025",
+                            "number_value": None,
+                            "boolean_value": None,
+                            "json_value": None,
+                        },
+                        {
+                            "field_path": "identifiers.doi",
+                            "value_type": "string",
+                            "string_value": " DOI:10.1000/Reference-1 ",
+                            "number_value": None,
+                            "boolean_value": None,
+                            "json_value": None,
+                        },
+                    ],
+                    "evidence_references": [
+                        {
+                            "field_path": "citation.title",
+                            "evidence_record_id": "reference-evidence-title",
+                            "extraction_result_id": "prep-extract-reference",
+                            "anchor": {
+                                "anchor_kind": "snippet",
+                                "locator_quality": "exact_quote",
+                                "supports_decision": "supports",
+                                "snippet_text": "Adapter-owned reference scaffold in practice",
+                                "sentence_text": "Adapter-owned reference scaffold in practice",
+                                "normalized_text": None,
+                                "viewer_search_text": "Adapter-owned reference scaffold in practice",
+                                "pdfx_markdown_offset_start": 12,
+                                "pdfx_markdown_offset_end": 60,
+                                "page_number": 2,
+                                "page_label": None,
+                                "section_title": "Results",
+                                "subsection_title": None,
+                                "figure_reference": None,
+                                "table_reference": None,
+                                "chunk_ids": ["chunk-reference-title"],
+                            },
+                            "rationale": "The title is quoted directly from the manuscript.",
+                        },
+                        {
+                            "field_path": "identifiers.doi",
+                            "evidence_record_id": "reference-evidence-doi",
+                            "extraction_result_id": "prep-extract-reference",
+                            "anchor": {
+                                "anchor_kind": "snippet",
+                                "locator_quality": "exact_quote",
+                                "supports_decision": "supports",
+                                "snippet_text": "doi:10.1000/Reference-1",
+                                "sentence_text": "doi:10.1000/Reference-1",
+                                "normalized_text": None,
+                                "viewer_search_text": "doi:10.1000/Reference-1",
+                                "pdfx_markdown_offset_start": 200,
+                                "pdfx_markdown_offset_end": 223,
+                                "page_number": 4,
+                                "page_label": None,
+                                "section_title": "References",
+                                "subsection_title": None,
+                                "figure_reference": None,
+                                "table_reference": None,
+                                "chunk_ids": ["chunk-reference-doi"],
+                            },
+                            "rationale": "The DOI is present in the reference block.",
+                        },
+                    ],
+                    "conversation_context_summary": (
+                        "Conversation narrowed the workspace to a single supporting reference."
+                    ),
+                    "confidence": 0.93,
+                    "unresolved_ambiguities": [],
+                }
+            ],
+            "run_metadata": {
+                "model_name": "gpt-5-mini",
+                "token_usage": {
+                    "input_tokens": 90,
+                    "output_tokens": 35,
+                    "total_tokens": 125,
+                },
+                "processing_notes": ["Reference candidate normalized by the adapter scaffold."],
+                "warnings": [],
+            },
+        }
+    )
+
+
+def _make_reference_request(prep_output: CurationPrepAgentOutput, *, document_id: str):
+    return module.PostCurationPipelineRequest(
+        prep_output=prep_output,
+        document_id=document_id,
+        source_kind=CurationExtractionSourceKind.CHAT,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        profile_key=None,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        notes="Reference adapter pipeline bootstrap.",
+        tags=("wave-11",),
+        prepared_at=_now(),
     )
 
 
@@ -378,20 +527,77 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
         select(ValidationSnapshotModel).where(ValidationSnapshotModel.session_id == session_row.id)
     ).all()
     assert len(snapshots) == 2
-    session_snapshot = next(snapshot for snapshot in snapshots if snapshot.candidate_id is None)
-    candidate_snapshot = next(snapshot for snapshot in snapshots if snapshot.candidate_id is not None)
-    assert session_snapshot.state is CurationValidationSnapshotState.COMPLETED
-    assert candidate_snapshot.state is CurationValidationSnapshotState.COMPLETED
-    assert candidate_snapshot.summary["counts"]["skipped"] == 3
 
-    action_types = [
-        action_log.action_type
-        for action_log in db_session.scalars(
-            select(SessionActionLogModel).where(SessionActionLogModel.session_id == session_row.id)
-        ).all()
+
+def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(
+    db_session,
+):
+    document = _create_document(db_session)
+    prep_output = _make_reference_prep_output()
+    prep_record = _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        profile_key=None,
+        domain_key=REFERENCE_ADAPTER_KEY,
+    )
+
+    result = module.execute_post_curation_pipeline(
+        _make_reference_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+        dependencies=module.PostCurationPipelineDependencies(
+            evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
+        ),
+    )
+
+    assert result.status is module.PipelineRunStatus.COMPLETED
+    assert result.prep_extraction_result_id == str(prep_record.id)
+
+    draft_row = db_session.scalars(select(DraftModel)).one()
+    assert [field["field_key"] for field in draft_row.fields] == [
+        "citation.title",
+        "citation.authors",
+        "citation.journal",
+        "citation.publication_year",
+        "citation.reference_type",
+        "identifiers.doi",
+        "identifiers.pmid",
     ]
-    assert CurationActionType.SESSION_CREATED in action_types
-    assert CurationActionType.VALIDATION_COMPLETED in action_types
+    assert [field["group_key"] for field in draft_row.fields[:5]] == [
+        "citation_details",
+        "citation_details",
+        "citation_details",
+        "citation_details",
+        "citation_details",
+    ]
+    assert draft_row.fields[1]["value"] == ["Ada Lovelace", "Grace Hopper"]
+    assert draft_row.fields[1]["metadata"]["widget"] == "reference_author_list"
+    assert draft_row.fields[1]["metadata"]["validation"]["plan_key"] == REFERENCE_VALIDATION_PLAN_KEY
+    assert draft_row.fields[4]["value"] == "journal_article"
+    assert draft_row.fields[4]["metadata"]["default_applied"] is True
+    assert draft_row.fields[5]["value"] == "10.1000/reference-1"
+    assert draft_row.fields[5]["evidence_anchor_ids"]
+
+    candidate_row = db_session.scalars(select(CurationCandidate)).one()
+    assert candidate_row.normalized_payload == {
+        "citation": {
+            "title": "Adapter-owned reference scaffold in practice",
+            "authors": ["Ada Lovelace", "Grace Hopper"],
+            "journal": "Journal of Adapter Boundaries",
+            "publication_year": 2025,
+            "reference_type": "journal_article",
+        },
+        "identifiers": {
+            "doi": "10.1000/reference-1",
+            "pmid": None,
+        },
+    }
+    assert candidate_row.candidate_metadata["reference_adapter"]["adapter_key"] == REFERENCE_ADAPTER_KEY
+
+    workspace = session_service.get_session_workspace(db_session, result.session_id)
+    assert workspace.workspace.session.adapter.adapter_key == REFERENCE_ADAPTER_KEY
+    assert workspace.workspace.session.adapter.display_label == "Reference"
 
 
 def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_session):

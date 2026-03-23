@@ -12,6 +12,7 @@ import {
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import { AnnotationEditor } from '@/features/curation/editor'
 import {
   EvidenceChipGroup,
@@ -103,6 +104,12 @@ function CurationWorkspacePageContent({
   const evidenceNavigation = useEvidenceNavigation({
     evidence: activeCandidate?.evidence_anchors ?? [],
   })
+  const editorPack = useMemo(
+    () => getCurationAdapterEditorPack(
+      activeCandidate?.adapter_key ?? workspace.session.adapter.adapter_key,
+    ),
+    [activeCandidate?.adapter_key, workspace.session.adapter.adapter_key],
+  )
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
   const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
@@ -185,6 +192,7 @@ function CurationWorkspacePageContent({
             selectedEvidence={evidenceNavigation.selectedEvidence}
           />
         )}
+        renderFieldInput={editorPack?.renderFieldInput}
       />
 
       {workspace.session.warnings.length > 0 ? (
