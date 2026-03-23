@@ -6,8 +6,7 @@ import type {
   CurationEvidenceRecord,
 } from '@/features/curation/types'
 
-const FIELD_ROW_TEST_ID_PREFIX = 'field-row-'
-const PDF_TO_FORM_HIGHLIGHT_STYLE_ID = 'pdf-to-form-linking-styles'
+const FIELD_ROW_DATA_ATTRIBUTE = 'data-field-key'
 const PDF_TO_FORM_HIGHLIGHT_CLASSNAME = 'pdf-to-form-linked-field'
 const PDF_TO_FORM_HIGHLIGHT_DURATION_MS = 1_800
 
@@ -27,8 +26,9 @@ export interface UsePdfToFormLinkingOptions {
   ) => void
 }
 
-function buildFieldRowTestId(fieldKey: string): string {
-  return `${FIELD_ROW_TEST_ID_PREFIX}${fieldKey}`
+function findFieldRowElement(fieldKey: string): HTMLElement | null {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[${FIELD_ROW_DATA_ATTRIBUTE}]`))
+    .find((element) => element.dataset.fieldKey === fieldKey) ?? null
 }
 
 function findCandidateFieldKey(
@@ -44,23 +44,6 @@ function findCandidateFieldKey(
   }
 
   return null
-}
-
-function ensurePdfToFormHighlightStyles(): void {
-  if (document.getElementById(PDF_TO_FORM_HIGHLIGHT_STYLE_ID)) {
-    return
-  }
-
-  const styleElement = document.createElement('style')
-  styleElement.id = PDF_TO_FORM_HIGHLIGHT_STYLE_ID
-  styleElement.textContent = `
-    .${PDF_TO_FORM_HIGHLIGHT_CLASSNAME} {
-      background-color: rgba(21, 101, 192, 0.12);
-      box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.38);
-      transition: background-color 180ms ease, box-shadow 180ms ease;
-    }
-  `
-  document.head.appendChild(styleElement)
 }
 
 export function resolvePdfToFormTarget(
@@ -153,16 +136,13 @@ export function usePdfToFormLinking({
       return
     }
 
-    const targetField = document.querySelector<HTMLElement>(
-      `[data-testid="${buildFieldRowTestId(pendingTarget.fieldKey)}"]`,
-    )
+    const targetField = findFieldRowElement(pendingTarget.fieldKey)
     if (!targetField) {
       setPendingTarget(null)
       return
     }
 
     clearHighlightedField()
-    ensurePdfToFormHighlightStyles()
 
     targetField.scrollIntoView({
       behavior: 'smooth',
@@ -183,7 +163,7 @@ export function usePdfToFormLinking({
 }
 
 export {
-  buildFieldRowTestId,
+  FIELD_ROW_DATA_ATTRIBUTE,
   PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
   PDF_TO_FORM_HIGHLIGHT_DURATION_MS,
 }

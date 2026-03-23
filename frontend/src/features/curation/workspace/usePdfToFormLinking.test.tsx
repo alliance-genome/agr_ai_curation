@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { dispatchPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/pdfEvents'
@@ -9,7 +9,7 @@ import type {
 } from '@/features/curation/types'
 import { createEvidenceRecord } from '../evidence/testFactories'
 import {
-  buildFieldRowTestId,
+  FIELD_ROW_DATA_ATTRIBUTE,
   PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
   PDF_TO_FORM_HIGHLIGHT_DURATION_MS,
   usePdfToFormLinking,
@@ -68,6 +68,17 @@ function buildEvidenceIndex(
   }, {})
 }
 
+function getFieldRow(fieldKey: string): HTMLElement {
+  const fieldRow = document.querySelector<HTMLElement>(
+    `[${FIELD_ROW_DATA_ATTRIBUTE}="${fieldKey}"]`,
+  )
+  if (!fieldRow) {
+    throw new Error(`Expected field row for ${fieldKey}`)
+  }
+
+  return fieldRow
+}
+
 function LinkingHarness({
   candidates,
   evidence,
@@ -98,7 +109,11 @@ function LinkingHarness({
   return (
     <div>
       {activeCandidate?.draft.fields.map((field) => (
-        <div data-testid={buildFieldRowTestId(field.field_key)} key={field.field_key}>
+        <div
+          data-field-key={field.field_key}
+          data-testid={`linking-harness-row-${field.field_key}`}
+          key={field.field_key}
+        >
           {field.label}
         </div>
       ))}
@@ -145,11 +160,11 @@ describe('usePdfToFormLinking', () => {
       block: 'center',
       inline: 'nearest',
     })
-    expect(screen.getByTestId(buildFieldRowTestId('field_b'))).toHaveClass(
+    expect(getFieldRow('field_b')).toHaveClass(
       PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
     )
 
-    expect(screen.getByTestId(buildFieldRowTestId('field_a'))).not.toHaveClass(
+    expect(getFieldRow('field_a')).not.toHaveClass(
       PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
     )
 
@@ -157,7 +172,7 @@ describe('usePdfToFormLinking', () => {
       vi.advanceTimersByTime(PDF_TO_FORM_HIGHLIGHT_DURATION_MS)
     })
 
-    expect(screen.getByTestId(buildFieldRowTestId('field_b'))).not.toHaveClass(
+    expect(getFieldRow('field_b')).not.toHaveClass(
       PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
     )
   })
@@ -185,10 +200,12 @@ describe('usePdfToFormLinking', () => {
     })
 
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-2')
-    expect(screen.getByTestId(buildFieldRowTestId('field_b'))).toHaveClass(
+    expect(getFieldRow('field_b')).toHaveClass(
       PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
     )
-    expect(screen.queryByTestId(buildFieldRowTestId('field_a'))).not.toBeInTheDocument()
+    expect(
+      document.querySelector(`[${FIELD_ROW_DATA_ATTRIBUTE}="field_a"]`),
+    ).not.toBeInTheDocument()
     expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
   })
 })
