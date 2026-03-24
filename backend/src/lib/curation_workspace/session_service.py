@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from math import ceil
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 from uuid import UUID, uuid4
@@ -144,8 +146,17 @@ _CURATION_PREP_AGENT_KEY = "curation_prep"
 _MANUAL_TEMPLATE_FIELDS_METADATA_KEY = "manual_draft_fields"
 _MANUAL_TEMPLATE_SOURCE_METADATA_KEY = "manual_template_source"
 _PREP_ADAPTER_METADATA_KEY = "adapter_metadata"
-_EXPORT_ADAPTER_REGISTRY = build_default_export_adapter_registry()
-_SUBMISSION_ADAPTER_REGISTRY = build_default_submission_adapter_registry()
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _export_adapter_registry():
+    return build_default_export_adapter_registry()
+
+
+@lru_cache(maxsize=1)
+def _submission_adapter_registry():
+    return build_default_submission_adapter_registry()
 
 
 @dataclass(frozen=True)
@@ -2489,7 +2500,7 @@ def _resolve_submission_preview_target_key(
 
 
 def _resolve_export_adapter(adapter_key: str):
-    export_adapter = _EXPORT_ADAPTER_REGISTRY.get(adapter_key)
+    export_adapter = _export_adapter_registry().get(adapter_key)
     if export_adapter is not None:
         return export_adapter
 
@@ -2500,7 +2511,7 @@ def _resolve_export_adapter(adapter_key: str):
 
 def _resolve_submission_transport_adapter(target_key: str) -> SubmissionTransportAdapter:
     try:
-        return _SUBMISSION_ADAPTER_REGISTRY.require(target_key)
+        return _submission_adapter_registry().require(target_key)
     except KeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2508,7 +2519,7 @@ def _resolve_submission_transport_adapter(target_key: str) -> SubmissionTranspor
         ) from exc
 
 
-def _submission_payload_context(
+def _base_submission_payload_context(
     *,
     db: Session,
     session_row: ReviewSessionModel,
@@ -2533,13 +2544,32 @@ def _submission_payload_context(
             if session_validation is not None
             else None
         ),
+        "warnings": dedupe(warnings),
+    }
+
+
+def _submission_payload_context(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    ready_candidates: Sequence[CurationCandidate],
+    session_validation: CurationValidationSnapshotSchema | None,
+) -> dict[str, Any]:
+    payload_context = _base_submission_payload_context(
+        db=db,
+        session_row=session_row,
+        ready_candidates=ready_candidates,
+        session_validation=session_validation,
+    )
+
+    return {
+        **payload_context,
         "candidate_ids": [str(candidate.id) for candidate in ready_candidates],
         "candidate_count": len(ready_candidates),
         "candidates": [
             _submission_candidate_bundle(candidate)
             for candidate in ready_candidates
         ],
-        "warnings": dedupe(warnings),
     }
 
 
@@ -2550,33 +2580,22 @@ def _export_submission_payload_context(
     ready_candidates: Sequence[CurationCandidate],
     session_validation: CurationValidationSnapshotSchema | None,
 ) -> dict[str, Any]:
-    document = db.get(PDFDocument, session_row.document_id)
-    warnings: list[str] = []
-    if not ready_candidates:
-        warnings.append("No accepted candidates are ready for submission.")
-
+    payload_context = _base_submission_payload_context(
+        db=db,
+        session_row=session_row,
+        ready_candidates=ready_candidates,
+        session_validation=session_validation,
+    )
     export_candidates = [
         _candidate_payload(candidate).model_dump(mode="json")
         for candidate in ready_candidates
     ]
 
     return {
-        "session_id": str(session_row.id),
-        "profile_key": session_row.profile_key,
-        "document": (
-            _document_ref(document).model_dump(mode="json")
-            if document is not None
-            else None
-        ),
-        "session_validation": (
-            session_validation.model_dump(mode="json")
-            if session_validation is not None
-            else None
-        ),
+        **payload_context,
         "candidate_ids": [candidate["candidate_id"] for candidate in export_candidates],
         "candidate_count": len(export_candidates),
         "candidates": export_candidates,
-        "warnings": dedupe(warnings),
     }
 
 
@@ -3114,6 +3133,12 @@ def execute_submission(
             transport_adapter.submit(payload=payload)
         )
     except Exception as exc:
+        logger.exception(
+            "Submission transport adapter '%s' failed for session '%s' and target '%s'",
+            transport_adapter.transport_key,
+            str(normalized_session_id),
+            request.target_key,
+        )
         result = _coerce_failed_submission_result(
             adapter=transport_adapter,
             error=exc,

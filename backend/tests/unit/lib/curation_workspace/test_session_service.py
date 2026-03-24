@@ -1403,6 +1403,32 @@ def test_submission_preview_rejects_unknown_candidate_ids(db_session):
     assert "Unknown candidate(s) for session" in exc.value.detail
 
 
+def test_submission_adapter_registry_is_built_lazily_and_cached(monkeypatch):
+    module._submission_adapter_registry.cache_clear()
+
+    build_calls = []
+
+    class StubRegistry:
+        def require(self, target_key):
+            return {"transport_key": target_key}
+
+    def _build_registry():
+        build_calls.append("built")
+        return StubRegistry()
+
+    monkeypatch.setattr(module, "build_default_submission_adapter_registry", _build_registry)
+
+    try:
+        first = module._resolve_submission_transport_adapter("reference_target")
+        second = module._resolve_submission_transport_adapter("reference_target")
+    finally:
+        module._submission_adapter_registry.cache_clear()
+
+    assert first == {"transport_key": "reference_target"}
+    assert second == {"transport_key": "reference_target"}
+    assert build_calls == ["built"]
+
+
 def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):
     seeded = _create_decision_session(
         db_session,
@@ -1560,6 +1586,14 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
         lambda _target_key: ExplodingSubmissionAdapter(),
     )
 
+    logged = {}
+
+    def _capture_exception(message, *args):
+        logged["message"] = message
+        logged["args"] = args
+
+    monkeypatch.setattr(module.logger, "exception", _capture_exception)
+
     response = module.execute_submission(
         db_session,
         seeded["session_id"],
@@ -1574,6 +1608,14 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     assert "timeout talking to downstream submitter" in (response.submission.response_message or "")
     assert response.session.status == CurationSessionStatus.NEW
     assert response.session.submitted_at is None
+    assert logged["message"] == (
+        "Submission transport adapter '%s' failed for session '%s' and target '%s'"
+    )
+    assert logged["args"] == (
+        "exploding_submission",
+        seeded["session_id"],
+        DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
