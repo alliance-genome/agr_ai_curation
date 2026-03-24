@@ -115,11 +115,17 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
     if not isinstance(payload, dict):
         raise LokiResponseError("Invalid Loki response format: expected a JSON object.")
 
-    data = payload.get("data", {})
+    missing = object()
+
+    data = payload.get("data", missing)
+    if data is missing:
+        raise LokiResponseError("Invalid Loki response format: missing data object.")
     if not isinstance(data, dict):
         raise LokiResponseError("Invalid Loki response format: expected data to be an object.")
 
-    result = data.get("result", [])
+    result = data.get("result", missing)
+    if result is missing:
+        raise LokiResponseError("Invalid Loki response format: missing data.result list.")
     if not isinstance(result, list):
         raise LokiResponseError("Invalid Loki response format: expected data.result to be a list.")
 
@@ -129,7 +135,9 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
             raise LokiResponseError(
                 "Invalid Loki response format: expected each stream to be an object."
             )
-        values = stream.get("values", [])
+        values = stream.get("values", missing)
+        if values is missing:
+            raise LokiResponseError("Invalid Loki response format: missing stream values list.")
         if not isinstance(values, list):
             raise LokiResponseError(
                 "Invalid Loki response format: expected stream values to be a list."
