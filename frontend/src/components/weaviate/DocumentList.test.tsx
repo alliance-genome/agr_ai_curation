@@ -6,7 +6,6 @@ import { createMockDocument } from '../../test/test-utils';
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
 const openCurationWorkspaceMock = vi.fn();
-const getCurationWorkspaceLaunchAvailabilityMock = vi.fn();
 
 vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
@@ -19,8 +18,6 @@ vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
 
   return {
     ...actual,
-    getCurationWorkspaceLaunchAvailability: (options: unknown) =>
-      getCurationWorkspaceLaunchAvailabilityMock(options),
     openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
   };
 });
@@ -157,7 +154,6 @@ describe('DocumentList', () => {
     refetchHealthMock.mockReset();
     emitGlobalToastMock.mockReset();
     openCurationWorkspaceMock.mockReset();
-    getCurationWorkspaceLaunchAvailabilityMock.mockReset();
   });
 
   it('renders document list with all documents', () => {
@@ -265,7 +261,6 @@ describe('DocumentList', () => {
 
     // Button should render immediately without any availability probe
     expect(await screen.findByRole('button', { name: /review & curate/i })).toBeInTheDocument();
-    expect(getCurationWorkspaceLaunchAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it('disables re-embed button for processing documents', () => {
