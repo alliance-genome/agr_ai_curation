@@ -1,6 +1,7 @@
 """Curation workspace persistence models."""
 
 import importlib
+from typing import Any
 
 from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
@@ -75,7 +76,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in _LAZY_IMPORTS:
         module_path, attr = _LAZY_IMPORTS[name]
         mod = importlib.import_module(module_path, __package__)

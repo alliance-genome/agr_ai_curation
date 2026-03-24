@@ -9,6 +9,7 @@ Provides services for exploring and analyzing agent prompts:
 """
 import importlib
 import logging
+from typing import Any
 
 from .models import (
     # Prompt catalog models
@@ -76,7 +77,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in _LAZY_IMPORTS:
         module_path, attr = _LAZY_IMPORTS[name]
         mod = importlib.import_module(module_path, __package__)
