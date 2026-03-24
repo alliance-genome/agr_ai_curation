@@ -125,6 +125,7 @@ async def test_chat_endpoint_success(monkeypatch):
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)))
 
@@ -153,6 +154,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
 
@@ -238,11 +240,51 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypatch):
+    """Regression: ALL-137 — tool-map resolution failure must fail closed, not silently disable extraction."""
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(
+        chat,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
+    )
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+
+    def _raise_tool_map():
+        raise RuntimeError("agent registry unavailable")
+
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
+
+    # run_agent_streamed should never be reached; provide a sentinel to verify.
+    stream_called = False
+
+    async def _stream_sentinel(**_kwargs):
+        nonlocal stream_called
+        stream_called = True
+        yield {"type": "RUN_FINISHED", "data": {"response": "should not reach"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream_sentinel)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1"),
+            {"sub": "user-1", "cognito:groups": []},
+        )
+
+    assert exc.value.status_code == 500
+    assert "Internal configuration error" in exc.value.detail
+    assert not stream_called, "Agent stream should not run when tool-map resolution fails"
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
 

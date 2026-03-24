@@ -33,6 +33,7 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
 
@@ -101,6 +102,7 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -320,3 +322,51 @@ def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(
     assert "RUN_FINISHED" not in event_types
     assert events[-1]["error_type"] == "RuntimeError"
     assert add_calls == []
+
+
+def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch):
+    """Regression: ALL-137 — tool-map resolution failure must fail closed, not silently disable extraction."""
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(
+        chat,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
+    )
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+
+    def _raise_tool_map():
+        raise RuntimeError("agent registry unavailable")
+
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
+
+    # Stream infrastructure should never be reached; provide sentinels to verify.
+    stream_infra_called = False
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        nonlocal stream_infra_called
+        stream_infra_called = True
+        return True
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+
+    with pytest.raises(chat.HTTPException) as exc:
+        asyncio.run(
+            chat.chat_stream_endpoint(
+                chat_message=chat.ChatMessage(message="hello", session_id="session-toolmap-fail"),
+                user={"sub": "auth-sub", "cognito:groups": []},
+            )
+        )
+
+    assert exc.value.status_code == 500
+    assert "Internal configuration error" in exc.value.detail
+    assert not stream_infra_called, "Stream registration should not run when tool-map resolution fails"
