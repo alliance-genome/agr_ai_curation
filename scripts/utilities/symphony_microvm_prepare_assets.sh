@@ -12,10 +12,11 @@ Usage:
   symphony_microvm_prepare_assets.sh [--assets-root DIR] [--release TAG] [--force] [--dry-run]
 
 Behavior:
-  - Downloads Firecracker and jailer binaries for the current architecture.
-  - Downloads the latest kernel and Ubuntu squashfs guest assets from Firecracker CI.
+  - Downloads microVM runtime binaries and kernel for the current architecture.
+  - Downloads the latest Ubuntu squashfs guest image.
   - Generates an SSH keypair for root login into the guest.
-  - Builds an ext4 rootfs image with authorized_keys injected.
+  - Bakes all packages into rootfs via chroot (apt, npm, Erlang, Elixir).
+  - Builds an ext4 rootfs image ready for immediate use (no per-worker bootstrap).
   - Writes machine-readable summary lines on success.
 EOF
 }
@@ -57,7 +58,7 @@ done
 
 arch="$(symphony_microvm_arch)"
 
-for cmd in curl jq wget tar unsquashfs mkfs.ext4 ssh-keygen; do
+for cmd in curl jq wget tar unsquashfs mkfs.ext4 ssh-keygen chroot; do
   symphony_microvm_require_cmd "${cmd}"
 done
 
@@ -140,6 +141,47 @@ if [[ ! -f "${rootfs_ext4}" || "${force}" -eq 1 ]]; then
   sudo -n chmod 700 "${rootfs_dir}/root/.ssh"
   sudo -n chmod 600 "${rootfs_dir}/root/.ssh/authorized_keys"
   sudo -n chown -R root:root "${rootfs_dir}"
+
+  # --- Bake packages into rootfs via chroot ---
+  # Eliminates per-worker bootstrap downloads and reduces supply-chain window.
+  chroot_cleanup() {
+    sudo -n umount "${rootfs_dir}/proc" 2>/dev/null || true
+    sudo -n umount "${rootfs_dir}/sys" 2>/dev/null || true
+    sudo -n umount "${rootfs_dir}/dev/pts" 2>/dev/null || true
+    sudo -n umount "${rootfs_dir}/dev" 2>/dev/null || true
+    sudo -n rm -f "${rootfs_dir}/etc/resolv.conf.bak"
+  }
+  trap chroot_cleanup EXIT
+
+  sudo -n mount --bind /proc "${rootfs_dir}/proc"
+  sudo -n mount --bind /sys "${rootfs_dir}/sys"
+  sudo -n mount --bind /dev "${rootfs_dir}/dev"
+  sudo -n mount --bind /dev/pts "${rootfs_dir}/dev/pts"
+  # Preserve existing resolv.conf, inject host DNS for package downloads
+  sudo -n cp -f "${rootfs_dir}/etc/resolv.conf" "${rootfs_dir}/etc/resolv.conf.bak" 2>/dev/null || true
+  printf 'nameserver 8.8.8.8\n' | sudo -n tee "${rootfs_dir}/etc/resolv.conf" >/dev/null
+  # Ensure directories exist that the minimal squashfs rootfs may lack
+  sudo -n mkdir -p "${rootfs_dir}/tmp"
+  sudo -n chmod 1777 "${rootfs_dir}/tmp"
+  sudo -n mkdir -p "${rootfs_dir}/var/cache/apt/archives/partial"
+  sudo -n mkdir -p "${rootfs_dir}/var/log"
+
+  echo "Baking packages into rootfs (this takes a few minutes on first run)..."
+  # Copy bootstrap script into chroot and run it
+  sudo -n cp -f "${SCRIPT_DIR}/symphony_microvm_guest_bootstrap.sh" "${rootfs_dir}/tmp/bootstrap.sh"
+  sudo -n chmod +x "${rootfs_dir}/tmp/bootstrap.sh"
+  sudo -n chroot "${rootfs_dir}" /bin/bash /tmp/bootstrap.sh
+  sudo -n rm -f "${rootfs_dir}/tmp/bootstrap.sh"
+
+  # Restore original resolv.conf (guest will set its own DNS on boot)
+  if [[ -f "${rootfs_dir}/etc/resolv.conf.bak" ]]; then
+    sudo -n mv -f "${rootfs_dir}/etc/resolv.conf.bak" "${rootfs_dir}/etc/resolv.conf"
+  fi
+
+  chroot_cleanup
+  trap - EXIT
+  # --- End bake ---
+
   rm -f "${rootfs_ext4}"
   truncate -s "${rootfs_size_mb}M" "${rootfs_ext4}"
   sudo -n mkfs.ext4 -q -d "${rootfs_dir}" -F "${rootfs_ext4}"
