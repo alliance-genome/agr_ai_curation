@@ -1433,6 +1433,9 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
     assert response.submission.payload.payload_json is not None
     assert response.submission.payload.payload_json["candidate_count"] == 1
+    assert response.submission.payload.payload_text is not None
+    assert response.submission.payload.content_type == "application/json"
+    assert response.submission.payload.filename is not None
     assert response.session.status == CurationSessionStatus.SUBMITTED
     assert response.session.submitted_at is not None
     assert response.session.latest_submission is not None
@@ -1446,11 +1449,34 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     ).one()
     assert persisted_submission.status == CurationSubmissionStatus.ACCEPTED
     assert persisted_submission.external_reference == f"noop:{DEFAULT_JSON_BUNDLE_TARGET_KEY}:1"
+    assert persisted_submission.payload is not None
+    assert persisted_submission.payload["candidate_ids"] == [seeded["first_candidate_id"]]
+    assert persisted_submission.payload["payload_json"]["candidate_count"] == 1
+    assert persisted_submission.payload["payload_text"] is not None
+    assert persisted_submission.payload["content_type"] == "application/json"
+    assert persisted_submission.payload["filename"] is not None
+
+    reloaded_submission = module._submission_record(persisted_submission)
+    assert reloaded_submission.payload is not None
+    assert reloaded_submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+    assert reloaded_submission.payload.payload_json is not None
+    assert reloaded_submission.payload.payload_json["candidate_count"] == 1
+    assert reloaded_submission.payload.payload_text is not None
+    assert reloaded_submission.payload.content_type == "application/json"
+    assert reloaded_submission.payload.filename == persisted_submission.payload["filename"]
 
     refreshed_session = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
     assert refreshed_session is not None
     assert refreshed_session.status == CurationSessionStatus.SUBMITTED
     assert refreshed_session.submitted_at is not None
+
+    session_detail = module.get_session_detail(db_session, seeded["session_id"])
+    assert session_detail.latest_submission is not None
+    assert session_detail.latest_submission.payload is not None
+    assert session_detail.latest_submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+    assert session_detail.latest_submission.payload.payload_text is not None
+    assert session_detail.latest_submission.payload.content_type == "application/json"
+    assert session_detail.latest_submission.payload.filename is not None
 
 
 def test_execute_submission_persists_validation_errors_without_marking_session_submitted(

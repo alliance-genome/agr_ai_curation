@@ -1045,13 +1045,28 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
 def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | None:
     if record.payload is None:
         return None
-    payload_json = record.payload if not isinstance(record.payload, str) else None
-    payload_text = record.payload if isinstance(record.payload, str) else None
-    candidate_ids = [
-        readiness.get("candidate_id")
-        for readiness in record.readiness or []
-        if isinstance(readiness, dict) and readiness.get("candidate_id")
-    ]
+
+    if _stored_submission_payload_contract(record.payload):
+        payload_json = record.payload.get("payload_json")
+        payload_text = record.payload.get("payload_text")
+        candidate_ids = [
+            candidate_id
+            for candidate_id in record.payload.get("candidate_ids", [])
+            if isinstance(candidate_id, str) and candidate_id
+        ]
+        content_type = record.payload.get("content_type")
+        filename = record.payload.get("filename")
+    else:
+        payload_json = record.payload if not isinstance(record.payload, str) else None
+        payload_text = record.payload if isinstance(record.payload, str) else None
+        candidate_ids = [
+            readiness.get("candidate_id")
+            for readiness in record.readiness or []
+            if isinstance(readiness, dict) and readiness.get("candidate_id")
+        ]
+        content_type = None
+        filename = None
+
     return SubmissionPayloadContract(
         mode=record.mode,
         target_key=record.target_key,
@@ -1059,8 +1074,25 @@ def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | 
         candidate_ids=candidate_ids,
         payload_json=payload_json,
         payload_text=payload_text,
+        content_type=content_type,
+        filename=filename,
         warnings=list(record.warnings or []),
     )
+
+
+def _stored_submission_payload_contract(payload: object) -> bool:
+    return isinstance(payload, dict) and payload.get("storage_kind") == "submission_payload_contract"
+
+
+def _serialize_submission_payload_contract(payload: SubmissionPayloadContract) -> dict[str, Any]:
+    return {
+        "storage_kind": "submission_payload_contract",
+        "candidate_ids": list(payload.candidate_ids),
+        "payload_json": payload.payload_json,
+        "payload_text": payload.payload_text,
+        "content_type": payload.content_type,
+        "filename": payload.filename,
+    }
 
 
 def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
@@ -3106,7 +3138,7 @@ def execute_submission(
         target_key=request.target_key,
         status=result.status,
         readiness=[item.model_dump(mode="json") for item in readiness],
-        payload=payload.payload_json if payload.payload_json is not None else payload.payload_text,
+        payload=_serialize_submission_payload_contract(payload),
         external_reference=result.external_reference,
         response_message=result.response_message,
         validation_errors=list(result.validation_errors),
