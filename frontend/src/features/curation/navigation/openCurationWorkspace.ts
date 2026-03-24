@@ -115,6 +115,7 @@ export async function findExistingCurationSessionId(
   return response.sessions[0]?.session_id ?? null
 }
 
+/** @deprecated No longer used by UI components — availability is now resolved at click time. */
 export async function getCurationWorkspaceLaunchAvailability(
   target: CurationWorkspaceLaunchTarget
 ): Promise<CurationWorkspaceLaunchAvailability> {
