@@ -66,6 +66,10 @@ services:
     image: docker.io/langfuse/langfuse-worker:3
     restart: always
     depends_on: *langfuse-depends-on
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: langfuse-worker
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
       interval: 30s
@@ -78,6 +82,10 @@ services:
     image: docker.io/langfuse/langfuse:3
     restart: always
     depends_on: *langfuse-depends-on
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: langfuse
     ports:
       - "${LANGFUSE_HOST_PORT:-3000}:3000"
     environment:
@@ -370,6 +378,10 @@ services:
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: analytics
+      log_component: clickhouse
     user: "101:101"
     environment:
       CLICKHOUSE_DB: "${CLICKHOUSE_DB:-default}"
@@ -392,6 +404,10 @@ services:
   minio:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: storage
+      log_component: minio
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
@@ -412,6 +428,10 @@ services:
   postgres:
     image: docker.io/postgres:16
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: database
+      log_component: postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 15s
@@ -459,7 +479,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./promtail-production-config.yml:/etc/promtail/config.yml:ro
 
 volumes:
   postgres_data:
