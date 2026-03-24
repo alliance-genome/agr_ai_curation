@@ -92,6 +92,7 @@ from src.schemas.curation_workspace import (
     CurationSessionSummary,
     CurationSubmissionExecuteRequest,
     CurationSubmissionExecuteResponse,
+    CurationSubmissionHistoryResponse,
     CurationSessionValidationRequest,
     CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
@@ -100,6 +101,8 @@ from src.schemas.curation_workspace import (
     CurationSubmissionPreviewRequest,
     CurationSubmissionPreviewResponse,
     CurationSubmissionRecord,
+    CurationSubmissionRetryRequest,
+    CurationSubmissionRetryResponse,
     CurationSubmissionStatus,
     CurationValidationCounts,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
@@ -2105,6 +2108,30 @@ def _load_session_for_validation(
     return session_row
 
 
+def _load_submission_record(
+    db: Session,
+    *,
+    session_id: str | UUID,
+    submission_id: str | UUID,
+) -> SubmissionModel:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
+    submission_row = db.scalars(
+        select(SubmissionModel)
+        .where(SubmissionModel.id == normalized_submission_id)
+        .where(SubmissionModel.session_id == normalized_session_id)
+    ).first()
+    if submission_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Curation submission {normalized_submission_id} not found in session "
+                f"{normalized_session_id}"
+            ),
+        )
+    return submission_row
+
+
 def _validation_result_for_field(field: CurationDraftFieldSchema) -> FieldValidationResult:
     if field.dirty:
         return FieldValidationResult(
@@ -2637,8 +2664,9 @@ def _build_submission_execute_payload(
     target_key: str,
     ready_candidates: Sequence[CurationCandidate],
     session_validation: CurationValidationSnapshotSchema | None,
+    adapter_key: str | None = None,
 ) -> SubmissionPayloadContract:
-    export_adapter = _resolve_export_adapter(session_row.adapter_key)
+    export_adapter = _resolve_export_adapter(adapter_key or session_row.adapter_key)
     payload_context = _export_submission_payload_context(
         db=db,
         session_row=session_row,
@@ -2692,6 +2720,145 @@ def _submission_action_message(
         f"Submission to target '{target_key}' completed with status "
         f"'{result_status.value}'"
     )
+
+
+def _submission_candidate_ids(record: SubmissionModel) -> list[str]:
+    payload = _submission_payload(record)
+    if payload is not None and payload.candidate_ids:
+        return dedupe(payload.candidate_ids)
+
+    return dedupe(
+        [
+            candidate_id
+            for readiness_item in (record.readiness or [])
+            if isinstance(readiness_item, dict)
+            and readiness_item.get("ready") is True
+            and isinstance(candidate_id := readiness_item.get("candidate_id"), str)
+            and candidate_id
+        ]
+    )
+
+
+def _execute_direct_submission_attempt(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    adapter_key: str,
+    mode: SubmissionMode,
+    target_key: str,
+    payload: SubmissionPayloadContract,
+    readiness: Sequence[CurationCandidateSubmissionReadiness],
+    actor_claims: dict[str, Any],
+    action_type: CurationActionType,
+    action_metadata: Mapping[str, Any] | None = None,
+) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
+    transport_adapter = _resolve_submission_transport_adapter(target_key)
+    requested_at = datetime.now(timezone.utc)
+    try:
+        result = coerce_submission_transport_result(
+            transport_adapter.submit(payload=payload)
+        )
+    except Exception as exc:
+        logger.exception(
+            "Submission transport adapter '%s' failed for session '%s' and target '%s'",
+            transport_adapter.transport_key,
+            str(session_row.id),
+            target_key,
+        )
+        result = _coerce_failed_submission_result(
+            adapter=transport_adapter,
+            error=exc,
+        )
+
+    if result.status not in DIRECT_SUBMISSION_RESULT_STATUSES:
+        result = normalize_submission_transport_result(
+            status=CurationSubmissionStatus.FAILED,
+            response_message=(
+                f"Submission adapter '{transport_adapter.transport_key}' returned "
+                f"unsupported direct-submit status '{result.status.value}'"
+            ),
+            warnings=result.warnings,
+        )
+
+    completed_at = result.completed_at or requested_at
+    combined_warnings = dedupe([*payload.warnings, *result.warnings])
+    submission_row = SubmissionModel(
+        session_id=session_row.id,
+        adapter_key=adapter_key,
+        mode=mode,
+        target_key=target_key,
+        status=result.status,
+        readiness=[item.model_dump(mode="json") for item in readiness],
+        payload=_serialize_submission_payload_contract(payload),
+        external_reference=result.external_reference,
+        response_message=result.response_message,
+        validation_errors=list(result.validation_errors),
+        warnings=combined_warnings,
+        requested_at=requested_at,
+        completed_at=completed_at,
+    )
+
+    previous_session_status = session_row.status
+    if _submission_attempt_marks_session_submitted(result.status):
+        session_row.status = CurationSessionStatus.SUBMITTED
+        if session_row.submitted_at is None:
+            session_row.submitted_at = completed_at
+    session_row.updated_at = completed_at
+    session_row.last_worked_at = completed_at
+    session_row.session_version += 1
+
+    action_log_payload = {
+        "target_key": target_key,
+        "mode": mode.value,
+        "submission_status": result.status.value,
+        "submitted_candidate_ids": list(payload.candidate_ids),
+        "submitted_candidate_count": len(payload.candidate_ids),
+        "external_reference": result.external_reference,
+        "validation_error_count": len(result.validation_errors),
+    }
+    if action_metadata:
+        action_log_payload.update(dict(action_metadata))
+
+    action_log_row = SessionActionLogModel(
+        session_id=session_row.id,
+        action_type=action_type,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=completed_at,
+        previous_session_status=(
+            previous_session_status if previous_session_status != session_row.status else None
+        ),
+        new_session_status=(
+            session_row.status if previous_session_status != session_row.status else None
+        ),
+        message=_submission_action_message(
+            result_status=result.status,
+            target_key=target_key,
+        ),
+        action_metadata=action_log_payload,
+    )
+
+    db.add(session_row)
+    db.add(submission_row)
+    db.add(action_log_row)
+    db.flush()
+
+    response_submission = _submission_record(submission_row).model_copy(
+        update={
+            "payload": payload,
+            "warnings": combined_warnings,
+        }
+    )
+
+    db.commit()
+    action_log_entry = _action_log_entry(action_log_row)
+    if action_log_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Submission action log entry could not be serialized",
+        )
+
+    return response_submission, action_log_entry
 
 
 def update_candidate_draft(
@@ -3097,7 +3264,6 @@ def execute_submission(
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
-    transport_adapter = _resolve_submission_transport_adapter(request.target_key)
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
     readiness = [
@@ -3133,102 +3299,17 @@ def execute_submission(
         ready_candidates=ready_candidates,
         session_validation=validation_response.session_validation,
     )
-
-    requested_at = datetime.now(timezone.utc)
-    try:
-        result = coerce_submission_transport_result(
-            transport_adapter.submit(payload=payload)
-        )
-    except Exception as exc:
-        logger.exception(
-            "Submission transport adapter '%s' failed for session '%s' and target '%s'",
-            transport_adapter.transport_key,
-            str(normalized_session_id),
-            request.target_key,
-        )
-        result = _coerce_failed_submission_result(
-            adapter=transport_adapter,
-            error=exc,
-        )
-
-    if result.status not in DIRECT_SUBMISSION_RESULT_STATUSES:
-        result = normalize_submission_transport_result(
-            status=CurationSubmissionStatus.FAILED,
-            response_message=(
-                f"Submission adapter '{transport_adapter.transport_key}' returned "
-                f"unsupported direct-submit status '{result.status.value}'"
-            ),
-            warnings=result.warnings,
-        )
-
-    completed_at = result.completed_at or requested_at
-    combined_warnings = dedupe([*payload.warnings, *result.warnings])
-    submission_row = SubmissionModel(
-        session_id=session_row.id,
+    response_submission, action_log_entry = _execute_direct_submission_attempt(
+        db=db,
+        session_row=session_row,
         adapter_key=payload.adapter_key,
         mode=request.mode,
         target_key=request.target_key,
-        status=result.status,
-        readiness=[item.model_dump(mode="json") for item in readiness],
-        payload=_serialize_submission_payload_contract(payload),
-        external_reference=result.external_reference,
-        response_message=result.response_message,
-        validation_errors=list(result.validation_errors),
-        warnings=combined_warnings,
-        requested_at=requested_at,
-        completed_at=completed_at,
-    )
-
-    previous_session_status = session_row.status
-    if _submission_attempt_marks_session_submitted(result.status):
-        session_row.status = CurationSessionStatus.SUBMITTED
-        if session_row.submitted_at is None:
-            session_row.submitted_at = completed_at
-    session_row.updated_at = completed_at
-    session_row.last_worked_at = completed_at
-    session_row.session_version += 1
-
-    action_log_row = SessionActionLogModel(
-        session_id=session_row.id,
+        payload=payload,
+        readiness=readiness,
+        actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_EXECUTED,
-        actor_type=CurationActorType.USER,
-        actor=_actor_claims_payload(actor_claims),
-        occurred_at=completed_at,
-        previous_session_status=(
-            previous_session_status if previous_session_status != session_row.status else None
-        ),
-        new_session_status=(
-            session_row.status if previous_session_status != session_row.status else None
-        ),
-        message=_submission_action_message(
-            result_status=result.status,
-            target_key=request.target_key,
-        ),
-        action_metadata={
-            "target_key": request.target_key,
-            "mode": request.mode.value,
-            "submission_status": result.status.value,
-            "submitted_candidate_ids": list(payload.candidate_ids),
-            "submitted_candidate_count": len(payload.candidate_ids),
-            "external_reference": result.external_reference,
-            "validation_error_count": len(result.validation_errors),
-        },
     )
-
-    db.add(session_row)
-    db.add(submission_row)
-    db.add(action_log_row)
-    db.flush()
-
-    response_submission = _submission_record(submission_row).model_copy(
-        update={
-            "payload": payload,
-            "warnings": combined_warnings,
-        }
-    )
-
-    db.commit()
-    action_log_entry = _action_log_entry(action_log_row)
     db.expire_all()
 
     response_session = get_session_detail(db, normalized_session_id)
@@ -3244,6 +3325,130 @@ def execute_submission(
         submission=response_submission,
         session=response_session,
         action_log_entry=action_log_entry,
+    )
+
+
+def retry_submission(
+    db: Session,
+    session_id: str | UUID,
+    submission_id: str | UUID,
+    request: CurationSubmissionRetryRequest,
+    actor_claims: dict[str, Any],
+) -> CurationSubmissionRetryResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
+    request_submission_id = _normalize_uuid(request.submission_id, field_name="submission_id")
+    if normalized_submission_id != request_submission_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path submission_id does not match request body submission_id",
+        )
+
+    original_submission = _load_submission_record(
+        db,
+        session_id=normalized_session_id,
+        submission_id=normalized_submission_id,
+    )
+    if original_submission.mode != SubmissionMode.DIRECT_SUBMIT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only direct-submit submissions may be retried",
+        )
+    if original_submission.status != CurationSubmissionStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only failed submissions may be retried",
+        )
+
+    target_candidate_ids = _submission_candidate_ids(original_submission)
+    if not target_candidate_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Original submission does not include retriable candidate identifiers",
+        )
+
+    validation_response = validate_session(
+        db,
+        normalized_session_id,
+        CurationSessionValidationRequest(
+            session_id=str(normalized_session_id),
+            candidate_ids=target_candidate_ids,
+            force=False,
+        ),
+    )
+
+    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
+    readiness = [
+        _candidate_submission_readiness(
+            candidate_map[candidate_id],
+            next(
+                (
+                    candidate_validation
+                    for candidate_validation in validation_response.candidate_validations
+                    if candidate_validation.candidate_id == candidate_id
+                ),
+                None,
+            ),
+        )
+        for candidate_id in target_candidate_ids
+    ]
+    ready_candidates = [
+        candidate_map[readiness_item.candidate_id]
+        for readiness_item in readiness
+        if readiness_item.ready
+    ]
+    if not ready_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No eligible candidates are ready for direct submission",
+        )
+
+    payload = _build_submission_execute_payload(
+        db=db,
+        session_row=session_row,
+        adapter_key=original_submission.adapter_key,
+        mode=original_submission.mode,
+        target_key=original_submission.target_key,
+        ready_candidates=ready_candidates,
+        session_validation=validation_response.session_validation,
+    )
+    retry_reason = _normalized_optional_string(request.reason, field_name="reason")
+    response_submission, action_log_entry = _execute_direct_submission_attempt(
+        db=db,
+        session_row=session_row,
+        adapter_key=original_submission.adapter_key,
+        mode=original_submission.mode,
+        target_key=original_submission.target_key,
+        payload=payload,
+        readiness=readiness,
+        actor_claims=actor_claims,
+        action_type=CurationActionType.SUBMISSION_RETRIED,
+        action_metadata={
+            "original_submission_id": str(original_submission.id),
+            "retry_reason": retry_reason,
+        },
+    )
+    db.expire_all()
+
+    return CurationSubmissionRetryResponse(
+        submission=response_submission,
+        action_log_entry=action_log_entry,
+    )
+
+
+def get_submission(
+    db: Session,
+    session_id: str | UUID,
+    submission_id: str | UUID,
+) -> CurationSubmissionHistoryResponse:
+    submission_row = _load_submission_record(
+        db,
+        session_id=session_id,
+        submission_id=submission_id,
+    )
+    return CurationSubmissionHistoryResponse(
+        submission=_submission_record(submission_row),
     )
 
 
@@ -4081,6 +4286,7 @@ __all__ = [
     "execute_submission",
     "get_next_session",
     "get_candidate_detail",
+    "get_submission",
     "find_reusable_prepared_session",
     "get_session_detail",
     "get_session_workspace",
@@ -4094,6 +4300,7 @@ __all__ = [
     "PreparedSessionUpsertResult",
     "ReusablePreparedSessionContext",
     "PreparedValidationSnapshotInput",
+    "retry_submission",
     "submission_preview",
     "upsert_prepared_session",
     "update_candidate_draft",

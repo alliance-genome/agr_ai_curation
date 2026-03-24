@@ -25,6 +25,7 @@ from src.schemas.curation_workspace import (
     CurationSessionCreateRequest,
     CurationSessionValidationRequest,
     CurationSubmissionExecuteRequest,
+    CurationSubmissionRetryRequest,
     CurationSubmissionPreviewRequest,
     EvidenceAnchor,
     EvidenceAnchorKind,
@@ -750,6 +751,82 @@ async def test_post_submission_execute_delegates_to_service(monkeypatch):
         "session_id": session_id,
         "request": request,
         "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_submission_retry_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _retry_submission(db, session_id, submission_id, request, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["submission_id"] = submission_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "retry_submission", _retry_submission)
+
+    session_id = uuid4()
+    submission_id = uuid4()
+    request = CurationSubmissionRetryRequest(
+        submission_id=str(submission_id),
+        reason="Retry after downstream outage.",
+    )
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+    db = object()
+
+    response = await module.post_submission_retry(
+        session_id,
+        submission_id,
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "submission_id": submission_id,
+        "request": request,
+        "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_submission_history_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _get_submission(db, session_id, submission_id):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["submission_id"] = submission_id
+        return expected
+
+    monkeypatch.setattr(module, "get_submission", _get_submission)
+
+    session_id = uuid4()
+    submission_id = uuid4()
+    db = object()
+
+    response = await module.get_submission_history(
+        session_id,
+        submission_id,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "submission_id": submission_id,
     }
 
 
