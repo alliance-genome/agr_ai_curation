@@ -569,7 +569,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         )
         raise HTTPException(
             status_code=500,
-            detail=f"Supervisor tool-map resolution failed: {exc}",
+            detail="Internal configuration error: unable to process chat request",
         ) from exc
 
     try:
@@ -714,7 +714,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         )
         raise HTTPException(
             status_code=500,
-            detail=f"Supervisor tool-map resolution failed: {exc}",
+            detail="Internal configuration error: unable to process chat request",
         ) from exc
 
     # Create local cancellation event (for immediate same-worker cancellation)

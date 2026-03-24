@@ -274,7 +274,7 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
         )
 
     assert exc.value.status_code == 500
-    assert "agent registry unavailable" in exc.value.detail
+    assert "Internal configuration error" in exc.value.detail
     assert not stream_called, "Agent stream should not run when tool-map resolution fails"
 
 
