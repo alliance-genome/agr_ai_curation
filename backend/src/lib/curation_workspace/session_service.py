@@ -13,7 +13,17 @@ from fastapi import HTTPException, status
 from sqlalchemy import String, asc, case, delete, desc, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
+from src.lib.curation_workspace.submission_adapters import (
+    DIRECT_SUBMISSION_RESULT_STATUSES,
+    SubmissionTransportAdapter,
+    SubmissionTransportError,
+    SubmissionTransportResult,
+    build_default_submission_adapter_registry,
+    coerce_submission_transport_result,
+    normalize_submission_transport_result,
+)
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
     field_validation_status,
@@ -78,6 +88,8 @@ from src.schemas.curation_workspace import (
     CurationSessionStatsResponse,
     CurationSessionStatus,
     CurationSessionSummary,
+    CurationSubmissionExecuteRequest,
+    CurationSubmissionExecuteResponse,
     CurationSessionValidationRequest,
     CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
@@ -132,6 +144,8 @@ _CURATION_PREP_AGENT_KEY = "curation_prep"
 _MANUAL_TEMPLATE_FIELDS_METADATA_KEY = "manual_draft_fields"
 _MANUAL_TEMPLATE_SOURCE_METADATA_KEY = "manual_template_source"
 _PREP_ADAPTER_METADATA_KEY = "adapter_metadata"
+_EXPORT_ADAPTER_REGISTRY = build_default_export_adapter_registry()
+_SUBMISSION_ADAPTER_REGISTRY = build_default_submission_adapter_registry()
 
 
 @dataclass(frozen=True)
@@ -2442,6 +2456,26 @@ def _resolve_submission_preview_target_key(
     return submission_adapter, _default_submission_target_key(adapter_key)
 
 
+def _resolve_export_adapter(adapter_key: str):
+    export_adapter = _EXPORT_ADAPTER_REGISTRY.get(adapter_key)
+    if export_adapter is not None:
+        return export_adapter
+
+    # Keep direct-submit payload building aligned with the shared submission
+    # contract while domain-specific export adapters continue to roll out.
+    return _resolve_submission_domain_adapter(adapter_key)
+
+
+def _resolve_submission_transport_adapter(target_key: str) -> SubmissionTransportAdapter:
+    try:
+        return _SUBMISSION_ADAPTER_REGISTRY.require(target_key)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
 def _submission_payload_context(
     *,
     db: Session,
@@ -2477,6 +2511,43 @@ def _submission_payload_context(
     }
 
 
+def _export_submission_payload_context(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    ready_candidates: Sequence[CurationCandidate],
+    session_validation: CurationValidationSnapshotSchema | None,
+) -> dict[str, Any]:
+    document = db.get(PDFDocument, session_row.document_id)
+    warnings: list[str] = []
+    if not ready_candidates:
+        warnings.append("No accepted candidates are ready for submission.")
+
+    export_candidates = [
+        _candidate_payload(candidate).model_dump(mode="json")
+        for candidate in ready_candidates
+    ]
+
+    return {
+        "session_id": str(session_row.id),
+        "profile_key": session_row.profile_key,
+        "document": (
+            _document_ref(document).model_dump(mode="json")
+            if document is not None
+            else None
+        ),
+        "session_validation": (
+            session_validation.model_dump(mode="json")
+            if session_validation is not None
+            else None
+        ),
+        "candidate_ids": [candidate["candidate_id"] for candidate in export_candidates],
+        "candidate_count": len(export_candidates),
+        "candidates": export_candidates,
+        "warnings": dedupe(warnings),
+    }
+
+
 def _build_submission_preview_payload(
     *,
     db: Session,
@@ -2497,6 +2568,71 @@ def _build_submission_preview_payload(
         mode=mode,
         target_key=target_key,
         payload_context=payload_context,
+    )
+
+
+def _build_submission_execute_payload(
+    *,
+    db: Session,
+    session_row: ReviewSessionModel,
+    mode: SubmissionMode,
+    target_key: str,
+    ready_candidates: Sequence[CurationCandidate],
+    session_validation: CurationValidationSnapshotSchema | None,
+) -> SubmissionPayloadContract:
+    export_adapter = _resolve_export_adapter(session_row.adapter_key)
+    payload_context = _export_submission_payload_context(
+        db=db,
+        session_row=session_row,
+        ready_candidates=ready_candidates,
+        session_validation=session_validation,
+    )
+
+    try:
+        return export_adapter.build_submission_payload(
+            mode=mode,
+            target_key=target_key,
+            payload_context=payload_context,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+def _coerce_failed_submission_result(
+    *,
+    adapter: SubmissionTransportAdapter,
+    error: Exception,
+) -> SubmissionTransportResult:
+    if isinstance(error, SubmissionTransportError):
+        return error.to_result()
+
+    return normalize_submission_transport_result(
+        status=CurationSubmissionStatus.FAILED,
+        response_message=(
+            f"Submission adapter '{adapter.transport_key}' failed: {error}"
+        ),
+    )
+
+
+def _submission_attempt_marks_session_submitted(status_value: CurationSubmissionStatus) -> bool:
+    return status_value in {
+        CurationSubmissionStatus.ACCEPTED,
+        CurationSubmissionStatus.QUEUED,
+        CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED,
+    }
+
+
+def _submission_action_message(
+    *,
+    result_status: CurationSubmissionStatus,
+    target_key: str,
+) -> str:
+    return (
+        f"Submission to target '{target_key}' completed with status "
+        f"'{result_status.value}'"
     )
 
 
@@ -2870,6 +3006,180 @@ def submission_preview(
             warnings=submission_warnings,
         ),
         session_validation=validation_response.session_validation,
+    )
+
+
+def execute_submission(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationSubmissionExecuteRequest,
+    actor_claims: dict[str, Any],
+) -> CurationSubmissionExecuteResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+    if request.mode != SubmissionMode.DIRECT_SUBMIT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Submit endpoint only supports mode 'direct_submit'",
+        )
+
+    validation_response = validate_session(
+        db,
+        normalized_session_id,
+        CurationSessionValidationRequest(
+            session_id=request.session_id,
+            candidate_ids=request.candidate_ids,
+            force=False,
+        ),
+    )
+
+    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    transport_adapter = _resolve_submission_transport_adapter(request.target_key)
+    candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
+    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    readiness = [
+        _candidate_submission_readiness(
+            candidate_map[candidate_id],
+            next(
+                (
+                    candidate_validation
+                    for candidate_validation in validation_response.candidate_validations
+                    if candidate_validation.candidate_id == candidate_id
+                ),
+                None,
+            ),
+        )
+        for candidate_id in target_candidate_ids
+    ]
+    ready_candidates = [
+        candidate_map[readiness_item.candidate_id]
+        for readiness_item in readiness
+        if readiness_item.ready
+    ]
+    if not ready_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No eligible candidates are ready for direct submission",
+        )
+
+    payload = _build_submission_execute_payload(
+        db=db,
+        session_row=session_row,
+        mode=request.mode,
+        target_key=request.target_key,
+        ready_candidates=ready_candidates,
+        session_validation=validation_response.session_validation,
+    )
+
+    requested_at = datetime.now(timezone.utc)
+    try:
+        result = coerce_submission_transport_result(
+            transport_adapter.submit(payload=payload)
+        )
+    except Exception as exc:
+        result = _coerce_failed_submission_result(
+            adapter=transport_adapter,
+            error=exc,
+        )
+
+    if result.status not in DIRECT_SUBMISSION_RESULT_STATUSES:
+        result = normalize_submission_transport_result(
+            status=CurationSubmissionStatus.FAILED,
+            response_message=(
+                f"Submission adapter '{transport_adapter.transport_key}' returned "
+                f"unsupported direct-submit status '{result.status.value}'"
+            ),
+            warnings=result.warnings,
+        )
+
+    completed_at = result.completed_at or requested_at
+    combined_warnings = dedupe([*payload.warnings, *result.warnings])
+    submission_row = SubmissionModel(
+        session_id=session_row.id,
+        adapter_key=payload.adapter_key,
+        mode=request.mode,
+        target_key=request.target_key,
+        status=result.status,
+        readiness=[item.model_dump(mode="json") for item in readiness],
+        payload=payload.payload_json if payload.payload_json is not None else payload.payload_text,
+        external_reference=result.external_reference,
+        response_message=result.response_message,
+        validation_errors=list(result.validation_errors),
+        warnings=combined_warnings,
+        requested_at=requested_at,
+        completed_at=completed_at,
+    )
+
+    previous_session_status = session_row.status
+    if _submission_attempt_marks_session_submitted(result.status):
+        session_row.status = CurationSessionStatus.SUBMITTED
+        if session_row.submitted_at is None:
+            session_row.submitted_at = completed_at
+    session_row.updated_at = completed_at
+    session_row.last_worked_at = completed_at
+    session_row.session_version += 1
+
+    action_log_row = SessionActionLogModel(
+        session_id=session_row.id,
+        action_type=CurationActionType.SUBMISSION_EXECUTED,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=completed_at,
+        previous_session_status=(
+            previous_session_status if previous_session_status != session_row.status else None
+        ),
+        new_session_status=(
+            session_row.status if previous_session_status != session_row.status else None
+        ),
+        message=_submission_action_message(
+            result_status=result.status,
+            target_key=request.target_key,
+        ),
+        action_metadata={
+            "target_key": request.target_key,
+            "mode": request.mode.value,
+            "submission_status": result.status.value,
+            "submitted_candidate_ids": list(payload.candidate_ids),
+            "submitted_candidate_count": len(payload.candidate_ids),
+            "external_reference": result.external_reference,
+            "validation_error_count": len(result.validation_errors),
+        },
+    )
+
+    db.add(session_row)
+    db.add(submission_row)
+    db.add(action_log_row)
+    db.flush()
+
+    response_submission = _submission_record(submission_row).model_copy(
+        update={
+            "payload": payload,
+            "warnings": combined_warnings,
+        }
+    )
+
+    db.commit()
+    action_log_entry = _action_log_entry(action_log_row)
+    db.expire_all()
+
+    response_session = get_session_detail(db, normalized_session_id)
+    if (
+        response_session.latest_submission is not None
+        and response_session.latest_submission.submission_id == response_submission.submission_id
+    ):
+        response_session = response_session.model_copy(
+            update={"latest_submission": response_submission}
+        )
+
+    return CurationSubmissionExecuteResponse(
+        submission=response_submission,
+        session=response_session,
+        action_log_entry=action_log_entry,
     )
 
 
@@ -3704,6 +4014,7 @@ __all__ = [
     "build_actor_claims_payload",
     "build_evidence_record",
     "create_manual_candidate",
+    "execute_submission",
     "get_next_session",
     "get_candidate_detail",
     "find_reusable_prepared_session",

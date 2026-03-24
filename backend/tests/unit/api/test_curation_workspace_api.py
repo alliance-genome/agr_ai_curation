@@ -12,7 +12,6 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDraftUpdateRequest,
-    CurationSubmissionPreviewRequest,
     CurationCandidateValidationRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
@@ -23,8 +22,10 @@ from src.schemas.curation_workspace import (
     CurationManualCandidateCreateRequest,
     CurationManualEvidenceCreateRequest,
     CurationSavedViewCreateRequest,
-    CurationSessionValidationRequest,
     CurationSessionCreateRequest,
+    CurationSessionValidationRequest,
+    CurationSubmissionExecuteRequest,
+    CurationSubmissionPreviewRequest,
     EvidenceAnchor,
     EvidenceAnchorKind,
     EvidenceLocatorQuality,
@@ -709,6 +710,46 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
         "db": db,
         "session_id": session_id,
         "request": request,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_submission_execute_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _execute_submission(db, session_id, request, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "execute_submission", _execute_submission)
+
+    session_id = uuid4()
+    request = CurationSubmissionExecuteRequest(
+        session_id=str(session_id),
+        target_key="review_export_bundle",
+        candidate_ids=[str(uuid4())],
+    )
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+    db = object()
+
+    response = await module.post_submission_execute(
+        session_id,
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "request": request,
+        "actor_claims": user,
     }
 
 

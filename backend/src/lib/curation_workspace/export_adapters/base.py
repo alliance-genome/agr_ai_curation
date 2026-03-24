@@ -40,6 +40,7 @@ class DeterministicExportAdapter(ABC):
         supported_submission_modes: Sequence[SubmissionMode] = (
             SubmissionMode.PREVIEW,
             SubmissionMode.EXPORT,
+            SubmissionMode.DIRECT_SUBMIT,
         ),
     ) -> None:
         self.adapter_key = adapter_key

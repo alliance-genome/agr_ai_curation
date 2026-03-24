@@ -14,6 +14,8 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
+from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -31,10 +33,9 @@ from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
     CurationCandidateAction,
-    CurationSubmissionPreviewRequest,
     CurationCandidateValidationRequest,
-    CurationCandidateSource,
     CurationCandidateDecisionRequest,
+    CurationCandidateSource,
     CurationCandidateStatus,
     CurationEvidenceSource,
     CurationExtractionSourceKind,
@@ -46,6 +47,8 @@ from src.schemas.curation_workspace import (
     CurationSessionSortField,
     CurationSessionStatus,
     CurationSortDirection,
+    CurationSubmissionExecuteRequest,
+    CurationSubmissionPreviewRequest,
     CurationSubmissionStatus,
     SubmissionMode,
     SubmissionPayloadContract,
@@ -1398,3 +1401,156 @@ def test_submission_preview_rejects_unknown_candidate_ids(db_session):
 
     assert exc.value.status_code == 400
     assert "Unknown candidate(s) for session" in exc.value.detail
+
+
+def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.commit()
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+    )
+
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    assert response.submission.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+    assert response.submission.external_reference == f"noop:{DEFAULT_JSON_BUNDLE_TARGET_KEY}:1"
+    assert response.submission.payload is not None
+    assert response.submission.payload.mode == SubmissionMode.DIRECT_SUBMIT
+    assert response.submission.payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+    assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+    assert response.submission.payload.payload_json is not None
+    assert response.submission.payload.payload_json["candidate_count"] == 1
+    assert response.session.status == CurationSessionStatus.SUBMITTED
+    assert response.session.submitted_at is not None
+    assert response.session.latest_submission is not None
+    assert response.session.latest_submission.status == CurationSubmissionStatus.ACCEPTED
+    assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
+    assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
+    assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
+
+    persisted_submission = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted_submission.status == CurationSubmissionStatus.ACCEPTED
+    assert persisted_submission.external_reference == f"noop:{DEFAULT_JSON_BUNDLE_TARGET_KEY}:1"
+
+    refreshed_session = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert refreshed_session is not None
+    assert refreshed_session.status == CurationSessionStatus.SUBMITTED
+    assert refreshed_session.submitted_at is not None
+
+
+def test_execute_submission_persists_validation_errors_without_marking_session_submitted(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.commit()
+
+    class StubSubmissionAdapter:
+        transport_key = "stub_submission"
+
+        def submit(self, *, payload):
+            assert payload.mode == SubmissionMode.DIRECT_SUBMIT
+            return {
+                "status": CurationSubmissionStatus.VALIDATION_ERRORS,
+                "response_message": "Downstream validation rejected the payload.",
+                "validation_errors": ["Field A is empty."],
+            }
+
+    monkeypatch.setattr(
+        module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: StubSubmissionAdapter(),
+    )
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert response.submission.status == CurationSubmissionStatus.VALIDATION_ERRORS
+    assert response.submission.validation_errors == ["Field A is empty."]
+    assert response.session.status == CurationSessionStatus.NEW
+    assert response.session.submitted_at is None
+    assert response.action_log_entry.new_session_status is None
+
+    persisted_submission = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted_submission.status == CurationSubmissionStatus.VALIDATION_ERRORS
+    assert persisted_submission.validation_errors == ["Field A is empty."]
+
+
+def test_execute_submission_normalizes_transport_errors_to_failed_submission_record(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.commit()
+
+    class ExplodingSubmissionAdapter:
+        transport_key = "exploding_submission"
+
+        def submit(self, *, payload):
+            assert payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+            raise RuntimeError("timeout talking to downstream submitter")
+
+    monkeypatch.setattr(
+        module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: ExplodingSubmissionAdapter(),
+    )
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert response.submission.status == CurationSubmissionStatus.FAILED
+    assert "timeout talking to downstream submitter" in (response.submission.response_message or "")
+    assert response.session.status == CurationSessionStatus.NEW
+    assert response.session.submitted_at is None
+
+    persisted_submission = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted_submission.status == CurationSubmissionStatus.FAILED
+    assert "timeout talking to downstream submitter" in (persisted_submission.response_message or "")
