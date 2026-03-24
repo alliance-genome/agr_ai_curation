@@ -7,8 +7,9 @@ Provides services for exploring and analyzing agent prompts:
 - OpusChatService: Stream Opus conversations
 - Flow Tools: Create and manage curation flows via Opus
 """
+import importlib
 import logging
-import os
+from typing import Any
 
 from .models import (
     # Prompt catalog models
@@ -32,7 +33,6 @@ from .models import (
     ErrorResponse,
 )
 
-from .catalog_service import PromptCatalogService, get_prompt_catalog, get_prompt_key_for_agent
 from .trace_context_service import (
     TraceContextError,
     TraceNotFoundError,
@@ -45,31 +45,46 @@ from .suggestion_service import (
     submit_suggestion_sns,
     SUBMIT_SUGGESTION_TOOL,
 )
-from .flow_tools import (
-    register_flow_tools,
-    set_workflow_user_context,
-    clear_workflow_user_context,
-    get_current_user_id,
-    get_current_user_email,
-    set_current_flow_context,
-    clear_current_flow_context,
-    FLOW_AGENT_IDS,
-)
 
 logger = logging.getLogger(__name__)
 
-# Register flow tools on module import
-# This makes create_flow, validate_flow, and get_flow_templates
-# available to Opus via the DiagnosticToolRegistry
-auto_register_flow_tools = (
-    os.getenv("AGENT_STUDIO_AUTO_REGISTER_FLOW_TOOLS", "1").strip().lower()
-    not in {"0", "false", "no", "off"}
-)
-if auto_register_flow_tools:
-    try:
-        register_flow_tools()
-    except Exception:
-        logger.exception("Flow tool registration failed during agent_studio import")
+# ---------------------------------------------------------------------------
+# Lazy accessors for heavy submodules (catalog_service, flow_tools)
+# ---------------------------------------------------------------------------
+# These names were previously imported eagerly, pulling in the OpenAI Agents
+# SDK (agents.Agent) on every ``import agent_studio``.  They are now resolved
+# on first access so that lightweight consumers (models, validation, etc.)
+# are not penalised.
+#
+# Auto-registration of flow tools has been removed from module import.
+# Call ``register_flow_tools()`` explicitly where needed (e.g. API startup).
+# ---------------------------------------------------------------------------
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # catalog_service
+    "PromptCatalogService": (".catalog_service", "PromptCatalogService"),
+    "get_prompt_catalog": (".catalog_service", "get_prompt_catalog"),
+    "get_prompt_key_for_agent": (".catalog_service", "get_prompt_key_for_agent"),
+    # flow_tools
+    "register_flow_tools": (".flow_tools", "register_flow_tools"),
+    "set_workflow_user_context": (".flow_tools", "set_workflow_user_context"),
+    "clear_workflow_user_context": (".flow_tools", "clear_workflow_user_context"),
+    "get_current_user_id": (".flow_tools", "get_current_user_id"),
+    "get_current_user_email": (".flow_tools", "get_current_user_email"),
+    "set_current_flow_context": (".flow_tools", "set_current_flow_context"),
+    "clear_current_flow_context": (".flow_tools", "clear_current_flow_context"),
+    "FLOW_AGENT_IDS": (".flow_tools", "FLOW_AGENT_IDS"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_IMPORTS:
+        module_path, attr = _LAZY_IMPORTS[name]
+        mod = importlib.import_module(module_path, __package__)
+        val = getattr(mod, attr)
+        globals()[name] = val  # cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -92,7 +107,7 @@ __all__ = [
     "PromptCatalogResponse",
     "TraceContextResponse",
     "ErrorResponse",
-    # Services
+    # Services (lazy)
     "PromptCatalogService",
     "get_prompt_catalog",
     "get_prompt_key_for_agent",
@@ -106,7 +121,7 @@ __all__ = [
     "SuggestionSubmission",
     "submit_suggestion_sns",
     "SUBMIT_SUGGESTION_TOOL",
-    # Flow tools
+    # Flow tools (lazy)
     "register_flow_tools",
     "set_workflow_user_context",
     "clear_workflow_user_context",

@@ -1,9 +1,8 @@
 """Curation workspace persistence models."""
 
-from .curation_prep_service import (
-    CurationPrepPersistenceContext,
-    run_curation_prep,
-)
+import importlib
+from typing import Any
+
 from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
@@ -25,20 +24,67 @@ from .models import (
     CurationSubmissionRecord,
     CurationValidationSnapshot,
 )
-from .pipeline import (
-    DEFAULT_ASYNC_CANDIDATE_THRESHOLD,
-    AsyncioPipelineTaskScheduler,
-    DeterministicStructuralValidationService,
-    PassthroughCandidateNormalizer,
-    PassthroughEvidenceAnchorResolver,
-    PipelineExecutionMode,
-    PipelineRunStatus,
-    PostCurationPipelineDependencies,
-    PostCurationPipelineRequest,
-    PostCurationPipelineResult,
-    execute_post_curation_pipeline,
-    run_post_curation_pipeline,
-)
+
+# ---------------------------------------------------------------------------
+# Lazy accessors for heavy submodules (curation_prep_service, pipeline)
+# ---------------------------------------------------------------------------
+# These names were previously imported eagerly, pulling in the OpenAI Agents
+# SDK (agents.Runner, agents.RunConfig, agents.Agent) on every
+# ``import curation_workspace``.  They are now resolved on first access so
+# that lightweight consumers (models, extraction_results, etc.) are not
+# penalised.
+# ---------------------------------------------------------------------------
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # curation_prep_service
+    "CurationPrepPersistenceContext": (
+        ".curation_prep_service",
+        "CurationPrepPersistenceContext",
+    ),
+    "run_curation_prep": (".curation_prep_service", "run_curation_prep"),
+    # pipeline
+    "DEFAULT_ASYNC_CANDIDATE_THRESHOLD": (
+        ".pipeline",
+        "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
+    ),
+    "AsyncioPipelineTaskScheduler": (".pipeline", "AsyncioPipelineTaskScheduler"),
+    "DeterministicStructuralValidationService": (
+        ".pipeline",
+        "DeterministicStructuralValidationService",
+    ),
+    "PassthroughCandidateNormalizer": (
+        ".pipeline",
+        "PassthroughCandidateNormalizer",
+    ),
+    "PassthroughEvidenceAnchorResolver": (
+        ".pipeline",
+        "PassthroughEvidenceAnchorResolver",
+    ),
+    "PipelineExecutionMode": (".pipeline", "PipelineExecutionMode"),
+    "PipelineRunStatus": (".pipeline", "PipelineRunStatus"),
+    "PostCurationPipelineDependencies": (
+        ".pipeline",
+        "PostCurationPipelineDependencies",
+    ),
+    "PostCurationPipelineRequest": (".pipeline", "PostCurationPipelineRequest"),
+    "PostCurationPipelineResult": (".pipeline", "PostCurationPipelineResult"),
+    "execute_post_curation_pipeline": (
+        ".pipeline",
+        "execute_post_curation_pipeline",
+    ),
+    "run_post_curation_pipeline": (".pipeline", "run_post_curation_pipeline"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_IMPORTS:
+        module_path, attr = _LAZY_IMPORTS[name]
+        mod = importlib.import_module(module_path, __package__)
+        val = getattr(mod, attr)
+        globals()[name] = val  # cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CurationActionLogEntry",
