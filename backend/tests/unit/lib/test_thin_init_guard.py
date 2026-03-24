@@ -39,16 +39,21 @@ def _get_eager_relative_imports(init_path: Path) -> dict[str, list[str]]:
 
 
 def _has_auto_registration_block(init_path: Path) -> bool:
-    """Return True if the __init__.py has a top-level call to register_flow_tools()."""
+    """Return True if the __init__.py has a top-level call to register_flow_tools().
+
+    Uses ``ast.iter_child_nodes`` (top-level statements only) so that calls
+    inside ``__getattr__`` or other functions are not falsely detected.
+    """
     source = init_path.read_text()
     tree = ast.parse(source, filename=str(init_path))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "register_flow_tools":
-                return True
-            if isinstance(func, ast.Attribute) and func.attr == "register_flow_tools":
-                return True
+    for node in ast.iter_child_nodes(tree):
+        for inner in ast.walk(node) if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else []:
+            if isinstance(inner, ast.Call):
+                func = inner.func
+                if isinstance(func, ast.Name) and func.id == "register_flow_tools":
+                    return True
+                if isinstance(func, ast.Attribute) and func.attr == "register_flow_tools":
+                    return True
     return False
 
 
