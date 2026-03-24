@@ -1883,7 +1883,10 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     )
     adapter_key: Optional[str] = Field(
         default=None,
-        description="Adapter key associated with the envelope",
+        description=(
+            "Adapter key associated with the envelope. "
+            "Curation prep persistence requires exactly one adapter key."
+        ),
     )
     profile_key: Optional[str] = Field(
         default=None,
@@ -1921,6 +1924,15 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
         default_factory=dict,
         description="Storage or transport metadata for persistence",
     )
+
+    @model_validator(mode="after")
+    def validate_curation_prep_adapter_key(self) -> "CurationExtractionPersistenceRequest":
+        """Require prep persistence payloads to retain a single adapter owner."""
+
+        if self.agent_key == "curation_prep" and not str(self.adapter_key or "").strip():
+            raise ValueError("Curation prep persistence requires exactly one adapter key.")
+
+        return self
 
 
 class CurationExtractionPersistenceResponse(CurationWorkspaceBaseModel):

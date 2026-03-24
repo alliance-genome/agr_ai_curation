@@ -52,6 +52,7 @@ async def run_curation_prep(
     persistence_context = persistence_context or CurationPrepPersistenceContext()
     primary_extraction_result = _resolve_primary_extraction_result(agent_input.extraction_results)
     document_id = _resolve_document_id(agent_input.extraction_results, persistence_context)
+    adapter_key = _resolve_required_adapter_key(agent_input)
     agent_definition = get_curation_prep_agent_definition()
     agent = create_curation_prep_agent()
 
@@ -77,6 +78,7 @@ async def run_curation_prep(
     persist_extraction_result(
         _build_persistence_request(
             agent_input,
+            adapter_key=adapter_key,
             result=result,
             raw_output=raw_output,
             final_output=final_output,
@@ -149,6 +151,7 @@ def _extract_token_usage(result: Any) -> CurationPrepTokenUsage:
 def _build_persistence_request(
     agent_input: CurationPrepAgentInput,
     *,
+    adapter_key: str,
     result: Any,
     raw_output: CurationPrepAgentOutput,
     final_output: CurationPrepAgentOutput,
@@ -162,7 +165,7 @@ def _build_persistence_request(
         document_id=document_id,
         agent_key=CURATION_PREP_AGENT_ID,
         source_kind=persistence_context.source_kind or primary_extraction_result.source_kind,
-        adapter_key=_resolve_adapter_key(agent_input),
+        adapter_key=adapter_key,
         profile_key=_resolve_profile_key(agent_input),
         domain_key=_resolve_domain_key(agent_input),
         origin_session_id=(
@@ -232,6 +235,15 @@ def _resolve_adapter_key(agent_input: CurationPrepAgentInput) -> str | None:
             *(record.adapter_key for record in agent_input.extraction_results if record.adapter_key),
         ]
     )
+
+
+def _resolve_required_adapter_key(agent_input: CurationPrepAgentInput) -> str:
+    """Require prep input to resolve to a single adapter owner before execution."""
+
+    adapter_key = _resolve_adapter_key(agent_input)
+    if adapter_key is None:
+        raise ValueError("Curation prep requires extraction results for exactly one adapter key.")
+    return adapter_key
 
 
 def _resolve_profile_key(agent_input: CurationPrepAgentInput) -> str | None:

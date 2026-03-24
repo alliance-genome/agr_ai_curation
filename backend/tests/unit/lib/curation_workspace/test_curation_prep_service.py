@@ -6,10 +6,22 @@ import pytest
 
 from src.lib.curation_workspace import curation_prep_service as module
 from src.schemas.curation_prep import CurationPrepAgentInput, CurationPrepAgentOutput
-from src.schemas.curation_workspace import CurationExtractionSourceKind
+from src.schemas.curation_workspace import (
+    CurationExtractionPersistenceRequest,
+    CurationExtractionSourceKind,
+)
 
 
-def _make_agent_input(*, second_document_id: str | None = None) -> CurationPrepAgentInput:
+def _make_agent_input(
+    *,
+    second_document_id: str | None = None,
+    scope_adapter_keys: list[str] | None = None,
+    extraction_adapter_keys: list[str | None] | None = None,
+) -> CurationPrepAgentInput:
+    scope_adapter_keys = ["disease"] if scope_adapter_keys is None else scope_adapter_keys
+    extraction_adapter_keys = (
+        ["disease"] if extraction_adapter_keys is None else extraction_adapter_keys
+    )
     payload = {
         "conversation_history": [
             {
@@ -19,29 +31,7 @@ def _make_agent_input(*, second_document_id: str | None = None) -> CurationPrepA
                 "created_at": "2026-03-20T21:50:00Z",
             }
         ],
-        "extraction_results": [
-            {
-                "extraction_result_id": "extract-1",
-                "document_id": "document-1",
-                "adapter_key": "disease",
-                "profile_key": "primary",
-                "domain_key": "disease",
-                "agent_key": "pdf_extraction",
-                "source_kind": CurationExtractionSourceKind.CHAT,
-                "origin_session_id": "chat-session-1",
-                "trace_id": "trace-upstream",
-                "flow_run_id": None,
-                "user_id": "user-upstream",
-                "candidate_count": 1,
-                "conversation_summary": "Conversation focused on APOE disease relevance.",
-                "payload_json": {
-                    "items": [{"gene_symbol": "APOE"}],
-                    "run_summary": {"candidate_count": 1},
-                },
-                "created_at": "2026-03-20T21:55:00Z",
-                "metadata": {},
-            }
-        ],
+        "extraction_results": [],
         "evidence_records": [
             {
                 "evidence_record_id": "evidence-1",
@@ -66,7 +56,7 @@ def _make_agent_input(*, second_document_id: str | None = None) -> CurationPrepA
         ],
         "scope_confirmation": {
             "confirmed": True,
-            "adapter_keys": ["disease"],
+            "adapter_keys": scope_adapter_keys,
             "profile_keys": ["primary"],
             "domain_keys": ["disease"],
             "notes": ["User confirmed the disease adapter scope."],
@@ -91,7 +81,37 @@ def _make_agent_input(*, second_document_id: str | None = None) -> CurationPrepA
         ],
     }
 
-    if second_document_id is not None:
+    base_extraction_result = {
+        "extraction_result_id": "extract-1",
+        "document_id": "document-1",
+        "adapter_key": "disease",
+        "profile_key": "primary",
+        "domain_key": "disease",
+        "agent_key": "pdf_extraction",
+        "source_kind": CurationExtractionSourceKind.CHAT,
+        "origin_session_id": "chat-session-1",
+        "trace_id": "trace-upstream",
+        "flow_run_id": None,
+        "user_id": "user-upstream",
+        "candidate_count": 1,
+        "conversation_summary": "Conversation focused on APOE disease relevance.",
+        "payload_json": {
+            "items": [{"gene_symbol": "APOE"}],
+            "run_summary": {"candidate_count": 1},
+        },
+        "created_at": "2026-03-20T21:55:00Z",
+        "metadata": {},
+    }
+
+    for index, adapter_key in enumerate(extraction_adapter_keys, start=1):
+        extraction_result = dict(base_extraction_result)
+        extraction_result["extraction_result_id"] = f"extract-{index}"
+        extraction_result["adapter_key"] = adapter_key
+        if second_document_id is not None and index == 2:
+            extraction_result["document_id"] = second_document_id
+        payload["extraction_results"].append(extraction_result)
+
+    if second_document_id is not None and len(payload["extraction_results"]) == 1:
         second_result = dict(payload["extraction_results"][0])
         second_result["extraction_result_id"] = "extract-2"
         second_result["document_id"] = second_document_id
@@ -278,6 +298,52 @@ def test_resolve_primary_extraction_result_requires_non_empty_input():
         module._resolve_primary_extraction_result([])
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        [],
+        ["disease", "reference"],
+    ],
+)
+def test_resolve_single_value_returns_none_for_absent_or_mixed_values(values):
+    """Scope resolution should reject absent and mixed ownership equally."""
+
+    assert module._resolve_single_value(values) is None
+
+
+@pytest.mark.parametrize(
+    ("scope_adapter_keys", "extraction_adapter_keys"),
+    [
+        (["disease", "reference"], ["disease", "reference"]),
+        ([], [None]),
+    ],
+)
+def test_resolve_adapter_key_returns_none_for_absent_or_mixed_scope(
+    scope_adapter_keys,
+    extraction_adapter_keys,
+):
+    """Prep input should surface ambiguous adapter ownership before persistence."""
+
+    agent_input = _make_agent_input(
+        scope_adapter_keys=scope_adapter_keys,
+        extraction_adapter_keys=extraction_adapter_keys,
+    )
+
+    assert module._resolve_adapter_key(agent_input) is None
+
+
+def test_curation_prep_persistence_request_requires_adapter_key():
+    """The persistence schema should encode prep's single-adapter contract."""
+
+    with pytest.raises(ValueError, match="exactly one adapter key"):
+        CurationExtractionPersistenceRequest(
+            document_id="document-1",
+            agent_key="curation_prep",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            payload_json={"candidates": []},
+        )
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_rejects_multiple_document_ids(monkeypatch):
     """Persisted prep output must target a single document id."""
@@ -307,6 +373,48 @@ async def test_run_curation_prep_rejects_multiple_document_ids(monkeypatch):
 
     with pytest.raises(ValueError, match="exactly one document"):
         await module.run_curation_prep(agent_input)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope_adapter_keys", "extraction_adapter_keys"),
+    [
+        (["disease", "reference"], ["disease", "reference"]),
+        ([], [None]),
+    ],
+)
+async def test_run_curation_prep_rejects_absent_or_mixed_adapter_scope_before_runner(
+    monkeypatch,
+    scope_adapter_keys,
+    extraction_adapter_keys,
+):
+    """Prep should fail fast instead of persisting ambiguous adapter ownership."""
+
+    agent_input = _make_agent_input(
+        scope_adapter_keys=scope_adapter_keys,
+        extraction_adapter_keys=extraction_adapter_keys,
+    )
+    runner_called = False
+    persist_called = False
+
+    async def _fake_runner_run(*_args, **_kwargs):
+        nonlocal runner_called
+        runner_called = True
+        return SimpleNamespace(final_output=_make_agent_output(), context_wrapper=None, raw_responses=[])
+
+    def _fake_persist_extraction_result(*_args, **_kwargs):
+        nonlocal persist_called
+        persist_called = True
+        return None
+
+    monkeypatch.setattr(module.Runner, "run", _fake_runner_run)
+    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist_extraction_result)
+
+    with pytest.raises(ValueError, match="exactly one adapter key"):
+        await module.run_curation_prep(agent_input)
+
+    assert runner_called is False
+    assert persist_called is False
 
 
 @pytest.mark.asyncio
