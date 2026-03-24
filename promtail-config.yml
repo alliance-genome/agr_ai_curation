@@ -37,6 +37,9 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_label_log_tier']
         target_label: 'tier'
 
+      - source_labels: ['__meta_docker_container_label_log_component']
+        target_label: 'component'
+
       # Keep important Docker metadata
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project_config_files']
         target_label: 'compose_file'
