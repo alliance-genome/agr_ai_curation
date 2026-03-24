@@ -144,7 +144,7 @@ services:
       PYTHONUNBUFFERED: "1"
       AGR_RUNTIME_ROOT: /runtime
       DEV_MODE: "${DEV_MODE:-false}"
-      LOKI_URL: "http://loki:3100"
+      LOKI_URL: "${LOKI_URL:-http://loki:3100}"
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
       RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
       PDF_EXTRACTION_SERVICE_URL: "${PDF_EXTRACTION_SERVICE_URL:-}"
