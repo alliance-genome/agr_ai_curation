@@ -46,9 +46,7 @@ from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
     run_curation_prep,
 )
-from src.lib.curation_workspace.extraction_results import (
-    list_extraction_results_for_origin_session,
-)
+from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
 from src.schemas.curation_prep import CurationPrepAgentInput
@@ -524,10 +522,10 @@ async def _dispatch_curation_prep_from_chat_context(
         )
 
     active_document_id = _current_chat_document_id(user_id)
-    extraction_results = list_extraction_results_for_origin_session(
-        session_id,
+    extraction_results = list_extraction_results(
+        origin_session_id=session_id,
         user_id=user_id,
-        source_kind=CurationExtractionSourceKind.CHAT.value,
+        source_kind=CurationExtractionSourceKind.CHAT,
         document_id=active_document_id,
         exclude_agent_keys=("curation_prep",),
     )

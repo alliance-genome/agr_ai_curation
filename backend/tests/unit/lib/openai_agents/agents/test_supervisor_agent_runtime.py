@@ -636,6 +636,35 @@ def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scop
     assert notes == []
 
 
+def test_filter_extraction_results_for_scope_keeps_all_records_when_all_are_unscoped():
+    scoped_results, notes = supervisor_agent._filter_extraction_results_for_scope(
+        [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-1",
+                adapter_key=None,
+                profile_key=None,
+                domain_key=None,
+            ),
+            _PrepExtractionRecord(
+                extraction_result_id="extract-2",
+                adapter_key=None,
+                profile_key=None,
+                domain_key=None,
+            ),
+        ],
+        {
+            "adapter_keys": ["reference_adapter"],
+            "profile_keys": [],
+            "domain_keys": ["disease"],
+        },
+    )
+
+    assert [record.extraction_result_id for record in scoped_results] == ["extract-1", "extract-2"]
+    assert notes == [
+        "Persisted extraction results did not include scope keys; using current session extraction context with curator-confirmed scope.",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_dispatch_curation_prep_requires_prior_confirmation_prompt(monkeypatch):
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
@@ -656,7 +685,7 @@ async def test_dispatch_curation_prep_requires_prior_confirmation_prompt(monkeyp
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "list_extraction_results_for_origin_session",
+        "list_extraction_results",
         lambda *_args, **_kwargs: pytest.fail("extraction lookup should not run without checkpoint"),
     )
 
@@ -696,7 +725,7 @@ async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "list_extraction_results_for_origin_session",
+        "list_extraction_results",
         lambda *_args, **_kwargs: [_PrepExtractionRecord()],
     )
 
@@ -766,7 +795,7 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "list_extraction_results_for_origin_session",
+        "list_extraction_results",
         lambda *_args, **_kwargs: [
             _PrepExtractionRecord(adapter_key="reference_adapter", domain_key="disease"),
             _PrepExtractionRecord(
@@ -863,7 +892,7 @@ async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
 
     monkeypatch.setattr(
         supervisor_agent,
-        "list_extraction_results_for_origin_session",
+        "list_extraction_results",
         _fake_list_extraction_results,
     )
 
@@ -914,7 +943,7 @@ async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_docu
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "list_extraction_results_for_origin_session",
+        "list_extraction_results",
         lambda *_args, **_kwargs: [
             _PrepExtractionRecord(
                 extraction_result_id="extract-1",

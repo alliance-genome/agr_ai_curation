@@ -255,58 +255,6 @@ def list_extraction_results(
             session.close()
 
 
-def list_extraction_results_for_origin_session(
-    origin_session_id: str,
-    *,
-    user_id: Optional[str] = None,
-    source_kind: Optional[str] = None,
-    document_id: Optional[str] = None,
-    exclude_agent_keys: Sequence[str] = (),
-    db: Optional[Session] = None,
-) -> list[CurationExtractionResultRecord]:
-    """Return persisted extraction results for one chat/flow session."""
-
-    owns_session = db is None
-    session = db or SessionLocal()
-
-    try:
-        query = session.query(CurationExtractionResultRecordModel).filter(
-            CurationExtractionResultRecordModel.origin_session_id == origin_session_id,
-        )
-
-        if user_id is not None:
-            query = query.filter(CurationExtractionResultRecordModel.user_id == user_id)
-
-        if source_kind is not None:
-            query = query.filter(CurationExtractionResultRecordModel.source_kind == source_kind)
-
-        if document_id is not None:
-            try:
-                document_uuid = UUID(str(document_id).strip())
-            except (AttributeError, TypeError, ValueError):
-                logger.warning(
-                    "Ignoring invalid document_id filter for extraction results: %r",
-                    document_id,
-                )
-                return []
-            query = query.filter(
-                CurationExtractionResultRecordModel.document_id == document_uuid
-            )
-
-        excluded = [str(agent_key).strip() for agent_key in exclude_agent_keys if str(agent_key).strip()]
-        if excluded:
-            query = query.filter(~CurationExtractionResultRecordModel.agent_key.in_(excluded))
-
-        records = query.order_by(
-            CurationExtractionResultRecordModel.created_at.asc(),
-            CurationExtractionResultRecordModel.id.asc(),
-        ).all()
-        return [_record_to_schema(record) for record in records]
-    finally:
-        if owns_session:
-            session.close()
-
-
 def _coerce_tool_output_payload(raw_output: Any) -> Optional[dict[str, Any] | list[Any]]:
     """Best-effort decode of specialist tool output into JSON-compatible payload."""
 
@@ -401,7 +349,6 @@ __all__ = [
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
     "list_extraction_results",
-    "list_extraction_results_for_origin_session",
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",

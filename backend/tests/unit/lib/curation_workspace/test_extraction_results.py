@@ -9,7 +9,7 @@ import pytest
 
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
-    list_extraction_results_for_origin_session,
+    list_extraction_results,
     persist_extraction_result,
     persist_extraction_results,
 )
@@ -78,48 +78,140 @@ class _FakeSession:
 
 
 class _Field:
+    def __init__(self, name=None):
+        self.name = name
+
     def __eq__(self, _other):
-        return True
+        if self.name is None:
+            return True
+        return _FilterCondition(field_name=self.name, operator="eq", value=_other)
 
     def in_(self, _values):
         return True
 
+    def notin_(self, values):
+        if self.name is None:
+            return True
+        return _FilterCondition(field_name=self.name, operator="not_in", value=tuple(values))
+
     def asc(self):
+        if self.name is None:
+            return self
+        return _SortField(self.name)
+
+
+class _FilterCondition:
+    def __init__(self, *, field_name, operator, value):
+        self.field_name = field_name
+        self.operator = operator
+        self.value = value
+
+
+class _SortField:
+    def __init__(self, field_name):
+        self.field_name = field_name
+
+
+class _FakeSelectStatement:
+    def __init__(self):
+        self.conditions = []
+        self.order_fields = []
+
+    def order_by(self, *fields):
+        self.order_fields.extend(fields)
+        return self
+
+    def where(self, *conditions):
+        self.conditions.extend(conditions)
         return self
 
 
-class _FakeQuery:
+class _FakeScalarResult:
     def __init__(self, rows):
         self._rows = rows
-        self.filter_calls = 0
-        self.order_by_calls = 0
-        self.all_calls = 0
-
-    def filter(self, *_args, **_kwargs):
-        self.filter_calls += 1
-        return self
-
-    def order_by(self, *_args, **_kwargs):
-        self.order_by_calls += 1
-        return self
 
     def all(self):
-        self.all_calls += 1
         return list(self._rows)
 
 
-class _FakeQuerySession:
+class _FakeExecuteResult:
+    def __init__(self, rows, statement):
+        self._rows = rows
+        self._statement = statement
+
+    def scalars(self):
+        rows = list(self._rows)
+        for condition in self._statement.conditions:
+            if condition.operator == "eq":
+                rows = [
+                    row
+                    for row in rows
+                    if getattr(row, condition.field_name) == condition.value
+                ]
+            elif condition.operator == "not_in":
+                rows = [
+                    row
+                    for row in rows
+                    if getattr(row, condition.field_name) not in condition.value
+                ]
+            else:
+                raise AssertionError(f"Unsupported operator in fake select evaluator: {condition.operator}")
+
+        for sort_field in reversed(self._statement.order_fields):
+            rows.sort(key=lambda row: getattr(row, sort_field.field_name))
+
+        return _FakeScalarResult(rows)
+
+
+class _FakeSelectSession:
     def __init__(self, rows):
         self._rows = rows
         self.closed = False
-        self.last_query = None
+        self.execute_calls = 0
+        self.last_statement = None
 
-    def query(self, _model):
-        self.last_query = _FakeQuery(self._rows)
-        return self.last_query
+    def execute(self, statement):
+        self.execute_calls += 1
+        self.last_statement = statement
+        return _FakeExecuteResult(self._rows, statement)
 
     def close(self):
         self.closed = True
+
+
+def _fake_select_model():
+    return SimpleNamespace(
+        origin_session_id=_Field("origin_session_id"),
+        user_id=_Field("user_id"),
+        source_kind=_Field("source_kind"),
+        document_id=_Field("document_id"),
+        agent_key=_Field("agent_key"),
+        created_at=_Field("created_at"),
+        id=_Field("id"),
+    )
+
+
+def _record_row(**overrides):
+    payload = {
+        "id": 1,
+        "document_id": uuid4(),
+        "adapter_key": "reference_adapter",
+        "profile_key": None,
+        "domain_key": "disease",
+        "agent_key": "disease_extractor",
+        "source_kind": CurationExtractionSourceKind.CHAT,
+        "origin_session_id": "session-1",
+        "trace_id": "trace-1",
+        "flow_run_id": None,
+        "user_id": "user-1",
+        "candidate_count": 1,
+        "conversation_summary": "summary",
+        "payload_json": _sample_envelope_payload(),
+        "created_at": datetime(2026, 3, 21, 0, 0, tzinfo=timezone.utc),
+        "extraction_metadata": {},
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
 
 
 def test_build_extraction_envelope_candidate_parses_json_tool_output():
@@ -278,36 +370,100 @@ def test_persist_extraction_results_rolls_back_batch_on_commit_error():
     assert session.refresh_calls == 0
 
 
-def test_list_extraction_results_for_origin_session_returns_empty_for_invalid_document_id(
-    monkeypatch,
-    caplog,
-):
-    fake_model = SimpleNamespace(
-        origin_session_id=_Field(),
-        user_id=_Field(),
-        source_kind=_Field(),
-        document_id=_Field(),
-        agent_key=_Field(),
-        created_at=_Field(),
-        id=_Field(),
-    )
-    session = _FakeQuerySession(rows=[])
+def test_list_extraction_results_returns_empty_for_invalid_document_id(monkeypatch, caplog):
+    session = _FakeSelectSession(rows=[])
 
     monkeypatch.setattr(
         "src.lib.curation_workspace.extraction_results.CurationExtractionResultRecordModel",
-        fake_model,
+        _fake_select_model(),
+    )
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results.select",
+        lambda _model: _FakeSelectStatement(),
     )
 
     with caplog.at_level("WARNING"):
-        results = list_extraction_results_for_origin_session(
-            "session-1",
+        results = list_extraction_results(
+            origin_session_id="session-1",
             user_id="user-1",
-            source_kind=CurationExtractionSourceKind.CHAT.value,
+            source_kind=CurationExtractionSourceKind.CHAT,
             document_id="not-a-uuid",
             db=session,
         )
 
     assert results == []
-    assert session.last_query is not None
-    assert session.last_query.all_calls == 0
+    assert session.execute_calls == 0
     assert "Ignoring invalid document_id filter" in caplog.text
+
+
+def test_list_extraction_results_applies_filters_and_ordering(monkeypatch):
+    document_id = uuid4()
+    kept_first = _record_row(
+        id=1,
+        document_id=document_id,
+        created_at=datetime(2026, 3, 21, 0, 1, tzinfo=timezone.utc),
+    )
+    kept_second = _record_row(
+        id=3,
+        document_id=document_id,
+        created_at=datetime(2026, 3, 21, 0, 2, tzinfo=timezone.utc),
+        extraction_metadata={"tool_name": "ask_disease_specialist"},
+    )
+    rows = [
+        _record_row(
+            id=7,
+            document_id=document_id,
+            origin_session_id="other-session",
+            created_at=datetime(2026, 3, 21, 0, 7, tzinfo=timezone.utc),
+        ),
+        _record_row(
+            id=6,
+            document_id=document_id,
+            user_id="user-2",
+            created_at=datetime(2026, 3, 21, 0, 6, tzinfo=timezone.utc),
+        ),
+        _record_row(
+            id=5,
+            document_id=document_id,
+            source_kind=CurationExtractionSourceKind.FLOW,
+            created_at=datetime(2026, 3, 21, 0, 5, tzinfo=timezone.utc),
+        ),
+        _record_row(
+            id=4,
+            document_id=document_id,
+            agent_key="curation_prep",
+            created_at=datetime(2026, 3, 21, 0, 4, tzinfo=timezone.utc),
+        ),
+        _record_row(
+            id=2,
+            document_id=uuid4(),
+            created_at=datetime(2026, 3, 21, 0, 3, tzinfo=timezone.utc),
+        ),
+        kept_second,
+        kept_first,
+    ]
+    session = _FakeSelectSession(rows=rows)
+
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results.CurationExtractionResultRecordModel",
+        _fake_select_model(),
+    )
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results.select",
+        lambda _model: _FakeSelectStatement(),
+    )
+
+    results = list_extraction_results(
+        origin_session_id="session-1",
+        user_id="user-1",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        document_id=str(document_id),
+        exclude_agent_keys=["curation_prep", "   "],
+        db=session,
+    )
+
+    assert [record.extraction_result_id for record in results] == ["1", "3"]
+    assert [record.agent_key for record in results] == ["disease_extractor", "disease_extractor"]
+    assert results[1].metadata == {"tool_name": "ask_disease_specialist"}
+    assert session.execute_calls == 1
+    assert [field.field_name for field in session.last_statement.order_fields] == ["created_at", "id"]
