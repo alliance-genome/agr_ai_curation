@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
+from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -1503,6 +1504,77 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert session_detail.latest_submission.payload.payload_text is not None
     assert session_detail.latest_submission.payload.content_type == "application/json"
     assert session_detail.latest_submission.payload.filename is not None
+
+
+def test_execute_submission_preserves_payload_warnings_across_reload(db_session, monkeypatch):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.commit()
+
+    payload_warning = "Payload warning"
+    transport_warning = "Transport warning"
+
+    monkeypatch.setattr(
+        module,
+        "_build_submission_execute_payload",
+        lambda **_kwargs: SubmissionPayloadContract(
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            candidate_ids=[seeded["first_candidate_id"]],
+            payload_json={"candidate_count": 1},
+            payload_text='{"candidate_count": 1}',
+            content_type="application/json",
+            filename="submission.json",
+            warnings=[payload_warning],
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: NoOpSubmissionAdapter(
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            warnings=[transport_warning],
+        ),
+    )
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+    )
+
+    assert response.submission.payload is not None
+    assert response.submission.payload.warnings == [payload_warning]
+    assert response.submission.warnings == [payload_warning, transport_warning]
+
+    persisted_submission = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted_submission.payload is not None
+    assert persisted_submission.payload["warnings"] == [payload_warning]
+    assert persisted_submission.warnings == [payload_warning, transport_warning]
+
+    reloaded_submission = module._submission_record(persisted_submission)
+    assert reloaded_submission.payload is not None
+    assert reloaded_submission.payload.warnings == [payload_warning]
+    assert reloaded_submission.warnings == [payload_warning, transport_warning]
+
+    session_detail = module.get_session_detail(db_session, seeded["session_id"])
+    assert session_detail.latest_submission is not None
+    assert session_detail.latest_submission.payload is not None
+    assert session_detail.latest_submission.payload.warnings == [payload_warning]
+    assert session_detail.latest_submission.warnings == [payload_warning, transport_warning]
 
 
 def test_execute_submission_persists_validation_errors_without_marking_session_submitted(

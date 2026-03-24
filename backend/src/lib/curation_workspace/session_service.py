@@ -1067,6 +1067,11 @@ def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | 
         ]
         content_type = record.payload.get("content_type")
         filename = record.payload.get("filename")
+        payload_warnings = [
+            warning
+            for warning in record.payload.get("warnings", [])
+            if isinstance(warning, str) and warning
+        ]
     else:
         payload_json = record.payload if not isinstance(record.payload, str) else None
         payload_text = record.payload if isinstance(record.payload, str) else None
@@ -1077,6 +1082,7 @@ def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | 
         ]
         content_type = None
         filename = None
+        payload_warnings = list(record.warnings or [])
 
     return SubmissionPayloadContract(
         mode=record.mode,
@@ -1087,7 +1093,7 @@ def _submission_payload(record: SubmissionModel) -> SubmissionPayloadContract | 
         payload_text=payload_text,
         content_type=content_type,
         filename=filename,
-        warnings=list(record.warnings or []),
+        warnings=payload_warnings,
     )
 
 
@@ -1103,6 +1109,7 @@ def _serialize_submission_payload_contract(payload: SubmissionPayloadContract) -
         "payload_text": payload.payload_text,
         "content_type": payload.content_type,
         "filename": payload.filename,
+        "warnings": list(payload.warnings),
     }
 
 
