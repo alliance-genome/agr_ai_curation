@@ -50,6 +50,7 @@ from src.schemas.curation_workspace import (
     CurationSortDirection,
     CurationSubmissionExecuteRequest,
     CurationSubmissionPreviewRequest,
+    CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
     SubmissionMode,
     SubmissionPayloadContract,
@@ -1694,3 +1695,212 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     ).one()
     assert persisted_submission.status == CurationSubmissionStatus.FAILED
     assert "timeout talking to downstream submitter" in (persisted_submission.response_message or "")
+
+
+def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.flush()
+
+    original_submission = SubmissionModel(
+        id=uuid4(),
+        session_id=session_row.id,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        status=CurationSubmissionStatus.FAILED,
+        readiness=[
+            {
+                "candidate_id": seeded["first_candidate_id"],
+                "ready": True,
+                "blocking_reasons": [],
+                "warnings": [],
+            }
+        ],
+        payload=module._serialize_submission_payload_contract(
+            SubmissionPayloadContract(
+                mode=SubmissionMode.DIRECT_SUBMIT,
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+                adapter_key=REFERENCE_ADAPTER_KEY,
+                candidate_ids=[seeded["first_candidate_id"]],
+                payload_json={"candidate_count": 1},
+                payload_text='{"candidate_count": 1}',
+                content_type="application/json",
+                filename="submission.json",
+            )
+        ),
+        response_message="Initial submit failed.",
+        requested_at=_now(),
+        completed_at=_now(),
+    )
+    db_session.add(original_submission)
+    db_session.commit()
+
+    response = module.retry_submission(
+        db_session,
+        seeded["session_id"],
+        str(original_submission.id),
+        CurationSubmissionRetryRequest(
+            submission_id=str(original_submission.id),
+            reason="Retry after transient downstream failure.",
+        ),
+        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+    )
+
+    assert response.submission.submission_id != str(original_submission.id)
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    assert response.submission.adapter_key == REFERENCE_ADAPTER_KEY
+    assert response.submission.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+    assert response.submission.external_reference == f"noop:{DEFAULT_JSON_BUNDLE_TARGET_KEY}:1"
+    assert response.submission.payload is not None
+    assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+    assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_RETRIED
+    assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
+    assert response.action_log_entry.metadata["original_submission_id"] == str(original_submission.id)
+    assert response.action_log_entry.metadata["retry_reason"] == (
+        "Retry after transient downstream failure."
+    )
+
+    persisted_submissions = db_session.scalars(
+        select(SubmissionModel)
+        .where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+        .order_by(SubmissionModel.requested_at.asc(), SubmissionModel.id.asc())
+    ).all()
+    assert len(persisted_submissions) == 2
+    assert persisted_submissions[0].id == original_submission.id
+    assert persisted_submissions[0].status == CurationSubmissionStatus.FAILED
+    assert persisted_submissions[1].status == CurationSubmissionStatus.ACCEPTED
+    assert persisted_submissions[1].adapter_key == REFERENCE_ADAPTER_KEY
+
+    action_log_rows = db_session.scalars(
+        select(SessionActionLogModel)
+        .where(SessionActionLogModel.session_id == UUID(seeded["session_id"]))
+        .where(SessionActionLogModel.action_type == CurationActionType.SUBMISSION_RETRIED)
+    ).all()
+    assert len(action_log_rows) == 1
+    assert action_log_rows[0].action_metadata["original_submission_id"] == str(original_submission.id)
+
+
+def test_retry_submission_rejects_non_failed_original_submission(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.flush()
+
+    original_submission = SubmissionModel(
+        id=uuid4(),
+        session_id=session_row.id,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        status=CurationSubmissionStatus.ACCEPTED,
+        readiness=[
+            {
+                "candidate_id": seeded["first_candidate_id"],
+                "ready": True,
+                "blocking_reasons": [],
+                "warnings": [],
+            }
+        ],
+        payload=module._serialize_submission_payload_contract(
+            SubmissionPayloadContract(
+                mode=SubmissionMode.DIRECT_SUBMIT,
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+                adapter_key=REFERENCE_ADAPTER_KEY,
+                candidate_ids=[seeded["first_candidate_id"]],
+                payload_json={"candidate_count": 1},
+                payload_text='{"candidate_count": 1}',
+                content_type="application/json",
+                filename="submission.json",
+            )
+        ),
+        response_message="Initial submit succeeded.",
+        requested_at=_now(),
+        completed_at=_now(),
+    )
+    db_session.add(original_submission)
+    db_session.commit()
+
+    with pytest.raises(module.HTTPException) as exc:
+        module.retry_submission(
+            db_session,
+            seeded["session_id"],
+            str(original_submission.id),
+            CurationSubmissionRetryRequest(
+                submission_id=str(original_submission.id),
+                reason="Retry should be rejected for accepted submissions.",
+            ),
+            actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Only failed submissions may be retried"
+
+    persisted_submissions = db_session.scalars(
+        select(SubmissionModel)
+        .where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+        .order_by(SubmissionModel.requested_at.asc(), SubmissionModel.id.asc())
+    ).all()
+    assert len(persisted_submissions) == 1
+    assert persisted_submissions[0].id == original_submission.id
+    assert persisted_submissions[0].status == CurationSubmissionStatus.ACCEPTED
+
+    action_log_rows = db_session.scalars(
+        select(SessionActionLogModel)
+        .where(SessionActionLogModel.session_id == UUID(seeded["session_id"]))
+        .where(SessionActionLogModel.action_type == CurationActionType.SUBMISSION_RETRIED)
+    ).all()
+    assert action_log_rows == []
+
+
+def test_get_submission_returns_single_submission_history_record(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    submission_row = SubmissionModel(
+        id=uuid4(),
+        session_id=UUID(seeded["session_id"]),
+        adapter_key="reference_adapter",
+        mode=SubmissionMode.PREVIEW,
+        target_key="reference_adapter.default",
+        status=CurationSubmissionStatus.PREVIEW_READY,
+        readiness=[
+            {
+                "candidate_id": seeded["first_candidate_id"],
+                "ready": True,
+                "blocking_reasons": [],
+                "warnings": [],
+            }
+        ],
+        payload={"ok": True},
+        response_message="Preview available.",
+        requested_at=_now(),
+        completed_at=_now(),
+    )
+    db_session.add(submission_row)
+    db_session.commit()
+
+    response = module.get_submission(
+        db_session,
+        seeded["session_id"],
+        str(submission_row.id),
+    )
+
+    assert response.submission.submission_id == str(submission_row.id)
+    assert response.submission.session_id == seeded["session_id"]
+    assert response.submission.status == CurationSubmissionStatus.PREVIEW_READY
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json == {"ok": True}
+    assert response.submission.response_message == "Preview available."

@@ -19,6 +19,59 @@ def _hash(char: str) -> str:
     return char * 64
 
 
+def _seed_submission_record(
+    test_db,
+    *,
+    session_id: str,
+    adapter_key: str,
+    candidate_id: str,
+    status,
+    mode="direct_submit",
+    target_key: str = "review_export_bundle",
+) -> str:
+    from src.lib.curation_workspace import session_service
+    from src.lib.curation_workspace.models import CurationSubmissionRecord
+    from src.schemas.curation_workspace import SubmissionMode, SubmissionPayloadContract
+
+    normalized_mode = SubmissionMode(mode)
+
+    requested_at = datetime(2026, 3, 5, 15, 10, tzinfo=timezone.utc)
+    record = CurationSubmissionRecord(
+        id=uuid4(),
+        session_id=UUID(session_id),
+        adapter_key=adapter_key,
+        mode=normalized_mode,
+        target_key=target_key,
+        status=status,
+        readiness=[
+            {
+                "candidate_id": candidate_id,
+                "ready": True,
+                "blocking_reasons": [],
+                "warnings": [],
+            }
+        ],
+        payload=session_service._serialize_submission_payload_contract(
+            SubmissionPayloadContract(
+                mode=normalized_mode,
+                target_key=target_key,
+                adapter_key=adapter_key,
+                candidate_ids=[candidate_id],
+                payload_json={"candidate_count": 1},
+                payload_text='{"candidate_count": 1}',
+                content_type="application/json",
+                filename="submission.json",
+            )
+        ),
+        response_message="Initial submission failed.",
+        requested_at=requested_at,
+        completed_at=requested_at,
+    )
+    test_db.add(record)
+    test_db.commit()
+    return str(record.id)
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with auth and database overrides."""
@@ -1150,3 +1203,132 @@ def test_post_session_validation_returns_session_and_candidate_snapshots(
     assert len(payload["candidate_validations"]) == 1
     assert payload["candidate_validations"][0]["candidate_id"] == seeded_review_sessions["candidate_alpha_id"]
     assert payload["candidate_validations"][0]["field_results"]["disease_term"]["status"] == "skipped"
+
+
+def test_post_submission_retry_creates_new_submission_record(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+    monkeypatch,
+):
+    from src.lib.curation_workspace import session_service
+    from src.lib.curation_workspace.models import CurationSubmissionRecord
+    from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
+    from src.schemas.curation_workspace import (
+        CurationActionType,
+        CurationSubmissionStatus,
+        SubmissionMode,
+    )
+
+    original_submission_id = _seed_submission_record(
+        test_db,
+        session_id=seeded_review_sessions["session_beta_id"],
+        adapter_key="gene",
+        candidate_id=seeded_review_sessions["candidate_beta_id"],
+        status=CurationSubmissionStatus.FAILED,
+    )
+    monkeypatch.setattr(
+        session_service,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: NoOpSubmissionAdapter(target_key="review_export_bundle"),
+    )
+
+    response = client.post(
+        (
+            "/api/curation-workspace/sessions/"
+            f"{seeded_review_sessions['session_beta_id']}/submissions/{original_submission_id}/retry"
+        ),
+        json={
+            "submission_id": original_submission_id,
+            "reason": "Retry after transient submission transport failure.",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["submission"]["submission_id"] != original_submission_id
+    assert payload["submission"]["status"] == "accepted"
+    assert payload["submission"]["target_key"] == "review_export_bundle"
+    assert payload["submission"]["payload"]["candidate_ids"] == [
+        seeded_review_sessions["candidate_beta_id"]
+    ]
+    assert payload["action_log_entry"]["action_type"] == "submission_retried"
+    assert payload["action_log_entry"]["metadata"]["original_submission_id"] == original_submission_id
+
+    original_record = test_db.get(CurationSubmissionRecord, UUID(original_submission_id))
+    assert original_record is not None
+    assert original_record.status == CurationSubmissionStatus.FAILED
+    assert original_record.response_message == "Initial submission failed."
+
+    retried_record = test_db.get(
+        CurationSubmissionRecord,
+        UUID(payload["submission"]["submission_id"]),
+    )
+    assert retried_record is not None
+    assert retried_record.status == CurationSubmissionStatus.ACCEPTED
+    assert retried_record.adapter_key == "gene"
+
+    direct_submit_rows = (
+        test_db.query(CurationSubmissionRecord)
+        .filter(CurationSubmissionRecord.session_id == UUID(seeded_review_sessions["session_beta_id"]))
+        .filter(CurationSubmissionRecord.mode == SubmissionMode.DIRECT_SUBMIT)
+        .order_by(CurationSubmissionRecord.requested_at.asc())
+        .all()
+    )
+    assert len(direct_submit_rows) == 2
+    assert str(direct_submit_rows[0].id) == original_submission_id
+    assert direct_submit_rows[0].status == CurationSubmissionStatus.FAILED
+    assert direct_submit_rows[1].status == CurationSubmissionStatus.ACCEPTED
+
+    action_log_rows = (
+        test_db.query(session_service.SessionActionLogModel)
+        .filter(
+            session_service.SessionActionLogModel.session_id
+            == UUID(seeded_review_sessions["session_beta_id"])
+        )
+        .filter(
+            session_service.SessionActionLogModel.action_type
+            == CurationActionType.SUBMISSION_RETRIED
+        )
+        .all()
+    )
+    assert len(action_log_rows) == 1
+
+
+def test_get_submission_history_returns_single_submission_record(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import CurationSubmissionRecord
+    from src.schemas.curation_workspace import CurationSubmissionStatus
+
+    submission_id = _seed_submission_record(
+        test_db,
+        session_id=seeded_review_sessions["session_beta_id"],
+        adapter_key="gene",
+        candidate_id=seeded_review_sessions["candidate_beta_id"],
+        status=CurationSubmissionStatus.FAILED,
+    )
+
+    response = client.get(
+        (
+            "/api/curation-workspace/sessions/"
+            f"{seeded_review_sessions['session_beta_id']}/submissions/{submission_id}"
+        )
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["submission"]["submission_id"] == submission_id
+    assert payload["submission"]["session_id"] == seeded_review_sessions["session_beta_id"]
+    assert payload["submission"]["status"] == "failed"
+    assert payload["submission"]["payload"]["candidate_ids"] == [
+        seeded_review_sessions["candidate_beta_id"]
+    ]
+    assert payload["submission"]["response_message"] == "Initial submission failed."
+
+    persisted_submission = test_db.get(CurationSubmissionRecord, UUID(submission_id))
+    assert persisted_submission is not None

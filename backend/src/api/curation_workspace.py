@@ -34,6 +34,7 @@ from src.lib.curation_workspace.session_service import (
     create_manual_candidate,
     decide_candidate,
     execute_submission,
+    get_submission,
     get_next_session,
     get_session_detail,
     get_session_workspace,
@@ -41,6 +42,7 @@ from src.lib.curation_workspace.session_service import (
     list_flow_run_sessions,
     list_flow_runs,
     list_sessions,
+    retry_submission,
     submission_preview,
     update_candidate_draft,
     update_session,
@@ -95,8 +97,11 @@ from src.schemas.curation_workspace import (
     CurationSessionStatus,
     CurationSubmissionExecuteRequest,
     CurationSubmissionExecuteResponse,
+    CurationSubmissionHistoryResponse,
     CurationSubmissionPreviewRequest,
     CurationSubmissionPreviewResponse,
+    CurationSubmissionRetryRequest,
+    CurationSubmissionRetryResponse,
     CurationSessionValidationRequest,
     CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
@@ -621,6 +626,42 @@ async def post_submission_execute(
         request,
         actor_claims=user,
     )
+
+
+@router.post(
+    "/sessions/{session_id}/submissions/{submission_id}/retry",
+    response_model=CurationSubmissionRetryResponse,
+)
+async def post_submission_retry(
+    session_id: UUID,
+    submission_id: UUID,
+    request: CurationSubmissionRetryRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSubmissionRetryResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return retry_submission(
+        db,
+        session_id,
+        submission_id,
+        request,
+        actor_claims=user,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/submissions/{submission_id}",
+    response_model=CurationSubmissionHistoryResponse,
+)
+async def get_submission_history(
+    session_id: UUID,
+    submission_id: UUID,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationSubmissionHistoryResponse:
+    set_global_user_from_cognito(db, user)
+    return get_submission(db, session_id, submission_id)
 
 
 __all__ = ["router"]
