@@ -836,6 +836,67 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     )
 
 
+class CurationExportPayloadContext(CurationWorkspaceBaseModel):
+    """Deterministic adapter input for export bundles built from approved candidates."""
+
+    session_id: str = Field(description="Owning session identifier")
+    profile_key: Optional[str] = Field(
+        default=None,
+        description="Optional adapter-owned profile or subdomain key",
+    )
+    document: Optional[CurationDocumentRef] = Field(
+        default=None,
+        description="Document metadata included with the export bundle",
+    )
+    session_validation: Optional[CurationValidationSnapshot] = Field(
+        default=None,
+        description="Session-level validation snapshot captured for the export",
+    )
+    candidate_ids: list[str] = Field(
+        default_factory=list,
+        description="Candidate identifiers included in this export bundle",
+    )
+    candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description="Total curator-approved candidates included in the export bundle",
+    )
+    candidates: list[CurationCandidate] = Field(
+        default_factory=list,
+        description="Ordered approved candidates with draft and evidence payloads",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings emitted while preparing the export context",
+    )
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> "CurationExportPayloadContext":
+        """Keep candidate identifiers and approved-candidate invariants aligned."""
+
+        if self.candidate_count != len(self.candidates):
+            raise ValueError("Export candidate count must match the number of candidates")
+        if len(self.candidate_ids) != self.candidate_count:
+            raise ValueError("Export candidate_ids must align with candidate_count")
+
+        expected_candidate_ids = [candidate.candidate_id for candidate in self.candidates]
+        if self.candidate_ids != expected_candidate_ids:
+            raise ValueError(
+                "Export candidate_ids must preserve the ordered candidate identifiers"
+            )
+
+        for candidate in self.candidates:
+            if candidate.status != CurationCandidateStatus.ACCEPTED:
+                raise ValueError("Export payload candidates must be curator-approved")
+            for evidence_record in candidate.evidence_anchors:
+                if evidence_record.candidate_id != candidate.candidate_id:
+                    raise ValueError(
+                        "Export evidence anchors must reference their owning candidate"
+                    )
+
+        return self
+
+
 class CurationActionLogEntry(CurationWorkspaceBaseModel):
     """Immutable action log record for session and candidate mutations."""
 
