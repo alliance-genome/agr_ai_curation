@@ -628,6 +628,72 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert persistence_context.user_id == "user-123"
         assert persistence_context.trace_id == "trace-flow-1"
 
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_prep_step_rejects_multi_adapter_flow_scope(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Mixed upstream adapter ownership should fail in prep before persistence."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            adapter_key = "gene_adapter" if tool_name == "ask_gene_specialist" else "disease_adapter"
+            destination = "gene" if tool_name == "ask_gene_specialist" else "disease"
+
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(
+                    {
+                        "adapter_key": adapter_key,
+                        "actor": specialist_name,
+                        "destination": destination,
+                        "confidence": 0.92,
+                        "reasoning": "matched",
+                        "items": [{"label": query}],
+                        "raw_mentions": [{"mention": query}],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {"candidate_count": 1},
+                    }
+                )
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr("src.lib.flows.executor.get_current_trace_id", lambda: "trace-flow-1")
+
+        flow = _make_flow([
+            _task_input_node("Prepare mixed extraction findings for review."),
+            _agent_node("n1", "gene", step_goal="Extract gene findings"),
+            _agent_node("n2", "disease", step_goal="Extract disease findings"),
+            _agent_node("n3", "curation_prep", step_goal="Prepare candidates for the workspace"),
+        ])
+
+        tools, created_names = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            session_id="session-123",
+            flow_run_id="flow-run-123",
+            user_query="Keep the gene and disease findings together.",
+        )
+
+        assert created_names == {
+            "ask_gene_specialist",
+            "ask_disease_specialist",
+            "ask_curation_prep_specialist",
+        }
+
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract gene"})))
+        asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "extract disease"})))
+
+        prep_output = asyncio.run(
+            tools[2].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+        )
+
+        assert "exactly one adapter key" in prep_output
+
 
 # ===========================================================================
 # build_supervisor_instructions – custom instruction annotation & tool refs
