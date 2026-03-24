@@ -28,10 +28,12 @@ from agents import Agent, function_tool
 
 from src.lib.context import get_current_trace_id
 from src.lib.curation_workspace import (
-    CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
     persist_extraction_results,
+)
+from src.lib.curation_workspace.curation_prep_service import (
+    CurationPrepPersistenceContext,
     run_curation_prep,
 )
 from src.models.sql.curation_flow import CurationFlow

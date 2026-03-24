@@ -1,9 +1,11 @@
-"""Curation workspace persistence models."""
+"""Curation workspace persistence models.
 
-from .curation_prep_service import (
-    CurationPrepPersistenceContext,
-    run_curation_prep,
-)
+Heavy runtime dependencies (``agents.Runner``, ``agents.RunConfig``) live in
+``curation_prep_service`` and are **not** imported at package level.  Use an
+explicit submodule import when you need ``run_curation_prep`` or
+``CurationPrepPersistenceContext``.
+"""
+
 from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
@@ -73,3 +75,26 @@ __all__ = [
     "run_curation_prep",
     "run_post_curation_pipeline",
 ]
+
+# ---------------------------------------------------------------------------
+# Lazy accessor – curation_prep_service depends on agents.Runner / RunConfig
+# ---------------------------------------------------------------------------
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "CurationPrepPersistenceContext": (
+        ".curation_prep_service",
+        "CurationPrepPersistenceContext",
+    ),
+    "run_curation_prep": (".curation_prep_service", "run_curation_prep"),
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        module_path, attr = _LAZY_IMPORTS[name]
+        import importlib
+
+        mod = importlib.import_module(module_path, __package__)
+        value = getattr(mod, attr)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
