@@ -180,10 +180,43 @@ class TestReadinessEndpoint:
         assert sorted(data.keys()) == ["ready", "timestamp"]
 
 
-class TestMainHealthEndpointCurationDb:
-    """Tests for /health endpoint curation_db reporting."""
+class TestMainHealthEndpoint:
+    """Tests for the main app health endpoints."""
 
-    def test_health_reports_curation_db_not_configured(self, client, monkeypatch):
+    def test_liveness_health_is_lightweight(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["service"] == "AI Curation Platform API"
+        assert data["checks"] == {"app": "running"}
+        assert "services" not in data
+        assert "timestamp" in data
+
+    def test_liveness_alias_matches_health(self, client):
+        response = client.get("/health/live")
+        assert response.status_code == 200
+        assert response.json()["checks"] == {"app": "running"}
+
+    def test_liveness_health_does_not_depend_on_deep_services(self, client, monkeypatch):
+        def _unexpected_call(*args, **kwargs):
+            raise AssertionError("deep dependency should not be touched by /health")
+
+        monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", _unexpected_call)
+        monkeypatch.setattr("src.lib.database.curation_resolver.get_curation_resolver", _unexpected_call)
+
+        async def _unexpected_redis(*args, **kwargs):
+            raise AssertionError("redis should not be touched by /health")
+
+        monkeypatch.setattr("src.lib.redis_client.get_redis", _unexpected_redis)
+
+        for path in ("/health", "/health/live"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.json()["checks"] == {"app": "running"}
+
+    def test_deep_health_reports_curation_db_not_configured(self, client, monkeypatch):
         monkeypatch.setenv("CURATION_DB_CREDENTIALS_SOURCE", "env")
         monkeypatch.delenv("CURATION_DB_URL", raising=False)
         monkeypatch.delenv("PERSISTENT_STORE_DB_HOST", raising=False)
@@ -198,7 +231,7 @@ class TestMainHealthEndpointCurationDb:
         reset_connections_cache()
         reset_curation_resolver()
 
-        response = client.get("/health")
+        response = client.get("/health/deep")
         assert response.status_code == 200
         data = response.json()
         assert data["services"]["curation_db"] == "not_configured"
@@ -206,7 +239,7 @@ class TestMainHealthEndpointCurationDb:
         reset_connections_cache()
         reset_curation_resolver()
 
-    def test_health_reports_degraded_when_curation_db_disconnected(self, client, monkeypatch):
+    def test_deep_health_reports_degraded_when_curation_db_disconnected(self, client, monkeypatch):
         monkeypatch.setenv("CURATION_DB_CREDENTIALS_SOURCE", "env")
         monkeypatch.setenv("CURATION_DB_URL", "postgresql://127.0.0.1:59999/nonexistent")
 
@@ -216,7 +249,7 @@ class TestMainHealthEndpointCurationDb:
         reset_connections_cache()
         reset_curation_resolver()
 
-        response = client.get("/health")
+        response = client.get("/health/deep")
         assert response.status_code == 200
 
         data = response.json()

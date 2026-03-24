@@ -20,6 +20,7 @@ python-jose[cryptography]>=3.3.0  # JWT validation and JWKS handling
 openai
 tiktoken  # Token preflight checks for embedding limits
 openai-agents[litellm]  # OpenAI Agents SDK for multi-agent orchestration (with LiteLLM for Gemini support)
+litellm<1.82.7  # Pin below compromised 1.82.8 (supply chain attack — malicious .pth file, yanked from PyPI)
 anthropic>=0.40.0  # Anthropic SDK for Opus chat in Prompt Explorer
 aiohttp  # Async HTTP client for PDFX service
 langfuse>=3.0.0  # Observability for LLM applications (v3 has start_as_current_span for OTEL context)

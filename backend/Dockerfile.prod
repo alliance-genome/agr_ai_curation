@@ -13,11 +13,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.lock.txt requirements.txt ./
 
 RUN python -m venv "${VIRTUAL_ENV}" \
     && pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.lock.txt
+
+# Post-install security check: only allow known .pth files (supply chain defense)
+RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth" && \
+    UNKNOWN="" && \
+    for pth in $(find "${VIRTUAL_ENV}/lib/" -maxdepth 3 -name "*.pth" -exec basename {} \;); do \
+      if ! echo "$KNOWN_PTH" | grep -qw "$pth"; then UNKNOWN="$UNKNOWN $pth"; fi; \
+    done && \
+    if [ -n "$UNKNOWN" ]; then \
+      echo "SECURITY: Unknown .pth file(s) detected:$UNKNOWN" && \
+      echo "If legitimate, add to KNOWN_PTH whitelist in Dockerfile.prod." && exit 1; \
+    else echo "SECURITY: .pth whitelist check passed"; fi
 
 
 FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime

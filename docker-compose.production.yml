@@ -113,6 +113,10 @@ services:
       start_period: 10s
 
   backend:
+    pids_limit: 200
+    # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
+    cap_drop:
+      - ALL
     image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-smoke-20260310-final}"
     restart: unless-stopped
     depends_on:
@@ -243,14 +247,17 @@ services:
         target: /runtime/state/file_outputs
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
+      - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
 
   trace_review_backend:
+    pids_limit: 100
     image: "${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:-latest}"
     restart: unless-stopped
     labels:
@@ -281,7 +288,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8001/health', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -325,6 +332,7 @@ services:
       start_period: 30s
 
   reranker-transformers:
+    pids_limit: 100
     image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
     restart: always
     labels:
@@ -334,7 +342,7 @@ services:
     environment:
       ENABLE_CUDA: "0"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')\""]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8080/.well-known/ready', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -353,9 +361,10 @@ services:
       - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:?set in standalone env}", "ping"]
-      interval: 3s
-      timeout: 10s
-      retries: 10
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
@@ -374,10 +383,10 @@ services:
       - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 20s
 
   minio:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
@@ -394,19 +403,20 @@ services:
       - langfuse_minio_data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
-      interval: 1s
+      interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 1s
+      start_period: 10s
 
   postgres:
     image: docker.io/postgres:16
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_PASSWORD:

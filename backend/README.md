@@ -111,7 +111,9 @@ config/
 
 ### Health & Monitoring
 - `GET /` - API information
-- `GET /health` - Comprehensive health check
+- `GET /health` - Lightweight liveness probe
+- `GET /health/live` - Explicit liveness alias for probes
+- `GET /health/deep` - Comprehensive dependency health check
 - `GET /docs` - Swagger UI documentation
 - `GET /openapi.json` - OpenAPI specification
 

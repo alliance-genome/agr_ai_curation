@@ -110,6 +110,12 @@ services:
 
   # Unified Backend API service (OpenAI Agents SDK Chat + Weaviate Control Panel)
   backend:
+    pids_limit: 100
+    # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
+    cap_drop:
+      - ALL
+    sysctls:
+      - net.ipv4.conf.all.route_localnet=0
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -243,13 +249,16 @@ services:
       - ./pdf_storage:/app/pdf_storage
       - ./file_outputs:/app/file_outputs
       - ./backend/config:/app/backend/config
-      - ./docker-compose.yml:/app/docker-compose.yml:ro  # For docker compose logs command
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for logs access (read-only)
       - ./config:/app/config:ro  # Config files including maintenance_message.txt
+      # REMOVED: docker.sock and docker-compose.yml mounts (security hardening 2026-03-24)
+      # These enabled the /api/logs endpoint but also gave container-escape capability.
+      # The logs feature now requires 'docker compose logs' from the host.
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux for AWS DB tunnels
+      - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
+      - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -279,6 +288,7 @@ services:
 
   # TraceReview Backend API for trace analysis (Agent Studio feature)
   trace_review_backend:
+    pids_limit: 100
     image: ${TRACE_REVIEW_BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend}:${TRACE_REVIEW_BACKEND_IMAGE_TAG:-latest}
     # Environment loaded from shell (via Makefile) or optional local .env
     env_file:
@@ -322,7 +332,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8001/health', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -367,6 +377,7 @@ services:
 
   # Reranker service for Weaviate
   reranker-transformers:
+    pids_limit: 100
     image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
     restart: always
     labels:
@@ -376,7 +387,7 @@ services:
     environment:
       ENABLE_CUDA: 0  # Set to 1 if you have GPU support
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/.well-known/ready')\""]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8080/.well-known/ready', timeout=2); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -396,9 +407,10 @@ services:
       - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}", "ping"]
-      interval: 3s
-      timeout: 10s
-      retries: 10
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   # ClickHouse for Langfuse analytics
   clickhouse:
@@ -418,10 +430,10 @@ services:
       - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"  # Native protocol
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 20s
 
   # MinIO for Langfuse object storage
   minio:
@@ -440,10 +452,10 @@ services:
       - langfuse_minio_data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
-      interval: 1s
+      interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 1s
+      start_period: 10s
 
   # PostgreSQL for PDF viewer metadata and feedback storage
   postgres:
@@ -451,9 +463,10 @@ services:
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}

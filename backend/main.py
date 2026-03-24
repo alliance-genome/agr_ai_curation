@@ -1,13 +1,15 @@
 """Main FastAPI application for AI Curation Platform Backend."""
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import logging
 import os
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # Disable telemetry before any imports that might use it
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
@@ -567,12 +569,35 @@ async def root():
         "service": "AI Curation Platform API",
         "version": get_app_version(),
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "deep_health": "/health/deep",
     }
 
+
+def _build_liveness_health_status() -> dict[str, object]:
+    """Return a cheap liveness payload safe for high-frequency probing."""
+    return {
+        "status": "healthy",
+        "service": "AI Curation Platform API",
+        "version": get_app_version(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": {
+            "app": "running",
+        },
+        "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+    }
+
+
 @app.get("/health")
+@app.get("/health/live")
 async def health_check():
-    """Comprehensive health check endpoint."""
+    """Cheap liveness endpoint for Docker and load-balancer probes."""
+    return _build_liveness_health_status()
+
+
+@app.get("/health/deep")
+async def deep_health_check():
+    """Comprehensive dependency health check endpoint."""
     health_status = {
         "status": "healthy",
         "services": {
