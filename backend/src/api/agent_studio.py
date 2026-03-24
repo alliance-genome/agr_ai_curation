@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
 from src.lib.agent_studio import (
-    get_prompt_catalog,
     PromptCatalog,
     GroupRuleInfo,
     PromptInfo,
@@ -39,11 +38,12 @@ from src.lib.agent_studio import (
     SuggestionType,
     submit_suggestion_sns,
     SUBMIT_SUGGESTION_TOOL,
-    # Flow tools user context management
+)
+from src.lib.agent_studio.catalog_service import get_prompt_catalog
+from src.lib.agent_studio.flow_tools import (
     register_flow_tools,
     set_workflow_user_context,
     clear_workflow_user_context,
-    # Flow context for get_current_flow tool
     set_current_flow_context,
     clear_current_flow_context,
 )
