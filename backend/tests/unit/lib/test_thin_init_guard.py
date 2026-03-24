@@ -13,8 +13,6 @@ conflicts and missing-dependency issues in CI isolation.
 import ast
 from pathlib import Path
 
-import pytest
-
 _BACKEND_SRC = Path(__file__).resolve().parents[3] / "src"
 
 # Submodules known to pull in the OpenAI Agents SDK (agents.Agent / Runner / RunConfig)

@@ -196,7 +196,10 @@ def get_diagnostic_tools_registry() -> DiagnosticToolRegistry:
         _registry_instance = DiagnosticToolRegistry()
         # Auto-register all tools on first access
         from . import tool_definitions
-        tool_definitions.register_all_tools(_registry_instance)
+        try:
+            tool_definitions.register_all_tools(_registry_instance)
+        except Exception:
+            logger.exception("Error during diagnostic tool registration; registry may be incomplete")
         _registry_instance._initialized = True
         logger.info('Diagnostic tools registry initialized with %s tools', _registry_instance.get_tool_count())
     return _registry_instance
