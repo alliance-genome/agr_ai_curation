@@ -136,6 +136,7 @@ services:
       PYTHONUNBUFFERED: "1"
       AGR_RUNTIME_ROOT: /runtime
       DEV_MODE: "${DEV_MODE:-false}"
+      LOKI_URL: "http://loki:3100"
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
       RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
       PDF_EXTRACTION_SERVICE_URL: "${PDF_EXTRACTION_SERVICE_URL:-}"
@@ -426,8 +427,44 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  loki:
+    image: grafana/loki:latest
+    restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: loki
+    ports:
+      - "${LOKI_HOST_PORT:-3100}:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  promtail:
+    image: grafana/promtail:latest
+    restart: always
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on:
+      - loki
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: promtail
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+
 volumes:
   postgres_data:
+    driver: local
+  loki-data:
     driver: local
   langfuse_clickhouse_data:
     driver: local
