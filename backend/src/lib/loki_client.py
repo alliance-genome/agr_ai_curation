@@ -17,36 +17,15 @@ LOKI_QUERY_RANGE_PATH = "/loki/api/v1/query_range"
 TimeInput: TypeAlias = datetime | int | str
 
 
-class LokiQueryData(TypedDict):
-    """Successful Loki query payload returned to callers."""
-
-    service: str
-    query: str
-    start: str | None
-    end: str | None
-    limit: int
-    lines: list[str]
-    line_count: int
-
-
-class LokiQuerySuccess(TypedDict):
-    """Success result for Loki log queries."""
-
-    status: Literal["success"]
-    data: LokiQueryData
-    error: None
-
-
 class LokiQueryError(TypedDict):
     """Error result for Loki log queries."""
 
     status: Literal["error"]
-    data: None
     error: str
     help: str
 
 
-LokiQueryResult: TypeAlias = LokiQuerySuccess | LokiQueryError
+LokiQueryResult: TypeAlias = list[str] | LokiQueryError
 
 
 def get_loki_url() -> str:
@@ -158,6 +137,15 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _error_result(error: str, help_text: str) -> LokiQueryError:
+    """Build a consistent error result for Loki query failures."""
+    return {
+        "status": "error",
+        "error": error,
+        "help": help_text,
+    }
+
+
 class LokiClient:
     """Async wrapper around Loki's `query_range` HTTP API."""
 
@@ -213,59 +201,35 @@ class LokiClient:
             try:
                 payload = response.json()
             except json.JSONDecodeError:
-                return {
-                    "status": "error",
-                    "data": None,
-                    "error": "Loki returned an invalid JSON response.",
-                    "help": "Check Loki service health and the query_range API response.",
-                }
+                return _error_result(
+                    "Loki returned an invalid JSON response.",
+                    "Check Loki service health and the query_range API response.",
+                )
 
             lines = _extract_lines(payload)
-            return {
-                "status": "success",
-                "data": {
-                    "service": normalized_service,
-                    "query": query,
-                    "start": start_ns,
-                    "end": end_ns,
-                    "limit": limit,
-                    "lines": lines,
-                    "line_count": len(lines),
-                },
-                "error": None,
-            }
+            return lines
         except ValueError as exc:
-            return {
-                "status": "error",
-                "data": None,
-                "error": str(exc),
-                "help": "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
-            }
+            return _error_result(
+                str(exc),
+                "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
+            )
         except httpx.TimeoutException:
-            return {
-                "status": "error",
-                "data": None,
-                "error": f"Timed out querying Loki at {self.base_url}.",
-                "help": "Ensure the Loki service is running and responding on the configured LOKI_URL.",
-            }
+            return _error_result(
+                f"Timed out querying Loki at {self.base_url}.",
+                "Ensure the Loki service is running and responding on the configured LOKI_URL.",
+            )
         except httpx.HTTPStatusError as exc:
-            return {
-                "status": "error",
-                "data": None,
-                "error": f"Loki query failed with HTTP {exc.response.status_code}.",
-                "help": "Check Loki availability and confirm the query_range endpoint is reachable.",
-            }
+            return _error_result(
+                f"Loki query failed with HTTP {exc.response.status_code}.",
+                "Check Loki availability and confirm the query_range endpoint is reachable.",
+            )
         except httpx.RequestError as exc:
-            return {
-                "status": "error",
-                "data": None,
-                "error": f"Failed to reach Loki: {exc}.",
-                "help": "Ensure the Loki service is running and the configured LOKI_URL is correct.",
-            }
+            return _error_result(
+                f"Failed to reach Loki: {exc}.",
+                "Ensure the Loki service is running and the configured LOKI_URL is correct.",
+            )
         except Exception as exc:
-            return {
-                "status": "error",
-                "data": None,
-                "error": f"Unexpected Loki client error: {exc}.",
-                "help": "Review Loki service health and client configuration.",
-            }
+            return _error_result(
+                f"Unexpected Loki client error: {exc}.",
+                "Review Loki service health and client configuration.",
+            )
