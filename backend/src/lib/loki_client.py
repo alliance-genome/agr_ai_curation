@@ -17,6 +17,10 @@ LOKI_QUERY_RANGE_PATH = "/loki/api/v1/query_range"
 TimeInput: TypeAlias = datetime | int | str
 
 
+class LokiResponseError(ValueError):
+    """Raised when Loki returns an unexpected response structure."""
+
+
 class LokiQueryError(TypedDict):
     """Error result for Loki log queries."""
 
@@ -109,27 +113,31 @@ def _build_query(service: str, level: str | None = None) -> str:
 def _extract_lines(payload: dict[str, Any]) -> list[str]:
     """Flatten Loki query results into plain log lines."""
     if not isinstance(payload, dict):
-        raise ValueError("Invalid Loki response format: expected a JSON object.")
+        raise LokiResponseError("Invalid Loki response format: expected a JSON object.")
 
     data = payload.get("data", {})
     if not isinstance(data, dict):
-        raise ValueError("Invalid Loki response format: expected data to be an object.")
+        raise LokiResponseError("Invalid Loki response format: expected data to be an object.")
 
     result = data.get("result", [])
     if not isinstance(result, list):
-        raise ValueError("Invalid Loki response format: expected data.result to be a list.")
+        raise LokiResponseError("Invalid Loki response format: expected data.result to be a list.")
 
     lines: list[str] = []
     for stream in result:
         if not isinstance(stream, dict):
-            raise ValueError("Invalid Loki response format: expected each stream to be an object.")
+            raise LokiResponseError(
+                "Invalid Loki response format: expected each stream to be an object."
+            )
         values = stream.get("values", [])
         if not isinstance(values, list):
-            raise ValueError("Invalid Loki response format: expected stream values to be a list.")
+            raise LokiResponseError(
+                "Invalid Loki response format: expected stream values to be a list."
+            )
 
         for entry in values:
             if not isinstance(entry, list) or len(entry) < 2:
-                raise ValueError(
+                raise LokiResponseError(
                     "Invalid Loki response format: expected each value entry to contain timestamp and line."
                 )
             lines.append(str(entry[1]))
@@ -208,6 +216,11 @@ class LokiClient:
 
             lines = _extract_lines(payload)
             return lines
+        except LokiResponseError as exc:
+            return _error_result(
+                str(exc),
+                "Check Loki service health and confirm the query_range response format is valid.",
+            )
         except ValueError as exc:
             return _error_result(
                 str(exc),
