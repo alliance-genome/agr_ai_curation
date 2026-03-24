@@ -8,6 +8,9 @@
 #   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config
 #   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d
 
+# Keep the standalone project name stable for predictable container naming.
+name: ai_curation_prototype
+
 x-langfuse-depends-on: &langfuse-depends-on
   postgres:
     condition: service_healthy
@@ -66,6 +69,10 @@ services:
     image: docker.io/langfuse/langfuse-worker:3
     restart: always
     depends_on: *langfuse-depends-on
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: langfuse-worker
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'node worker/dist/index.js' > /dev/null || exit 1"]
       interval: 30s
@@ -78,6 +85,10 @@ services:
     image: docker.io/langfuse/langfuse:3
     restart: always
     depends_on: *langfuse-depends-on
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: langfuse
     ports:
       - "${LANGFUSE_HOST_PORT:-3000}:3000"
     environment:
@@ -136,6 +147,7 @@ services:
       PYTHONUNBUFFERED: "1"
       AGR_RUNTIME_ROOT: /runtime
       DEV_MODE: "${DEV_MODE:-false}"
+      LOKI_URL: "${LOKI_URL:-http://loki:3100}"
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
       RUN_DB_MIGRATIONS_ON_START: "${RUN_DB_MIGRATIONS_ON_START:-true}"
       PDF_EXTRACTION_SERVICE_URL: "${PDF_EXTRACTION_SERVICE_URL:-}"
@@ -369,6 +381,10 @@ services:
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:24.6.2.17-alpine
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: analytics
+      log_component: clickhouse
     user: "101:101"
     environment:
       CLICKHOUSE_DB: "${CLICKHOUSE_DB:-default}"
@@ -391,6 +407,10 @@ services:
   minio:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: storage
+      log_component: minio
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
@@ -411,6 +431,10 @@ services:
   postgres:
     image: docker.io/postgres:16
     restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: database
+      log_component: postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 15s
@@ -426,8 +450,44 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  loki:
+    image: grafana/loki:latest
+    restart: always
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: loki
+    ports:
+      - "${LOKI_HOST_PORT:-3100}:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  promtail:
+    image: grafana/promtail:latest
+    restart: always
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on:
+      - loki
+    labels:
+      log_env: "${LOG_ENV:-production}"
+      log_tier: observability
+      log_component: promtail
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+
 volumes:
   postgres_data:
+    driver: local
+  loki-data:
     driver: local
   langfuse_clickhouse_data:
     driver: local
