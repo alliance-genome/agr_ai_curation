@@ -8,7 +8,7 @@
 #   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml config
 #   docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d
 
-# Keep the standalone project name aligned with the shared Promtail discovery filter.
+# Keep the standalone project name stable for predictable container naming.
 name: ai_curation_prototype
 
 x-langfuse-depends-on: &langfuse-depends-on
@@ -482,7 +482,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./promtail-production-config.yml:/etc/promtail/config.yml:ro
 
 volumes:
   postgres_data:
