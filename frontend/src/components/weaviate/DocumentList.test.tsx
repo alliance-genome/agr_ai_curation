@@ -235,10 +235,6 @@ describe('DocumentList', () => {
   });
 
   it('opens Review & Curate from the document action column', async () => {
-    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
-      existingSessionId: 'session-1',
-      canBootstrap: true,
-    });
     openCurationWorkspaceMock.mockResolvedValue('session-1');
 
     render(
@@ -253,19 +249,13 @@ describe('DocumentList', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionId: 'session-1',
           documentId: 'doc-review',
         })
       );
     });
   });
 
-  it('hides Review & Curate when the document has no prepared session', async () => {
-    getCurationWorkspaceLaunchAvailabilityMock.mockResolvedValue({
-      existingSessionId: null,
-      canBootstrap: false,
-    });
-
+  it('always renders Review & Curate button for completed documents', async () => {
     render(
       <DocumentList
         {...defaultProps}
@@ -273,15 +263,9 @@ describe('DocumentList', () => {
       />
     );
 
-    await waitFor(() => {
-      expect(getCurationWorkspaceLaunchAvailabilityMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: 'doc-without-session',
-        })
-      );
-    });
-
-    expect(screen.queryByRole('button', { name: /review & curate/i })).not.toBeInTheDocument();
+    // Button should render immediately without any availability probe
+    expect(await screen.findByRole('button', { name: /review & curate/i })).toBeInTheDocument();
+    expect(getCurationWorkspaceLaunchAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it('disables re-embed button for processing documents', () => {
