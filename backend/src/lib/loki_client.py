@@ -13,6 +13,13 @@ DEFAULT_LOKI_URL = "http://loki:3100"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_LIMIT = 2000
 LOKI_QUERY_RANGE_PATH = "/loki/api/v1/query_range"
+LOG_LEVEL_LABEL_PATTERNS = {
+    "DEBUG": "(?i)^debug$",
+    "INFO": "(?i)^info$",
+    "WARN": "(?i)^warn(?:ing)?$",
+    "ERROR": "(?i)^error$",
+    "FATAL": "(?i)^fatal$",
+}
 
 TimeInput: TypeAlias = datetime | int | str
 
@@ -56,7 +63,7 @@ def _datetime_to_unix_ns(dt_value: datetime) -> str:
     return str(total_nanoseconds)
 
 
-def _normalize_time(value: TimeInput | None) -> str | None:
+def normalize_time(value: TimeInput | None) -> str | None:
     """Normalize an ISO 8601 or Unix nanoseconds value for Loki."""
     if value is None:
         return None
@@ -88,26 +95,30 @@ def _normalize_time(value: TimeInput | None) -> str | None:
     return _datetime_to_unix_ns(parsed)
 
 
-def _escape_logql_literal(value: str) -> str:
+def escape_logql_literal(value: str) -> str:
     """Escape a string for safe inclusion in a LogQL quoted literal."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _build_query(service: str, level: str | None = None) -> str:
-    """Build a Loki LogQL query for one service and optional level filter."""
+def build_query(service: str, level: str | None = None) -> str:
+    """Build a Loki LogQL query for one service and optional level label filter."""
     normalized_service = service.strip()
     if not normalized_service:
         raise ValueError("Service label is required.")
 
-    query = f'{{service="{_escape_logql_literal(normalized_service)}"}}'
+    matchers = [f'service="{escape_logql_literal(normalized_service)}"']
 
     if level:
         normalized_level = level.strip().upper()
-        if not normalized_level:
-            raise ValueError("Log level filter cannot be blank.")
-        query = f'{query} |= "{_escape_logql_literal(normalized_level)}"'
+        level_pattern = LOG_LEVEL_LABEL_PATTERNS.get(normalized_level)
+        if not normalized_level or level_pattern is None:
+            allowed_levels = ", ".join(sorted(LOG_LEVEL_LABEL_PATTERNS))
+            raise ValueError(
+                f"Log level filter must be one of: {allowed_levels}."
+            )
+        matchers.append(f'level=~"{escape_logql_literal(level_pattern)}"')
 
-    return query
+    return "{" + ",".join(matchers) + "}"
 
 
 def _extract_lines(payload: dict[str, Any]) -> list[str]:
@@ -153,7 +164,7 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _error_result(error: str, help_text: str) -> LokiQueryError:
+def error_result(error: str, help_text: str) -> LokiQueryError:
     """Build a consistent error result for Loki query failures."""
     return {
         "status": "error",
@@ -190,13 +201,13 @@ class LokiClient:
                 raise ValueError("Limit must be greater than zero.")
 
             normalized_service = service.strip()
-            start_ns = _normalize_time(start)
-            end_ns = _normalize_time(end)
+            start_ns = normalize_time(start)
+            end_ns = normalize_time(end)
 
             if start_ns and end_ns and int(start_ns) > int(end_ns):
                 raise ValueError("Start timestamp must be less than or equal to end timestamp.")
 
-            query = _build_query(normalized_service, level)
+            query = build_query(normalized_service, level)
             params: dict[str, str | int] = {
                 "query": query,
                 "limit": limit,
@@ -217,7 +228,7 @@ class LokiClient:
             try:
                 payload = response.json()
             except json.JSONDecodeError:
-                return _error_result(
+                return error_result(
                     "Loki returned an invalid JSON response.",
                     "Check Loki service health and the query_range API response.",
                 )
@@ -225,32 +236,32 @@ class LokiClient:
             lines = _extract_lines(payload)
             return lines
         except LokiResponseError as exc:
-            return _error_result(
+            return error_result(
                 str(exc),
                 "Check Loki service health and confirm the query_range response format is valid.",
             )
         except ValueError as exc:
-            return _error_result(
+            return error_result(
                 str(exc),
                 "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
             )
         except httpx.TimeoutException:
-            return _error_result(
+            return error_result(
                 f"Timed out querying Loki at {self.base_url}.",
                 "Ensure the Loki service is running and responding on the configured LOKI_URL.",
             )
         except httpx.HTTPStatusError as exc:
-            return _error_result(
+            return error_result(
                 f"Loki query failed with HTTP {exc.response.status_code}.",
                 "Check Loki availability and confirm the query_range endpoint is reachable.",
             )
         except httpx.RequestError as exc:
-            return _error_result(
+            return error_result(
                 f"Failed to reach Loki: {exc}.",
                 "Ensure the Loki service is running and the configured LOKI_URL is correct.",
             )
         except Exception as exc:
-            return _error_result(
+            return error_result(
                 f"Unexpected Loki client error: {exc}.",
                 "Review Loki service health and client configuration.",
             )
