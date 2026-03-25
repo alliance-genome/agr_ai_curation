@@ -1,7 +1,7 @@
 """
 Workflow Analysis Tools
 
-Provides tool functions for Opus to dynamically query trace data and Docker logs.
+Provides tool functions for Opus to dynamically query trace data and Loki-backed service logs.
 Used in the Workflow Analysis feature (formerly Prompt Explorer).
 
 Token-Aware Tools (Claude-Specific Endpoints):
@@ -13,13 +13,15 @@ Token-Aware Tools (Claude-Specific Endpoints):
 - get_trace_view: Generic view access with token metadata
 
 System Tools:
-- get_docker_logs: Container log retrieval
+- get_service_logs: Service log retrieval
 """
 
 import httpx
 import os
 import re
 from typing import Dict, Any, Optional
+
+VALID_SERVICE_LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
 
 
 def get_trace_source() -> str:
@@ -682,16 +684,25 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
 # System Tools
 # ============================================================================
 
-async def get_docker_logs(container: str = "backend", lines: int = 2000) -> Dict[str, Any]:
+async def get_service_logs(
+    container: str = "backend",
+    lines: int = 2000,
+    level: Optional[str] = None,
+    since: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Retrieve Docker container logs for troubleshooting.
+    Retrieve Loki-backed service logs for troubleshooting.
 
-    Allows Opus to access container logs when helping curators debug issues.
+    Allows Opus to access internal service logs through `/api/logs/{container}`
+    when helping curators debug issues.
 
     Args:
-        container: Container name (default: "backend")
+        container: Service/container name (default: "backend")
             Valid options: backend, frontend, weaviate, postgres
         lines: Number of recent log lines (default: 2000, min: 100, max: 5000)
+        level: Optional log level filter (DEBUG, INFO, WARN, ERROR)
+        since: Optional time filter string supported by the logs API
+            (for example: "last 5 minutes")
 
     Returns:
         {
@@ -709,12 +720,42 @@ async def get_docker_logs(container: str = "backend", lines: int = 2000) -> Dict
     try:
         # Clamp lines to safe range
         lines = max(100, min(lines, 5000))
+        params: Dict[str, Any] = {"lines": lines}
+
+        if level is not None:
+            normalized_level = level.strip().upper()
+            if not normalized_level:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": "Log level filter cannot be blank",
+                    "help": "Use one of: DEBUG, INFO, WARN, ERROR"
+                }
+            if normalized_level not in VALID_SERVICE_LOG_LEVELS:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": f"Unsupported log level filter: {normalized_level}",
+                    "help": "Use one of: DEBUG, INFO, WARN, ERROR"
+                }
+            params["level"] = normalized_level
+
+        if since is not None:
+            normalized_since = since.strip()
+            if not normalized_since:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": "Time filter cannot be blank",
+                    "help": "Use a relative window such as 'last 5 minutes'"
+                }
+            params["since"] = normalized_since
 
         # Call internal logs API endpoint
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
             response = await client.get(
                 f"http://localhost:8000/api/logs/{container}",
-                params={"lines": lines}
+                params=params
             )
 
             if response.status_code == 200:
@@ -730,22 +771,20 @@ async def get_docker_logs(container: str = "backend", lines: int = 2000) -> Dict
                     "error": None
                 }
             elif response.status_code == 400:
-                # Invalid container name
-                error_detail = response.json().get("detail", "Invalid container")
+                error_detail = response.json().get("detail", "Invalid log request")
                 return {
                     "status": "error",
                     "data": None,
                     "error": error_detail,
-                    "help": "Valid containers: backend, frontend, weaviate, postgres, langfuse, redis"
+                    "help": "Check the service name and optional log filters"
                 }
             else:
-                # Other errors
                 error_detail = response.json().get("detail", "Unknown error")
                 return {
                     "status": "error",
                     "data": None,
                     "error": f"Logs API error: {error_detail}",
-                    "help": "Check Docker service and container status"
+                    "help": "Check the backend logs API and Loki availability"
                 }
 
     except httpx.TimeoutException:
@@ -753,19 +792,34 @@ async def get_docker_logs(container: str = "backend", lines: int = 2000) -> Dict
             "status": "error",
             "data": None,
             "error": "Timeout retrieving logs (15s exceeded)",
-            "help": "Container may be producing logs too slowly or not responding"
+            "help": "The logs API may be under load or the query window may be too large"
         }
     except httpx.ConnectError:
         return {
             "status": "error",
             "data": None,
             "error": "Cannot connect to logs API endpoint",
-            "help": "Ensure backend service is running"
+            "help": "Ensure the backend service is running and /api/logs is reachable"
         }
     except Exception as e:
         return {
             "status": "error",
             "data": None,
             "error": f"Failed to retrieve logs: {str(e)}",
-            "help": "Verify Docker is accessible and container name is correct"
+            "help": "Verify the logs API is reachable and the service name is correct"
         }
+
+
+async def get_docker_logs(
+    container: str = "backend",
+    lines: int = 2000,
+    level: Optional[str] = None,
+    since: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for the renamed `get_service_logs` tool."""
+    return await get_service_logs(
+        container=container,
+        lines=lines,
+        level=level,
+        since=since,
+    )
