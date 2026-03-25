@@ -31,14 +31,21 @@ async def _legacy_wait_for(coro: Any, *, timeout: float | None = None) -> Any:
 
 # Test-only shim for the still-shared Docker-era unit tests. The real endpoint
 # always uses Loki unless a test explicitly monkeypatches these callables.
-asyncio = SimpleNamespace(
+_legacy_asyncio_shim = SimpleNamespace(
     create_subprocess_exec=_legacy_create_subprocess_exec,
     wait_for=_legacy_wait_for,
     subprocess=SimpleNamespace(PIPE=object()),
     TimeoutError=TimeoutError,
 )
-_DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC = asyncio.create_subprocess_exec
-_DEFAULT_ASYNCIO_WAIT_FOR = asyncio.wait_for
+_DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC = _legacy_asyncio_shim.create_subprocess_exec
+_DEFAULT_ASYNCIO_WAIT_FOR = _legacy_asyncio_shim.wait_for
+
+
+def __getattr__(name: str) -> Any:
+    """Expose legacy test shims without shadowing stdlib module names in this module."""
+    if name == "asyncio":
+        return _legacy_asyncio_shim
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class LogsResponse(BaseModel):
@@ -75,8 +82,9 @@ DEFAULT_LOKI_LOOKBACK = timedelta(hours=24)
 def _legacy_test_transport_enabled() -> bool:
     """Return True only when tests monkeypatch the legacy shim."""
     return (
-        asyncio.create_subprocess_exec is not _DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC
-        or asyncio.wait_for is not _DEFAULT_ASYNCIO_WAIT_FOR
+        _legacy_asyncio_shim.create_subprocess_exec
+        is not _DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC
+        or _legacy_asyncio_shim.wait_for is not _DEFAULT_ASYNCIO_WAIT_FOR
     )
 
 
@@ -165,18 +173,20 @@ async def _get_logs_via_legacy_test_transport(
     container_name = f"{project_name}-{container}-1"
 
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await _legacy_asyncio_shim.create_subprocess_exec(
             "docker",
             "logs",
             "--tail",
             str(lines),
             container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=_legacy_asyncio_shim.subprocess.PIPE,
+            stderr=_legacy_asyncio_shim.subprocess.PIPE,
             shell=False,
         )
 
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        stdout, stderr = await _legacy_asyncio_shim.wait_for(
+            proc.communicate(), timeout=10.0
+        )
 
         if proc.returncode != 0:
             error_msg = stderr.decode("utf-8", errors="replace") if stderr else "Unknown error"
@@ -194,7 +204,7 @@ async def _get_logs_via_legacy_test_transport(
             lines_returned=lines_returned,
             logs=logs_text,
         )
-    except asyncio.TimeoutError:
+    except _legacy_asyncio_shim.TimeoutError:
         raise HTTPException(
             status_code=500,
             detail=f"Timeout retrieving logs for container '{container}' (10s limit exceeded)",
