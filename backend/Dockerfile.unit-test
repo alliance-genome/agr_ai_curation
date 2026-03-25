@@ -14,16 +14,17 @@ WORKDIR /app/backend
 RUN apt-get update && apt-get install -y \
     gcc \
     git \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first for better caching
-COPY backend/requirements.txt .
+# Copy requirements files first for better caching
+COPY backend/requirements.lock.txt backend/requirements.txt ./
 
 # Upgrade pip first
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install Python dependencies (no heavy ML packages)
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (no heavy ML packages) from the pinned lockfile
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 # Install test dependencies
 RUN pip install --no-cache-dir \

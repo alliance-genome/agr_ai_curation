@@ -48,6 +48,7 @@ WORKDIR /app/backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    ripgrep \
     && groupadd --gid "${APP_GID}" "${APP_USER}" \
     && useradd --uid "${APP_UID}" --gid "${APP_GID}" \
         --create-home --home-dir "/home/${APP_USER}" --shell /usr/sbin/nologin "${APP_USER}" \

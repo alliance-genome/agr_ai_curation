@@ -6,21 +6,19 @@ WORKDIR /app/backend
 RUN apt-get update && apt-get install -y \
     gcc \
     git \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first for better caching
-COPY requirements.txt .
+# Copy requirements files first for better caching
+COPY requirements.lock.txt requirements.txt ./
 
 # Upgrade pip first
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install heavy ML dependencies separately first (these rarely change)
-RUN pip install --no-cache-dir \
-    unstructured[pdf,local-inference] \
-    unstructured-inference
-
-# Install remaining Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies from the pinned lockfile.
+# PDF extraction now runs through external services in tests, so we do not
+# install the historical floating unstructured ML stack in this image.
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 # Install runtime system dependencies after Python deps
 RUN apt-get update && apt-get install -y \

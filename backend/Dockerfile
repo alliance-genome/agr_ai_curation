@@ -9,6 +9,7 @@ WORKDIR /app/backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     git \
+    ripgrep \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

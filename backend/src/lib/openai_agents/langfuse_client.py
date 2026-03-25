@@ -26,7 +26,7 @@ class OTELContextDetachFilter(logging.Filter):
     """
     Filter to suppress expected OTEL context detach errors in async generators.
 
-    When using start_as_current_span() with async generators, OTEL context can
+    When using start_as_current_observation() with async generators, OTEL context can
     be created in one async task and the cleanup happens in another. This causes
     "Failed to detach context" errors that are non-fatal but noisy.
 
@@ -254,11 +254,11 @@ def flush_agent_configs(root_span) -> int:
     """
     Flush all pending agent configs to the Langfuse trace as EVENT observations.
 
-    This should be called INSIDE the trace context (after start_as_current_span).
+    This should be called INSIDE the trace context (after start_as_current_observation()).
     Each config is logged as an event linked to the current trace.
 
     Args:
-        root_span: The Langfuse span object from start_as_current_span()
+        root_span: The Langfuse span object from start_as_current_observation()
 
     Returns:
         Number of configs flushed

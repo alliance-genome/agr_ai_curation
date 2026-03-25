@@ -29,6 +29,7 @@ from openai.types.responses import (
 from pydantic import ValidationError
 
 # Import Langfuse-wrapped OpenAI client for automatic tracing
+from langfuse import propagate_attributes
 from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
 
 from .langfuse_client import (
@@ -130,8 +131,8 @@ class SafeLangfuseAsyncOpenAI(LangfuseAsyncOpenAI):
     in config/providers.yaml.
 
     Note: Trace context is handled automatically via OpenTelemetry context propagation.
-    When used inside a start_as_current_span() context, all calls are automatically
-    nested under that parent span.
+    When used inside a start_as_current_observation() context, all calls are
+    automatically nested under that parent span.
     """
 
     def __init__(self, *args, **kwargs):
@@ -179,6 +180,42 @@ set_default_openai_client(_default_client)
 def _now_iso() -> str:
     """Return current UTC time in ISO format for audit events."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _close_langfuse_context(
+    context_manager: Any,
+    *,
+    label: str,
+    trace_id: str,
+    session_id: Optional[str],
+    user_id: str,
+) -> None:
+    """Best-effort cleanup for Langfuse context managers across async yields."""
+    if context_manager is None:
+        return
+
+    try:
+        context_manager.__exit__(None, None, None)
+        logger.info(
+            "%s closed",
+            label,
+            extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+        )
+    except ValueError as e:
+        if "Token was created in a different Context" in str(e):
+            logger.debug(
+                "%s detach skipped (async boundary): %s",
+                label,
+                e,
+                extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+            )
+        else:
+            logger.warning(
+                "Unexpected error during %s cleanup: %s",
+                label.lower(),
+                e,
+                extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+            )
 
 
 def _build_custom_tool_display_names(agent: Agent) -> Dict[str, str]:
@@ -407,7 +444,7 @@ async def _run_agent_with_tracing(
     """
     Internal generator that runs the agent within Langfuse trace context.
 
-    This function is called from within a start_as_current_span() context,
+    This function is called from within an active Langfuse observation context,
     so all OpenAI calls made by the agent are automatically nested.
 
     REAL-TIME STREAMING:
@@ -948,7 +985,7 @@ async def run_agent_streamed(
     environment variables. See config.py for available settings.
 
     Langfuse Tracing:
-        Uses start_as_current_span() to set the ACTIVE context. The Langfuse
+        Uses start_as_current_observation() to set the ACTIVE context. The Langfuse
         OpenAI wrapper uses OpenTelemetry context propagation to automatically
         nest all LLM calls under this parent span, creating a proper hierarchy.
 
@@ -1063,7 +1100,7 @@ async def run_agent_streamed(
         )
 
     if langfuse:
-        # Use start_as_current_span() to SET THE ACTIVE CONTEXT
+        # Use start_as_current_observation() to SET THE ACTIVE CONTEXT
         # All OpenAI calls inside will automatically be nested under this span
         try:
             # Build trace metadata with optional hierarchy
@@ -1087,7 +1124,7 @@ async def run_agent_streamed(
                     "abstract_length": len(abstract),
                 }
 
-            # Use start_as_current_span() to set OTEL context - this is CRITICAL
+            # Use start_as_current_observation() to set OTEL context - this is CRITICAL
             # for the langfuse.openai wrapper to auto-nest GENERATION observations
             # under our trace. Without this, OpenAI calls create orphaned traces.
             #
@@ -1105,12 +1142,16 @@ async def run_agent_streamed(
                 extra={"session_id": session_id, "user_id": user_id},
             )
 
-            span_context_manager = langfuse.start_as_current_span(
+            span_context_manager = langfuse.start_as_current_observation(
                 name="chat-flow",
+                as_type="span",
                 input={"query": user_message, "document_id": document_id, "document_name": document_name},
                 metadata=trace_metadata
             )
             root_span = span_context_manager.__enter__()
+            trace_id = root_span.trace_id
+            trace_attribute_context_manager = None
+            trace_attribute_context_active = False
 
             try:
                 # Build trace tags - include group tags for easy filtering
@@ -1119,17 +1160,16 @@ async def run_agent_streamed(
                     # Add group:MGI, group:FB, etc. for each active group
                     trace_tags.extend([f"group:{grp}" for grp in active_groups])
 
-                # Update trace-level attributes including the trace NAME
-                # This ensures the trace is properly named (not just the span)
-                root_span.update_trace(
-                    name=trace_name,  # Set trace name explicitly to prevent agent config names from overwriting
+                # Propagate trace-level attributes onto the active span and all child spans.
+                # In Langfuse v4, this replaces the removed span.update_trace(...) API.
+                trace_attribute_context_manager = propagate_attributes(
                     user_id=user_id,
                     session_id=session_id,  # Group all chats for same chat session together
                     tags=trace_tags,
+                    trace_name=trace_name,  # Keep the trace grouped under the chat-specific name
                 )
-
-                # Use Langfuse trace_id for frontend (enables trace extraction)
-                trace_id = root_span.trace_id
+                trace_attribute_context_manager.__enter__()
+                trace_attribute_context_active = True
 
                 # Set trace_id in context for tools (enables closure capture)
                 set_current_trace_id(trace_id)
@@ -1325,36 +1365,22 @@ async def run_agent_streamed(
                 # This ensures audit trail is complete even if client disconnects mid-stream
                 _log_used_prompts_to_db(trace_id=trace_id, session_id=session_id, span=root_span)
 
-                # Exit the context manager to properly clean up OTEL context
-                # This ensures proper cleanup regardless of how the generator exits
-                # We pass (None, None, None) to indicate no exception occurred in the finally
-                #
-                # NOTE: The __exit__() may fail with "Token was created in a different Context"
-                # when the async generator is abandoned (GeneratorExit) because OTEL contextvars
-                # track context per-task, and the cleanup runs in a different async context than
-                # where __enter__() ran. This is a known limitation with async generators.
-                # The trace is still captured correctly - the error is just about cleanup.
-                try:
-                    span_context_manager.__exit__(None, None, None)
-                    logger.info(
-                        "Span context closed",
-                        extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
+                # Close the attribute propagation context before the root span context.
+                if trace_attribute_context_active:
+                    _close_langfuse_context(
+                        trace_attribute_context_manager,
+                        label="Trace attribute context",
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        user_id=user_id,
                     )
-                except ValueError as e:
-                    if "Token was created in a different Context" in str(e):
-                        # Expected when generator is abandoned or suspended across async boundaries
-                        logger.debug(
-                            "OTEL context detach skipped (async boundary): %s",
-                            e,
-                            extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
-                        )
-                    else:
-                        # Unexpected ValueError - log but don't crash
-                        logger.warning(
-                            "Unexpected error during span cleanup: %s",
-                            e,
-                            extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
-                        )
+                _close_langfuse_context(
+                    span_context_manager,
+                    label="Span context",
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                )
                 flush_langfuse()
                 logger.info(
                     "Flushed trace data",

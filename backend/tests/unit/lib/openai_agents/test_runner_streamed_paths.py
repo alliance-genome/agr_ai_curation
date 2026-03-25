@@ -95,9 +95,7 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
 
     class _RootSpan:
         trace_id = "trace-abc"
-
-        def update_trace(self, **kwargs):
-            captured["update_trace"] = kwargs
+        id = "span-abc"
 
         def update(self, **kwargs):
             captured["update"] = kwargs
@@ -111,12 +109,24 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             captured["span_exit"] = (exc_type, exc, tb)
 
+    class _TraceAttributeContext:
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            captured["propagate_attributes"] = self.kwargs
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            captured["trace_attr_exit"] = (exc_type, exc, tb)
+
     class _Langfuse:
-        def start_as_current_span(self, **kwargs):
+        def start_as_current_observation(self, **kwargs):
             captured["span_start"] = kwargs
             return _SpanContext()
 
     monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(runner, "propagate_attributes", lambda **kwargs: _TraceAttributeContext(kwargs))
 
     async def _fake_run_agent_with_tracing(**_kwargs):
         yield {
@@ -141,7 +151,13 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     assert events[0]["data"]["trace_id"] == "trace-abc"
     assert events[-1]["type"] == "RUN_FINISHED"
     assert captured["trace_ids"][-1] == "trace-abc"
-    assert captured["update_trace"]["user_id"] == "user-2"
+    assert captured["span_start"]["as_type"] == "span"
+    assert captured["propagate_attributes"]["user_id"] == "user-2"
+    assert captured["propagate_attributes"]["session_id"] == "session-2"
+    assert captured["propagate_attributes"]["tags"] == ["chat", "openai-agents", "group:WB"]
+    assert captured["propagate_attributes"]["trace_name"].startswith("chat: longer message")
+    assert captured["trace_attr_exit"] == (None, None, None)
+    assert captured["span_exit"] == (None, None, None)
     assert captured["logged"][0][0] == "trace-abc"
 
 
@@ -151,7 +167,7 @@ async def test_run_agent_streamed_falls_back_when_span_creation_fails(monkeypatc
     _patch_common_runtime(monkeypatch, captured)
 
     class _BrokenLangfuse:
-        def start_as_current_span(self, **_kwargs):
+        def start_as_current_observation(self, **_kwargs):
             raise RuntimeError("span init failed")
 
     monkeypatch.setattr(runner, "get_langfuse", lambda: _BrokenLangfuse())
@@ -181,9 +197,7 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
 
     class _RootSpan:
         trace_id = "trace-specialist"
-
-        def update_trace(self, **_kwargs):
-            pass
+        id = "span-specialist"
 
         def update(self, **kwargs):
             captured.setdefault("span_updates", []).append(kwargs)
@@ -195,11 +209,19 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    class _TraceAttributeContext:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     class _Langfuse:
-        def start_as_current_span(self, **_kwargs):
+        def start_as_current_observation(self, **_kwargs):
             return _SpanContext()
 
     monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(runner, "propagate_attributes", lambda **_kwargs: _TraceAttributeContext())
 
     async def _notify_tool_failure(**_kwargs):
         return None
@@ -220,6 +242,11 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
     event_types = [event["type"] for event in events]
     assert "SPECIALIST_ERROR" in event_types
     assert "RUN_ERROR" in event_types
+    assert any(
+        update.get("output", {}).get("error_type") == "SpecialistOutputError"
+        and update.get("metadata", {}).get("specialist_retry_failed") is True
+        for update in captured["span_updates"]
+    )
     assert captured["logged"][0][0] == "trace-specialist"
 
 
