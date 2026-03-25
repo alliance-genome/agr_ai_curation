@@ -34,6 +34,7 @@ REVIEW_HOST="${REVIEW_HOST:-${SYMPHONY_REVIEW_HOST:-}}"
 PRIVATE_ENV_FILE="${AGR_AI_CURATION_ENV_FILE:-${HOME}/.agr_ai_curation/.env}"
 BUILD_BACKEND="${SYMPHONY_REVIEW_BUILD_BACKEND:-1}"
 BUILD_FRONTEND="${SYMPHONY_REVIEW_BUILD_FRONTEND:-1}"
+INCLUDE_LANGFUSE_STACK="${SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK:-0}"
 SKIP_DB_TUNNEL=0
 SKIP_RUNTIME_REFRESH="${SYMPHONY_REVIEW_PREP_REFRESH_MANAGED:-1}"
 DEPENDENCY_START_MAX_ATTEMPTS="${SYMPHONY_REVIEW_DEPENDENCY_START_MAX_ATTEMPTS:-2}"
@@ -152,6 +153,7 @@ refresh_workspace_runtime() {
     return 0
   fi
 
+  local refresh_mode="${SYMPHONY_RUNTIME_REFRESH_MODE:-refresh}"
   local helper=""
   if [[ -x "${REPO_ROOT}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
     helper="${REPO_ROOT}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
@@ -164,8 +166,20 @@ refresh_workspace_runtime() {
     return 0
   fi
 
-  log_step "Refreshing managed Symphony runtime files"
-  bash "${helper}" --workspace-dir "${WORKSPACE_DIR}" --refresh-managed
+  case "${refresh_mode}" in
+    ensure)
+      log_step "Ensuring Symphony runtime files"
+      bash "${helper}" --workspace-dir "${WORKSPACE_DIR}"
+      ;;
+    refresh)
+      log_step "Refreshing managed Symphony runtime files"
+      bash "${helper}" --workspace-dir "${WORKSPACE_DIR}" --refresh-managed
+      ;;
+    *)
+      echo "Unknown SYMPHONY_RUNTIME_REFRESH_MODE: ${refresh_mode}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 json_compact() {
@@ -218,6 +232,39 @@ seed_port_env() {
   export REDIS_HOST_PORT="${REDIS_HOST_PORT:-$((6400 + issue_number))}"
   export WEAVIATE_HTTP_HOST_PORT="${WEAVIATE_HTTP_HOST_PORT:-$((18400 + issue_number))}"
   export WEAVIATE_GRPC_HOST_PORT="${WEAVIATE_GRPC_HOST_PORT:-$((15400 + issue_number))}"
+}
+
+capture_review_port_env() {
+  REVIEW_PORT_LANGFUSE_HOST_PORT="${LANGFUSE_HOST_PORT:-}"
+  REVIEW_PORT_FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-}"
+  REVIEW_PORT_BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-}"
+  REVIEW_PORT_POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-}"
+  REVIEW_PORT_REDIS_HOST_PORT="${REDIS_HOST_PORT:-}"
+  REVIEW_PORT_WEAVIATE_HTTP_HOST_PORT="${WEAVIATE_HTTP_HOST_PORT:-}"
+  REVIEW_PORT_WEAVIATE_GRPC_HOST_PORT="${WEAVIATE_GRPC_HOST_PORT:-}"
+}
+
+restore_review_port_env() {
+  export LANGFUSE_HOST_PORT="${REVIEW_PORT_LANGFUSE_HOST_PORT}"
+  export FRONTEND_HOST_PORT="${REVIEW_PORT_FRONTEND_HOST_PORT}"
+  export BACKEND_HOST_PORT="${REVIEW_PORT_BACKEND_HOST_PORT}"
+  export POSTGRES_HOST_PORT="${REVIEW_PORT_POSTGRES_HOST_PORT}"
+  export REDIS_HOST_PORT="${REVIEW_PORT_REDIS_HOST_PORT}"
+  export WEAVIATE_HTTP_HOST_PORT="${REVIEW_PORT_WEAVIATE_HTTP_HOST_PORT}"
+  export WEAVIATE_GRPC_HOST_PORT="${REVIEW_PORT_WEAVIATE_GRPC_HOST_PORT}"
+}
+
+ensure_langfuse_nextauth_url() {
+  if [[ "${INCLUDE_LANGFUSE_STACK}" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${NEXTAUTH_URL:-}" ]]; then
+    return 0
+  fi
+
+  local langfuse_host="${REVIEW_HOST:-127.0.0.1}"
+  export NEXTAUTH_URL="http://${langfuse_host}:${LANGFUSE_HOST_PORT}"
 }
 
 prepare_docker_config() {
@@ -275,6 +322,10 @@ resolve_review_dependency_services() {
   local service
   local candidates=(postgres redis reranker-transformers weaviate)
   REVIEW_DEPENDENCY_SERVICES=()
+
+  if [[ "${INCLUDE_LANGFUSE_STACK}" == "1" ]]; then
+    candidates+=(clickhouse minio langfuse langfuse-worker)
+  fi
 
   for service in "${candidates[@]}"; do
     if compose_service_exists "${service}"; then
@@ -400,8 +451,11 @@ if [[ ! -f "${COMPOSE_FILE}" ]]; then
   exit 2
 fi
 seed_port_env "${ISSUE_NUMBER}"
+capture_review_port_env
 normalize_private_env_file
 load_exported_env_file "${PRIVATE_ENV_FILE}"
+restore_review_port_env
+ensure_langfuse_nextauth_url
 check_required_vars
 export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-true}"
 export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"
@@ -436,6 +490,7 @@ echo "weaviate_http_host_port=${WEAVIATE_HTTP_HOST_PORT}"
 echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
 echo "build_backend=${BUILD_BACKEND}"
 echo "build_frontend=${BUILD_FRONTEND}"
+echo "include_langfuse_stack=${INCLUDE_LANGFUSE_STACK}"
 echo "dependency_start_max_attempts=${DEPENDENCY_START_MAX_ATTEMPTS}"
 echo "run_db_bootstrap_on_start=${RUN_DB_BOOTSTRAP_ON_START}"
 echo "run_db_migrations_on_start=${RUN_DB_MIGRATIONS_ON_START}"

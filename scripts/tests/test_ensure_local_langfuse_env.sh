@@ -286,6 +286,41 @@ EOF
   assert_contains "^LANGFUSE_LOCAL_DATABASE_URL=${canonical_langfuse_url_pattern}$" "$output_file"
 }
 
+test_repairs_drifted_local_langfuse_database_url() {
+  local temp_dir env_file db_auth_value drifted_db_auth canonical_langfuse_url_pattern
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+  env_file="${temp_dir}/.env"
+  db_auth_value="$(local_langfuse_database_auth)"
+  drifted_db_auth="different_local_langfuse_password"
+  canonical_langfuse_url_pattern="$(canonical_langfuse_url_regex)"
+
+  cat >"$env_file" <<EOF
+OPENAI_API_KEY=sk-test
+POSTGRES_PASSWORD=$db_auth_value
+NEXTAUTH_SECRET=$(repeat_char 'a' 64)
+SALT=$(repeat_char 'b' 64)
+ENCRYPTION_KEY=$(repeat_char 'c' 64)
+LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-$(repeat_char '1' 32)
+LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-$(repeat_char '2' 32)
+LANGFUSE_PUBLIC_KEY=pk-lf-$(repeat_char '1' 32)
+LANGFUSE_SECRET_KEY=sk-lf-$(repeat_char '2' 32)
+LANGFUSE_LOCAL_PUBLIC_KEY=pk-lf-$(repeat_char '1' 32)
+LANGFUSE_LOCAL_SECRET_KEY=sk-lf-$(repeat_char '2' 32)
+LANGFUSE_LOCAL_NEXTAUTH_SECRET=$(repeat_char 'a' 64)
+LANGFUSE_LOCAL_SALT=$(repeat_char 'b' 64)
+LANGFUSE_LOCAL_ENCRYPTION_KEY=$(repeat_char 'c' 64)
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_DATABASE_URL=postgresql://postgres:${drifted_db_auth}@postgres:5432/postgres
+LANGFUSE_LOCAL_DATABASE_URL=postgresql://postgres:${drifted_db_auth}@postgres:5432/postgres
+EOF
+
+  bash "$REPAIR_SCRIPT" "$env_file"
+
+  assert_contains "^LANGFUSE_DATABASE_URL=${canonical_langfuse_url_pattern}$" "$env_file"
+  assert_contains "^LANGFUSE_LOCAL_DATABASE_URL=${canonical_langfuse_url_pattern}$" "$env_file"
+}
+
 test_compose_uses_legacy_vars_when_local_not_set() {
   # Production backward compat: when LANGFUSE_LOCAL_* vars are absent,
   # compose falls through to legacy var names so EC2 deployments
@@ -374,6 +409,7 @@ EOF
 test_repairs_stale_langfuse_values
 test_preserves_valid_values
 test_load_home_test_env_repairs_before_export
+test_repairs_drifted_local_langfuse_database_url
 test_compose_uses_legacy_vars_when_local_not_set
 test_compose_local_vars_override_legacy
 

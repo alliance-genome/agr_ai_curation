@@ -242,6 +242,22 @@ reaches the container, and prints review URLs plus health summaries.
   --review-host 192.168.86.44
 ```
 
+### utilities/symphony_main_sandbox.sh
+
+Launches or cleans a dedicated latest-`main` sandbox checkout for manual work
+inside the Symphony VM. It creates a fresh git worktree, runs the same review
+prep wrapper used by Human Review Prep, automatically picks a free frontend /
+backend port pair from the existing Symphony review-proxy ranges unless you
+override them, and can tear the sandbox down when you are done.
+
+```bash
+# Launch or refresh the sandbox from origin/main
+./scripts/utilities/symphony_main_sandbox.sh prepare
+
+# Tear down the sandbox stack and remove the worktree
+./scripts/utilities/symphony_main_sandbox.sh cleanup
+```
+
 ### local_db_tunnel.sh
 
 Interactive/manual version of the curation DB tunnel. This keeps the tunnel alive in the

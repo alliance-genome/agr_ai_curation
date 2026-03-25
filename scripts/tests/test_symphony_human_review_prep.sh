@@ -122,11 +122,13 @@ make_stub_bin() {
 #!/usr/bin/env bash
 set -euo pipefail
 log_file="${DOCKER_STUB_LOG:?}"
-printf 'docker|cwd=%s|CURATION_DB_URL=%s|LANGFUSE_LOCAL_DATABASE_URL=%s|LANGFUSE_LOCAL_ENCRYPTION_KEY=%s|args=%s\n' \
+printf 'docker|cwd=%s|CURATION_DB_URL=%s|LANGFUSE_LOCAL_DATABASE_URL=%s|LANGFUSE_LOCAL_ENCRYPTION_KEY=%s|LANGFUSE_HOST_PORT=%s|NEXTAUTH_URL=%s|args=%s\n' \
   "$PWD" \
   "${CURATION_DB_URL:-}" \
   "${LANGFUSE_LOCAL_DATABASE_URL:-}" \
   "${LANGFUSE_LOCAL_ENCRYPTION_KEY:-}" \
+  "${LANGFUSE_HOST_PORT:-}" \
+  "${NEXTAUTH_URL:-}" \
   "$*" >> "${log_file}"
 if [[ -n "${STUB_DOCKER_FAIL_ONCE_MATCH:-}" && "$*" == *"${STUB_DOCKER_FAIL_ONCE_MATCH}"* ]]; then
   count_file="${STUB_DOCKER_FAIL_ONCE_COUNT_FILE:?}"
@@ -141,7 +143,7 @@ if [[ -n "${STUB_DOCKER_FAIL_ONCE_MATCH:-}" && "$*" == *"${STUB_DOCKER_FAIL_ONCE
   fi
 fi
 if [[ "$*" == *"config --services"* ]]; then
-  printf '%s\n' postgres redis reranker-transformers weaviate backend frontend
+  printf '%s\n' postgres redis reranker-transformers weaviate clickhouse minio langfuse langfuse-worker backend frontend
   exit 0
 fi
 if [[ "$*" == *" ps"* ]]; then
@@ -340,6 +342,107 @@ EOF
   unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
 }
 
+test_review_prep_can_include_langfuse_stack() {
+  local temp_root workspace stub_dir output docker_log old_path env_file
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/ALL-49"
+  stub_dir="${temp_root}/stubbin"
+  output="${temp_root}/output.txt"
+  docker_log="${temp_root}/docker.log"
+  env_file="${temp_root}/private.env"
+
+  mkdir -p "${workspace}/scripts"
+  : > "${workspace}/docker-compose.yml"
+  cat > "${env_file}" <<'EOF'
+export OPENAI_API_KEY=test-openai
+export GROQ_API_KEY=test-groq
+export POSTGRES_PASSWORD=postgres
+EOF
+
+  make_workspace_tunnel_helpers "${workspace}"
+  make_stub_bin "${stub_dir}" "healthy"
+
+  old_path="${PATH}"
+  export PATH="${stub_dir}:${PATH}"
+  export DOCKER_STUB_LOG="${docker_log}"
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_PREP_REFRESH_MANAGED=0
+  export SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK=1
+
+  "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
+    --workspace-dir "${workspace}" \
+    --env-file "${env_file}" \
+    > "${output}"
+
+  assert_contains "include_langfuse_stack=1" "${output}"
+  assert_contains "dependency_services=postgres,redis,reranker-transformers,weaviate,clickhouse,minio,langfuse,langfuse-worker" "${output}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate clickhouse minio langfuse langfuse-worker" "${docker_log}"
+
+  export PATH="${old_path}"
+  unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
+  unset SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
+  unset SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK
+}
+
+test_review_prep_preserves_review_ports_over_private_env() {
+  local temp_root workspace stub_dir output docker_log old_path env_file
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/ALL-49"
+  stub_dir="${temp_root}/stubbin"
+  output="${temp_root}/output.txt"
+  docker_log="${temp_root}/docker.log"
+  env_file="${temp_root}/private.env"
+
+  mkdir -p "${workspace}/scripts"
+  : > "${workspace}/docker-compose.yml"
+  cat > "${env_file}" <<'EOF'
+export OPENAI_API_KEY=test-openai
+export GROQ_API_KEY=test-groq
+export POSTGRES_PASSWORD=postgres
+export LANGFUSE_HOST_PORT=127.0.0.1:3000
+EOF
+
+  make_workspace_tunnel_helpers "${workspace}"
+  make_stub_bin "${stub_dir}" "healthy"
+
+  old_path="${PATH}"
+  export PATH="${stub_dir}:${PATH}"
+  export DOCKER_STUB_LOG="${docker_log}"
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS=1
+  export SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS=0
+  export SYMPHONY_REVIEW_PREP_REFRESH_MANAGED=0
+  export SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK=1
+
+  "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
+    --workspace-dir "${workspace}" \
+    --env-file "${env_file}" \
+    > "${output}"
+
+  assert_contains "langfuse_host_port=3449" "${output}"
+  assert_contains "LANGFUSE_HOST_PORT=3449" "${docker_log}"
+  assert_contains "NEXTAUTH_URL=http://192.168.86.44:3449" "${docker_log}"
+
+  export PATH="${old_path}"
+  unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
+  unset SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_FRONTEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_BACKEND_HEALTH_ATTEMPTS SYMPHONY_REVIEW_BACKEND_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_CURATION_HEALTH_ATTEMPTS SYMPHONY_REVIEW_CURATION_HEALTH_SLEEP_SECONDS
+  unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
+  unset SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK
+}
+
 test_review_prep_reports_backend_root_cause() {
   local temp_root workspace stub_dir output docker_log old_path env_file
   temp_root="$(mktemp -d)"
@@ -449,7 +552,9 @@ EOF
 
 test_review_prep_happy_path
 test_review_prep_retries_dependency_start_once
+test_review_prep_preserves_review_ports_over_private_env
 test_review_prep_reports_backend_root_cause
 test_review_prep_normalizes_langfuse_env_before_compose
+test_review_prep_can_include_langfuse_stack
 
 echo "symphony_human_review_prep tests passed"

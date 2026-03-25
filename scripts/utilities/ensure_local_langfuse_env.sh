@@ -172,11 +172,11 @@ ensure_langfuse_database_url() {
   current_value="$(get_env_var "LANGFUSE_DATABASE_URL")"
   current_local_value="$(get_env_var "LANGFUSE_LOCAL_DATABASE_URL")"
 
-  if [[ -z "$current_value" || "$current_value" == *"@langfuse-db:"* || "$current_value" == *"@langfuse-db/"* ]]; then
+  if [[ "$current_value" != "$canonical_langfuse_database_url" ]]; then
     set_env_var "LANGFUSE_DATABASE_URL" "$canonical_langfuse_database_url" "Normalized LANGFUSE_DATABASE_URL to use the compose postgres service."
   fi
 
-  if [[ -z "$current_local_value" || "$current_local_value" == *"@langfuse-db:"* || "$current_local_value" == *"@langfuse-db/"* ]]; then
+  if [[ "$current_local_value" != "$canonical_langfuse_database_url" ]]; then
     set_env_var "LANGFUSE_LOCAL_DATABASE_URL" "$canonical_langfuse_database_url" "Normalized LANGFUSE_LOCAL_DATABASE_URL to use the compose postgres service."
   fi
 }

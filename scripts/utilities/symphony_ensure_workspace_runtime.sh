@@ -55,8 +55,18 @@ workspace_dir="$(cd "${workspace_dir}" && pwd -P)"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/../.." && pwd -P)"
 
+workspace_git_common_dir=""
+if git_common_dir="$(git -C "${workspace_dir}" rev-parse --git-common-dir 2>/dev/null)"; then
+  if [[ "${git_common_dir}" == /* ]]; then
+    workspace_git_common_dir="${git_common_dir}"
+  else
+    workspace_git_common_dir="${workspace_dir}/${git_common_dir}"
+  fi
+fi
+
 hooks_source="${SYMPHONY_HOOKS_SOURCE:-${repo_root}/.git/hooks}"
 local_source_root="${SYMPHONY_LOCAL_SOURCE_ROOT:-${repo_root}}"
+workspace_hooks_dir="${workspace_git_common_dir:-${workspace_dir}/.git}/hooks"
 
 copied=0
 refreshed=0
@@ -70,7 +80,12 @@ ensure_one() {
   local mode="$3"
   local required="$4"
 
-  local dest="${workspace_dir}/${dest_rel}"
+  local dest
+  if [[ "${dest_rel}" == /* ]]; then
+    dest="${dest_rel}"
+  else
+    dest="${workspace_dir}/${dest_rel}"
+  fi
 
   if [[ ! -f "${src}" ]]; then
     if [[ "${required}" == "required" ]]; then
@@ -105,13 +120,14 @@ ensure_one() {
 }
 
 # Required files for core Symphony runtime lanes in this repo.
-ensure_one "${hooks_source}/pre-commit" ".git/hooks/pre-commit" "0755" "required"
-ensure_one "${hooks_source}/pre-push" ".git/hooks/pre-push" "0755" "required"
+ensure_one "${hooks_source}/pre-commit" "${workspace_hooks_dir}/pre-commit" "0755" "required"
+ensure_one "${hooks_source}/pre-push" "${workspace_hooks_dir}/pre-push" "0755" "required"
 ensure_one "${local_source_root}/.symphony/WORKFLOW.md" ".symphony/WORKFLOW.md" "0644" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_pre_merge_cleanup.sh" "scripts/utilities/symphony_pre_merge_cleanup.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_prepare_docker_config.sh" "scripts/utilities/symphony_prepare_docker_config.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_guard_workspace_repo.sh" "scripts/utilities/symphony_guard_workspace_repo.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_human_review_prep.sh" "scripts/utilities/symphony_human_review_prep.sh" "0755" "required"
+ensure_one "${local_source_root}/scripts/utilities/symphony_main_sandbox.sh" "scripts/utilities/symphony_main_sandbox.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_ready_for_pr.sh" "scripts/utilities/symphony_ready_for_pr.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_loop.sh" "scripts/utilities/symphony_claude_review_loop.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_in_review.sh" "scripts/utilities/symphony_in_review.sh" "0755" "required"
