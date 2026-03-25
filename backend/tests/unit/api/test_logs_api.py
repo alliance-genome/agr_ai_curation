@@ -95,11 +95,12 @@ async def test_get_container_logs_uses_default_lookback_and_returns_logs(
 
 @pytest.mark.asyncio
 async def test_get_container_logs_passes_since_and_normalized_level(
-    monkeypatch, frozen_now
+    monkeypatch, frozen_now, fake_loki_client
 ):
     captured = {}
 
-    async def _fake_query_logs(_loki_client, *, service, start, end, limit, level):
+    async def _fake_query_logs(loki_client, *, service, start, end, limit, level):
+        captured["loki_client"] = loki_client
         captured["service"] = service
         captured["start"] = start
         captured["end"] = end
@@ -116,6 +117,8 @@ async def test_get_container_logs_passes_since_and_normalized_level(
         since=15,
     )
 
+    assert len(fake_loki_client) == 1
+    assert captured["loki_client"] is fake_loki_client[0]
     assert captured["service"] == "backend"
     assert captured["start"] == frozen_now - timedelta(minutes=15)
     assert captured["end"] == frozen_now
@@ -126,7 +129,40 @@ async def test_get_container_logs_passes_since_and_normalized_level(
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_formats_loki_error_response(monkeypatch):
+async def test_get_container_logs_returns_empty_payload_for_no_logs(
+    monkeypatch, frozen_now, fake_loki_client
+):
+    captured = {}
+
+    async def _fake_query_logs(loki_client, *, service, start, end, limit, level):
+        captured["loki_client"] = loki_client
+        captured["service"] = service
+        captured["start"] = start
+        captured["end"] = end
+        captured["limit"] = limit
+        captured["level"] = level
+        return []
+
+    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+
+    payload = await logs_api.get_container_logs("backend", lines=100)
+
+    assert len(fake_loki_client) == 1
+    assert captured["loki_client"] is fake_loki_client[0]
+    assert captured["service"] == "backend"
+    assert captured["start"] == frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
+    assert captured["end"] == frozen_now
+    assert captured["limit"] == 100
+    assert captured["level"] is None
+    assert payload.lines == 0
+    assert payload.lines_returned == 0
+    assert payload.logs == ""
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_formats_loki_error_response(
+    monkeypatch, frozen_now, fake_loki_client
+):
     async def _fake_query_logs(*_args, **_kwargs):
         return {
             "status": "error",
@@ -147,7 +183,9 @@ async def test_get_container_logs_formats_loki_error_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_wraps_unexpected_errors(monkeypatch):
+async def test_get_container_logs_wraps_unexpected_errors(
+    monkeypatch, frozen_now, fake_loki_client
+):
     async def _fake_query_logs(*_args, **_kwargs):
         raise RuntimeError("boom")
 
