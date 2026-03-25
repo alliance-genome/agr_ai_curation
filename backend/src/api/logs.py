@@ -5,13 +5,11 @@ Provides access to service logs via Loki for troubleshooting.
 Used by Opus Workflow Analysis feature's get_docker_logs tool.
 """
 
-import json
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Annotated, Any
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -120,54 +118,7 @@ def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str
 
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
     """Flatten Loki results into chronological log lines for docker-log parity."""
-    if not isinstance(payload, dict):
-        raise loki.LokiResponseError("Invalid Loki response format: expected a JSON object.")
-
-    missing = object()
-    data = payload.get("data", missing)
-    if data is missing:
-        raise loki.LokiResponseError("Invalid Loki response format: missing data object.")
-    if not isinstance(data, dict):
-        raise loki.LokiResponseError("Invalid Loki response format: expected data to be an object.")
-
-    result = data.get("result", missing)
-    if result is missing:
-        raise loki.LokiResponseError("Invalid Loki response format: missing data.result list.")
-    if not isinstance(result, list):
-        raise loki.LokiResponseError("Invalid Loki response format: expected data.result to be a list.")
-
-    entries: list[tuple[int, int, str]] = []
-    sequence = 0
-
-    for stream in result:
-        if not isinstance(stream, dict):
-            raise loki.LokiResponseError(
-                "Invalid Loki response format: expected each stream to be an object."
-            )
-        values = stream.get("values", missing)
-        if values is missing:
-            raise loki.LokiResponseError("Invalid Loki response format: missing stream values list.")
-        if not isinstance(values, list):
-            raise loki.LokiResponseError(
-                "Invalid Loki response format: expected stream values to be a list."
-            )
-
-        for entry in values:
-            if not isinstance(entry, list) or len(entry) < 2:
-                raise loki.LokiResponseError(
-                    "Invalid Loki response format: expected each value entry to contain timestamp and line."
-                )
-
-            try:
-                timestamp = int(str(entry[0]))
-            except (TypeError, ValueError) as exc:
-                raise loki.LokiResponseError(
-                    "Invalid Loki response format: expected each value entry timestamp to be a Unix nanosecond integer."
-                ) from exc
-
-            entries.append((timestamp, sequence, str(entry[1])))
-            sequence += 1
-
+    entries = loki.extract_entries(payload)
     entries.sort(key=lambda item: (item[0], item[1]))
     return [line for _, _, line in entries]
 
@@ -191,80 +142,17 @@ async def _query_logs(
     level: str | None,
 ) -> list[str] | dict[str, str]:
     """
-    Query Loki with explicit range bounds and endpoint-specific chronological rendering.
-
-    The shared client already owns LogQL construction, time normalization, and
-    standardized error payloads. This wrapper only adds the `/api/logs`
-    requirements that are not exposed by the client API yet: explicit backward
-    range queries plus a timestamp sort that restores docker-log ordering across
-    Loki streams before the final line-tail rendering step.
+    Query Loki through the shared client with endpoint-specific chronological rendering.
     """
-    try:
-        if limit < 1:
-            raise ValueError("Limit must be greater than zero.")
-
-        start_ns = loki.normalize_time(start)
-        end_ns = loki.normalize_time(end)
-        if start_ns is None or end_ns is None:
-            raise ValueError("Start and end timestamps are required.")
-        if int(start_ns) > int(end_ns):
-            raise ValueError("Start timestamp must be less than or equal to end timestamp.")
-
-        params: dict[str, str | int] = {
-            "query": loki.build_query(service, level),
-            "limit": limit,
-            "start": start_ns,
-            "end": end_ns,
-            "direction": "backward",
-        }
-
-        async with httpx.AsyncClient(timeout=loki_client.timeout) as client:
-            response = await client.get(
-                f"{loki_client.base_url}{loki.LOKI_QUERY_RANGE_PATH}",
-                params=params,
-            )
-            response.raise_for_status()
-
-        try:
-            payload = response.json()
-        except json.JSONDecodeError:
-            return loki.error_result(
-                "Loki returned an invalid JSON response.",
-                "Check Loki service health and the query_range API response.",
-            )
-
-        return _extract_chronological_lines(payload)
-    except loki.LokiResponseError as exc:
-        return loki.error_result(
-            str(exc),
-            "Check Loki service health and confirm the query_range response format is valid.",
-        )
-    except ValueError as exc:
-        return loki.error_result(
-            str(exc),
-            "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
-        )
-    except httpx.TimeoutException:
-        return loki.error_result(
-            f"Timed out querying Loki at {loki_client.base_url}.",
-            "Ensure the Loki service is running and responding on the configured LOKI_URL.",
-        )
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code if exc.response is not None else "unknown"
-        return loki.error_result(
-            f"Loki query failed with HTTP {status_code}.",
-            "Check Loki availability and confirm the query_range endpoint is reachable.",
-        )
-    except httpx.RequestError as exc:
-        return loki.error_result(
-            f"Failed to reach Loki: {exc}.",
-            "Ensure the Loki service is running and the configured LOKI_URL is correct.",
-        )
-    except Exception as exc:
-        return loki.error_result(
-            f"Unexpected Loki client error: {exc}.",
-            "Review Loki service health and client configuration.",
-        )
+    return await loki_client.query_logs(
+        service=service,
+        start=start,
+        end=end,
+        limit=limit,
+        level=level,
+        direction="backward",
+        extractor=_extract_chronological_lines,
+    )
 
 
 async def _get_logs_via_legacy_test_transport(

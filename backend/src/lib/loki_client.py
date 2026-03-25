@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Any, Callable, Literal, TypeAlias, TypedDict
 
 import httpx
 
@@ -37,6 +37,8 @@ class LokiQueryError(TypedDict):
 
 
 LokiQueryResult: TypeAlias = list[str] | LokiQueryError
+LokiEntry: TypeAlias = tuple[int, int, str]
+LokiPayloadExtractor: TypeAlias = Callable[[dict[str, Any]], list[str]]
 
 
 def get_loki_url() -> str:
@@ -121,8 +123,8 @@ def build_query(service: str, level: str | None = None) -> str:
     return "{" + ",".join(matchers) + "}"
 
 
-def _extract_lines(payload: dict[str, Any]) -> list[str]:
-    """Flatten Loki query results into plain log lines."""
+def extract_entries(payload: dict[str, Any]) -> list[LokiEntry]:
+    """Validate a Loki response and return `(timestamp, sequence, line)` tuples."""
     if not isinstance(payload, dict):
         raise LokiResponseError("Invalid Loki response format: expected a JSON object.")
 
@@ -140,7 +142,8 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
     if not isinstance(result, list):
         raise LokiResponseError("Invalid Loki response format: expected data.result to be a list.")
 
-    lines: list[str] = []
+    entries: list[LokiEntry] = []
+    sequence = 0
     for stream in result:
         if not isinstance(stream, dict):
             raise LokiResponseError(
@@ -159,9 +162,22 @@ def _extract_lines(payload: dict[str, Any]) -> list[str]:
                 raise LokiResponseError(
                     "Invalid Loki response format: expected each value entry to contain timestamp and line."
                 )
-            lines.append(str(entry[1]))
+            try:
+                timestamp = int(str(entry[0]))
+            except (TypeError, ValueError) as exc:
+                raise LokiResponseError(
+                    "Invalid Loki response format: expected each value entry timestamp to be a Unix nanosecond integer."
+                ) from exc
 
-    return lines
+            entries.append((timestamp, sequence, str(entry[1])))
+            sequence += 1
+
+    return entries
+
+
+def _extract_lines(payload: dict[str, Any]) -> list[str]:
+    """Flatten Loki query results into plain log lines."""
+    return [line for _, _, line in extract_entries(payload)]
 
 
 def error_result(error: str, help_text: str) -> LokiQueryError:
@@ -194,6 +210,8 @@ class LokiClient:
         end: TimeInput | None = None,
         limit: int = DEFAULT_LIMIT,
         level: str | None = None,
+        direction: Literal["backward", "forward"] | None = None,
+        extractor: LokiPayloadExtractor | None = None,
     ) -> LokiQueryResult:
         """Query Loki logs for one service and return parsed log lines."""
         try:
@@ -217,6 +235,8 @@ class LokiClient:
                 params["start"] = start_ns
             if end_ns is not None:
                 params["end"] = end_ns
+            if direction is not None:
+                params["direction"] = direction
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
@@ -233,7 +253,8 @@ class LokiClient:
                     "Check Loki service health and the query_range API response.",
                 )
 
-            lines = _extract_lines(payload)
+            parser = extractor or _extract_lines
+            lines = parser(payload)
             return lines
         except LokiResponseError as exc:
             return error_result(
