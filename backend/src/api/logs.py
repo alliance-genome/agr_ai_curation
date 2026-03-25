@@ -71,6 +71,13 @@ ALLOWED_CONTAINERS = {
 CONTAINER_TO_SERVICE_LABEL = {container: container for container in ALLOWED_CONTAINERS}
 ALLOWED_LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"}
 LOKI_EARLIEST_QUERY_TIME = datetime(1970, 1, 1, tzinfo=timezone.utc)
+LOG_LEVEL_LABEL_PATTERNS = {
+    "DEBUG": "(?i)^debug$",
+    "INFO": "(?i)^info$",
+    "WARN": "(?i)^warn(?:ing)?$",
+    "ERROR": "(?i)^error$",
+    "FATAL": "(?i)^fatal$",
+}
 
 
 def _legacy_test_transport_enabled() -> bool:
@@ -97,6 +104,26 @@ def _normalize_log_level(level: str | None) -> str | None:
             f"{', '.join(sorted(ALLOWED_LOG_LEVELS))}"
         ),
     )
+
+
+def _build_logs_query(service: str, level: str | None = None) -> str:
+    """Build the `/api/logs` LogQL selector using Loki labels, not message text."""
+    normalized_service = service.strip()
+    if not normalized_service:
+        raise ValueError("Service label is required.")
+
+    matchers = [f'service="{loki._escape_logql_literal(normalized_service)}"']
+
+    if level:
+        normalized_level = level.strip().upper()
+        level_pattern = LOG_LEVEL_LABEL_PATTERNS.get(normalized_level)
+        if not normalized_level or level_pattern is None:
+            raise ValueError("Log level filter cannot be blank.")
+        matchers.append(
+            f'level=~"{loki._escape_logql_literal(level_pattern)}"'
+        )
+
+    return "{" + ",".join(matchers) + "}"
 
 
 def _join_log_lines(log_lines: list[str]) -> str:
@@ -210,7 +237,7 @@ async def _query_logs(
             raise ValueError("Start timestamp must be less than or equal to end timestamp.")
 
         params: dict[str, str | int] = {
-            "query": loki._build_query(service, level),
+            "query": _build_logs_query(service, level),
             "limit": limit,
             "start": start_ns,
             "end": end_ns,
