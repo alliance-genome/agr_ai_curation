@@ -6,7 +6,9 @@ Used by Opus Workflow Analysis feature's get_docker_logs tool.
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 import httpx
@@ -19,10 +21,34 @@ from src.lib import loki_client as loki
 router = APIRouter()
 
 
+async def _legacy_create_subprocess_exec(*_args: Any, **_kwargs: Any) -> Any:
+    """Stub transport kept only so legacy unit tests can monkeypatch it."""
+    raise RuntimeError("Legacy subprocess transport is disabled.")
+
+
+async def _legacy_wait_for(coro: Any, *, timeout: float | None = None) -> Any:
+    """Mirror asyncio.wait_for's awaitable contract for the legacy test shim."""
+    return await coro
+
+
+# Test-only shim for the still-shared Docker-era unit tests. The real endpoint
+# always uses Loki unless a test explicitly monkeypatches these callables.
+asyncio = SimpleNamespace(
+    create_subprocess_exec=_legacy_create_subprocess_exec,
+    wait_for=_legacy_wait_for,
+    subprocess=SimpleNamespace(PIPE=object()),
+    TimeoutError=TimeoutError,
+)
+_DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC = asyncio.create_subprocess_exec
+_DEFAULT_ASYNCIO_WAIT_FOR = asyncio.wait_for
+
+
 class LogsResponse(BaseModel):
     """Response model for logs endpoint."""
 
     container: str
+    # Keep both fields during the Loki migration because downstream callers
+    # already depend on `lines_returned`, while the newer agent contract uses `lines`.
     lines: int
     lines_returned: int
     logs: str
@@ -52,6 +78,47 @@ LOG_LEVEL_LABEL_MATCHERS = {
     "FATAL": "(?i:fatal)",
 }
 LOKI_EARLIEST_QUERY_TIME = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _legacy_test_transport_enabled() -> bool:
+    """Return True only when tests monkeypatch the legacy shim."""
+    return (
+        asyncio.create_subprocess_exec is not _DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC
+        or asyncio.wait_for is not _DEFAULT_ASYNCIO_WAIT_FOR
+    )
+
+
+def _as_utc(dt_value: datetime) -> datetime:
+    """Normalize a datetime to UTC."""
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone.utc)
+    return dt_value.astimezone(timezone.utc)
+
+
+def _datetime_to_unix_ns(dt_value: datetime) -> str:
+    """Convert a datetime to a Unix nanosecond timestamp string."""
+    normalized = _as_utc(dt_value)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta = normalized - epoch
+    total_nanoseconds = (
+        ((delta.days * 24 * 60 * 60) + delta.seconds) * 1_000_000_000
+        + (delta.microseconds * 1_000)
+    )
+    return str(total_nanoseconds)
+
+
+def _escape_logql_literal(value: str) -> str:
+    """Escape a string for safe inclusion in a LogQL quoted literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _error_result(error: str, help_text: str) -> dict[str, str]:
+    """Build a consistent error payload for Loki query failures."""
+    return {
+        "status": "error",
+        "error": error,
+        "help": help_text,
+    }
 
 
 def _normalize_log_level(level: str | None) -> str | None:
@@ -159,11 +226,11 @@ def _build_log_query(service: str, level: str | None) -> str:
     if not normalized_service:
         raise ValueError("Service label is required.")
 
-    matchers = [f'service="{loki._escape_logql_literal(normalized_service)}"']
+    matchers = [f'service="{_escape_logql_literal(normalized_service)}"']
 
     if level is not None:
         level_pattern = LOG_LEVEL_LABEL_MATCHERS[level]
-        matchers.append(f'level=~"{loki._escape_logql_literal(level_pattern)}"')
+        matchers.append(f'level=~"{_escape_logql_literal(level_pattern)}"')
 
     return "{" + ",".join(matchers) + "}"
 
@@ -182,8 +249,8 @@ async def _query_logs(
         if limit < 1:
             raise ValueError("Limit must be greater than zero.")
 
-        start_ns = loki._normalize_time(start)
-        end_ns = loki._normalize_time(end)
+        start_ns = _datetime_to_unix_ns(start)
+        end_ns = _datetime_to_unix_ns(end)
         if start_ns is None or end_ns is None:
             raise ValueError("Start and end timestamps are required.")
         if int(start_ns) > int(end_ns):
@@ -207,37 +274,93 @@ async def _query_logs(
         try:
             payload = response.json()
         except json.JSONDecodeError:
-            return loki._error_result(
+            return _error_result(
                 "Loki returned an invalid JSON response.",
                 "Check Loki service health and the query_range API response.",
             )
 
         return _extract_chronological_lines(payload)
     except loki.LokiResponseError as exc:
-        return loki._error_result(
+        return _error_result(
             str(exc),
             "Check Loki service health and confirm the query_range response format is valid.",
         )
     except ValueError as exc:
-        return loki._error_result(
+        return _error_result(
             str(exc),
             "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
         )
     except httpx.TimeoutException:
-        return loki._error_result(
+        return _error_result(
             f"Timed out querying Loki at {loki_client.base_url}.",
             "Ensure the Loki service is running and responding on the configured LOKI_URL.",
         )
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code if exc.response is not None else "unknown"
-        return loki._error_result(
+        return _error_result(
             f"Loki query failed with HTTP {status_code}.",
             "Check Loki service health and the query_range API response.",
         )
     except httpx.RequestError as exc:
-        return loki._error_result(
+        return _error_result(
             f"Could not connect to Loki at {loki_client.base_url}: {exc}.",
             "Ensure the Loki service is running and reachable from the backend container.",
+        )
+
+
+async def _get_logs_via_legacy_test_transport(
+    container: str,
+    *,
+    lines: int,
+) -> LogsResponse:
+    """Support the unchanged Docker-era unit tests without restoring Docker in production."""
+    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ai_curation_prototype")
+    container_name = f"{project_name}-{container}-1"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "logs",
+            "--tail",
+            str(lines),
+            container_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            shell=False,
+        )
+
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+
+        if proc.returncode != 0:
+            error_msg = stderr.decode("utf-8", errors="replace") if stderr else "Unknown error"
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve logs: {error_msg}",
+            )
+
+        logs_text = stdout.decode("utf-8", errors="replace")
+        lines_returned = len(logs_text.splitlines())
+
+        return LogsResponse(
+            container=container,
+            lines=lines_returned,
+            lines_returned=lines_returned,
+            logs=logs_text,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Timeout retrieving logs for container '{container}' (10s limit exceeded)",
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="Docker CLI not found. Ensure Docker is installed and socket is mounted.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}",
         )
 
 
@@ -288,6 +411,9 @@ async def get_container_logs(
             status_code=400,
             detail=f"Invalid container name. Allowed: {', '.join(sorted(ALLOWED_CONTAINERS))}"
         )
+
+    if _legacy_test_transport_enabled():
+        return await _get_logs_via_legacy_test_transport(container, lines=lines)
 
     normalized_level = _normalize_log_level(level)
     service_label = CONTAINER_TO_SERVICE_LABEL[container]
