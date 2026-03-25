@@ -5,9 +5,7 @@ Provides access to service logs via Loki for troubleshooting.
 Used by Opus Workflow Analysis feature's get_docker_logs tool.
 """
 
-import os
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -19,41 +17,12 @@ from src.lib import loki_client as loki
 router = APIRouter()
 
 
-async def _legacy_create_subprocess_exec(*_args: Any, **_kwargs: Any) -> Any:
-    """Stub transport kept only so legacy unit tests can monkeypatch it."""
-    raise RuntimeError("Legacy subprocess transport is disabled.")
-
-
-async def _legacy_wait_for(coro: Any, *, timeout: float | None = None) -> Any:
-    """Mirror asyncio.wait_for's awaitable contract for the legacy test shim."""
-    return await coro
-
-
-# Test-only shim for the still-shared Docker-era unit tests. The real endpoint
-# always uses Loki unless a test explicitly monkeypatches these callables.
-_legacy_asyncio_shim = SimpleNamespace(
-    create_subprocess_exec=_legacy_create_subprocess_exec,
-    wait_for=_legacy_wait_for,
-    subprocess=SimpleNamespace(PIPE=object()),
-    TimeoutError=TimeoutError,
-)
-_DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC = _legacy_asyncio_shim.create_subprocess_exec
-_DEFAULT_ASYNCIO_WAIT_FOR = _legacy_asyncio_shim.wait_for
-
-
-def __getattr__(name: str) -> Any:
-    """Expose legacy test shims without shadowing stdlib module names in this module."""
-    if name == "asyncio":
-        return _legacy_asyncio_shim
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 class LogsResponse(BaseModel):
     """Response model for logs endpoint."""
 
     container: str
-    # Keep both fields during the Loki migration because downstream callers
-    # already depend on `lines_returned`, while the newer agent contract uses `lines`.
+    # Keep both fields because downstream callers still consume `lines_returned`,
+    # while newer clients read the shorter `lines` field.
     lines: int
     lines_returned: int
     logs: str
@@ -77,15 +46,6 @@ CONTAINER_TO_SERVICE_LABEL = {container: container for container in ALLOWED_CONT
 ALLOWED_LOG_LEVELS = frozenset(loki.LOG_LEVEL_LABEL_PATTERNS)
 # Keep the default bounded so an omitted `since` does not trigger an epoch-wide Loki scan.
 DEFAULT_LOKI_LOOKBACK = timedelta(hours=24)
-
-
-def _legacy_test_transport_enabled() -> bool:
-    """Return True only when tests monkeypatch the legacy shim."""
-    return (
-        _legacy_asyncio_shim.create_subprocess_exec
-        is not _DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC
-        or _legacy_asyncio_shim.wait_for is not _DEFAULT_ASYNCIO_WAIT_FOR
-    )
 
 
 def _normalize_log_level(level: str | None) -> str | None:
@@ -125,7 +85,7 @@ def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str
 
 
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
-    """Flatten Loki results into chronological log lines for docker-log parity."""
+    """Flatten Loki results into chronological log lines for API consumers."""
     entries = loki.extract_timestamped_entries(payload)
     entries.sort(key=lambda item: (item[0], item[1]))
     return [line for _, _, line in entries]
@@ -161,64 +121,6 @@ async def _query_logs(
         direction="backward",
         extractor=_extract_chronological_lines,
     )
-
-
-async def _get_logs_via_legacy_test_transport(
-    container: str,
-    *,
-    lines: int,
-) -> LogsResponse:
-    """Support the unchanged Docker-era unit tests without restoring Docker in production."""
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ai_curation_prototype")
-    container_name = f"{project_name}-{container}-1"
-
-    try:
-        proc = await _legacy_asyncio_shim.create_subprocess_exec(
-            "docker",
-            "logs",
-            "--tail",
-            str(lines),
-            container_name,
-            stdout=_legacy_asyncio_shim.subprocess.PIPE,
-            stderr=_legacy_asyncio_shim.subprocess.PIPE,
-            shell=False,
-        )
-
-        stdout, stderr = await _legacy_asyncio_shim.wait_for(
-            proc.communicate(), timeout=10.0
-        )
-
-        if proc.returncode != 0:
-            error_msg = stderr.decode("utf-8", errors="replace") if stderr else "Unknown error"
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to retrieve logs: {error_msg}",
-            )
-
-        logs_text = stdout.decode("utf-8", errors="replace")
-        lines_returned = len(logs_text.splitlines())
-
-        return LogsResponse(
-            container=container,
-            lines=lines_returned,
-            lines_returned=lines_returned,
-            logs=logs_text,
-        )
-    except _legacy_asyncio_shim.TimeoutError:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Timeout retrieving logs for container '{container}' (10s limit exceeded)",
-        )
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=500,
-            detail="Docker CLI not found. Ensure Docker is installed and socket is mounted.",
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error: {str(e)}",
-        )
 
 
 @router.get("/logs/{container}", response_model=LogsResponse)
@@ -268,9 +170,6 @@ async def get_container_logs(
             status_code=400,
             detail=f"Invalid container name. Allowed: {', '.join(sorted(ALLOWED_CONTAINERS))}"
         )
-
-    if _legacy_test_transport_enabled():
-        return await _get_logs_via_legacy_test_transport(container, lines=lines)
 
     normalized_level = _normalize_log_level(level)
     service_label = CONTAINER_TO_SERVICE_LABEL[container]
