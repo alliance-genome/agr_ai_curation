@@ -79,6 +79,17 @@ def _join_log_lines(log_lines: list[str]) -> str:
     return "\n".join(log_lines) + "\n"
 
 
+def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str, int]:
+    """Apply the requested line limit after multiline entries are rendered."""
+    rendered_logs = _join_log_lines(log_entries)
+    if not rendered_logs:
+        return "", 0
+
+    rendered_lines = rendered_logs.splitlines(keepends=True)
+    tailed_lines = rendered_lines[-line_limit:]
+    return "".join(tailed_lines), len(tailed_lines)
+
+
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
     """Flatten Loki results into chronological log lines for docker-log parity."""
     if not isinstance(payload, dict):
@@ -304,8 +315,7 @@ async def get_container_logs(
                 detail=_format_loki_error(result),
             )
 
-        logs_text = _join_log_lines(result)
-        lines_returned = len(result)
+        logs_text, lines_returned = _tail_rendered_logs(result, line_limit=lines)
 
         return LogsResponse(
             container=container,
