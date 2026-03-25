@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -18,28 +19,15 @@ class _FrozenDateTime(datetime):
         return cls._now.astimezone(tz)
 
 
-class _FakeLokiClient:
-    def __init__(self, *, timeout_seconds):
-        self.timeout_seconds = timeout_seconds
+@pytest.fixture(autouse=True)
+def clear_loki_url(monkeypatch):
+    monkeypatch.delenv("LOKI_URL", raising=False)
 
 
 @pytest.fixture
 def frozen_now(monkeypatch):
     monkeypatch.setattr(logs_api, "datetime", _FrozenDateTime)
     return _FrozenDateTime._now
-
-
-@pytest.fixture
-def fake_loki_client(monkeypatch):
-    created_clients = []
-
-    def _factory(*, timeout_seconds):
-        client = _FakeLokiClient(timeout_seconds=timeout_seconds)
-        created_clients.append(client)
-        return client
-
-    monkeypatch.setattr(logs_api.loki, "LokiClient", _factory)
-    return created_clients
 
 
 @pytest.mark.asyncio
@@ -61,131 +49,153 @@ async def test_get_container_logs_rejects_invalid_level():
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_uses_default_lookback_and_returns_logs(
-    monkeypatch, frozen_now, fake_loki_client
+async def test_get_container_logs_queries_loki_with_default_lookback_and_service_label(
+    frozen_now, patch_loki_async_client, loki_response
 ):
-    captured = {}
-
-    async def _fake_query_logs(loki_client, *, service, start, end, limit, level):
-        captured["loki_client"] = loki_client
-        captured["service"] = service
-        captured["start"] = start
-        captured["end"] = end
-        captured["limit"] = limit
-        captured["level"] = level
-        return ["line1", "line2"]
-
-    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    capture = {}
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(
+            logs_api.loki,
+            {
+                "data": {
+                    "result": [
+                        {
+                            "stream": {"service": "backend"},
+                            "values": [
+                                ["1742903999000000000", "later line"],
+                                ["1742903998000000000", "earlier line"],
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        capture=capture,
+    )
 
     payload = await logs_api.get_container_logs("backend", lines=120)
 
-    assert len(fake_loki_client) == 1
-    assert fake_loki_client[0].timeout_seconds == 10.0
-    assert captured["loki_client"] is fake_loki_client[0]
-    assert captured["service"] == "backend"
-    assert captured["start"] == frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
-    assert captured["end"] == frozen_now
-    assert captured["limit"] == 120
-    assert captured["level"] is None
+    assert capture["url"] == (
+        f"{logs_api.loki.DEFAULT_LOKI_URL}{logs_api.loki.LOKI_QUERY_RANGE_PATH}"
+    )
+    assert isinstance(capture["timeout"], httpx.Timeout)
+    assert capture["timeout"].connect == 10.0
+    assert capture["timeout"].read == 10.0
+    assert capture["params"]["query"] == '{service="backend"}'
+    assert capture["params"]["limit"] == 120
+    assert capture["params"]["direction"] == "backward"
+    assert capture["params"]["start"] == logs_api.loki.normalize_time(
+        frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
+    )
+    assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
     assert payload.container == "backend"
     assert payload.lines == 2
     assert payload.lines_returned == 2
-    assert payload.logs == "line1\nline2\n"
+    assert payload.logs == "earlier line\nlater line\n"
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_passes_since_and_normalized_level(
-    monkeypatch, frozen_now, fake_loki_client
+async def test_get_container_logs_passes_since_level_and_limit_to_loki(
+    frozen_now, patch_loki_async_client, loki_response
 ):
-    captured = {}
-
-    async def _fake_query_logs(loki_client, *, service, start, end, limit, level):
-        captured["loki_client"] = loki_client
-        captured["service"] = service
-        captured["start"] = start
-        captured["end"] = end
-        captured["limit"] = limit
-        captured["level"] = level
-        return ["debug context", "ERROR line"]
-
-    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    capture = {}
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(
+            logs_api.loki,
+            {
+                "data": {
+                    "result": [
+                        {
+                            "stream": {"service": "backend", "level": "ERROR"},
+                            "values": [["1742903100000000000", "ERROR line"]],
+                        }
+                    ]
+                }
+            }
+        ),
+        capture=capture,
+    )
 
     payload = await logs_api.get_container_logs(
         "backend",
-        lines=100,
+        lines=150,
         level="error",
         since=15,
     )
 
-    assert len(fake_loki_client) == 1
-    assert captured["loki_client"] is fake_loki_client[0]
-    assert captured["service"] == "backend"
-    assert captured["start"] == frozen_now - timedelta(minutes=15)
-    assert captured["end"] == frozen_now
-    assert captured["limit"] == 100
-    assert captured["level"] == "ERROR"
-    assert payload.lines_returned == 2
-    assert payload.logs == "debug context\nERROR line\n"
+    assert capture["params"]["query"] == (
+        '{service="backend",level=~"(?i)^error$"}'
+    )
+    assert capture["params"]["limit"] == 150
+    assert capture["params"]["start"] == logs_api.loki.normalize_time(
+        frozen_now - timedelta(minutes=15)
+    )
+    assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
+    assert payload.lines == 1
+    assert payload.lines_returned == 1
+    assert payload.logs == "ERROR line\n"
 
 
 @pytest.mark.asyncio
 async def test_get_container_logs_returns_empty_payload_for_no_logs(
-    monkeypatch, frozen_now, fake_loki_client
+    patch_loki_async_client, loki_response
 ):
-    captured = {}
-
-    async def _fake_query_logs(loki_client, *, service, start, end, limit, level):
-        captured["loki_client"] = loki_client
-        captured["service"] = service
-        captured["start"] = start
-        captured["end"] = end
-        captured["limit"] = limit
-        captured["level"] = level
-        return []
-
-    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    capture = {}
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(logs_api.loki, {"data": {"result": []}}),
+        capture=capture,
+    )
 
     payload = await logs_api.get_container_logs("backend", lines=100)
 
-    assert len(fake_loki_client) == 1
-    assert captured["loki_client"] is fake_loki_client[0]
-    assert captured["service"] == "backend"
-    assert captured["start"] == frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
-    assert captured["end"] == frozen_now
-    assert captured["limit"] == 100
-    assert captured["level"] is None
+    assert capture["params"]["query"] == '{service="backend"}'
+    assert capture["params"]["limit"] == 100
     assert payload.lines == 0
     assert payload.lines_returned == 0
     assert payload.logs == ""
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_formats_loki_error_response(
-    monkeypatch, frozen_now, fake_loki_client
+@pytest.mark.parametrize(
+    ("exc", "expected_error", "expected_help"),
+    [
+        (
+            httpx.TimeoutException("timeout"),
+            "Timed out querying Loki at",
+            "Ensure the Loki service is running and responding on the configured LOKI_URL.",
+        ),
+        (
+            httpx.ConnectError(
+                "connection refused",
+                request=httpx.Request(
+                    "GET",
+                    f"{logs_api.loki.DEFAULT_LOKI_URL}{logs_api.loki.LOKI_QUERY_RANGE_PATH}",
+                ),
+            ),
+            "Failed to reach Loki: connection refused.",
+            "Ensure the Loki service is running and the configured LOKI_URL is correct.",
+        ),
+    ],
+)
+async def test_get_container_logs_formats_loki_unavailable_errors(
+    patch_loki_async_client, exc, expected_error, expected_help
 ):
-    async def _fake_query_logs(*_args, **_kwargs):
-        return {
-            "status": "error",
-            "error": "Timed out querying Loki.",
-            "help": "Ensure the Loki service is running.",
-        }
+    patch_loki_async_client(logs_api.loki, exc=exc)
 
-    monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
-
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(HTTPException) as error:
         await logs_api.get_container_logs("backend", lines=200)
 
-    assert exc.value.status_code == 500
-    assert exc.value.detail == (
-        "Failed to retrieve logs from Loki: Timed out querying Loki. "
-        "Ensure the Loki service is running."
-    )
+    assert error.value.status_code == 500
+    assert error.value.detail.startswith("Failed to retrieve logs from Loki: ")
+    assert expected_error in error.value.detail
+    assert expected_help in error.value.detail
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_wraps_unexpected_errors(
-    monkeypatch, frozen_now, fake_loki_client
-):
+async def test_get_container_logs_wraps_unexpected_errors(monkeypatch):
     async def _fake_query_logs(*_args, **_kwargs):
         raise RuntimeError("boom")
 
