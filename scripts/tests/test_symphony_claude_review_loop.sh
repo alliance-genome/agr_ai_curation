@@ -779,6 +779,56 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+# ── Test: --disposition-file is accepted and does not break dry-run ───
+
+test_disposition_file_accepted() {
+  local temp_dir top_json inline_json output_file disposition_file rc output
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+  output_file="${temp_dir}/output.txt"
+  disposition_file="${temp_dir}/disposition.md"
+
+  # Scenario that triggers request_and_wait: head newer than review, no markers
+  cat > "${top_json}" <<'EOF'
+{
+  "comments": [
+    {
+      "author": {"login": "claude"},
+      "createdAt": "2026-03-21T14:04:00Z",
+      "url": "https://github.com/test/repo/pull/99#issuecomment-1",
+      "body": "## Review\n\nSuggestion: add error handling.\nSuggestion: refactor helper."
+    }
+  ],
+  "reviews": [],
+  "url": "https://github.com/test/repo/pull/99",
+  "headRefOid": "def456",
+  "commits": [
+    {"oid": "abc123", "committedDate": "2026-03-21T14:01:00Z"},
+    {"oid": "def456", "committedDate": "2026-03-21T14:15:00Z"}
+  ]
+}
+EOF
+  echo '[]' > "${inline_json}"
+
+  # Write a disposition file with not-taken items
+  cat > "${disposition_file}" <<'EOF'
+- Add error handling → **fixed**
+- Refactor helper → **not taken**: out of scope, covered by ALL-99
+EOF
+
+  # Run with --dry-run and --disposition-file; should succeed without error
+  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" \
+    --dry-run --disposition-file "${disposition_file}")"
+  output="$(cat "${output_file}")"
+
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+
+  echo "  PASS: test_disposition_file_accepted"
+  rm -rf "${temp_dir}"
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 
 echo "Running symphony_claude_review_loop tests..."
@@ -797,5 +847,6 @@ test_custom_author
 test_already_requested_sha_does_not_repost
 test_report_excludes_rereview_markers
 test_pr109_scenario_head_after_review
+test_disposition_file_accepted
 
-echo "symphony_claude_review_loop tests passed (15/15)"
+echo "symphony_claude_review_loop tests passed (16/16)"

@@ -33,6 +33,7 @@ Options:
   --wait-seconds VALUE      Poll timeout per round in seconds (default: 300)
   --poll-seconds VALUE      Poll interval in seconds (default: 30)
   --head-sha VALUE          Current PR head SHA for re-review marker dedup (optional; auto-detected from PR if omitted)
+  --disposition-file PATH   File containing feedback disposition context (items intentionally not addressed and why)
   --top-json-file PATH      Test fixture override for gh pr view JSON
   --inline-json-file PATH   Test fixture override for gh api inline-comment JSON
   --dry-run                 Do not post re-review requests; report what would happen
@@ -47,6 +48,7 @@ max_rounds=3
 wait_seconds=300
 poll_seconds=30
 head_sha=""
+disposition_file=""
 top_json_file=""
 inline_json_file=""
 dry_run=0
@@ -83,6 +85,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --head-sha)
       head_sha="${2:-}"
+      shift 2
+      ;;
+    --disposition-file)
+      disposition_file="${2:-}"
       shift 2
       ;;
     --top-json-file)
@@ -572,6 +578,18 @@ post_rereview_request() {
 - Updated PR head: \`${short_sha}\`
 - Context: addressed prior PR feedback
 "
+
+  # Append feedback disposition context if provided, so Claude knows
+  # which prior suggestions were intentionally not addressed and why.
+  if [[ -n "${disposition_file}" && -s "${disposition_file}" ]]; then
+    comment_body+="
+### Prior Feedback Disposition
+
+The following is the agent's disposition on your prior review comments. Items marked **not taken** were intentionally skipped for the stated reason — please do not re-raise them unless the stated reason is incorrect.
+
+$(cat "${disposition_file}")
+"
+  fi
 
   if (( dry_run == 1 )); then
     echo "DRY_RUN: would post re-review request for ${short_sha}" >&2

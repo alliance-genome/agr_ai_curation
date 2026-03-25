@@ -18,6 +18,7 @@ Options:
   --wait-for-review-seconds N    Wait N seconds for Claude Code review after PR success (default: 0)
   --review-poll-seconds N        Poll interval during Claude wait (default: 30)
   --review-author VALUE          GitHub login to watch for reviews (default: claude)
+  --disposition-file PATH        File with feedback disposition context (passed to Claude review loop)
   --dry-run                      Do not create a PR; report intended action only
   --pr-json-file PATH            Test fixture override for `gh pr list` JSON
   --pr-view-json-file PATH       Test fixture override for `gh pr view` JSON
@@ -34,6 +35,7 @@ body_file=""
 wait_for_review_seconds=0
 review_poll_seconds=30
 review_author="claude"
+disposition_file=""
 dry_run=0
 pr_json_file=""
 pr_view_json_file=""
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --review-author)
       review_author="${2:-}"
+      shift 2
+      ;;
+    --disposition-file)
+      disposition_file="${2:-}"
       shift 2
       ;;
     --dry-run)
@@ -201,14 +207,18 @@ INST
 
   local loop_output
   set +e
-  loop_output="$(bash "${loop_script}" \
-    --repo "${repo}" \
-    --pr "${pr_num}" \
-    --since "${since_ts}" \
-    --author "${review_author}" \
-    --wait-seconds "${wait_for_review_seconds}" \
-    --poll-seconds "${review_poll_seconds}" \
-    --max-rounds 3)"
+  local -a loop_cmd=(bash "${loop_script}"
+    --repo "${repo}"
+    --pr "${pr_num}"
+    --since "${since_ts}"
+    --author "${review_author}"
+    --wait-seconds "${wait_for_review_seconds}"
+    --poll-seconds "${review_poll_seconds}"
+    --max-rounds 3)
+  if [[ -n "${disposition_file}" && -s "${disposition_file}" ]]; then
+    loop_cmd+=(--disposition-file "${disposition_file}")
+  fi
+  loop_output="$("${loop_cmd[@]}")"
   set -e
 
   # Extract variables from loop output
