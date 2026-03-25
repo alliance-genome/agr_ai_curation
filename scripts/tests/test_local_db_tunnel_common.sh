@@ -60,6 +60,16 @@ assert_file_exists() {
   }
 }
 
+assert_output_contains() {
+  local pattern="$1"
+  local output="$2"
+  if ! printf '%s\n' "${output}" | rg -n --fixed-strings "${pattern}" >/dev/null 2>&1; then
+    echo "Expected to find '${pattern}' in output:" >&2
+    printf '%s\n' "${output}" >&2
+    exit 1
+  fi
+}
+
 test_forward_host_defaults_to_host_docker_internal() {
   unset CURATION_DB_TUNNEL_FORWARD_HOST || true
   assert_equals "host.docker.internal" "$(local_db_tunnel_forward_host)"
@@ -165,6 +175,63 @@ test_spawn_detached_creates_missing_parent_dirs() {
   kill "${worker_pid}" 2>/dev/null || true
 }
 
+test_load_private_env_tolerates_forward_references_under_nounset() {
+  local temp_home env_file output
+  temp_home="$(mktemp -d)"
+  mkdir -p "${temp_home}/.agr_ai_curation"
+  env_file="${temp_home}/.agr_ai_curation/.env"
+
+  cat > "${env_file}" <<'EOF'
+LANGFUSE_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+POSTGRES_PASSWORD=from-later-line
+AWS_PROFILE=test-profile
+EOF
+
+  output="$(
+    HOME="${temp_home}" bash -c "
+      set -euo pipefail
+      source '${REPO_ROOT}/scripts/lib/local_db_tunnel_common.sh'
+      local_db_tunnel_load_private_env >/dev/null
+      printf 'POSTGRES_PASSWORD=%s\n' \"\${POSTGRES_PASSWORD}\"
+      printf 'AWS_PROFILE=%s\n' \"\${AWS_PROFILE}\"
+      printf 'LANGFUSE_DATABASE_URL=%s\n' \"\${LANGFUSE_DATABASE_URL}\"
+    "
+  )"
+
+  assert_output_contains "POSTGRES_PASSWORD=from-later-line" "${output}"
+  assert_output_contains "AWS_PROFILE=test-profile" "${output}"
+  assert_output_contains 'LANGFUSE_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres' "${output}"
+}
+
+test_load_private_env_expands_known_earlier_variables() {
+  local temp_home env_file output
+  temp_home="$(mktemp -d)"
+  mkdir -p "${temp_home}/.agr_ai_curation"
+  env_file="${temp_home}/.agr_ai_curation/.env"
+
+  cat > "${env_file}" <<'EOF'
+BASE_PROFILE=team-dev
+AWS_PROFILE=${BASE_PROFILE}
+DOUBLE_QUOTED="prefix-${BASE_PROFILE}"
+SINGLE_QUOTED='literal-${BASE_PROFILE}'
+EOF
+
+  output="$(
+    HOME="${temp_home}" bash -c "
+      set -euo pipefail
+      source '${REPO_ROOT}/scripts/lib/local_db_tunnel_common.sh'
+      local_db_tunnel_load_private_env >/dev/null
+      printf 'AWS_PROFILE=%s\n' \"\${AWS_PROFILE}\"
+      printf 'DOUBLE_QUOTED=%s\n' \"\${DOUBLE_QUOTED}\"
+      printf 'SINGLE_QUOTED=%s\n' \"\${SINGLE_QUOTED}\"
+    "
+  )"
+
+  assert_output_contains "AWS_PROFILE=team-dev" "${output}"
+  assert_output_contains "DOUBLE_QUOTED=prefix-team-dev" "${output}"
+  assert_output_contains 'SINGLE_QUOTED=literal-${BASE_PROFILE}' "${output}"
+}
+
 test_forward_host_defaults_to_host_docker_internal
 test_bind_ip_override_wins
 test_docker_gateway_ip_uses_docker_bridge_when_available
@@ -172,5 +239,7 @@ test_write_env_file_uses_container_forward_host
 test_state_dir_is_workspace_specific
 test_state_root_falls_back_when_xdg_runtime_dir_is_unusable
 test_spawn_detached_creates_missing_parent_dirs
+test_load_private_env_tolerates_forward_references_under_nounset
+test_load_private_env_expands_known_earlier_variables
 
 echo "local_db_tunnel_common tests passed"

@@ -33,11 +33,51 @@ local_db_tunnel_load_private_env() {
   local agr_env_file="${AGR_AI_CURATION_ENV_FILE:-${HOME}/.agr_ai_curation/.env}"
   if [[ -f "${agr_env_file}" ]]; then
     local_db_tunnel_info "🔐 Loading local environment: ${agr_env_file}"
-    set -a
-    # shellcheck disable=SC1090
-    source "${agr_env_file}"
-    set +a
+    local raw_line line key value
+
+    while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+      line="${raw_line%$'\r'}"
+
+      if [[ -z "${line//[[:space:]]/}" || "${line}" =~ ^[[:space:]]*# ]]; then
+        continue
+      fi
+
+      if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+        key="${BASH_REMATCH[2]}"
+        value="${BASH_REMATCH[3]}"
+        value="${value#"${value%%[![:space:]]*}"}"
+
+        if [[ "${value}" =~ ^\"(.*)\"[[:space:]]*$ ]]; then
+          value="${BASH_REMATCH[1]}"
+          value="$(local_db_tunnel_expand_known_vars "${value}")"
+        elif [[ "${value}" =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+          value="${BASH_REMATCH[1]}"
+        else
+          value="${value%%[[:space:]]#*}"
+          value="${value%"${value##*[![:space:]]}"}"
+          value="$(local_db_tunnel_expand_known_vars "${value}")"
+        fi
+
+        export "${key}=${value}"
+      fi
+    done < "${agr_env_file}"
   fi
+}
+
+local_db_tunnel_expand_known_vars() {
+  LOCAL_DB_TUNNEL_ENV_VALUE="$1" python3 - <<'PY'
+import os
+import re
+
+value = os.environ["LOCAL_DB_TUNNEL_ENV_VALUE"]
+pattern = re.compile(r"\$(\w+)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+def replace(match):
+    name = match.group(1) or match.group(2)
+    return os.environ.get(name, match.group(0))
+
+print(pattern.sub(replace, value), end="")
+PY
 }
 
 local_db_tunnel_require_prereqs() {
