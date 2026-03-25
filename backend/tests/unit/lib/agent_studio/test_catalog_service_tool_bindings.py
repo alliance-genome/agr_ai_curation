@@ -1,7 +1,9 @@
 """Unit tests for catalog_service tool binding resolution."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -341,6 +343,57 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
 
     with pytest.raises(RuntimeError, match="bad_agent \\(Bad Agent\\) -> MissingEnvelope"):
         catalog_service.validate_active_agent_output_schemas(db)
+
+
+def test_import_package_binding_target_adds_runtime_helper_paths(monkeypatch):
+    repo_root = catalog_service._HOST_RUNTIME_ROOT_DIR.parent
+    package_path = repo_root / "packages" / "alliance"
+    python_package_root = (
+        package_path / "python" / "src" / "agr_ai_curation_alliance"
+    ).resolve(strict=False)
+    binding = SimpleNamespace(
+        tool_id="search_document",
+        import_path=(
+            "agr_ai_curation_alliance.tools.documents:create_search_document_tool"
+        ),
+        source=SimpleNamespace(package_id="agr.alliance"),
+    )
+    package = SimpleNamespace(
+        package_path=package_path,
+        manifest=SimpleNamespace(python_package_root="python/src/agr_ai_curation_alliance"),
+    )
+    blocked_paths = {
+        catalog_service._HOST_RUNTIME_ROOT_DIR.resolve(strict=False),
+        catalog_service._HOST_RUNTIME_SRC_DIR.resolve(strict=False),
+        package_path.resolve(strict=False),
+        python_package_root.resolve(strict=False),
+        python_package_root.parent.resolve(strict=False),
+    }
+
+    monkeypatch.setattr(catalog_service, "_get_loaded_package_for_binding", lambda _binding: package)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if entry
+            and Path(entry).resolve(strict=False) not in blocked_paths
+        ],
+    )
+    for module_name in list(sys.modules):
+        if module_name == "agr_ai_curation_runtime" or module_name.startswith(
+            ("agr_ai_curation_runtime.", "agr_ai_curation_alliance.")
+        ):
+            sys.modules.pop(module_name, None)
+
+    imported = catalog_service._import_package_binding_target(binding)
+
+    assert callable(imported)
+    assert str(catalog_service._HOST_RUNTIME_SRC_DIR) in sys.path
+    assert str(catalog_service._HOST_RUNTIME_ROOT_DIR) in sys.path
+    assert str(package_path) in sys.path
+    assert str(python_package_root.parent) in sys.path
 
 
 @pytest.mark.asyncio

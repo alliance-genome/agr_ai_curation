@@ -44,6 +44,10 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+_HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
+_HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
+
+
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
     """Resolve a registry agent ID/alias to canonical prompt cache key (folder name)."""
     if registry_agent_id == "task_input":
@@ -918,14 +922,25 @@ def _get_package_tool_runner():
 
 
 def _extend_sys_path_for_package(package: Any) -> None:
-    """Make one loaded package importable inside the live backend process."""
+    """Make one loaded package and public runtime helpers importable."""
     python_package_root = (
         package.package_path / package.manifest.python_package_root
     ).expanduser().resolve(strict=False)
-    for candidate in (python_package_root.parent, python_package_root, package.package_path):
+    for candidate in (
+        _HOST_RUNTIME_SRC_DIR,
+        python_package_root.parent,
+        python_package_root,
+        package.package_path,
+    ):
         candidate_text = str(candidate)
         if candidate_text not in sys.path:
             sys.path.insert(0, candidate_text)
+
+    host_runtime_root_text = str(_HOST_RUNTIME_ROOT_DIR)
+    if host_runtime_root_text not in sys.path:
+        # Keep the backend package root available for public runtime helpers that
+        # lazily import ``src.lib.*`` modules, without outranking package-local paths.
+        sys.path.append(host_runtime_root_text)
 
 
 def _get_loaded_package_for_binding(binding: Any) -> Any:

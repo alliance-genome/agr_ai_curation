@@ -367,6 +367,14 @@ print(
     assert payload["connection_url"] == "postgresql://db.invalid:5432/curation"
 
 
+def test_alliance_runtime_requirements_include_public_runtime_deps():
+    requirements_path = REPO_ROOT / "packages" / "alliance" / "requirements" / "runtime.txt"
+    requirements_text = requirements_path.read_text(encoding="utf-8")
+
+    assert "weaviate-client>=4.0" in requirements_text
+    assert "grpcio>=1.72.0" in requirements_text
+
+
 def test_alliance_agr_curation_module_preserves_group_mapping_load_failure(tmp_path):
     env = os.environ.copy()
     env["GROUPS_CONFIG_PATH"] = str(tmp_path / "missing-groups.yaml")
