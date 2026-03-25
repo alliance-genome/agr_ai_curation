@@ -70,13 +70,6 @@ ALLOWED_CONTAINERS = {
 # Loki uses the Compose service name as the `service` label for these logs.
 CONTAINER_TO_SERVICE_LABEL = {container: container for container in ALLOWED_CONTAINERS}
 ALLOWED_LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"}
-LOG_LEVEL_LABEL_MATCHERS = {
-    "DEBUG": "(?i:debug)",
-    "INFO": "(?i:info)",
-    "WARN": "(?i:warn(?:ing)?)",
-    "ERROR": "(?i:error)",
-    "FATAL": "(?i:fatal)",
-}
 LOKI_EARLIEST_QUERY_TIME = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
@@ -86,39 +79,6 @@ def _legacy_test_transport_enabled() -> bool:
         asyncio.create_subprocess_exec is not _DEFAULT_ASYNCIO_CREATE_SUBPROCESS_EXEC
         or asyncio.wait_for is not _DEFAULT_ASYNCIO_WAIT_FOR
     )
-
-
-def _as_utc(dt_value: datetime) -> datetime:
-    """Normalize a datetime to UTC."""
-    if dt_value.tzinfo is None:
-        return dt_value.replace(tzinfo=timezone.utc)
-    return dt_value.astimezone(timezone.utc)
-
-
-def _datetime_to_unix_ns(dt_value: datetime) -> str:
-    """Convert a datetime to a Unix nanosecond timestamp string."""
-    normalized = _as_utc(dt_value)
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    delta = normalized - epoch
-    total_nanoseconds = (
-        ((delta.days * 24 * 60 * 60) + delta.seconds) * 1_000_000_000
-        + (delta.microseconds * 1_000)
-    )
-    return str(total_nanoseconds)
-
-
-def _escape_logql_literal(value: str) -> str:
-    """Escape a string for safe inclusion in a LogQL quoted literal."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _error_result(error: str, help_text: str) -> dict[str, str]:
-    """Build a consistent error payload for Loki query failures."""
-    return {
-        "status": "error",
-        "error": error,
-        "help": help_text,
-    }
 
 
 def _normalize_log_level(level: str | None) -> str | None:
@@ -220,21 +180,6 @@ def _format_loki_error(result: dict[str, str]) -> str:
     return detail
 
 
-def _build_log_query(service: str, level: str | None) -> str:
-    """Build a LogQL selector for one service and optional extracted level label."""
-    normalized_service = service.strip()
-    if not normalized_service:
-        raise ValueError("Service label is required.")
-
-    matchers = [f'service="{_escape_logql_literal(normalized_service)}"']
-
-    if level is not None:
-        level_pattern = LOG_LEVEL_LABEL_MATCHERS[level]
-        matchers.append(f'level=~"{_escape_logql_literal(level_pattern)}"')
-
-    return "{" + ",".join(matchers) + "}"
-
-
 async def _query_logs(
     loki_client: loki.LokiClient,
     *,
@@ -244,20 +189,28 @@ async def _query_logs(
     limit: int,
     level: str | None,
 ) -> list[str] | dict[str, str]:
-    """Query Loki with explicit range bounds and optional level-label filtering."""
+    """
+    Query Loki with explicit range bounds and endpoint-specific chronological rendering.
+
+    The shared client already owns LogQL construction, time normalization, and
+    standardized error payloads. This wrapper only adds the `/api/logs`
+    requirements that are not exposed by the client API yet: explicit backward
+    range queries plus a timestamp sort that restores docker-log ordering across
+    Loki streams before the final line-tail rendering step.
+    """
     try:
         if limit < 1:
             raise ValueError("Limit must be greater than zero.")
 
-        start_ns = _datetime_to_unix_ns(start)
-        end_ns = _datetime_to_unix_ns(end)
+        start_ns = loki._normalize_time(start)
+        end_ns = loki._normalize_time(end)
         if start_ns is None or end_ns is None:
             raise ValueError("Start and end timestamps are required.")
         if int(start_ns) > int(end_ns):
             raise ValueError("Start timestamp must be less than or equal to end timestamp.")
 
         params: dict[str, str | int] = {
-            "query": _build_log_query(service, level),
+            "query": loki._build_query(service, level),
             "limit": limit,
             "start": start_ns,
             "end": end_ns,
@@ -274,37 +227,42 @@ async def _query_logs(
         try:
             payload = response.json()
         except json.JSONDecodeError:
-            return _error_result(
+            return loki._error_result(
                 "Loki returned an invalid JSON response.",
                 "Check Loki service health and the query_range API response.",
             )
 
         return _extract_chronological_lines(payload)
     except loki.LokiResponseError as exc:
-        return _error_result(
+        return loki._error_result(
             str(exc),
             "Check Loki service health and confirm the query_range response format is valid.",
         )
     except ValueError as exc:
-        return _error_result(
+        return loki._error_result(
             str(exc),
             "Provide a valid service label, positive limit, and ISO 8601 or Unix nanosecond timestamps.",
         )
     except httpx.TimeoutException:
-        return _error_result(
+        return loki._error_result(
             f"Timed out querying Loki at {loki_client.base_url}.",
             "Ensure the Loki service is running and responding on the configured LOKI_URL.",
         )
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code if exc.response is not None else "unknown"
-        return _error_result(
+        return loki._error_result(
             f"Loki query failed with HTTP {status_code}.",
-            "Check Loki service health and the query_range API response.",
+            "Check Loki availability and confirm the query_range endpoint is reachable.",
         )
     except httpx.RequestError as exc:
-        return _error_result(
-            f"Could not connect to Loki at {loki_client.base_url}: {exc}.",
-            "Ensure the Loki service is running and reachable from the backend container.",
+        return loki._error_result(
+            f"Failed to reach Loki: {exc}.",
+            "Ensure the Loki service is running and the configured LOKI_URL is correct.",
+        )
+    except Exception as exc:
+        return loki._error_result(
+            f"Unexpected Loki client error: {exc}.",
+            "Review Loki service health and client configuration.",
         )
 
 
