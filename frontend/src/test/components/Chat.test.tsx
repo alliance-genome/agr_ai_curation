@@ -30,6 +30,7 @@ const CURATION_DB_WARNING =
 
 function mockChatFetch(options?: {
   curationDbStatus?: string
+  weaviateStatus?: string
   rejectHealth?: boolean
   prepPreview?: {
     ready: boolean
@@ -58,6 +59,7 @@ function mockChatFetch(options?: {
 }) {
   const {
     curationDbStatus = 'connected',
+    weaviateStatus = 'connected',
     rejectHealth = false,
     prepPreview,
     prepRun,
@@ -67,7 +69,7 @@ function mockChatFetch(options?: {
   vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
 
-    if (url === '/health') {
+    if (url === '/health/deep') {
       if (rejectHealth) {
         throw new Error('health fetch failed')
       }
@@ -76,7 +78,7 @@ function mockChatFetch(options?: {
         ok: true,
         json: async () => ({
           services: {
-            weaviate: 'connected',
+            weaviate: weaviateStatus,
             curation_db: curationDbStatus,
           },
         }),
@@ -282,14 +284,14 @@ describe('Chat persistence', () => {
     renderChat()
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/health')
+      expect(global.fetch).toHaveBeenCalledWith('/health/deep')
     })
 
     expect(screen.queryByText(CURATION_DB_WARNING)).not.toBeInTheDocument()
   })
 
   it.each(['disconnected', 'error'])(
-    'shows the curation DB outage warning when /health reports %s',
+    'shows the curation DB outage warning when /health/deep reports %s',
     async (curationDbStatus) => {
       mockChatFetch({ curationDbStatus })
 
@@ -300,6 +302,18 @@ describe('Chat persistence', () => {
       })
     }
   )
+
+  it('shows the weaviate outage warning when /health/deep reports it as disconnected', async () => {
+    mockChatFetch({ weaviateStatus: 'disconnected' })
+
+    renderChat()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Weaviate database connection lost - PDF search unavailable')
+      ).toBeInTheDocument()
+    })
+  })
 
   it('always shows the Prepare for Curation button', () => {
     renderChat()

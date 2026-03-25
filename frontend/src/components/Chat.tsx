@@ -724,7 +724,10 @@ function Chat({
     // Check Weaviate and Curation DB connection status
     const checkHealth = async () => {
       try {
-        const response = await fetch('/health')
+        const response = await fetch('/health/deep')
+        if (!response.ok) {
+          throw new Error(`Health check failed with status ${response.status}`)
+        }
         const data = await response.json()
         setWeaviateConnected(data?.services?.weaviate === 'connected')
         setShowCurationDbWarning(shouldShowCurationDbWarning(data?.services?.curation_db))
