@@ -408,6 +408,7 @@ export OPENAI_API_KEY=test-openai
 export GROQ_API_KEY=test-groq
 export POSTGRES_PASSWORD=postgres
 export LANGFUSE_HOST_PORT=127.0.0.1:3000
+export NEXTAUTH_URL=http://localhost:3000
 EOF
 
   make_workspace_tunnel_helpers "${workspace}"

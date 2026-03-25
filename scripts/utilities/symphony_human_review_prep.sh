@@ -259,12 +259,14 @@ ensure_langfuse_nextauth_url() {
     return 0
   fi
 
-  if [[ -n "${NEXTAUTH_URL:-}" ]]; then
+  local langfuse_host="${REVIEW_HOST:-127.0.0.1}"
+  local expected_nextauth_url="http://${langfuse_host}:${LANGFUSE_HOST_PORT}"
+
+  if [[ "${NEXTAUTH_URL:-}" == "${expected_nextauth_url}" ]]; then
     return 0
   fi
 
-  local langfuse_host="${REVIEW_HOST:-127.0.0.1}"
-  export NEXTAUTH_URL="http://${langfuse_host}:${LANGFUSE_HOST_PORT}"
+  export NEXTAUTH_URL="${expected_nextauth_url}"
 }
 
 prepare_docker_config() {
