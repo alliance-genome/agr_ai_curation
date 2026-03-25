@@ -19,48 +19,6 @@ class _FrozenDateTime(datetime):
         return cls._now.astimezone(tz)
 
 
-class _FakeAsyncClient:
-    def __init__(self, *, response=None, exc=None, capture=None, timeout=None):
-        self._response = response
-        self._exc = exc
-        self._capture = capture if capture is not None else {}
-        self._capture["timeout"] = timeout
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    async def get(self, url, params=None):
-        self._capture["url"] = url
-        self._capture["params"] = params
-        if self._exc is not None:
-            raise self._exc
-        return self._response
-
-
-def _loki_response(payload, *, status_code=200):
-    request = httpx.Request(
-        "GET",
-        f"{logs_api.loki.DEFAULT_LOKI_URL}{logs_api.loki.LOKI_QUERY_RANGE_PATH}",
-    )
-    return httpx.Response(status_code, json=payload, request=request)
-
-
-def _patch_async_client(monkeypatch, *, response=None, exc=None, capture=None):
-    monkeypatch.setattr(
-        logs_api.loki.httpx,
-        "AsyncClient",
-        lambda timeout=None: _FakeAsyncClient(
-            response=response,
-            exc=exc,
-            capture=capture,
-            timeout=timeout,
-        ),
-    )
-
-
 @pytest.fixture(autouse=True)
 def clear_loki_url(monkeypatch):
     monkeypatch.delenv("LOKI_URL", raising=False)
@@ -92,12 +50,13 @@ async def test_get_container_logs_rejects_invalid_level():
 
 @pytest.mark.asyncio
 async def test_get_container_logs_queries_loki_with_default_lookback_and_service_label(
-    monkeypatch, frozen_now
+    frozen_now, patch_loki_async_client, loki_response
 ):
     capture = {}
-    _patch_async_client(
-        monkeypatch,
-        response=_loki_response(
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(
+            logs_api.loki,
             {
                 "data": {
                     "result": [
@@ -138,12 +97,13 @@ async def test_get_container_logs_queries_loki_with_default_lookback_and_service
 
 @pytest.mark.asyncio
 async def test_get_container_logs_passes_since_level_and_limit_to_loki(
-    monkeypatch, frozen_now
+    frozen_now, patch_loki_async_client, loki_response
 ):
     capture = {}
-    _patch_async_client(
-        monkeypatch,
-        response=_loki_response(
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(
+            logs_api.loki,
             {
                 "data": {
                     "result": [
@@ -179,11 +139,13 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_returns_empty_payload_for_no_logs(monkeypatch):
+async def test_get_container_logs_returns_empty_payload_for_no_logs(
+    patch_loki_async_client, loki_response
+):
     capture = {}
-    _patch_async_client(
-        monkeypatch,
-        response=_loki_response({"data": {"result": []}}),
+    patch_loki_async_client(
+        logs_api.loki,
+        response=loki_response(logs_api.loki, {"data": {"result": []}}),
         capture=capture,
     )
 
@@ -219,9 +181,9 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(monkeypatch)
     ],
 )
 async def test_get_container_logs_formats_loki_unavailable_errors(
-    monkeypatch, exc, expected_error, expected_help
+    patch_loki_async_client, exc, expected_error, expected_help
 ):
-    _patch_async_client(monkeypatch, exc=exc)
+    patch_loki_async_client(logs_api.loki, exc=exc)
 
     with pytest.raises(HTTPException) as error:
         await logs_api.get_container_logs("backend", lines=200)
