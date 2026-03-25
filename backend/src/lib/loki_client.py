@@ -37,7 +37,8 @@ class LokiQueryError(TypedDict):
 
 
 LokiQueryResult: TypeAlias = list[str] | LokiQueryError
-LokiEntry: TypeAlias = tuple[int, int, str]
+LokiEntry: TypeAlias = tuple[str, int, str]
+LokiTimestampedEntry: TypeAlias = tuple[int, int, str]
 LokiPayloadExtractor: TypeAlias = Callable[[dict[str, Any]], list[str]]
 
 
@@ -124,7 +125,7 @@ def build_query(service: str, level: str | None = None) -> str:
 
 
 def extract_entries(payload: dict[str, Any]) -> list[LokiEntry]:
-    """Validate a Loki response and return `(timestamp, sequence, line)` tuples."""
+    """Validate a Loki response and return raw `(timestamp, sequence, line)` tuples."""
     if not isinstance(payload, dict):
         raise LokiResponseError("Invalid Loki response format: expected a JSON object.")
 
@@ -162,17 +163,27 @@ def extract_entries(payload: dict[str, Any]) -> list[LokiEntry]:
                 raise LokiResponseError(
                     "Invalid Loki response format: expected each value entry to contain timestamp and line."
                 )
-            try:
-                timestamp = int(str(entry[0]))
-            except (TypeError, ValueError) as exc:
-                raise LokiResponseError(
-                    "Invalid Loki response format: expected each value entry timestamp to be a Unix nanosecond integer."
-                ) from exc
-
-            entries.append((timestamp, sequence, str(entry[1])))
+            entries.append((str(entry[0]), sequence, str(entry[1])))
             sequence += 1
 
     return entries
+
+
+def extract_timestamped_entries(payload: dict[str, Any]) -> list[LokiTimestampedEntry]:
+    """Validate a Loki response and return `(timestamp, sequence, line)` tuples."""
+    timestamped_entries: list[LokiTimestampedEntry] = []
+
+    for raw_timestamp, sequence, line in extract_entries(payload):
+        try:
+            timestamp = int(raw_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise LokiResponseError(
+                "Invalid Loki response format: expected each value entry timestamp to be a Unix nanosecond integer."
+            ) from exc
+
+        timestamped_entries.append((timestamp, sequence, line))
+
+    return timestamped_entries
 
 
 def _extract_lines(payload: dict[str, Any]) -> list[str]:

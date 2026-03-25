@@ -118,7 +118,7 @@ def _tail_rendered_logs(log_entries: list[str], *, line_limit: int) -> tuple[str
 
 def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
     """Flatten Loki results into chronological log lines for docker-log parity."""
-    entries = loki.extract_entries(payload)
+    entries = loki.extract_timestamped_entries(payload)
     entries.sort(key=lambda item: (item[0], item[1]))
     return [line for _, _, line in entries]
 
