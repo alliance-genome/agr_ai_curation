@@ -1330,16 +1330,16 @@ GET_TRACE_VIEW_TOOL = {
     }
 }
 
-GET_DOCKER_LOGS_TOOL = {
-    "name": "get_docker_logs",
-    "description": "Retrieve Docker container logs for troubleshooting. Use this when curators report errors or unexpected behavior to help diagnose issues.",
+GET_SERVICE_LOGS_TOOL = {
+    "name": "get_service_logs",
+    "description": "Retrieve Loki-backed service logs for troubleshooting. Use this when curators report errors or unexpected behavior; optional level and time filters can narrow the results.",
     "input_schema": {
         "type": "object",
         "properties": {
             "container": {
                 "type": "string",
                 "enum": ["backend", "frontend", "weaviate", "postgres"],
-                "description": "Container name (default: backend)",
+                "description": "Service/container name (default: backend)",
                 "default": "backend"
             },
             "lines": {
@@ -1348,6 +1348,15 @@ GET_DOCKER_LOGS_TOOL = {
                 "default": 2000,
                 "minimum": 100,
                 "maximum": 5000
+            },
+            "level": {
+                "type": "string",
+                "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+                "description": "Optional log level filter"
+            },
+            "since": {
+                "type": "string",
+                "description": "Optional time filter such as 'last 5 minutes'"
             }
         },
         "required": []
@@ -1366,7 +1375,7 @@ _TRACE_TOOLS = {
     "get_tool_call_detail",
     "get_trace_conversation",
     "get_trace_view",
-    "get_docker_logs",
+    "get_service_logs",
 }
 _FLOW_TOOLS = {
     "create_flow",
@@ -1465,7 +1474,7 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         GET_TOOL_CALL_DETAIL_TOOL,
         GET_TRACE_CONVERSATION_TOOL,
         GET_TRACE_VIEW_TOOL,
-        GET_DOCKER_LOGS_TOOL,
+        GET_SERVICE_LOGS_TOOL,
     ]
 
     tools = [
@@ -1714,7 +1723,7 @@ async def _handle_tool_call(
     """
     # Import tool functions (lazy import to avoid circular dependencies)
     from src.lib.agent_studio.tools import (
-        get_docker_logs,
+        get_service_logs,
         get_trace_summary,
         get_tool_calls_summary,
         get_tool_calls_page,
@@ -1820,11 +1829,18 @@ async def _handle_tool_call(
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 
-    elif tool_name == "get_docker_logs":
+    elif tool_name in {"get_service_logs", "get_docker_logs"}:
         container = tool_input.get("container", "backend")
         lines = tool_input.get("lines", 2000)
+        level = tool_input.get("level")
+        since = tool_input.get("since")
 
-        result = await get_docker_logs(container=container, lines=lines)
+        result = await get_service_logs(
+            container=container,
+            lines=lines,
+            level=level,
+            since=since,
+        )
         return result
 
     elif tool_name == "submit_prompt_suggestion":
