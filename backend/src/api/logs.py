@@ -7,7 +7,7 @@ Used by Opus Workflow Analysis feature's get_docker_logs tool.
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -79,6 +79,60 @@ def _join_log_lines(log_lines: list[str]) -> str:
     return "\n".join(log_lines) + "\n"
 
 
+def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
+    """Flatten Loki results into chronological log lines for docker-log parity."""
+    if not isinstance(payload, dict):
+        raise loki.LokiResponseError("Invalid Loki response format: expected a JSON object.")
+
+    missing = object()
+    data = payload.get("data", missing)
+    if data is missing:
+        raise loki.LokiResponseError("Invalid Loki response format: missing data object.")
+    if not isinstance(data, dict):
+        raise loki.LokiResponseError("Invalid Loki response format: expected data to be an object.")
+
+    result = data.get("result", missing)
+    if result is missing:
+        raise loki.LokiResponseError("Invalid Loki response format: missing data.result list.")
+    if not isinstance(result, list):
+        raise loki.LokiResponseError("Invalid Loki response format: expected data.result to be a list.")
+
+    entries: list[tuple[int, int, str]] = []
+    sequence = 0
+
+    for stream in result:
+        if not isinstance(stream, dict):
+            raise loki.LokiResponseError(
+                "Invalid Loki response format: expected each stream to be an object."
+            )
+        values = stream.get("values", missing)
+        if values is missing:
+            raise loki.LokiResponseError("Invalid Loki response format: missing stream values list.")
+        if not isinstance(values, list):
+            raise loki.LokiResponseError(
+                "Invalid Loki response format: expected stream values to be a list."
+            )
+
+        for entry in values:
+            if not isinstance(entry, list) or len(entry) < 2:
+                raise loki.LokiResponseError(
+                    "Invalid Loki response format: expected each value entry to contain timestamp and line."
+                )
+
+            try:
+                timestamp = int(str(entry[0]))
+            except (TypeError, ValueError) as exc:
+                raise loki.LokiResponseError(
+                    "Invalid Loki response format: expected each value entry timestamp to be a Unix nanosecond integer."
+                ) from exc
+
+            entries.append((timestamp, sequence, str(entry[1])))
+            sequence += 1
+
+    entries.sort(key=lambda item: (item[0], item[1]))
+    return [line for _, _, line in entries]
+
+
 def _format_loki_error(result: dict[str, str]) -> str:
     """Render a Loki client error into the endpoint's string detail payload."""
     detail = f"Failed to retrieve logs from Loki: {result['error']}"
@@ -147,7 +201,7 @@ async def _query_logs(
                 "Check Loki service health and the query_range API response.",
             )
 
-        return loki._extract_lines(payload)
+        return _extract_chronological_lines(payload)
     except loki.LokiResponseError as exc:
         return loki._error_result(
             str(exc),
