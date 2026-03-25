@@ -21,6 +21,8 @@ import os
 import re
 from typing import Dict, Any, Optional
 
+VALID_SERVICE_LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
+
 
 def get_trace_source() -> str:
     """Get the default trace source for TraceReview API.
@@ -727,6 +729,13 @@ async def get_service_logs(
                     "status": "error",
                     "data": None,
                     "error": "Log level filter cannot be blank",
+                    "help": "Use one of: DEBUG, INFO, WARN, ERROR"
+                }
+            if normalized_level not in VALID_SERVICE_LOG_LEVELS:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": f"Unsupported log level filter: {normalized_level}",
                     "help": "Use one of: DEBUG, INFO, WARN, ERROR"
                 }
             params["level"] = normalized_level
