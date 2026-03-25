@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import {
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -286,15 +287,22 @@ describe('ManualAnnotationDialog', () => {
     const { onClose } = renderDialog()
     const dialog = await screen.findByRole('dialog')
 
-    await user.type(within(dialog).getByLabelText('Annotation label'), 'Manual candidate')
-    await user.clear(within(dialog).getByLabelText('Field A'))
-    await user.type(within(dialog).getByLabelText('Field A'), 'value alpha')
+    fireEvent.change(within(dialog).getByLabelText('Annotation label'), {
+      target: { value: 'Manual candidate' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('Field A'), {
+      target: { value: 'value alpha' },
+    })
 
     await user.click(within(dialog).getByRole('button', { name: 'Add evidence' }))
 
     const evidenceRow = within(dialog).getByTestId(/manual-annotation-evidence-row-/)
-    await user.type(within(evidenceRow).getByLabelText('Snippet text'), 'Quoted support text')
-    await user.type(within(evidenceRow).getByLabelText('Page'), '4')
+    fireEvent.change(within(evidenceRow).getByLabelText('Snippet text'), {
+      target: { value: 'Quoted support text' },
+    })
+    fireEvent.change(within(evidenceRow).getByLabelText('Page'), {
+      target: { value: '4' },
+    })
 
     await user.click(within(dialog).getByTestId('manual-annotation-create-button'))
 
