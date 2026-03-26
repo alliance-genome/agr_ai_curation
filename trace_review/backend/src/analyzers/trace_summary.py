@@ -9,6 +9,7 @@ from typing import Dict, List, Any
 from collections import defaultdict
 
 from .conversation import ConversationAnalyzer
+from .tool_calls import ToolCallAnalyzer
 
 
 class TraceSummaryAnalyzer:
@@ -100,34 +101,18 @@ class TraceSummaryAnalyzer:
         }
 
         # Tool call summary
-        tool_calls = []
-        tool_counts = defaultdict(int)
-
-        for gen in generations:
-            output = gen.get("output", {})
-
-            # Handle both formats:
-            # 1. output is a dict with type="function_call"
-            # 2. output is an array containing items with type="function_call"
-            function_calls = []
-            if isinstance(output, dict) and output.get("type") == "function_call":
-                function_calls = [output]
-            elif isinstance(output, list):
-                function_calls = [item for item in output if isinstance(item, dict) and item.get("type") == "function_call"]
-
-            for fc in function_calls:
-                tool_name = fc.get("name", "unknown")
-                tool_counts[tool_name] += 1
-                tool_calls.append({
-                    "name": tool_name,
-                    "timestamp": gen.get("startTime"),
-                    "call_id": fc.get("call_id")
-                })
-
+        tool_calls_analysis = ToolCallAnalyzer.extract_tool_calls(observations)
+        tool_counts = {
+            tool_name: sum(
+                1 for call in tool_calls_analysis.get("tool_calls", [])
+                if call.get("name") == tool_name
+            )
+            for tool_name in tool_calls_analysis.get("unique_tools", [])
+        }
         tool_summary = {
-            "total_tool_calls": len(tool_calls),
-            "tool_counts": dict(tool_counts),
-            "unique_tools": list(tool_counts.keys())
+            "total_tool_calls": tool_calls_analysis.get("total_count", 0),
+            "tool_counts": tool_counts,
+            "unique_tools": tool_calls_analysis.get("unique_tools", []),
         }
 
         # Error detection

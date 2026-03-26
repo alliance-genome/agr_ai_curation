@@ -38,10 +38,12 @@ from ..models.responses import (
     ConversationResponse,
     ConversationData,
 )
+from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
 
 
 router = APIRouter()
+TRANSIENT_CACHE_TTL_SECONDS = 15
 
 
 # Default source for trace extraction (EC2 Langfuse)
@@ -153,7 +155,15 @@ async def _ensure_trace_analyzed(
             }
         }
 
-        cache_manager.set(trace_id, cache_data)
+        if is_trace_output_cacheable(raw_trace.get("output")):
+            cache_manager.set(trace_id, cache_data, cache_status="stable")
+        else:
+            cache_manager.set(
+                trace_id,
+                cache_data,
+                cache_status="transient",
+                ttl_seconds=TRANSIENT_CACHE_TTL_SECONDS,
+            )
         return cache_data
 
     except Exception as e:

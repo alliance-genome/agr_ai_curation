@@ -63,7 +63,7 @@ function ProtectedContent() {
   const [viewData, setViewData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cacheStatus, setCacheStatus] = useState<'hit' | 'miss' | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<'hit' | 'miss' | 'transient' | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
 
   // Redirect to login if not authenticated
@@ -247,6 +247,20 @@ function ProtectedContent() {
     }
   };
 
+  const cacheStatusLabel =
+    cacheStatus === 'hit'
+      ? '✓ Loaded from cache'
+      : cacheStatus === 'transient'
+        ? `⚡ Fresh analysis (${source}, transient cache)`
+        : `⟳ Fetched from Langfuse (${source})`;
+
+  const cacheStatusColor =
+    cacheStatus === 'hit'
+      ? 'success'
+      : cacheStatus === 'transient'
+        ? 'warning'
+        : 'info';
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -356,8 +370,8 @@ function ProtectedContent() {
             {/* Status indicators */}
             {cacheStatus && (
               <Chip
-                label={cacheStatus === 'hit' ? '✓ Loaded from cache' : `⟳ Fetched from Langfuse (${source})`}
-                color={cacheStatus === 'hit' ? 'success' : 'info'}
+                label={cacheStatusLabel}
+                color={cacheStatusColor}
                 size="small"
               />
             )}

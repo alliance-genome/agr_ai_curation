@@ -2,10 +2,8 @@
 Langfuse Trace Extraction Service
 Fetches and processes trace data from Langfuse API
 """
-import os
-import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from langfuse import Langfuse
 from ..config import (
     get_langfuse_host, get_langfuse_public_key, get_langfuse_secret_key,
@@ -13,6 +11,7 @@ from ..config import (
 )
 
 logger = logging.getLogger(__name__)
+OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,prompt,metrics"
 
 
 class TraceExtractor:
@@ -51,42 +50,63 @@ class TraceExtractor:
             host=self.host
         )
 
+    @staticmethod
+    def _normalize_item(item: Any) -> Dict:
+        """Convert Langfuse SDK models into plain dictionaries."""
+        if hasattr(item, "dict"):
+            return item.dict()
+        return item
+
+    def _embedded_collection(self, trace: Optional[Dict], key: str) -> Optional[List[Dict]]:
+        """Return embedded trace collections when the trace payload already includes them."""
+        if not trace or key not in trace:
+            return None
+        return [self._normalize_item(item) for item in (trace.get(key) or [])]
+
     def get_trace_details(self, trace_id: str) -> Dict:
         """Get detailed trace information with all fields"""
         trace = self.client.api.trace.get(trace_id)
-        return trace.dict() if hasattr(trace, 'dict') else trace
+        return self._normalize_item(trace)
 
-    def get_observations(self, trace_id: str) -> List[Dict]:
-        """Get all observations for a trace"""
-        response = self.client.api.observations.get_many(trace_id=trace_id)
+    def get_observations(self, trace_id: str, trace: Optional[Dict] = None) -> List[Dict]:
+        """Get all observations for a trace."""
+        embedded = self._embedded_collection(trace, "observations")
+        if embedded is not None:
+            return embedded
 
-        observations = []
-        if hasattr(response, 'data'):
-            # Fetch each observation individually for complete data
-            for obs in response.data:
-                obs_id = obs.id if hasattr(obs, 'id') else None
+        observations: List[Dict] = []
+        cursor: Optional[str] = None
 
-                if obs_id:
-                    try:
-                        full_obs = self.client.api.observations.get(obs_id)
-                        obs_dict = full_obs.dict() if hasattr(full_obs, 'dict') else full_obs
-                        observations.append(obs_dict)
-                    except Exception:
-                        # Fallback to truncated version
-                        obs_dict = obs.dict() if hasattr(obs, 'dict') else obs
-                        observations.append(obs_dict)
-                else:
-                    obs_dict = obs.dict() if hasattr(obs, 'dict') else obs
-                    observations.append(obs_dict)
+        while True:
+            response = self.client.api.observations.get_many(
+                trace_id=trace_id,
+                fields=OBSERVATION_FIELDS,
+                limit=1000,
+                cursor=cursor,
+            )
+            response_data = getattr(response, "data", None)
+            if response_data:
+                observations.extend(self._normalize_item(obs) for obs in response_data)
+
+            meta = getattr(response, "meta", None)
+            cursor = getattr(meta, "cursor", None) if meta is not None else None
+            if not cursor:
+                break
 
         return observations
 
-    def get_scores(self, trace_id: str) -> List[Dict]:
-        """Get all scores for a trace"""
+    def get_scores(self, trace_id: str, trace: Optional[Dict] = None) -> List[Dict]:
+        """Get all scores for a trace."""
+        embedded = self._embedded_collection(trace, "scores")
+        if embedded is not None:
+            return embedded
+
         try:
-            response = self.client.api.score_v_2.get(trace_id=trace_id)
+            response = self.client.api.scores.get_many(trace_id=trace_id)
+            if hasattr(response, 'data'):
+                return [self._normalize_item(score) for score in response.data]
             if hasattr(response, 'items'):
-                return [score.dict() if hasattr(score, 'dict') else score for score in response.items]
+                return [self._normalize_item(score) for score in response.items]
             return []
         except Exception:
             return []
@@ -98,8 +118,8 @@ class TraceExtractor:
         """
         # Fetch all data
         trace = self.get_trace_details(trace_id)
-        observations = self.get_observations(trace_id)
-        scores = self.get_scores(trace_id)
+        observations = self.get_observations(trace_id, trace=trace)
+        scores = self.get_scores(trace_id, trace=trace)
 
         # Build structured response
         trace_fragment = trace_id[:8] if len(trace_id) >= 8 else trace_id
@@ -145,4 +165,3 @@ class TraceExtractor:
                 "timestamp": trace.get("timestamp")
             }
         }
-

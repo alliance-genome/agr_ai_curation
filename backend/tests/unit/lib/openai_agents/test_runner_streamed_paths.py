@@ -131,7 +131,12 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     async def _fake_run_agent_with_tracing(**_kwargs):
         yield {
             "type": "RUN_FINISHED",
-            "data": {"response_length": 12, "tool_calls": 1, "agents_used": ["Supervisor"]},
+            "data": {
+                "response": "grounded answer",
+                "response_length": 12,
+                "tool_calls": 1,
+                "agents_used": ["Supervisor"],
+            },
         }
 
     monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
@@ -158,6 +163,7 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     assert captured["propagate_attributes"]["trace_name"].startswith("chat: longer message")
     assert captured["trace_attr_exit"] == (None, None, None)
     assert captured["span_exit"] == (None, None, None)
+    assert captured["update"]["output"]["response"] == "grounded answer"
     assert captured["logged"][0][0] == "trace-abc"
 
 

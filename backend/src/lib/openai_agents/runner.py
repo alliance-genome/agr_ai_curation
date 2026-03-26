@@ -1228,6 +1228,7 @@ async def run_agent_streamed(
                             data = event.get("data", {})
                             root_span.update(
                                 output={
+                                    "response": data.get("response", ""),
                                     "response_length": data.get("response_length", 0),
                                     "tool_calls": data.get("tool_calls", 0),
                                     "agents_used": data.get("agents_used", []),

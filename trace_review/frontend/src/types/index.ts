@@ -5,7 +5,7 @@ export interface AnalyzeTraceResponse {
   trace_id: string;
   trace_id_short: string;
   message: string;
-  cache_status: 'hit' | 'miss';
+  cache_status: 'hit' | 'miss' | 'transient';
   cached_at?: string;
   available_views: string[];
 }

@@ -5,6 +5,8 @@ Extracts user input and assistant response from traces
 import json
 from typing import Dict, List, Optional
 
+from ..utils.trace_output import extract_trace_response_text
+
 
 class ConversationAnalyzer:
     """Analyzes traces to extract conversation data"""
@@ -53,10 +55,18 @@ class ConversationAnalyzer:
         if not isinstance(input_data, list):
             return None
 
-        # Traverse in reverse to find the last message with output_text
+        # Traverse in reverse to find the newest assistant output that appears
+        # after the latest user input. Historical assistant turns are included in
+        # conversation history and should not be mistaken for the current response.
         for item in reversed(input_data):
             if not isinstance(item, dict):
                 continue
+            if item.get("role") == "user":
+                break
+            if item.get("role") == "assistant":
+                content = item.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
             # Check for message type with content array
             if item.get("type") == "message" and item.get("content"):
                 content = item.get("content")
@@ -134,60 +144,48 @@ class ConversationAnalyzer:
             elif trace_input:
                 user_message = str(trace_input)
 
-        # Find final response (last GENERATION or direct response)
+        # Prefer the trace-level output when present. In current Langfuse/OpenAI Agents
+        # traces, this is the authoritative final response, while generation inputs may
+        # still contain partial assistant retry messages from intermediate turns.
         final_response = "N/A"
+        extracted = extract_trace_response_text(trace.get("output"))
+        if extracted:
+            final_response = extracted
 
-        # Look for synthesis/final response in observations (reversed)
-        for obs in reversed(sorted_observations):
-            if obs.get("type") == "GENERATION":
-                # First, check the input array for OpenAI Agents format
-                # (the final message is often in the input, not output)
-                obs_input = obs.get("input")
-                if obs_input:
-                    extracted = cls._extract_text_from_input_array(obs_input)
-                    if extracted:
-                        final_response = extracted
-                        break
+        # Fall back to observations only if the trace itself does not yet expose a final response.
+        if final_response == "N/A":
+            # Look for synthesis/final response in observations (reversed)
+            for obs in reversed(sorted_observations):
+                if obs.get("type") == "GENERATION":
+                    output = obs.get("output")
+                    if output:
+                        # Prefer the generation output when available. Retry flows can leave
+                        # partial assistant text in the input array while the output still
+                        # contains the fuller final message for that generation.
+                        if isinstance(output, list):
+                            extracted = cls._extract_text_from_openai_agents_format(output)
+                            if extracted:
+                                final_response = extracted
+                                break
+                        elif isinstance(output, dict):
+                            extracted = extract_trace_response_text(output)
+                            if extracted:
+                                final_response = extracted
+                                break
+                        elif isinstance(output, str):
+                            extracted = extract_trace_response_text(output)
+                            if extracted:
+                                final_response = extracted
+                                break
 
-                output = obs.get("output")
-                if output:
-                    # Try OpenAI Agents format (list with message items)
-                    if isinstance(output, list):
-                        extracted = cls._extract_text_from_openai_agents_format(output)
+                    # First, check the input array for OpenAI Agents format
+                    # (the final message is often in the input, not output)
+                    obs_input = obs.get("input")
+                    if obs_input:
+                        extracted = cls._extract_text_from_input_array(obs_input)
                         if extracted:
                             final_response = extracted
                             break
-                    elif isinstance(output, dict):
-                        # Try to get response from various possible fields
-                        final_response = output.get("response", output.get("text", output.get("content", "N/A")))
-                        if final_response != "N/A":
-                            break
-                    elif isinstance(output, str):
-                        # Try parsing as JSON in case it's a stringified list
-                        try:
-                            parsed = json.loads(output)
-                            if isinstance(parsed, list):
-                                extracted = cls._extract_text_from_openai_agents_format(parsed)
-                                if extracted:
-                                    final_response = extracted
-                                    break
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                        final_response = output
-                        break
-
-        # If still not found, try the trace output
-        if final_response == "N/A":
-            trace_output = trace.get("output")
-            if trace_output:
-                if isinstance(trace_output, list):
-                    extracted = cls._extract_text_from_openai_agents_format(trace_output)
-                    if extracted:
-                        final_response = extracted
-                elif isinstance(trace_output, dict):
-                    final_response = trace_output.get("response", trace_output.get("text", str(trace_output)))
-                else:
-                    final_response = str(trace_output)
 
         return {
             "user_input": user_message,

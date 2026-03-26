@@ -16,11 +16,13 @@ from ..analyzers.agent_context import AgentContextAnalyzer
 from ..analyzers.trace_summary import TraceSummaryAnalyzer
 from ..analyzers.document_hierarchy import DocumentHierarchyAnalyzer
 from ..analyzers.agent_config import AgentConfigAnalyzer
+from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+TRANSIENT_CACHE_TTL_SECONDS = 15
 
 # Group descriptions for display (Alliance MODs as default groups)
 GROUP_DESCRIPTIONS = {
@@ -65,12 +67,13 @@ async def analyze_trace(
     # Check cache first
     cached_data = cache_manager.get(trace_id)
     if cached_data:
+        cache_status = cache_manager.get_status(trace_id)
         return {
             "status": "success",
             "trace_id": trace_id,
             "trace_id_short": trace_id[:8] if len(trace_id) >= 8 else trace_id,
             "message": "Trace loaded from cache",
-            "cache_status": "hit",
+            "cache_status": "transient" if cache_status == "transient" else "hit",
             "cached_at": cached_data.get("cached_at"),
             "available_views": ALL_VIEWS
         }
@@ -149,14 +152,24 @@ async def analyze_trace(
             }
         }
 
-        cache_manager.set(trace_id, cache_data)
+        if is_trace_output_cacheable(raw_trace.get("output")):
+            cache_manager.set(trace_id, cache_data, cache_status="stable")
+            cache_status = "miss"
+        else:
+            cache_manager.set(
+                trace_id,
+                cache_data,
+                cache_status="transient",
+                ttl_seconds=TRANSIENT_CACHE_TTL_SECONDS,
+            )
+            cache_status = "transient"
 
         return {
             "status": "success",
             "trace_id": trace_id,
             "trace_id_short": trace_data["trace_id_short"],
             "message": "Trace analyzed successfully",
-            "cache_status": "miss",
+            "cache_status": cache_status,
             "available_views": ALL_VIEWS
         }
 
@@ -286,8 +299,17 @@ async def export_trace(
             }
         }
 
-        cache_manager.set(trace_id, cache_data)
-        logger.info("Cached trace %s", trace_id)
+        if is_trace_output_cacheable(raw_trace.get("output")):
+            cache_manager.set(trace_id, cache_data, cache_status="stable")
+            logger.info("Cached trace %s", trace_id)
+        else:
+            cache_manager.set(
+                trace_id,
+                cache_data,
+                cache_status="transient",
+                ttl_seconds=TRANSIENT_CACHE_TTL_SECONDS,
+            )
+            logger.info("Trace %s looks in-flight; cached transiently", trace_id)
 
         return cache_data
 

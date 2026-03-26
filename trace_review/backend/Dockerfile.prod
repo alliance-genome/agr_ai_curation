@@ -44,7 +44,8 @@ COPY --from=builder --chown=${APP_UID}:${APP_GID} /opt/venv /opt/venv
 COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
 
 EXPOSE 8001
+ENV BACKEND_PORT=8001
 
 USER ${APP_UID}:${APP_GID}
 
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["sh", "-c", "exec python -m uvicorn src.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8001}"]

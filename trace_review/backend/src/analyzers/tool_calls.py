@@ -524,12 +524,49 @@ class ToolCallAnalyzer:
             input_data = obs.get("input", [])
             if isinstance(input_data, list):
                 for msg in input_data:
+                    if not isinstance(msg, dict):
+                        continue
                     if msg.get("type") == "function_call_output":
                         call_id = msg.get("call_id")
                         output = msg.get("output", "")
                         if call_id and call_id not in outputs:
                             outputs[call_id] = output
         return outputs
+
+    @staticmethod
+    def _extract_function_calls_from_generation(observation: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return function calls recorded on a GENERATION observation.
+
+        Older traces recorded function calls in ``output`` while Langfuse v4
+        traces embed them in the ``input`` array alongside prior tool outputs.
+        """
+        function_calls: List[Dict[str, Any]] = []
+        seen_keys: set[str] = set()
+
+        def _append_candidates(candidate_data: Any) -> None:
+            if isinstance(candidate_data, dict):
+                candidates = [candidate_data]
+            elif isinstance(candidate_data, list):
+                candidates = [item for item in candidate_data if isinstance(item, dict)]
+            else:
+                return
+
+            for candidate in candidates:
+                if candidate.get("type") != "function_call":
+                    continue
+                call_key = str(
+                    candidate.get("call_id")
+                    or candidate.get("id")
+                    or f"{candidate.get('name')}:{candidate.get('arguments')}"
+                )
+                if call_key in seen_keys:
+                    continue
+                seen_keys.add(call_key)
+                function_calls.append(candidate)
+
+        _append_candidates(observation.get("output"))
+        _append_candidates(observation.get("input"))
+        return function_calls
 
     @staticmethod
     def _detect_duplicates(tool_calls: List[Dict]) -> Dict:
@@ -596,6 +633,7 @@ class ToolCallAnalyzer:
         # Keep track of generations for context
         # Key: observation_id, Value: Generation Observation
         generations_by_id = {}
+        seen_function_call_keys = set()
 
         # Key: parentObservationId, Value: Generation Observation (most recent sibling)
         last_sibling_generation = {}
@@ -612,19 +650,7 @@ class ToolCallAnalyzer:
                 if parent_id:
                     last_sibling_generation[parent_id] = obs
 
-                # NEW FORMAT: Check if this GENERATION contains function_call(s) in output
-                output_data = obs.get("output", {})
-
-                # Handle both formats:
-                # 1. output is a dict with type="function_call"
-                # 2. output is an array containing items with type="function_call"
-                function_calls = []
-                if isinstance(output_data, dict) and output_data.get("type") == "function_call":
-                    function_calls = [output_data]
-                elif isinstance(output_data, list):
-                    function_calls = [item for item in output_data if isinstance(item, dict) and item.get("type") == "function_call"]
-
-                for fc_data in function_calls:
+                for fc_data in ToolCallAnalyzer._extract_function_calls_from_generation(obs):
                     # Extract tool call from GENERATION with function_call output
                     start_time = obs.get("startTime") or obs.get("start_time")
                     end_time = obs.get("endTime") or obs.get("end_time")
@@ -638,6 +664,15 @@ class ToolCallAnalyzer:
                         arguments = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
                     except:
                         arguments = {"raw": arguments_str}
+
+                    call_key = str(
+                        fc_data.get("call_id")
+                        or fc_data.get("id")
+                        or f"{obs_id}:{tool_name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+                    )
+                    if call_key in seen_function_call_keys:
+                        continue
+                    seen_function_call_keys.add(call_key)
 
                     # Extract URL and method from arguments if present
                     url = arguments.get("url", "N/A")
