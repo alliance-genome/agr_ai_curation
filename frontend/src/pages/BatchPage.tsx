@@ -39,6 +39,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 import AuditPanel from '../components/AuditPanel';
 import { AuditEvent, AuditEventType } from '../types/AuditEvent';
+import { generateAuditEventId } from '../utils/auditHelpers';
 import FeedbackDialog from '../components/Chat/FeedbackDialog';
 import { submitFeedback } from '../services/feedbackService';
 import { useAuth } from '../contexts/AuthContext';
@@ -301,7 +302,7 @@ const BatchPage: React.FC = () => {
   const addAuditEvent = (event: Omit<AuditEvent, 'id'>, batchId?: string) => {
     const newEvent: AuditEvent = {
       ...event,
-      id: crypto.randomUUID(),
+      id: generateAuditEventId('batch-audit'),
     };
     setAuditEvents(prev => {
       const updated = [...prev, newEvent];

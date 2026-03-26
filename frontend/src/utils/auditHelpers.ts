@@ -38,6 +38,7 @@ export type AuditSeverity = 'info' | 'success' | 'warning' | 'error' | 'processi
 
 const MAX_PARAMETER_DISPLAY_LENGTH = 500
 const MAX_FILTER_DISPLAY = 5
+let fallbackAuditEventCounter = 0
 
 const SPECIES_MAP: Record<string, string> = {
   'NCBITaxon:6239': 'C. elegans',
@@ -72,7 +73,7 @@ const FORMATTER_SPECIALISTS = new Set([
  * Parses a Server-Sent Event (SSE) into an AuditEvent object.
  *
  * Converts the SSE timestamp string to a Date object and generates a unique ID
- * using crypto.randomUUID(). The resulting AuditEvent is ready for display in the UI.
+ * with a safe browser fallback when crypto.randomUUID() is unavailable.
  *
  * @param sseData - The SSE event data from the backend
  * @returns A fully formed AuditEvent with unique ID and parsed timestamp
@@ -91,12 +92,33 @@ const FORMATTER_SPECIALISTS = new Set([
  */
 export function parseSSEEvent(sseData: AuditEventSSE): AuditEvent {
   return {
-    id: crypto.randomUUID(),
+    id: generateAuditEventId(),
     type: sseData.type,
     timestamp: new Date(sseData.timestamp),
     sessionId: sseData.sessionId,
     details: sseData.details as AuditEventDetails
   }
+}
+
+/**
+ * Generates a client-side ID for audit events.
+ *
+ * Some embedded/insecure browser environments expose `crypto` without
+ * `randomUUID()`. Falling back here keeps the audit panel functional instead
+ * of dropping events during parsing.
+ */
+export function generateAuditEventId(prefix = 'audit'): string {
+  const cryptoApi = globalThis.crypto
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    try {
+      return cryptoApi.randomUUID()
+    } catch {
+      // Fall through to the local fallback ID format.
+    }
+  }
+
+  fallbackAuditEventCounter += 1
+  return `${prefix}-${Date.now().toString(36)}-${fallbackAuditEventCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 /**

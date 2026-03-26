@@ -33,7 +33,7 @@ export type AuditEventType =
 export interface AuditEvent {
   /**
    * Unique identifier for this event
-   * Generated client-side: crypto.randomUUID()
+   * Generated client-side with a browser-safe fallback when randomUUID is unavailable
    */
   id: string
 

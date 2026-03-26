@@ -5,10 +5,11 @@
  * all helper functions work correctly with the 10 audit event types.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   parseSSEEvent,
   formatAuditEvent,
+  generateAuditEventId,
   getEventPrefix,
   getEventLabel,
   getEventSeverity,
@@ -61,6 +62,27 @@ describe('parseSSEEvent (T012)', () => {
     // crypto.randomUUID is mocked in setup.ts to return a fixed UUID
     expect(event.id).toBe('123e4567-e89b-12d3-a456-426614174000')
     expect(event.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  })
+
+  it('falls back to a local ID when crypto.randomUUID throws', () => {
+    const randomUuidSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
+
+    const sseData: AuditEventSSE = {
+      type: 'CREW_START',
+      timestamp: '2025-10-23T10:30:01.000Z',
+      sessionId: 'session123',
+      details: { crewName: 'disease_ontology' }
+    }
+
+    try {
+      const event = parseSSEEvent(sseData)
+
+      expect(event.id).toMatch(/^audit-/)
+    } finally {
+      randomUuidSpy.mockRestore()
+    }
   })
 
   it('preserves type and sessionId from SSE data', () => {
@@ -126,6 +148,22 @@ describe('parseSSEEvent (T012)', () => {
     const event = parseSSEEvent(sseData)
 
     expect(event.details).toEqual(details)
+  })
+})
+
+describe('generateAuditEventId', () => {
+  it('supports custom fallback prefixes', () => {
+    const randomUuidSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
+
+    try {
+      const id = generateAuditEventId('batch-audit')
+
+      expect(id).toMatch(/^batch-audit-/)
+    } finally {
+      randomUuidSpy.mockRestore()
+    }
   })
 })
 

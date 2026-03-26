@@ -122,6 +122,34 @@ describe('AuditPanel - Event Display (T018)', () => {
     expect(screen.getByText(/Agent completed/)).toBeInTheDocument()
     expect(screen.getByText(/Done/)).toBeInTheDocument()
   })
+
+  it('renders SSE audit events when crypto.randomUUID throws', async () => {
+    const randomUuidSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
+
+    try {
+      render(
+        <AuditPanel
+          sessionId="session123"
+          sseEvents={[
+            {
+              type: 'SUPERVISOR_START',
+              timestamp: '2025-10-23T10:30:00.000Z',
+              sessionId: 'session123',
+              details: { message: 'Processing from SSE' }
+            }
+          ]}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('[SUPERVISOR] Processing from SSE')).toBeInTheDocument()
+      })
+    } finally {
+      randomUuidSpy.mockRestore()
+    }
+  })
 })
 
 // ===================================================================
