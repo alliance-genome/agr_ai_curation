@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from src.lib.packages import ExportKind, LoadedPackage, PackageExport, load_package_registry
-from src.lib.packages.paths import get_runtime_packages_dir
+from src.lib.packages.paths import get_runtime_config_dir, get_runtime_packages_dir
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,12 @@ def get_default_agent_search_paths() -> tuple[Path, ...]:
     search_paths = [
         _get_fallback_packages_dir().expanduser().resolve(strict=False),
     ]
+    runtime_config_agents_dir = (
+        get_runtime_config_dir() / "agents"
+    ).expanduser().resolve(strict=False)
+    if runtime_config_agents_dir.exists() and runtime_config_agents_dir not in search_paths:
+        search_paths.append(runtime_config_agents_dir)
+
     project_root = _find_project_root()
     if project_root is not None:
         repo_agents_dir = (project_root / "config" / "agents").expanduser().resolve(strict=False)

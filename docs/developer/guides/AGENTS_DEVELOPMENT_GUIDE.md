@@ -58,7 +58,7 @@ The system uses a **config-driven, database-backed** architecture where YAML fil
 
 ### Key Components
 
-1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `config/agents/*/` is the source-development mirror for the shipped `agr.core` supervisor plus the shipped `agr.alliance` specialists. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
+1. **Package-backed YAML layer** (`runtime/packages/*/agents/<agent>/agent.yaml`, `prompt.yaml`, `group_rules/`) -- Source of truth for system agent definitions in standalone installs. In this repository, `packages/core/agents/supervisor/` is the generic shipped supervisor baseline, `config/agents/supervisor/` is the repo-local or deployment-specific supervisor override layer, and the shipped `agr.alliance` specialists are maintained under `packages/alliance/agents/`. `registry_builder.py` reads these bundles for UI metadata and Alembic migrations seed them into the database.
 
 2. **Unified Agents Table** (`agents` in Postgres) -- Single table for both system agents (seeded from YAML) and custom agents (created via UI). Contains all runtime fields: instructions, model settings, tool IDs, output schema key, group rules config, supervisor routing, and visibility.
 
@@ -123,7 +123,7 @@ config/agents/*.yaml (repo mirror for agr.core supervisor + agr.alliance special
 ### System Agents (package-defined)
 
 1. A package author creates `agents/my_agent/agent.yaml`, `prompt.yaml`, and optional `group_rules/` inside a runtime package.
-2. If shipped packages are being maintained from this repository, the same bundle is mirrored under `config/agents/`: `config/agents/supervisor/` for the shipped `agr.core` supervisor, or `config/agents/my_agent/` for shipped `agr.alliance` specialist bundles.
+2. If shipped packages are being maintained from this repository, use `packages/core/agents/supervisor/` for the generic shipped supervisor baseline, `config/agents/supervisor/` for repo-local or deployment-specific supervisor overrides, and `packages/alliance/agents/my_agent/` for shipped `agr.alliance` specialist bundles.
 3. An Alembic migration reads the package-backed YAML and inserts a row into `agents` with `visibility='system'`.
 4. At backend startup, `registry_builder.py` reads the bundle to build `AGENT_REGISTRY` for UI metadata.
 5. The prompt cache loads active prompts from `prompt_templates` for group rule injection.
@@ -183,7 +183,7 @@ The `agents` table (`backend/src/models/sql/agent.py`) stores all agent records:
 Use `<agent_root>` below to mean either:
 
 - `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/` for a standalone install, or
-- `config/agents/supervisor/` when maintaining the shipped `agr.core` supervisor from this repository, or `config/agents/<agent>/` when maintaining shipped `agr.alliance` specialist bundles.
+- `packages/core/agents/supervisor/` when maintaining the generic shipped `agr.core` supervisor from this repository, `config/agents/supervisor/` when maintaining a repo-local or deployment-specific supervisor override, or `packages/alliance/agents/<agent>/` when maintaining shipped `agr.alliance` specialist bundles.
 
 See the runtime bundle contract in `config/agents/README.md` or the repo mirror
 template at `config/agents/_examples/basic_agent/agent.yaml` for all fields. Key sections:

@@ -185,11 +185,32 @@ def test_get_default_agent_search_paths_layers_repo_config_over_runtime_packages
 
     monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
     monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: tmp_path / "runtime-config")
     monkeypatch.setattr(agent_sources, "_find_project_root", lambda: repo_root)
 
     assert agent_sources.get_default_agent_search_paths() == (
         packages_dir.resolve(strict=False),
         config_agents_dir.resolve(strict=False),
+    )
+
+
+def test_get_default_agent_search_paths_layers_runtime_config_over_packages_without_repo_root(
+    monkeypatch, tmp_path
+):
+    packages_dir = tmp_path / "runtime-packages"
+    runtime_config_dir = tmp_path / "runtime-config"
+    runtime_agents_dir = runtime_config_dir / "agents"
+    packages_dir.mkdir(parents=True)
+    runtime_agents_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: runtime_config_dir)
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+
+    assert agent_sources.get_default_agent_search_paths() == (
+        packages_dir.resolve(strict=False),
+        runtime_agents_dir.resolve(strict=False),
     )
 
 
@@ -340,6 +361,77 @@ def test_resolve_agent_config_sources_rejects_duplicate_bundles_within_packages_
 
     with pytest.raises(ValueError, match=r"Duplicate agent bundle 'gene' discovered in "):
         agent_sources.resolve_agent_config_sources(packages_dir)
+
+
+def test_load_prompts_defaults_to_runtime_config_override_without_repo_root(
+    monkeypatch, tmp_path
+):
+    packages_dir = tmp_path / "runtime-packages"
+    runtime_config_dir = tmp_path / "runtime-config"
+    runtime_agents_dir = runtime_config_dir / "agents"
+    package_dir = packages_dir / "core"
+
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "agr.core",
+            "display_name": "AGR Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/agr_core",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "supervisor"}],
+        },
+    )
+    (package_dir / "agents" / "supervisor").mkdir(parents=True)
+    (package_dir / "agents" / "supervisor" / "agent.yaml").write_text(
+        "agent_id: supervisor\nname: Supervisor\n",
+        encoding="utf-8",
+    )
+    (package_dir / "agents" / "supervisor" / "prompt.yaml").write_text(
+        "agent_id: supervisor\ncontent: Core prompt\n",
+        encoding="utf-8",
+    )
+
+    (runtime_agents_dir / "supervisor").mkdir(parents=True)
+    (runtime_agents_dir / "supervisor" / "agent.yaml").write_text(
+        "agent_id: supervisor\nname: Supervisor Override\n",
+        encoding="utf-8",
+    )
+    override_prompt = runtime_agents_dir / "supervisor" / "prompt.yaml"
+    override_prompt.write_text(
+        "agent_id: supervisor\ncontent: Override prompt\n",
+        encoding="utf-8",
+    )
+
+    db = MagicMock()
+    captured_calls = []
+
+    monkeypatch.delenv("AGENTS_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(agent_sources, "get_runtime_packages_dir", lambda: packages_dir)
+    monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: runtime_config_dir)
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
+    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
+
+    def _capture_upsert(**kwargs):
+        captured_calls.append(kwargs)
+        return (True, 1)
+
+    monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
+
+    result = prompt_loader.load_prompts(db=db, force_reload=True)
+
+    assert result["base_prompts"] == 1
+    assert any(
+        call["source_file"] == str(override_prompt.resolve(strict=False))
+        and call["prompt_type"] == "system"
+        and call["agent_name"] == "supervisor"
+        and call["content"] == "Override prompt"
+        for call in captured_calls
+    )
 
 
 def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatch):

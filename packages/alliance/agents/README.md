@@ -191,6 +191,11 @@ Migration note: older repo-based installs may still have `rules:` in
 migrating the agent bundle. The modular loader expects `content:` and skips the
 file when that field is missing.
 
+When you add or materially change supervisor-routable Alliance specialists,
+review `config/agents/supervisor/prompt.yaml`. The shipped core supervisor
+prompt stays generic in `packages/core/agents/supervisor/`, while the repo-local
+config override is where Alliance-specific routing and handoff examples live.
+
 ## Loading and override behavior
 
 - Agent bundles are discovered from loaded runtime packages.

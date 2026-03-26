@@ -13,10 +13,15 @@ editing this checkout in place.
 
 See [Modular Packages and Upgrades](../../docs/deployment/modular-packages.md)
 for the installed runtime layout. If you are maintaining the shipped packages
-in this repository, keep `config/agents/supervisor/` aligned with
-`packages/core/agents/supervisor/`, keep `config/agents/chat_output/` aligned
-with its canonical shipped source, and keep Alliance specialist bundles under
-`packages/alliance/agents/`.
+in this repository, treat `packages/core/agents/supervisor/` as the generic
+shipped baseline, use `config/agents/supervisor/` for repo-local or
+deployment-specific supervisor overrides, keep `config/agents/chat_output/`
+aligned with its canonical shipped source, and keep Alliance specialist bundles
+under `packages/alliance/agents/`.
+
+When you add or materially change supervisor-routable specialists, review
+`config/agents/supervisor/prompt.yaml` so the org-level handoff examples and
+expectations stay in sync with the current specialist catalog.
 
 ## Package-first authoring layout
 

@@ -17,8 +17,9 @@ Repository-development note:
 
 - The repo-local `config/` tree still carries installer-seeded defaults plus
   source mirrors used when maintaining shipped packages from this checkout.
-- `config/agents/supervisor/` mirrors the shipped `agr.core` (Alliance Core)
-  supervisor bundle in `packages/core/agents/supervisor/`.
+- `packages/core/agents/supervisor/` is the generic shipped `agr.core`
+  supervisor baseline, while `config/agents/supervisor/` is the repo-local or
+  deployment-specific supervisor override layer.
 - `config/agents/` is now the repo-local core/override layer; Alliance
   specialist bundles live under `packages/alliance/agents/` and are discovered
   from runtime packages first.

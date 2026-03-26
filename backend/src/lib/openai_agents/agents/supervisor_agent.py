@@ -888,6 +888,11 @@ def _build_runtime_tool_availability_note(
             f"{', '.join(available_tool_names)}. Do not mention or attempt any "
             "other specialist tools."
         )
+        notes.append(
+            "RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE: If any static prompt "
+            "example differs from the live tool names or tool descriptions, "
+            "follow the live tool names and tool descriptions."
+        )
     else:
         notes.append(
             "CORE-ONLY MODE: No domain specialist tools are currently installed. "

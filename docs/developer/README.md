@@ -145,7 +145,10 @@ Runtime Agent           # OpenAI Agents SDK Agent instance
 ```
 
 For shipped-package maintenance in this repository, keep
-`config/agents/supervisor/` aligned with `packages/core/agents/supervisor/` and
-the remaining repo mirror bundles aligned with `packages/alliance/agents/`.
+`packages/core/agents/supervisor/` generic as the shipped baseline, use
+`config/agents/supervisor/` as the repo-local or deployment-specific override,
+and keep the remaining repo mirror bundles aligned with
+`packages/alliance/agents/`. When the specialist catalog changes in a way that
+affects routing or handoff style, review the config supervisor override too.
 
 See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) and [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) for the complete reference.

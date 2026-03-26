@@ -8,10 +8,11 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 > **Scope**: Public or organization-specific customization for a standard
 > install should be packaged under `~/.agr_ai_curation/runtime/packages/`.
 > The repo-local `config/agents/` paths in this guide are for source checkout
-> work and shipped-package maintenance: `config/agents/supervisor/` mirrors the
-> shipped `agr.core` supervisor bundle, while the remaining `config/agents/*/`
-> paths mirror shipped `agr.alliance` specialist bundles. For the public runtime
-> contract,
+> work and shipped-package maintenance: `packages/core/agents/supervisor/`
+> contains the generic shipped `agr.core` supervisor baseline,
+> `config/agents/supervisor/` is the repo-local or deployment-specific
+> supervisor override, and the shipped `agr.alliance` specialist bundles live
+> under `packages/alliance/agents/`. For the public runtime contract,
 > see [Modular Packages and Upgrades](../../deployment/modular-packages.md).
 
 ---
@@ -21,12 +22,12 @@ Step-by-step guide to adding a new agent to the AI Curation system.
 Choose the path that matches your goal:
 
 1. **Runtime package authoring** -- For standalone installs and org-specific customization, add the agent bundle under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`, update that package's manifest, and install the package.
-2. **Source checkout maintenance** -- For shipped-package work in this repository, use the repo-local `config/agents/` mirror, keep `config/agents/supervisor/` aligned with `packages/core/agents/supervisor/`, and keep specialist bundles aligned with `packages/alliance/agents/`.
+2. **Source checkout maintenance** -- For shipped-package work in this repository, keep `packages/core/agents/supervisor/` generic, use `config/agents/supervisor/` for repo-local or deployment-specific supervisor overrides, and maintain shipped specialist bundles under `packages/alliance/agents/`.
 3. **Agent Studio UI** -- For personal or project-scoped agents, use the browser and skip file edits entirely.
 
 Agents are defined through two complementary paths:
 
-1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `config/agents/supervisor/` mirrors the shipped `agr.core` supervisor bundle, while the remaining `config/agents/` folders mirror the shipped `agr.alliance` specialist bundles in `packages/alliance/agents/`.
+1. **Package-backed agent bundles** (system agents) -- Standalone installs keep system-agent YAML under `~/.agr_ai_curation/runtime/packages/<package>/agents/<agent>/`. In this repository, `packages/core/agents/supervisor/` is the generic shipped `agr.core` supervisor baseline, `config/agents/supervisor/` is the repo-local or deployment-specific supervisor override, and the shipped `agr.alliance` specialist bundles live in `packages/alliance/agents/`.
 2. **Agent Studio UI** (custom agents) -- Curators create personal or project-scoped agents through the browser. These are stored directly in the `agents` table with `visibility='private'` or `visibility='project'`.
 
 Both paths produce rows in the same `agents` table. At runtime, the supervisor discovers all active, supervisor-enabled agents from the database and creates streaming tool wrappers for them dynamically. **No Python agent files are needed.**
@@ -63,10 +64,11 @@ mkdir -p ~/.agr_ai_curation/runtime/packages/org-custom/agents/my_agent
 ```
 
 If you are maintaining the shipped `agr.alliance` specialist catalog from this
-repository, keep the repo mirror in `config/agents/my_agent/` aligned with the
-package-owned bundle in `packages/alliance/agents/my_agent/`. If you are
-editing the shipped supervisor instead, keep `config/agents/supervisor/`
-aligned with `packages/core/agents/supervisor/`.
+repository, edit the package-owned bundle in `packages/alliance/agents/my_agent/`
+and review `config/agents/supervisor/` if the routing surface or handoff style
+changed. If you are editing the generic shipped supervisor, work in
+`packages/core/agents/supervisor/`. If you need deployment-specific supervisor
+behavior in this repo checkout, use `config/agents/supervisor/`.
 
 ### Step 2: Define Your Agent (agent.yaml)
 
