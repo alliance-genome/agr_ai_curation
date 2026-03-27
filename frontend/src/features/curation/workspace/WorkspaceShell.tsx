@@ -82,7 +82,7 @@ const MobilePanels = styled(Stack)(({ theme }) => ({
 
 const ToolbarSurface = styled(PanelSurface)(({ theme }) => ({
   flex: '0 0 auto',
-  minHeight: theme.spacing(10),
+  minHeight: theme.spacing(7),
 }))
 
 const StyledResizeHandle = styled(PanelResizeHandle, {

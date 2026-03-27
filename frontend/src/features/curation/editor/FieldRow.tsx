@@ -270,7 +270,7 @@ export default function FieldRow({
         display: 'grid',
         gridTemplateColumns: {
           xs: '1fr',
-          md: '84px minmax(0, 1fr) auto auto auto',
+          md: '120px minmax(0, 1fr) auto auto auto',
         },
         gap: 1.25,
         alignItems: {

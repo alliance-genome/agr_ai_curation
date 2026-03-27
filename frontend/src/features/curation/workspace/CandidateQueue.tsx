@@ -7,7 +7,6 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import { purple } from '@mui/material/colors'
 import { alpha, type Theme, useTheme } from '@mui/material/styles'
 
 import {
@@ -125,10 +124,10 @@ function getCardTone(
     case 'active':
     default:
       return {
-        borderColor: purple[300],
-        backgroundColor: alpha(purple[300], 0.18),
-        iconColor: purple[100],
-        boxShadow: `0 0 0 1px ${alpha(purple[200], 0.35)}, 0 12px 24px ${alpha(purple[400], 0.18)}`,
+        borderColor: theme.palette.primary.main,
+        backgroundColor: alpha(theme.palette.primary.main, 0.16),
+        iconColor: theme.palette.primary.light,
+        boxShadow: `0 0 0 1px ${alpha(theme.palette.primary.main, 0.3)}, 0 8px 16px ${alpha(theme.palette.primary.dark, 0.2)}`,
         opacity: 1,
       }
   }

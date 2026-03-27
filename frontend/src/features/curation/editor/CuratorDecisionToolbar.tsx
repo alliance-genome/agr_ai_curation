@@ -239,40 +239,44 @@ export default function CuratorDecisionToolbar() {
         sx={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 1.5,
-          p: 2,
+          gap: 1,
+          px: 2,
+          py: 1.25,
         }}
       >
         <Box
           sx={{
             display: 'flex',
-            flexDirection: {
-              xs: 'column',
-              lg: 'row',
-            },
-            alignItems: {
-              lg: 'center',
-            },
+            flexDirection: 'row',
+            alignItems: 'center',
             justifyContent: 'space-between',
             gap: 1.5,
+            flexWrap: 'wrap',
           }}
         >
-          <Stack spacing={0.5}>
-            <Typography color="text.secondary" variant="overline">
-              Decision toolbar
-            </Typography>
-            <Typography variant="body2">
-              {contextLabel}
-            </Typography>
-          </Stack>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{
+              fontSize: '0.8rem',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flexShrink: 1,
+            }}
+          >
+            {contextLabel}
+          </Typography>
 
-          <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
+          <Stack direction="row" flexShrink={0} spacing={0.75} useFlexGap>
             <Button
               color="inherit"
               disabled={!activeCandidate || isSubmitting}
               onClick={() => setIsResetDialogOpen(true)}
               size="small"
               variant="outlined"
+              sx={{ fontSize: '0.75rem', py: 0.4, px: 1.25, minWidth: 0 }}
             >
               {pendingAction === 'reset' ? 'Resetting...' : 'Reset'}
             </Button>
@@ -287,8 +291,9 @@ export default function CuratorDecisionToolbar() {
               }}
               size="small"
               variant="outlined"
+              sx={{ fontSize: '0.75rem', py: 0.4, px: 1.25, minWidth: 0 }}
             >
-              {skipCandidateId ? 'Skip →' : 'Skip'}
+              Skip
             </Button>
             <Button
               color="error"
@@ -296,8 +301,9 @@ export default function CuratorDecisionToolbar() {
               onClick={() => setIsRejectDialogOpen(true)}
               size="small"
               variant="outlined"
+              sx={{ fontSize: '0.75rem', py: 0.4, px: 1.5, minWidth: 0 }}
             >
-              {pendingAction === 'reject' ? 'Rejecting...' : '✕ Reject'}
+              {pendingAction === 'reject' ? 'Rejecting...' : 'Reject'}
             </Button>
             <Button
               color="success"
@@ -305,13 +311,14 @@ export default function CuratorDecisionToolbar() {
               onClick={handleAccept}
               size="small"
               variant="contained"
+              sx={{ fontSize: '0.75rem', py: 0.4, px: 1.5, minWidth: 0, fontWeight: 700 }}
             >
-              {pendingAction === 'accept' ? 'Accepting...' : '✓ Accept'}
+              {pendingAction === 'accept' ? 'Accepting...' : 'Accept'}
             </Button>
           </Stack>
         </Box>
 
-        {error ? <Alert severity="error">{error}</Alert> : null}
+        {error ? <Alert severity="error" sx={{ py: 0.25 }}>{error}</Alert> : null}
       </Box>
 
       <RejectReasonDialog

@@ -65,94 +65,120 @@ export default function WorkspaceHeader({
       sx={(theme) => ({
         display: 'flex',
         flexDirection: 'column',
-        gap: 1.5,
-        px: { xs: 2, md: 2.5 },
-        py: 2,
+        gap: 1,
+        px: { xs: 1.5, md: 2 },
+        py: 1.25,
         borderRadius: theme.shape.borderRadius * 1.25,
         border: `1px solid ${alpha(theme.palette.divider, 0.85)}`,
         backgroundColor: alpha(theme.palette.background.paper, 0.92),
         boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}`,
       })}
     >
+      {/* Row 1: Back + Title + Meta label + Chips */}
       <Stack
-        direction={{ xs: 'column', lg: 'row' }}
-        spacing={2}
-        justifyContent="space-between"
+        direction="row"
+        alignItems="center"
+        spacing={1.5}
+        sx={{ minWidth: 0 }}
       >
-        <Stack spacing={1}>
-          <Button
-            component={RouterLink}
-            startIcon={<ArrowBackRoundedIcon />}
-            sx={{ alignSelf: 'flex-start', px: 0 }}
-            to={backHref}
-          >
-            Back to Inventory
-          </Button>
-
-          <Stack spacing={0.75}>
-            <Typography variant="h4">
-              {session.document.title}
-            </Typography>
-            <Typography color="text.secondary" variant="body2">
-              {getDocumentMetaLabel(session)}
-            </Typography>
-          </Stack>
-        </Stack>
-
-        <Stack
-          alignItems={{ xs: 'flex-start', lg: 'flex-end' }}
-          justifyContent="space-between"
-          spacing={1.5}
+        <Button
+          component={RouterLink}
+          size="small"
+          startIcon={<ArrowBackRoundedIcon sx={{ fontSize: '1rem' }} />}
+          sx={{ px: 0.5, minWidth: 'auto', flexShrink: 0, fontSize: '0.75rem' }}
+          to={backHref}
         >
-          <Stack direction="row" flexWrap="wrap" spacing={1} useFlexGap>
-            <Chip
-              color={adapterChipColor}
-              label={getAdapterLabel(session.adapter)}
-              size="small"
-              variant="outlined"
-            />
-            <Chip
-              color="success"
-              label={`${session.progress.reviewed_candidates}/${session.progress.total_candidates} reviewed`}
-              size="small"
-              variant="outlined"
-            />
-            <Chip
-              color={statusChipColor}
-              label={getStatusLabel(session.status)}
-              size="small"
-              variant={statusChipColor === 'default' ? 'outlined' : 'filled'}
-            />
-          </Stack>
+          Back
+        </Button>
 
-          {navigationSlot ? (
-            <Box data-testid="workspace-header-navigation-slot">
-              {navigationSlot}
-            </Box>
-          ) : (
-            <Stack direction="row" spacing={1}>
-              <Button
-                disabled={previousDisabled}
-                onClick={onPreviousSession}
-                size="small"
-                startIcon={<ChevronLeftRoundedIcon />}
-                variant="outlined"
-              >
-                Prev Session
-              </Button>
-              <Button
-                disabled={nextDisabled}
-                onClick={onNextSession}
-                size="small"
-                endIcon={<ChevronRightRoundedIcon />}
-                variant="outlined"
-              >
-                Next Session
-              </Button>
-            </Stack>
-          )}
+        <Typography
+          variant="subtitle2"
+          sx={{
+            flexShrink: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: 600,
+          }}
+          title={getDocumentMetaLabel(session)}
+        >
+          {session.document.title}
+        </Typography>
+
+        <Typography
+          color="text.secondary"
+          variant="caption"
+          sx={{
+            flexShrink: 2,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            display: { xs: 'none', lg: 'block' },
+          }}
+        >
+          {getDocumentMetaLabel(session)}
+        </Typography>
+
+        <Box sx={{ flexGrow: 1 }} />
+
+        <Stack direction="row" flexShrink={0} spacing={0.75} useFlexGap>
+          <Chip
+            color={adapterChipColor}
+            label={getAdapterLabel(session.adapter)}
+            size="small"
+            variant="outlined"
+            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+          />
+          <Chip
+            color="success"
+            label={`${session.progress.reviewed_candidates}/${session.progress.total_candidates}`}
+            size="small"
+            variant="outlined"
+            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+          />
+          <Chip
+            color={statusChipColor}
+            label={getStatusLabel(session.status)}
+            size="small"
+            variant={statusChipColor === 'default' ? 'outlined' : 'filled'}
+            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+          />
         </Stack>
       </Stack>
+
+      {/* Row 2: Navigation slot (right-aligned) */}
+      {navigationSlot ? (
+        <Stack
+          direction="row"
+          justifyContent="flex-end"
+          data-testid="workspace-header-navigation-slot"
+        >
+          {navigationSlot}
+        </Stack>
+      ) : (
+        <Stack direction="row" justifyContent="flex-end" spacing={0.75}>
+          <Button
+            disabled={previousDisabled}
+            onClick={onPreviousSession}
+            size="small"
+            startIcon={<ChevronLeftRoundedIcon />}
+            variant="outlined"
+          >
+            Prev
+          </Button>
+          <Button
+            disabled={nextDisabled}
+            onClick={onNextSession}
+            size="small"
+            endIcon={<ChevronRightRoundedIcon />}
+            variant="outlined"
+          >
+            Next
+          </Button>
+        </Stack>
+      )}
     </Box>
   )
 }

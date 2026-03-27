@@ -1766,6 +1766,15 @@ export function PdfViewer({
       const onDocumentLoaded = () => {
         debug.log('🔍 [PDF VIEWER DEBUG] Document loaded event fired - setting status to ready')
         setStatus('ready')
+        const resolvedPageCount =
+          pdfApp?.pdfDocument?.numPages ?? pdfApp?.pdfViewer?.pdfDocument?.numPages ?? null
+        if (typeof resolvedPageCount === 'number' && resolvedPageCount > 0) {
+          setActiveDocument((current) =>
+            current && current.pageCount !== resolvedPageCount
+              ? { ...current, pageCount: resolvedPageCount }
+              : current,
+          )
+        }
         // Signal that document loading is complete
         sessionStorage.removeItem('document-loading')
         window.dispatchEvent(new CustomEvent('document-load-complete'))

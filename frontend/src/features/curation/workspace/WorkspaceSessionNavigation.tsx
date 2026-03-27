@@ -147,34 +147,37 @@ export default function WorkspaceSessionNavigation({
   const nextButtonDisabled = !queueRequest || isLoading || !nextQuery.data?.session
 
   return (
-    <Stack spacing={0.75} alignItems={{ xs: 'stretch', md: 'flex-end' }}>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        <Button
-          disabled={previousButtonDisabled}
-          onClick={() => handleQueueNavigation(previousQuery.data)}
-          startIcon={<NavigateBeforeRoundedIcon />}
-          variant="outlined"
-        >
-          Previous session
-        </Button>
-        <Button
-          disabled={nextButtonDisabled}
-          endIcon={<NavigateNextRoundedIcon />}
-          onClick={() => handleQueueNavigation(nextQuery.data)}
-          variant="outlined"
-        >
-          Next session
-        </Button>
-      </Stack>
-      <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: 'flex-start', md: 'flex-end' }}>
-        {isLoading ? <CircularProgress size={14} /> : null}
+    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+      <Button
+        disabled={previousButtonDisabled}
+        onClick={() => handleQueueNavigation(previousQuery.data)}
+        size="small"
+        startIcon={<NavigateBeforeRoundedIcon sx={{ fontSize: '1rem' }} />}
+        variant="outlined"
+        sx={{ fontSize: '0.75rem', py: 0.5 }}
+      >
+        Prev
+      </Button>
+      <Button
+        disabled={nextButtonDisabled}
+        endIcon={<NavigateNextRoundedIcon sx={{ fontSize: '1rem' }} />}
+        onClick={() => handleQueueNavigation(nextQuery.data)}
+        size="small"
+        variant="outlined"
+        sx={{ fontSize: '0.75rem', py: 0.5 }}
+      >
+        Next
+      </Button>
+      {isLoading ? <CircularProgress size={12} /> : null}
+      {queueRequest && !isLoading ? (
         <Typography
           color={errorMessage ? 'error.main' : 'text.secondary'}
           variant="caption"
+          sx={{ fontSize: '0.7rem' }}
         >
           {statusMessage}
         </Typography>
-      </Stack>
+      ) : null}
     </Stack>
   )
 }
