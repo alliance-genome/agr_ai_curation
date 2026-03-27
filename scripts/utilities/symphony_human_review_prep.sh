@@ -269,6 +269,14 @@ ensure_langfuse_nextauth_url() {
   export NEXTAUTH_URL="${expected_nextauth_url}"
 }
 
+ensure_workspace_storage_env() {
+  # Review workspaces use the repo-local dev compose file, which bind-mounts
+  # mutable data under /app/*. Override any standalone-runtime relative paths
+  # imported from ~/.agr_ai_curation/.env so uploaded PDFs remain reachable.
+  export PDF_STORAGE_PATH="/app/pdf_storage"
+  export FILE_OUTPUT_STORAGE_PATH="/app/file_outputs"
+}
+
 prepare_docker_config() {
   local helper_path="${1:-}"
   if [[ -n "${helper_path}" ]]; then
@@ -458,6 +466,7 @@ normalize_private_env_file
 load_exported_env_file "${PRIVATE_ENV_FILE}"
 restore_review_port_env
 ensure_langfuse_nextauth_url
+ensure_workspace_storage_env
 check_required_vars
 export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-true}"
 export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"

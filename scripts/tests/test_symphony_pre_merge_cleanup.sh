@@ -16,6 +16,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local unexpected="$1"
+  local actual="$2"
+  if [[ "${actual}" == *"${unexpected}"* ]]; then
+    echo "Expected output not to contain '${unexpected}'" >&2
+    printf 'Actual output:\n%s\n' "${actual}" >&2
+    exit 1
+  fi
+}
+
 with_fake_docker() {
   local temp_dir="$1"
   local docker_stub="${temp_dir}/docker"
@@ -25,6 +35,7 @@ with_fake_docker() {
 set -euo pipefail
 
 STATE_DIR="${TEST_STATE_DIR:?}"
+printf '%s\n' "$*" >> "${STATE_DIR}/docker_calls"
 
 read_lines() {
   local path="$1"
@@ -186,6 +197,9 @@ case "${1:-}" in
         done
         read_lines "${STATE_DIR}/images"
         ;;
+      prune)
+        echo "Total reclaimed space: 0B"
+        ;;
       rm)
         shift
         remove_matches "${STATE_DIR}/images" "$@"
@@ -233,6 +247,14 @@ case "${1:-}" in
     shift
     case "${1:-}" in
       prune)
+        if [[ -f "${STATE_DIR}/builder_prune_require_keep_storage" ]]; then
+          for arg in "$@"; do
+            if [[ "${arg}" == --reserved-space=* ]]; then
+              echo "unknown flag: --reserved-space" >&2
+              exit 125
+            fi
+          done
+        fi
         echo "Total:	0B"
         exit 0
         ;;
@@ -336,7 +358,10 @@ EOF
   assert_contains "CLEANUP_PROJECTS=all58,all58proof" "${output}"
   assert_contains "CLEANUP_LEFTOVER_CONTAINERS=0" "${output}"
   assert_contains "CLEANUP_LEFTOVER_IMAGES=0" "${output}"
-  assert_contains "CLEANUP_BUILD_CACHE_PRUNED=" "${output}"
+  assert_contains "CLEANUP_DANGLING_IMAGES_PRUNED=0" "${output}"
+  assert_contains "CLEANUP_BUILD_CACHE_PRUNED=0" "${output}"
+  assert_not_contains "image prune -f" "$(cat "${temp_dir}/state/docker_calls")"
+  assert_not_contains "builder prune --reserved-space=5GB -f" "$(cat "${temp_dir}/state/docker_calls")"
   [[ ! -s "${temp_dir}/state/containers" ]]
   [[ ! -s "${temp_dir}/state/volumes" ]]
   [[ ! -s "${temp_dir}/state/networks" ]]
@@ -402,8 +427,57 @@ EOF
   [[ "$(cat "${temp_dir}/state/images")" == $'all-107-unrelated\nkeep-me' ]]
 }
 
+test_low_disk_auto_enables_global_prunes() {
+  local temp_dir workspace output docker_calls
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/ALL-302"
+  mkdir -p "${temp_dir}/state" "${workspace}"
+  touch "${workspace}/docker-compose.yml"
+  : > "${temp_dir}/state/builder_prune_require_keep_storage"
+
+  output="$(
+    with_fake_docker "${temp_dir}" \
+      env SYMPHONY_CLEANUP_FREE_SPACE_BYTES_OVERRIDE=1073741824 SYMPHONY_CLEANUP_GLOBAL_PRUNE_FREE_SPACE_THRESHOLD=20GB \
+      bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" --compose-project all302 --max-attempts 1
+  )"
+
+  docker_calls="$(cat "${temp_dir}/state/docker_calls")"
+  assert_contains "CLEANUP_GLOBAL_PRUNE_TRIGGERED=true" "${output}"
+  assert_contains "CLEANUP_FREE_SPACE_BYTES=1073741824" "${output}"
+  assert_contains "CLEANUP_DANGLING_IMAGES_PRUNED=0B" "${output}"
+  assert_contains "CLEANUP_BUILD_CACHE_PRUNED=0B" "${output}"
+  assert_contains "image prune -f" "${docker_calls}"
+  assert_contains "builder prune --reserved-space=5GB -f" "${docker_calls}"
+  assert_contains "builder prune --keep-storage=5GB -f" "${docker_calls}"
+}
+
+test_opt_in_global_prunes_fall_back_to_keep_storage_for_older_buildx() {
+  local temp_dir workspace output docker_calls
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/ALL-201"
+  mkdir -p "${temp_dir}/state" "${workspace}"
+  touch "${workspace}/docker-compose.yml"
+  : > "${temp_dir}/state/builder_prune_require_keep_storage"
+
+  output="$(
+    with_fake_docker "${temp_dir}" \
+      env SYMPHONY_CLEANUP_PRUNE_DANGLING_IMAGES=1 SYMPHONY_CLEANUP_PRUNE_GLOBAL_BUILD_CACHE=1 \
+      bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" --compose-project all201 --max-attempts 1
+  )"
+
+  docker_calls="$(cat "${temp_dir}/state/docker_calls")"
+  assert_contains "CLEANUP_STATUS=success" "${output}"
+  assert_contains "CLEANUP_DANGLING_IMAGES_PRUNED=0B" "${output}"
+  assert_contains "CLEANUP_BUILD_CACHE_PRUNED=0B" "${output}"
+  assert_contains "image prune -f" "${docker_calls}"
+  assert_contains "builder prune --reserved-space=5GB -f" "${docker_calls}"
+  assert_contains "builder prune --keep-storage=5GB -f" "${docker_calls}"
+}
+
 test_force_cleanup_uses_workspace_project_discovery
 test_compose_failure_falls_back_to_direct_cleanup
 test_cleanup_matches_sanitized_issue_image_names
+test_low_disk_auto_enables_global_prunes
+test_opt_in_global_prunes_fall_back_to_keep_storage_for_older_buildx
 
 echo "symphony_pre_merge_cleanup tests passed"

@@ -9,7 +9,15 @@ Usage:
 Behavior:
   - Attempts issue-local docker teardown before merge.
   - Removes issue-local Docker images after containers are gone.
-  - Prunes Docker build cache (keeps most recent layers up to SYMPHONY_CLEANUP_BUILD_CACHE_KEEP, default 5GB).
+  - Leaves global Docker cache alone by default so shared base layers stay warm.
+  - Optional global pruning can be enabled with:
+      SYMPHONY_CLEANUP_PRUNE_DANGLING_IMAGES=1
+      SYMPHONY_CLEANUP_PRUNE_GLOBAL_BUILD_CACHE=1
+  - Automatic low-disk pruning enables those global prune steps when free
+    space on the workspace filesystem drops below
+      SYMPHONY_CLEANUP_GLOBAL_PRUNE_FREE_SPACE_THRESHOLD (default 20GB)
+    Build cache pruning keeps most recent layers up to
+    SYMPHONY_CLEANUP_BUILD_CACHE_KEEP (default 5GB).
   - Applies bounded self-healing (ownership fix + docker config fallback).
   - Emits machine-parsable summary lines:
       CLEANUP_STATUS=success|partial
@@ -21,6 +29,10 @@ Behavior:
       CLEANUP_LEFTOVER_VOLUMES=<n>
       CLEANUP_LEFTOVER_NETWORKS=<n>
       CLEANUP_LEFTOVER_IMAGES=<n>
+      CLEANUP_FREE_SPACE_BYTES=<bytes or unknown>
+      CLEANUP_GLOBAL_PRUNE_THRESHOLD_BYTES=<bytes or 0>
+      CLEANUP_GLOBAL_PRUNE_TRIGGERED=true|false
+      CLEANUP_DANGLING_IMAGES_PRUNED=<bytes or 0>
       CLEANUP_BUILD_CACHE_PRUNED=<bytes or 0>
       CLEANUP_FIXES=<comma-separated or none>
       CLEANUP_FIRST_ERROR=<single-line message or none>
@@ -35,6 +47,10 @@ remove_workspace=0
 max_attempts=2
 retry_sleep_seconds="${SYMPHONY_CLEANUP_RETRY_SLEEP_SECONDS:-5}"
 build_cache_keep_storage="${SYMPHONY_CLEANUP_BUILD_CACHE_KEEP:-5GB}"
+prune_dangling_images="${SYMPHONY_CLEANUP_PRUNE_DANGLING_IMAGES:-0}"
+prune_global_build_cache="${SYMPHONY_CLEANUP_PRUNE_GLOBAL_BUILD_CACHE:-0}"
+global_prune_free_space_threshold="${SYMPHONY_CLEANUP_GLOBAL_PRUNE_FREE_SPACE_THRESHOLD:-20GB}"
+free_space_bytes_override="${SYMPHONY_CLEANUP_FREE_SPACE_BYTES_OVERRIDE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -86,6 +102,66 @@ unique_nonempty_lines() {
   awk 'NF && !seen[$0]++'
 }
 
+human_size_to_bytes() {
+  local raw="${1:-}"
+  local normalized number suffix multiplier=1 power=0 value
+
+  normalized="$(printf '%s' "${raw}" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+  if [[ -z "${normalized}" || "${normalized}" == "0" ]]; then
+    printf '0'
+    return 0
+  fi
+
+  if command -v numfmt >/dev/null 2>&1; then
+    if numfmt --from=iec "${normalized}" >/dev/null 2>&1; then
+      numfmt --from=iec "${normalized}"
+      return 0
+    fi
+    if numfmt --from=si "${normalized}" >/dev/null 2>&1; then
+      numfmt --from=si "${normalized}"
+      return 0
+    fi
+  fi
+
+  if [[ "${normalized}" =~ ^([0-9]+)([A-Z]*)$ ]]; then
+    number="${BASH_REMATCH[1]}"
+    suffix="${BASH_REMATCH[2]}"
+  else
+    return 1
+  fi
+
+  case "${suffix}" in
+    ""|B) multiplier=1; power=0 ;;
+    K|KB) multiplier=1000; power=1 ;;
+    M|MB) multiplier=1000; power=2 ;;
+    G|GB) multiplier=1000; power=3 ;;
+    T|TB) multiplier=1000; power=4 ;;
+    P|PB) multiplier=1000; power=5 ;;
+    KI|KIB) multiplier=1024; power=1 ;;
+    MI|MIB) multiplier=1024; power=2 ;;
+    GI|GIB) multiplier=1024; power=3 ;;
+    TI|TIB) multiplier=1024; power=4 ;;
+    PI|PIB) multiplier=1024; power=5 ;;
+    *) return 1 ;;
+  esac
+
+  value="${number}"
+  while [[ "${power}" -gt 0 ]]; do
+    value=$((value * multiplier))
+    power=$((power - 1))
+  done
+  printf '%s' "${value}"
+}
+
+detect_free_space_bytes() {
+  if [[ -n "${free_space_bytes_override}" ]]; then
+    printf '%s' "${free_space_bytes_override}"
+    return 0
+  fi
+
+  df -Pk "${workspace_dir}" 2>/dev/null | awk 'NR==2 { print $4 * 1024 }'
+}
+
 first_error=""
 workspace_removed="false"
 remove_workspace_requested="false"
@@ -99,6 +175,22 @@ leftover_volumes_count=0
 leftover_networks_count=0
 leftover_images_count=0
 cleanup_projects_cache=()
+free_space_bytes="unknown"
+global_prune_threshold_bytes="0"
+global_prune_triggered="false"
+
+global_prune_threshold_bytes="$(human_size_to_bytes "${global_prune_free_space_threshold}" 2>/dev/null || printf '0')"
+free_space_detected="$(detect_free_space_bytes 2>/dev/null || true)"
+if [[ -n "${free_space_detected}" ]]; then
+  free_space_bytes="${free_space_detected}"
+fi
+if [[ "${global_prune_threshold_bytes}" =~ ^[0-9]+$ ]] && [[ "${free_space_bytes}" =~ ^[0-9]+$ ]]; then
+  if (( global_prune_threshold_bytes > 0 && free_space_bytes < global_prune_threshold_bytes )); then
+    global_prune_triggered="true"
+    prune_dangling_images=1
+    prune_global_build_cache=1
+  fi
+fi
 
 record_first_error() {
   local text="$1"
@@ -439,12 +531,27 @@ else
   fi
 fi
 
-# Prune Docker build cache to prevent unbounded growth across workspaces.
-# Each workspace build creates duplicate layers (COPY ., pip install, npm ci);
-# --keep-storage retains the most recently used base layers for fast rebuilds.
+# Remove dangling (untagged) Docker images only when explicitly requested.
+# Default workspace cleanup should avoid global pruning so shared build inputs
+# and reusable cache stay available for other issue builds.
+dangling_images_pruned_bytes=0
+if [[ "${prune_dangling_images}" == "1" ]] && command -v docker >/dev/null 2>&1; then
+  img_prune_output="$(docker image prune -f 2>&1 || true)"
+  dangling_images_pruned_bytes="$(printf '%s\n' "${img_prune_output}" | sed -n 's/^Total reclaimed space:[[:space:]]*//p' | tail -n 1)"
+  if [[ -z "${dangling_images_pruned_bytes}" ]]; then
+    dangling_images_pruned_bytes=0
+  fi
+fi
+
+# Prune global BuildKit cache only when explicitly requested. This can reclaim
+# disk, but it also evicts shared build layers that future issue workspaces may
+# otherwise reuse.
 build_cache_pruned_bytes=0
-if command -v docker >/dev/null 2>&1; then
-  prune_output="$(docker builder prune --keep-storage="${build_cache_keep_storage}" -f 2>&1 || true)"
+if [[ "${prune_global_build_cache}" == "1" ]] && command -v docker >/dev/null 2>&1; then
+  prune_output="$(docker builder prune --reserved-space="${build_cache_keep_storage}" -f 2>&1 || true)"
+  if printf '%s\n' "${prune_output}" | grep -qiE 'unknown (flag|option)|flag provided but not defined'; then
+    prune_output="$(docker builder prune --keep-storage="${build_cache_keep_storage}" -f 2>&1 || true)"
+  fi
   build_cache_pruned_bytes="$(printf '%s\n' "${prune_output}" | sed -n 's/^Total:[[:space:]]*//p' | tail -n 1)"
   if [[ -z "${build_cache_pruned_bytes}" ]]; then
     build_cache_pruned_bytes=0
@@ -524,6 +631,10 @@ echo "CLEANUP_LEFTOVER_CONTAINERS=${leftover_containers_count}"
 echo "CLEANUP_LEFTOVER_VOLUMES=${leftover_volumes_count}"
 echo "CLEANUP_LEFTOVER_NETWORKS=${leftover_networks_count}"
 echo "CLEANUP_LEFTOVER_IMAGES=${leftover_images_count}"
+echo "CLEANUP_FREE_SPACE_BYTES=${free_space_bytes}"
+echo "CLEANUP_GLOBAL_PRUNE_THRESHOLD_BYTES=${global_prune_threshold_bytes}"
+echo "CLEANUP_GLOBAL_PRUNE_TRIGGERED=${global_prune_triggered}"
+echo "CLEANUP_DANGLING_IMAGES_PRUNED=${dangling_images_pruned_bytes}"
 echo "CLEANUP_BUILD_CACHE_PRUNED=${build_cache_pruned_bytes}"
 echo "CLEANUP_FIXES=${fixes}"
 echo "CLEANUP_FIRST_ERROR=${first_error}"

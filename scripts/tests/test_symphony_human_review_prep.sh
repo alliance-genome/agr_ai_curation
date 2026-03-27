@@ -122,12 +122,14 @@ make_stub_bin() {
 #!/usr/bin/env bash
 set -euo pipefail
 log_file="${DOCKER_STUB_LOG:?}"
-printf 'docker|cwd=%s|CURATION_DB_URL=%s|LANGFUSE_LOCAL_DATABASE_URL=%s|LANGFUSE_LOCAL_ENCRYPTION_KEY=%s|LANGFUSE_HOST_PORT=%s|NEXTAUTH_URL=%s|args=%s\n' \
+printf 'docker|cwd=%s|CURATION_DB_URL=%s|LANGFUSE_LOCAL_DATABASE_URL=%s|LANGFUSE_LOCAL_ENCRYPTION_KEY=%s|LANGFUSE_HOST_PORT=%s|PDF_STORAGE_PATH=%s|FILE_OUTPUT_STORAGE_PATH=%s|NEXTAUTH_URL=%s|args=%s\n' \
   "$PWD" \
   "${CURATION_DB_URL:-}" \
   "${LANGFUSE_LOCAL_DATABASE_URL:-}" \
   "${LANGFUSE_LOCAL_ENCRYPTION_KEY:-}" \
   "${LANGFUSE_HOST_PORT:-}" \
+  "${PDF_STORAGE_PATH:-}" \
+  "${FILE_OUTPUT_STORAGE_PATH:-}" \
   "${NEXTAUTH_URL:-}" \
   "$*" >> "${log_file}"
 if [[ -n "${STUB_DOCKER_FAIL_ONCE_MATCH:-}" && "$*" == *"${STUB_DOCKER_FAIL_ONCE_MATCH}"* ]]; then
@@ -231,6 +233,8 @@ export OPENAI_API_KEY=test-openai
 export GROQ_API_KEY=test-groq
 export POSTGRES_PASSWORD=postgres
 export PDF_EXTRACTION_SERVICE_URL=http://pdf.example
+export PDF_STORAGE_PATH=pdf_storage
+export FILE_OUTPUT_STORAGE_PATH=file_outputs
 EOF
 
   make_workspace_tunnel_helpers "${workspace}"
@@ -276,6 +280,8 @@ EOF
   # Built from parts to avoid secret-scanner false positives on test fixture URIs
   _db_url="postgresql://""readonly:pw@host.docker.internal:6139/curation"
   assert_contains "CURATION_DB_URL=${_db_url}" "${docker_log}"
+  assert_contains "PDF_STORAGE_PATH=/app/pdf_storage" "${docker_log}"
+  assert_contains "FILE_OUTPUT_STORAGE_PATH=/app/file_outputs" "${docker_log}"
 
   export PATH="${old_path}"
   unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
