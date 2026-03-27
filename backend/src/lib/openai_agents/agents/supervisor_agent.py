@@ -46,7 +46,10 @@ from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
     run_curation_prep,
 )
-from src.lib.curation_workspace.extraction_results import list_extraction_results
+from src.lib.curation_workspace.extraction_results import (
+    enrich_extraction_result_scope,
+    list_extraction_results,
+)
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
 from src.schemas.curation_prep import CurationPrepAgentInput
@@ -529,6 +532,10 @@ async def _dispatch_curation_prep_from_chat_context(
         document_id=active_document_id,
         exclude_agent_keys=("curation_prep",),
     )
+    extraction_results = [
+        enrich_extraction_result_scope(record)
+        for record in extraction_results
+    ]
     if not extraction_results:
         return _tool_response(
             "no_extraction_context",

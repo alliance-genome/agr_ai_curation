@@ -886,6 +886,7 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         title=document.title or document.filename,
         pdf_url=viewer_url,
         viewer_url=viewer_url,
+        page_count=document.page_count,
     )
 
 

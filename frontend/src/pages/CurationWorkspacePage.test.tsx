@@ -82,6 +82,7 @@ function buildWorkspace(): CurationWorkspace {
         pmid: '123456',
         pdf_url: '/api/documents/document-1.pdf',
         viewer_url: '/api/documents/document-1.pdf',
+        page_count: 5,
       },
       progress: {
         total_candidates: 2,
@@ -695,7 +696,7 @@ describe('CurationWorkspacePage', () => {
         'document-1',
         '/api/documents/document-1.pdf',
         'Workspace Document',
-        0,
+        5,
         undefined,
       )
     })

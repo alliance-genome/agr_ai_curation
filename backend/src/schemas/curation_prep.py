@@ -125,6 +125,8 @@ def _validate_field_path(
         raise ValueError(
             f"{field_name} must use dot-delimited segments without empty or padded path components"
         )
+    if segments[0].isdigit():
+        raise ValueError(f"{field_name} must start with a named top-level field")
     if not allow_numeric_segments and any(segment.isdigit() for segment in segments):
         raise ValueError(
             f"{field_name} must not use numeric path segments; encode list values in json_value instead"
@@ -155,6 +157,109 @@ def _path_exists_in_payload(payload: Any, field_path: str) -> bool:
         return False
 
     return True
+
+
+_MISSING = object()
+
+
+def _container_for_next_segment(next_segment: str) -> list[Any] | dict[str, Any]:
+    """Return the nested container type implied by the upcoming field-path segment."""
+
+    if next_segment.isdigit():
+        return []
+    return {}
+
+
+def _ensure_list_slot(container: list[Any], index: int) -> None:
+    """Grow a list with missing markers until an index is addressable."""
+
+    while len(container) <= index:
+        container.append(_MISSING)
+
+
+def _assign_field_path_value(result: dict[str, Any], field_path: str, value: Any) -> None:
+    """Assign one extracted field into a nested dict/list payload."""
+
+    segments = field_path.split(".")
+    cursor: Any = result
+
+    for index, segment in enumerate(segments[:-1]):
+        next_segment = segments[index + 1]
+        next_container = _container_for_next_segment(next_segment)
+
+        if isinstance(cursor, dict):
+            existing = cursor.get(segment, _MISSING)
+            if existing is _MISSING:
+                cursor[segment] = next_container
+                existing = cursor[segment]
+            elif next_segment.isdigit():
+                if not isinstance(existing, list):
+                    raise ValueError(
+                        f"Field path '{field_path}' conflicts with an existing non-list value"
+                    )
+            elif not isinstance(existing, dict):
+                raise ValueError(
+                    f"Field path '{field_path}' conflicts with an existing non-object value"
+                )
+            cursor = existing
+            continue
+
+        if isinstance(cursor, list):
+            if not segment.isdigit():
+                raise ValueError(
+                    f"Field path '{field_path}' conflicts with an existing list value"
+                )
+
+            list_index = int(segment)
+            _ensure_list_slot(cursor, list_index)
+            existing = cursor[list_index]
+            if existing is _MISSING:
+                cursor[list_index] = next_container
+                existing = cursor[list_index]
+            elif next_segment.isdigit():
+                if not isinstance(existing, list):
+                    raise ValueError(
+                        f"Field path '{field_path}' conflicts with an existing non-list value"
+                    )
+            elif not isinstance(existing, dict):
+                raise ValueError(
+                    f"Field path '{field_path}' conflicts with an existing non-object value"
+                )
+            cursor = existing
+            continue
+
+        raise ValueError(f"Field path '{field_path}' conflicts with an existing scalar value")
+
+    leaf_key = segments[-1]
+    if isinstance(cursor, dict):
+        if leaf_key in cursor:
+            raise ValueError(f"Duplicate extracted field path '{field_path}' is not allowed")
+        cursor[leaf_key] = value
+        return
+
+    if isinstance(cursor, list):
+        if not leaf_key.isdigit():
+            raise ValueError(f"Field path '{field_path}' conflicts with an existing list value")
+        list_index = int(leaf_key)
+        _ensure_list_slot(cursor, list_index)
+        if cursor[list_index] is not _MISSING:
+            raise ValueError(f"Duplicate extracted field path '{field_path}' is not allowed")
+        cursor[list_index] = value
+        return
+
+    raise ValueError(f"Field path '{field_path}' conflicts with an existing scalar value")
+
+
+def _finalize_nested_lists(value: Any) -> Any:
+    """Replace internal missing markers with JSON-safe nulls recursively."""
+
+    if value is _MISSING:
+        return None
+    if isinstance(value, list):
+        return [_finalize_nested_lists(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _finalize_nested_lists(item) for key, item in value.items()}
+    return value
 
 
 class CurationPrepConversationRole(str, Enum):
@@ -338,11 +443,7 @@ class CurationPrepExtractedField(CurationPrepBaseModel):
     def validate_field_path(cls, value: str) -> str:
         """Require well-formed adapter-owned field paths."""
 
-        return _validate_field_path(
-            value,
-            field_name="field_path",
-            allow_numeric_segments=False,
-        )
+        return _validate_field_path(value, field_name="field_path")
 
     @model_validator(mode="after")
     def validate_value_slot(self) -> "CurationPrepExtractedField":
@@ -512,29 +613,12 @@ class CurationPrepCandidate(CurationPrepBaseModel):
         result: dict[str, Any] = {}
 
         for field in self.extracted_fields:
-            path_segments = str(field.field_path).split(".")
-            cursor = result
-
-            for segment in path_segments[:-1]:
-                existing = cursor.get(segment)
-                if existing is None:
-                    cursor[segment] = {}
-                    existing = cursor[segment]
-                elif not isinstance(existing, dict):
-                    raise ValueError(
-                        f"Field path '{field.field_path}' conflicts with an existing non-object value"
-                    )
-                cursor = existing
-
-            leaf_key = path_segments[-1]
-            if leaf_key in cursor:
-                raise ValueError(f"Duplicate extracted field path '{field.field_path}' is not allowed")
-            cursor[leaf_key] = field.to_python_value()
+            _assign_field_path_value(result, str(field.field_path), field.to_python_value())
 
         if not result:
             raise ValueError("extracted_fields must contain at least one field")
 
-        return result
+        return _finalize_nested_lists(result)
 
 
 class CurationPrepTokenUsage(CurationPrepBaseModel):
@@ -668,6 +752,9 @@ class CurationPrepChatRunResponse(CurationPrepBaseModel):
     """Result summary returned after the prep agent finishes."""
 
     summary_text: NonEmptyString = Field(description="User-facing completion summary")
+    document_id: NonEmptyString = Field(
+        description="Resolved document identifier for the prepared review candidates",
+    )
     candidate_count: int = Field(
         default=0,
         ge=0,

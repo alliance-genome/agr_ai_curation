@@ -26,6 +26,8 @@ content: |
   ## Candidate rules
 
   - extracted_fields must use adapter-owned field paths.
+  - Repeated values may use indexed field paths such as `genes.0.mention` when
+    reconstructing arrays inside the adapter-owned payload.
   - evidence_references must point to evidence_record_id values that exist in
     the input evidence_records.
   - Every evidence_references.field_path must resolve to a field inside the

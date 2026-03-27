@@ -22,8 +22,37 @@ interface PrepScopeConfirmationDialogProps {
   onConfirm: () => Promise<void> | void
 }
 
+const DEFAULT_REFERENCE_ADAPTER_KEYS = new Set(['reference', 'reference_adapter'])
+
+function humanizeScopeValue(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function displayScopeValues(label: string, values: string[]) {
+  const normalizedValues = values.map((value) => value.trim()).filter(Boolean)
+
+  if (
+    label === 'Adapters' &&
+    normalizedValues.length === 1 &&
+    DEFAULT_REFERENCE_ADAPTER_KEYS.has(normalizedValues[0])
+  ) {
+    return []
+  }
+
+  return normalizedValues.map((value) => {
+    if (label === 'Adapters' && DEFAULT_REFERENCE_ADAPTER_KEYS.has(value)) {
+      return 'Reference Curation'
+    }
+    return humanizeScopeValue(value)
+  })
+}
+
 function ScopePill({ label, values }: { label: string; values: string[] }) {
-  if (values.length === 0) {
+  const displayValues = displayScopeValues(label, values)
+
+  if (displayValues.length === 0) {
     return null
   }
 
@@ -45,7 +74,7 @@ function ScopePill({ label, values }: { label: string; values: string[] }) {
         {label}
       </Typography>
       <Typography component="span" sx={{ fontSize: '0.8rem' }}>
-        {values.join(', ')}
+        {displayValues.join(', ')}
       </Typography>
     </Box>
   )

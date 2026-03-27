@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -226,3 +227,81 @@ def test_get_document_bootstrap_availability_returns_false_when_no_matching_resu
     )
 
     assert availability.eligible is False
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_document_session_commits_persisted_session(monkeypatch):
+    class FakeDb:
+        def __init__(self):
+            self.commit_calls = 0
+            self.rollback_calls = 0
+            self._in_transaction = True
+
+        def commit(self):
+            self.commit_calls += 1
+            self._in_transaction = False
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._in_transaction = False
+
+        def in_transaction(self):
+            return self._in_transaction
+
+    fake_db = FakeDb()
+    extraction_result = SimpleNamespace(
+        id=uuid4(),
+        source_kind=CurationExtractionSourceKind.CHAT,
+        flow_run_id=None,
+        origin_session_id="chat-session-1",
+        trace_id="trace-1",
+    )
+    reusable_session = None
+    pipeline_request: dict[str, object] = {}
+    detail_request: dict[str, object] = {}
+
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: extraction_result,
+    )
+    monkeypatch.setattr(module, "_replayable_prep_output", lambda extraction_result: object())
+    monkeypatch.setattr(module, "_resolved_adapter_key", lambda extraction_result, prep_output: "reference_adapter")
+    monkeypatch.setattr(module, "_resolved_profile_key", lambda extraction_result, prep_output: None)
+    monkeypatch.setattr(module, "find_reusable_prepared_session", lambda *args, **kwargs: reusable_session)
+
+    async def _run_post_curation_pipeline(request, *, db):
+        pipeline_request["request"] = request
+        pipeline_request["db"] = db
+        return SimpleNamespace(session_id="session-123", created=True)
+
+    monkeypatch.setattr(module, "run_post_curation_pipeline", _run_post_curation_pipeline)
+
+    session_payload = {"session_id": "session-123"}
+
+    def _get_session_detail(db, session_id):
+        detail_request["db"] = db
+        detail_request["session_id"] = session_id
+        return session_payload
+
+    monkeypatch.setattr(module, "get_session_detail", _get_session_detail)
+    monkeypatch.setattr(
+        module,
+        "CurationDocumentBootstrapResponse",
+        lambda *, created, session: SimpleNamespace(created=created, session=session),
+    )
+
+    response = await module.bootstrap_document_session(
+        "document-1",
+        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+        current_user_id="user-1",
+        db=fake_db,
+    )
+
+    assert response.created is True
+    assert response.session == session_payload
+    assert pipeline_request["db"] is fake_db
+    assert detail_request == {"db": fake_db, "session_id": "session-123"}
+    assert fake_db.commit_calls == 1
+    assert fake_db.rollback_calls == 0

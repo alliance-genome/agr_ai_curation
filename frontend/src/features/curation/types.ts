@@ -194,6 +194,7 @@ export interface CurationDocumentRef {
   citation_label?: string | null
   pdf_url?: string | null
   viewer_url?: string | null
+  page_count?: number | null
   publication_year?: number | null
 }
 

@@ -103,45 +103,52 @@ async def bootstrap_document_session(
     )
 
     prepared_at = datetime.now(timezone.utc)
-    pipeline_result = await run_post_curation_pipeline(
-        PostCurationPipelineRequest(
-            prep_output=prep_output,
-            document_id=document_id,
-            source_kind=extraction_result.source_kind,
-            adapter_key=adapter_key,
-            profile_key=profile_key,
-            flow_run_id=extraction_result.flow_run_id,
-            origin_session_id=extraction_result.origin_session_id,
-            trace_id=extraction_result.trace_id,
-            user_id=current_user_id,
-            created_by_id=(
-                reusable_session.created_by_id if reusable_session else current_user_id
+    try:
+        pipeline_result = await run_post_curation_pipeline(
+            PostCurationPipelineRequest(
+                prep_output=prep_output,
+                document_id=document_id,
+                source_kind=extraction_result.source_kind,
+                adapter_key=adapter_key,
+                profile_key=profile_key,
+                flow_run_id=extraction_result.flow_run_id,
+                origin_session_id=extraction_result.origin_session_id,
+                trace_id=extraction_result.trace_id,
+                user_id=current_user_id,
+                created_by_id=(
+                    reusable_session.created_by_id if reusable_session else current_user_id
+                ),
+                assigned_curator_id=(
+                    request.curator_id
+                    if request.curator_id is not None
+                    else reusable_session.assigned_curator_id if reusable_session else None
+                ),
+                notes=reusable_session.notes if reusable_session else None,
+                tags=tuple(reusable_session.tags) if reusable_session else (),
+                prepared_at=prepared_at,
+                review_session_id=reusable_session.session_id if reusable_session else None,
+                prep_extraction_result_id=str(extraction_result.id),
+                execution_mode=PipelineExecutionMode.SYNC,
             ),
-            assigned_curator_id=(
-                request.curator_id
-                if request.curator_id is not None
-                else reusable_session.assigned_curator_id if reusable_session else None
-            ),
-            notes=reusable_session.notes if reusable_session else None,
-            tags=tuple(reusable_session.tags) if reusable_session else (),
-            prepared_at=prepared_at,
-            review_session_id=reusable_session.session_id if reusable_session else None,
-            prep_extraction_result_id=str(extraction_result.id),
-            execution_mode=PipelineExecutionMode.SYNC,
-        ),
-        db=db,
-    )
-
-    if pipeline_result.session_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Bootstrap pipeline did not return a review session identifier",
+            db=db,
         )
 
-    return CurationDocumentBootstrapResponse(
-        created=bool(pipeline_result.created),
-        session=get_session_detail(db, pipeline_result.session_id),
-    )
+        if pipeline_result.session_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Bootstrap pipeline did not return a review session identifier",
+            )
+
+        response = CurationDocumentBootstrapResponse(
+            created=bool(pipeline_result.created),
+            session=get_session_detail(db, pipeline_result.session_id),
+        )
+        db.commit()
+        return response
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
 
 
 def get_document_bootstrap_availability(

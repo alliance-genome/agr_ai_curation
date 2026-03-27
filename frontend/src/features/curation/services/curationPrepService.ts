@@ -21,6 +21,7 @@ export interface CurationPrepRunRequest {
 
 export interface CurationPrepRunResponse {
   summary_text: string
+  document_id: string
   candidate_count: number
   warnings: string[]
   processing_notes: string[]

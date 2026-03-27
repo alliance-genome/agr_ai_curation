@@ -457,6 +457,10 @@ class CurationDocumentRef(CurationWorkspaceBaseModel):
         default=None,
         description="Viewer route or PDF asset URL used by the frontend viewer",
     )
+    page_count: Optional[int] = Field(
+        default=None,
+        description="Page count for the attached PDF when available",
+    )
     publication_year: Optional[int] = Field(
         default=None,
         description="Publication year when available",

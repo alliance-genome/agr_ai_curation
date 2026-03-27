@@ -240,6 +240,64 @@ def test_curation_prep_candidate_accepts_numeric_evidence_path_inside_json_field
     assert candidate.evidence_references[0].field_path == "supporting_papers.0.title"
 
 
+def test_curation_prep_candidate_accepts_numeric_extracted_field_paths_for_lists():
+    """Extracted fields may use numeric segments to reconstruct repeated values."""
+
+    payload = make_candidate_payload()
+    payload["extracted_fields"] = [
+        {
+            "field_path": "genes.0.mention",
+            "value_type": CurationPrepExtractedFieldValueType.STRING,
+            "string_value": "crb",
+            "number_value": None,
+            "boolean_value": None,
+            "json_value": None,
+        },
+        {
+            "field_path": "genes.0.confidence",
+            "value_type": CurationPrepExtractedFieldValueType.STRING,
+            "string_value": "high",
+            "number_value": None,
+            "boolean_value": None,
+            "json_value": None,
+        },
+        {
+            "field_path": "genes.1.mention",
+            "value_type": CurationPrepExtractedFieldValueType.STRING,
+            "string_value": "ninaE",
+            "number_value": None,
+            "boolean_value": None,
+            "json_value": None,
+        },
+    ]
+    payload["evidence_references"] = [
+        {
+            "field_path": "genes.0.mention",
+            "evidence_record_id": "evidence-1",
+            "extraction_result_id": "extract-1",
+            "anchor": make_anchor_payload(),
+            "rationale": "The snippet supports the first extracted gene mention.",
+        }
+    ]
+    payload["unresolved_ambiguities"] = [
+        {
+            "field_path": "genes.1.normalized_id",
+            "description": "Normalization remains unresolved for the second gene mention.",
+            "candidate_values": ["FB:unresolved"],
+            "evidence_record_ids": ["evidence-1"],
+        }
+    ]
+
+    candidate = CurationPrepCandidate(**payload)
+
+    assert candidate.to_extracted_fields_dict() == {
+        "genes": [
+            {"mention": "crb", "confidence": "high"},
+            {"mention": "ninaE"},
+        ]
+    }
+
+
 @pytest.mark.parametrize(
     "invalid_fields",
     [
@@ -272,16 +330,6 @@ def test_curation_prep_candidate_accepts_numeric_evidence_path_inside_json_field
                 "number_value": None,
                 "boolean_value": None,
                 "json_value": "\"scalar values must use a dedicated value slot\"",
-            }
-        ],
-        [
-            {
-                "field_path": "items.0.name",
-                "value_type": CurationPrepExtractedFieldValueType.STRING,
-                "string_value": "APOE",
-                "number_value": None,
-                "boolean_value": None,
-                "json_value": None,
             }
         ],
     ],

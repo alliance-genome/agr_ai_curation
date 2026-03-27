@@ -45,6 +45,7 @@ function mockChatFetch(options?: {
   }
   prepRun?: {
     summary_text: string
+    document_id: string
     candidate_count: number
     warnings: string[]
     processing_notes: string[]
@@ -109,6 +110,7 @@ function mockChatFetch(options?: {
         ok: true,
         json: async () => prepRun ?? {
           summary_text: 'Prepared 1 candidate annotation for curation review.',
+          document_id: 'doc-1',
           candidate_count: 1,
           warnings: [],
           processing_notes: [],
@@ -338,6 +340,7 @@ describe('Chat persistence', () => {
       },
       prepRun: {
         summary_text: 'Prepared 2 candidate annotations for curation review.',
+        document_id: 'doc-disease-1',
         candidate_count: 2,
         warnings: ['Review warnings are available.'],
         processing_notes: ['Prep completed successfully.'],
@@ -408,6 +411,7 @@ describe('Chat persistence', () => {
       },
       prepRun: {
         summary_text: 'Prepared 2 candidate annotations for curation review.',
+        document_id: 'doc-1',
         candidate_count: 2,
         warnings: [],
         processing_notes: [],
@@ -464,6 +468,51 @@ describe('Chat persistence', () => {
         expect.objectContaining({
           sessionId: 'curation-session-2',
           documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          profileKeys: ['primary'],
+          domainKeys: ['gene'],
+          navigate: mockNavigate,
+        })
+      )
+    })
+  })
+
+  it('opens the curation workspace after prep completes even when active document state is missing', async () => {
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-fallback')
+    mockChatFetch({
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 1 candidate annotation. Prepare all for curation review?',
+        candidate_count: 1,
+        extraction_result_count: 1,
+        conversation_message_count: 2,
+        adapter_keys: ['gene'],
+        profile_keys: ['primary'],
+        domain_keys: ['gene'],
+        blocking_reasons: [],
+      },
+      prepRun: {
+        summary_text: 'Prepared 1 candidate annotation for curation review.',
+        document_id: 'doc-from-backend',
+        candidate_count: 1,
+        warnings: [],
+        processing_notes: [],
+        adapter_keys: ['gene'],
+        profile_keys: ['primary'],
+        domain_keys: ['gene'],
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /start prep/i }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-from-backend',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
           profileKeys: ['primary'],

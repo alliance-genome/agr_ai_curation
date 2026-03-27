@@ -803,6 +803,7 @@ def test_get_review_session_returns_detail_payload(
 
     assert payload["session_id"] == seeded_review_sessions["session_beta_id"]
     assert payload["document"]["title"] == "Beta_gene paper"
+    assert payload["document"]["page_count"] == 4
     assert payload["assigned_curator"]["actor_id"] == seeded_review_sessions["other_user_auth_sub"]
     assert payload["extraction_results"][0]["domain_key"] == "gene"
     assert payload["latest_submission"]["status"] == "preview_ready"
@@ -822,6 +823,7 @@ def test_get_review_session_include_workspace_returns_hydrated_workspace_payload
 
     assert payload["workspace"]["session"]["session_id"] == seeded_review_sessions["session_beta_id"]
     assert payload["workspace"]["session"]["document"]["title"] == "Beta_gene paper"
+    assert payload["workspace"]["session"]["document"]["page_count"] == 4
     assert payload["workspace"]["active_candidate_id"] is not None
     assert payload["workspace"]["queue_context"] is None
     assert payload["workspace"]["saved_view_context"] is None

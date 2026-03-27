@@ -29,6 +29,8 @@ _EXTRACTION_TOOL_NAME_PATTERN = re.compile(
     r"^ask_(?P<tool_segment>.+?)(?:_step\d+)?_specialist$"
 )
 _ENVELOPE_EXTRACTION_KEYS = frozenset({"items", "raw_mentions", "exclusions", "ambiguities"})
+_DEFAULT_EXTRACTION_ADAPTER_KEY = "reference_adapter"
+_NUL_CHARACTER = "\x00"
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,16 @@ def build_extraction_envelope_candidate(
             if resolved_domain_key is None:
                 resolved_domain_key = envelope_destination
 
+    if resolved_adapter_key is None:
+        resolved_adapter_key = _DEFAULT_EXTRACTION_ADAPTER_KEY
+        envelope_metadata.setdefault("inferred_adapter_key", resolved_adapter_key)
+
+    if resolved_domain_key is None:
+        inferred_domain_key = _infer_domain_key_from_agent_key(canonical_agent_key)
+        if inferred_domain_key is not None:
+            resolved_domain_key = inferred_domain_key
+            envelope_metadata.setdefault("inferred_domain_key", inferred_domain_key)
+
     return ExtractionEnvelopeCandidate(
         agent_key=canonical_agent_key,
         payload_json=payload,
@@ -136,6 +148,42 @@ def build_extraction_envelope_candidate(
         else None,
         metadata=envelope_metadata,
     )
+
+
+def enrich_extraction_result_scope(
+    record: CurationExtractionResultRecord,
+) -> CurationExtractionResultRecord:
+    """Backfill inferred scope for persisted extraction records when possible."""
+
+    candidate = build_extraction_envelope_candidate(
+        record.payload_json,
+        agent_key=record.agent_key,
+        adapter_key=record.adapter_key,
+        profile_key=record.profile_key,
+        domain_key=record.domain_key,
+        metadata=record.metadata,
+    )
+    if candidate is None:
+        return record
+
+    updated_fields: dict[str, Any] = {}
+
+    if candidate.adapter_key != record.adapter_key:
+        updated_fields["adapter_key"] = candidate.adapter_key
+    if candidate.profile_key != record.profile_key:
+        updated_fields["profile_key"] = candidate.profile_key
+    if candidate.domain_key != record.domain_key:
+        updated_fields["domain_key"] = candidate.domain_key
+
+    merged_metadata = dict(record.metadata)
+    merged_metadata.update(candidate.metadata)
+    if merged_metadata != dict(record.metadata):
+        updated_fields["metadata"] = merged_metadata
+
+    if not updated_fields:
+        return record
+
+    return record.model_copy(update=updated_fields)
 
 
 def persist_extraction_result(
@@ -292,6 +340,17 @@ def _is_extraction_envelope_payload(payload: Any) -> bool:
     return any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS)
 
 
+def _infer_domain_key_from_agent_key(agent_key: str | None) -> str | None:
+    """Infer a stable domain key from the agent key when envelopes omit one."""
+
+    normalized = str(agent_key or "").strip().replace("-", "_")
+    if not normalized:
+        return None
+    if normalized.endswith("_extractor"):
+        normalized = normalized[: -len("_extractor")]
+    return normalized or None
+
+
 def _record_to_schema(
     record: CurationExtractionResultRecordModel,
 ) -> CurationExtractionResultRecord:
@@ -338,10 +397,40 @@ def _build_extraction_result_record(
         flow_run_id=request.flow_run_id,
         user_id=request.user_id,
         candidate_count=request.candidate_count,
-        conversation_summary=request.conversation_summary,
-        payload_json=request.payload_json,
-        extraction_metadata=dict(request.metadata),
+        conversation_summary=_sanitize_persisted_text(request.conversation_summary),
+        payload_json=_sanitize_persisted_json_value(request.payload_json),
+        extraction_metadata=_sanitize_persisted_json_value(dict(request.metadata)),
     )
+
+
+def _sanitize_persisted_text(value: str | None) -> str | None:
+    """Remove characters Postgres cannot store in text-backed JSON payloads."""
+
+    if value is None:
+        return None
+    return value.replace(_NUL_CHARACTER, "")
+
+
+def _sanitize_persisted_json_value(value: Any) -> Any:
+    """Recursively sanitize JSON-like payloads before persisting them."""
+
+    if isinstance(value, str):
+        return _sanitize_persisted_text(value)
+
+    if isinstance(value, Mapping):
+        return {
+            _sanitize_persisted_text(key) if isinstance(key, str) else key:
+            _sanitize_persisted_json_value(nested_value)
+            for key, nested_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_sanitize_persisted_json_value(item) for item in value]
+
+    if isinstance(value, tuple):
+        return tuple(_sanitize_persisted_json_value(item) for item in value)
+
+    return value
 
 
 __all__ = [

@@ -1038,7 +1038,7 @@ function Chat({
         ? ` Warnings: ${result.warnings.join(' ')}`
         : ''
       const prepSummary = `${result.summary_text}${warningText}`.trim()
-      const targetDocumentId = activeDocument?.id ?? null
+      const targetDocumentId = result.document_id || activeDocument?.id || null
       const reviewAndCurateTarget = targetDocumentId
         ? {
             documentId: targetDocumentId,

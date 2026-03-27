@@ -12,7 +12,10 @@ from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
     run_curation_prep,
 )
-from src.lib.curation_workspace.extraction_results import list_extraction_results
+from src.lib.curation_workspace.extraction_results import (
+    enrich_extraction_result_scope,
+    list_extraction_results,
+)
 from src.lib.openai_agents.agents.curation_prep_agent import CURATION_PREP_AGENT_ID
 from src.schemas.curation_prep import (
     CurationPrepAdapterMetadata,
@@ -39,6 +42,7 @@ _DEFAULT_ADAPTER_METADATA_NOTE = (
     "Derived from persisted chat extraction results; adapter-owned field hints were not "
     "available from this invocation path."
 )
+_DEFAULT_REFERENCE_ADAPTER_KEYS = frozenset({"reference", "reference_adapter"})
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,7 @@ async def run_chat_curation_prep(
             f"Prepared {len(prep_output.candidates)} candidate "
             f"annotation{'s' if len(prep_output.candidates) != 1 else ''} for curation review."
         ),
+        document_id=context.extraction_results[0].document_id,
         candidate_count=len(prep_output.candidates),
         warnings=list(prep_output.run_metadata.warnings),
         processing_notes=list(prep_output.run_metadata.processing_notes),
@@ -168,6 +173,10 @@ def _load_chat_prep_context(
         source_kind=CurationExtractionSourceKind.CHAT,
         exclude_agent_keys=[CURATION_PREP_AGENT_ID],
     )
+    extraction_results = [
+        enrich_extraction_result_scope(record)
+        for record in extraction_results
+    ]
 
     document_ids = _unique_non_empty(record.document_id for record in extraction_results)
     if len(document_ids) > 1:
@@ -212,14 +221,16 @@ def _build_summary_text(context: _ChatPrepContext, blocking_reasons: Sequence[st
         return blocking_reasons[0]
 
     scope_labels = []
-    if context.adapter_keys:
-        scope_labels.append(_format_scope_fragment("adapter", context.adapter_keys))
+    visible_adapter_keys = _visible_adapter_keys(context.adapter_keys)
+    if visible_adapter_keys:
+        scope_labels.append(_format_scope_fragment("adapter", visible_adapter_keys))
     if context.domain_keys:
         scope_labels.append(_format_scope_fragment("domain", context.domain_keys))
 
     scope_suffix = ""
     if scope_labels:
-        scope_suffix = f" across {_humanize_list(scope_labels)}"
+        preposition = " in " if len(scope_labels) == 1 else " across "
+        scope_suffix = f"{preposition}{_humanize_list(scope_labels)}"
 
     return (
         f"You discussed {context.candidate_count} candidate "
@@ -433,7 +444,7 @@ def _build_conversation_summary(context: _ChatPrepContext) -> str:
 
 def _format_scope_fragment(label: str, values: Sequence[str]) -> str:
     plural_suffix = "s" if len(values) != 1 else ""
-    return f"{_humanize_list(values)} {label}{plural_suffix}"
+    return f"{_humanize_list(_display_scope_values(label, values))} {label}{plural_suffix}"
 
 
 def _humanize_list(values: Sequence[str]) -> str:
@@ -445,6 +456,30 @@ def _humanize_list(values: Sequence[str]) -> str:
     if len(normalized_values) == 2:
         return f"{normalized_values[0]} and {normalized_values[1]}"
     return f"{', '.join(normalized_values[:-1])}, and {normalized_values[-1]}"
+
+
+def _display_scope_values(label: str, values: Sequence[str]) -> list[str]:
+    return [
+        _display_scope_value(label, value)
+        for value in values
+        if str(value or "").strip()
+    ]
+
+
+def _display_scope_value(label: str, value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if label == "adapter" and normalized in _DEFAULT_REFERENCE_ADAPTER_KEYS:
+        return "reference curation"
+    return normalized.replace("_", " ").replace("-", " ")
+
+
+def _visible_adapter_keys(adapter_keys: Sequence[str]) -> list[str]:
+    normalized = _unique_non_empty(adapter_keys)
+    if len(normalized) == 1 and normalized[0] in _DEFAULT_REFERENCE_ADAPTER_KEYS:
+        return []
+    return normalized
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

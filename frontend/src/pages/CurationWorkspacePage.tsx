@@ -97,6 +97,7 @@ function CurationWorkspacePageContent({
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
   const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
+  const workspaceDocumentPageCount = workspaceDocument.page_count
   const workspaceDocumentTitle = workspaceDocument.title
   const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
@@ -111,7 +112,7 @@ function CurationWorkspacePageContent({
       workspaceDocumentId,
       pdfUrl,
       workspaceDocumentTitle,
-      0,
+      workspaceDocumentPageCount ?? 1,
       hydration.restoredScrollPosition === null
         ? undefined
         : {
@@ -124,6 +125,7 @@ function CurationWorkspacePageContent({
     hydration.isHydrated,
     hydration.restoredScrollPosition,
     workspaceDocumentId,
+    workspaceDocumentPageCount,
     workspaceDocumentPdfUrl,
     workspaceDocumentTitle,
     workspaceDocumentViewerUrl,
@@ -209,7 +211,7 @@ function CurationWorkspacePageContent({
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
-              <Stack spacing={1.5} alignItems={{ xs: 'stretch', lg: 'flex-end' }}>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                 <WorkspaceSessionNavigation
                   currentSessionId={workspace.session.session_id}
                   queueContext={queueNavigationState?.queueContext}
@@ -219,6 +221,7 @@ function CurationWorkspacePageContent({
                   onClick={() => setSubmissionDialogOpen(true)}
                   size="small"
                   variant="contained"
+                  sx={{ fontSize: '0.75rem', py: 0.5 }}
                 >
                   Preview submission
                 </Button>

@@ -258,6 +258,34 @@ def test_build_extraction_envelope_candidate_uses_destination_as_adapter_fallbac
     assert candidate.domain_key == "gene_expression"
 
 
+def test_build_extraction_envelope_candidate_defaults_reference_adapter_and_inferrs_domain():
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(
+            {
+                "genes": [{"mention": "tinman"}],
+                "items": [{"label": "tinman"}],
+                "raw_mentions": [{"mention": "tinman", "evidence": []}],
+                "exclusions": [],
+                "ambiguities": [],
+                "run_summary": {
+                    "candidate_count": 1,
+                    "kept_count": 1,
+                    "excluded_count": 0,
+                    "ambiguous_count": 0,
+                    "warnings": [],
+                },
+            }
+        ),
+        agent_key="gene_extractor",
+    )
+
+    assert candidate is not None
+    assert candidate.adapter_key == "reference_adapter"
+    assert candidate.domain_key == "gene"
+    assert candidate.metadata["inferred_adapter_key"] == "reference_adapter"
+    assert candidate.metadata["inferred_domain_key"] == "gene"
+
+
 def test_build_extraction_envelope_candidate_ignores_non_extraction_payload():
     candidate = build_extraction_envelope_candidate(
         json.dumps({"file_id": "file-1", "filename": "export.csv"}),
@@ -297,6 +325,53 @@ def test_persist_extraction_result_writes_record_and_returns_schema():
     assert response.extraction_result.document_id == request.document_id
     assert response.extraction_result.agent_key == "gene-expression"
     assert response.extraction_result.metadata == {"tool_name": "ask_gene_expression_specialist"}
+
+
+def test_persist_extraction_result_sanitizes_nul_characters_before_persisting():
+    session = _FakeSession()
+    request = CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()),
+        adapter_key="reference_adapter",
+        domain_key="gene",
+        agent_key="gene_extractor",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        candidate_count=1,
+        conversation_summary="Focus gene\x00 summary",
+        payload_json={
+            "items": [
+                {
+                    "gene": "wg\x00",
+                    "evidence": {
+                        "snippet": "266 \x00b1 51 fmoles",
+                        "nested": ["ok", "bad\x00value"],
+                    },
+                }
+            ],
+            "raw_mentions": [],
+            "exclusions": [],
+            "ambiguities": [],
+            "run_summary": {"candidate_count": 1},
+            "bad\x00key": "value\x00",
+        },
+        metadata={
+            "tool_name": "ask_gene_extractor_specialist",
+            "evidence_preview": "A\x00B",
+        },
+    )
+
+    response = persist_extraction_result(request, db=session)
+
+    assert session.added is not None
+    assert session.added.conversation_summary == "Focus gene summary"
+    assert session.added.payload_json["items"][0]["gene"] == "wg"
+    assert session.added.payload_json["items"][0]["evidence"]["snippet"] == "266 b1 51 fmoles"
+    assert session.added.payload_json["items"][0]["evidence"]["nested"] == ["ok", "badvalue"]
+    assert session.added.payload_json["badkey"] == "value"
+    assert session.added.extraction_metadata == {
+        "tool_name": "ask_gene_extractor_specialist",
+        "evidence_preview": "AB",
+    }
+    assert response.extraction_result.metadata["evidence_preview"] == "AB"
 
 
 def test_persist_extraction_result_rolls_back_on_commit_error():
