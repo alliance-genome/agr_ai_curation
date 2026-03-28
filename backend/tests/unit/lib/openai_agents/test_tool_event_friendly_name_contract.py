@@ -119,6 +119,7 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
 
     assert tool_events[0]["details"]["friendlyName"] == "Calling Gene Validation Agent..."
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent complete"
+    assert tool_events[1]["internal"]["tool_input"] == {"query": "test"}
 
 
 @pytest.mark.asyncio

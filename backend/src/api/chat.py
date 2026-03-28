@@ -166,6 +166,85 @@ def _build_extraction_candidate_from_tool_event(
     )
 
 
+def _coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
+    """Parse a backend-only tool payload into a dictionary when possible."""
+
+    if isinstance(value, dict):
+        return value
+
+    if not isinstance(value, str):
+        return None
+
+    raw_value = value.strip()
+    if not raw_value:
+        return None
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _build_evidence_record_from_tool_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse a record_evidence tool-complete event into an SSE-ready evidence record."""
+
+    if event.get("type") != "TOOL_COMPLETE":
+        return None
+
+    details = event.get("details", {}) or {}
+    internal_payload = event.get("internal", {}) or {}
+    tool_name = str(details.get("toolName") or "").strip()
+
+    if tool_name != "record_evidence" or not isinstance(internal_payload, dict):
+        return None
+
+    tool_output = _coerce_tool_event_dict(internal_payload.get("tool_output"))
+    tool_input = _coerce_tool_event_dict(internal_payload.get("tool_input"))
+
+    if not tool_output or not tool_input:
+        return None
+
+    if str(tool_output.get("status") or "").strip().lower() != "verified":
+        return None
+
+    entity = str(tool_input.get("entity") or "").strip()
+    chunk_id = str(tool_input.get("chunk_id") or "").strip()
+    verified_quote = str(tool_output.get("verified_quote") or "").strip()
+    section = str(tool_output.get("section") or "").strip()
+    page = tool_output.get("page")
+
+    if (
+        not entity
+        or not chunk_id
+        or not verified_quote
+        or not isinstance(page, int)
+        or isinstance(page, bool)
+        or page <= 0
+        or not section
+    ):
+        return None
+
+    evidence_record: Dict[str, Any] = {
+        "entity": entity,
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "chunk_id": chunk_id,
+    }
+
+    subsection = str(tool_output.get("subsection") or "").strip()
+    if subsection:
+        evidence_record["subsection"] = subsection
+
+    figure_reference = str(tool_output.get("figure_reference") or "").strip()
+    if figure_reference:
+        evidence_record["figure_reference"] = figure_reference
+
+    return evidence_record
+
+
 def _persist_extraction_candidates(
     *,
     candidates: List[ExtractionEnvelopeCandidate],
@@ -756,6 +835,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         run_finished = False
         pending_run_finished_event: Optional[Dict[str, Any]] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
+        evidence_records: List[Dict[str, Any]] = []
 
         try:
             async for event in run_agent_streamed(
@@ -812,6 +892,10 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 if candidate:
                     extraction_candidates.append(candidate)
 
+                evidence_record = _build_evidence_record_from_tool_event(event)
+                if evidence_record:
+                    evidence_records.append(evidence_record)
+
                 # Capture response for history
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
@@ -823,6 +907,11 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
 
             # Save to conversation history
             if run_finished:
+                if evidence_records:
+                    yield (
+                        "data: "
+                        f"{json.dumps({'type': 'evidence_summary', 'timestamp': datetime.now(timezone.utc).isoformat(), 'session_id': current_session_id, 'sessionId': current_session_id, 'evidence_records': evidence_records}, default=str)}\n\n"
+                    )
                 _persist_extraction_candidates(
                     candidates=extraction_candidates,
                     document_id=document_id,

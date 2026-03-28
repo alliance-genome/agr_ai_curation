@@ -280,6 +280,42 @@ describe('Chat persistence', () => {
     window.removeEventListener('pdf-overlay-update', listener as EventListener)
   })
 
+  it('attaches evidence summaries to the latest assistant message', async () => {
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Extraction complete for the highlighted entities.',
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumb',
+              verified_quote: 'Crumb is essential for maintaining epithelial polarity.',
+              page: 4,
+              section: 'Results',
+              subsection: 'Gene Expression Analysis',
+              chunk_id: 'chunk-1',
+              figure_reference: 'Figure 2A',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(
+      await screen.findByText('Extraction complete for the highlighted entities.')
+    ).toBeInTheDocument()
+    expect(await screen.findByText('1 evidence quotes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'crumb 1' }))
+
+    expect(
+      await screen.findByText('"Crumb is essential for maintaining epithelial polarity."')
+    ).toBeInTheDocument()
+  })
+
   it('does not show the curation DB outage warning when the service is not configured', async () => {
     mockChatFetch({ curationDbStatus: 'not_configured' })
 

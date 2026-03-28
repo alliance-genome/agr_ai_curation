@@ -288,6 +288,16 @@ export interface CurationDraft {
   metadata: Record<string, unknown>
 }
 
+export interface EvidenceRecord {
+  entity: string
+  verified_quote: string
+  page: number
+  section: string
+  subsection?: string
+  chunk_id: string
+  figure_reference?: string
+}
+
 export interface CurationEvidenceRecord {
   anchor_id: string
   candidate_id: string

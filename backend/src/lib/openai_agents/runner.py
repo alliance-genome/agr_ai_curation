@@ -455,6 +455,7 @@ async def _run_agent_with_tracing(
     full_response = ""
     structured_result = None
     tools_called: List[str] = []
+    pending_tool_calls: List[Dict[str, Any]] = []
     tool_calls_count = 0
     current_agent = agent.name
     agents_used = [agent.name]
@@ -680,6 +681,10 @@ async def _run_agent_with_tracing(
                                 except Exception:
                                     pass
                         tools_called.append(tool_name)
+                        pending_tool_calls.append({
+                            "tool_name": tool_name,
+                            "tool_input": tool_args,
+                        })
                         logger.info(
                             "Tool call started: %s",
                             tool_name,
@@ -707,12 +712,16 @@ async def _run_agent_with_tracing(
 
                     elif item_type == "tool_call_output_item":
                         output = getattr(item, "output", "")
+                        completed_tool = pending_tool_calls.pop() if pending_tool_calls else {
+                            "tool_name": tools_called[-1] if tools_called else "tool",
+                            "tool_input": None,
+                        }
                         # Truncate long outputs for the preview
                         output_preview = str(output)[:300]
                         if len(str(output)) > 300:
                             output_preview += "..."
                         # Get last tool name for the completion event
-                        last_tool = tools_called[-1] if tools_called else "tool"
+                        last_tool = str(completed_tool.get("tool_name") or "tool")
                         logger.info(
                             "Tool call completed, output length=%s",
                             len(str(output)),
@@ -749,6 +758,7 @@ async def _run_agent_with_tracing(
                             # intentionally drop this field, so it is not user-visible.
                             "internal": {
                                 "tool_output": output,
+                                "tool_input": completed_tool.get("tool_input"),
                                 "output_length": len(str(output)),
                                 "output_preview": output_preview,
                             },
