@@ -145,10 +145,6 @@ CANDIDATE_DETAIL_LOAD_OPTIONS = (
     selectinload(CurationCandidate.validation_snapshots),
 )
 
-_CURATION_PREP_AGENT_KEY = "curation_prep"
-_MANUAL_TEMPLATE_FIELDS_METADATA_KEY = "manual_draft_fields"
-_MANUAL_TEMPLATE_SOURCE_METADATA_KEY = "manual_template_source"
-_PREP_ADAPTER_METADATA_KEY = "adapter_metadata"
 logger = logging.getLogger(__name__)
 
 
@@ -227,9 +223,7 @@ class PreparedCandidateInput:
     profile_key: str | None = None
     display_label: str | None = None
     secondary_label: str | None = None
-    confidence: float | None = None
     conversation_summary: str | None = None
-    unresolved_ambiguities: list[str] = field(default_factory=list)
     extraction_result_id: str | None = None
     normalized_payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -671,188 +665,6 @@ def _actor_ref(user_map: dict[str, User], actor_id: str | None) -> CurationActor
     )
 
 
-def _humanize_field_key(value: str) -> str:
-    return " ".join(
-        segment.capitalize()
-        for segment in str(value).replace(".", " ").replace("_", " ").split()
-        if segment
-    )
-
-
-def _coerce_metadata_string(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _coerce_metadata_string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    normalized_values: list[str] = []
-    for item in value:
-        normalized = _coerce_metadata_string(item)
-        if normalized is None:
-            continue
-        normalized_values.append(normalized)
-    return normalized_values
-
-
-def _manual_template_fields_from_prep_metadata(
-    session: ReviewSessionModel,
-    extraction_metadata: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    adapter_metadata_payload = extraction_metadata.get(_PREP_ADAPTER_METADATA_KEY)
-    if not isinstance(adapter_metadata_payload, list):
-        return []
-
-    matched_metadata: Mapping[str, Any] | None = None
-    fallback_metadata: Mapping[str, Any] | None = None
-
-    for raw_metadata in adapter_metadata_payload:
-        if not isinstance(raw_metadata, dict):
-            continue
-
-        adapter_key = _coerce_metadata_string(raw_metadata.get("adapter_key"))
-        if adapter_key != session.adapter_key:
-            continue
-
-        profile_key = _coerce_metadata_string(raw_metadata.get("profile_key"))
-        if profile_key == session.profile_key:
-            matched_metadata = raw_metadata
-            break
-        if profile_key is None and fallback_metadata is None:
-            fallback_metadata = raw_metadata
-
-    metadata = matched_metadata or fallback_metadata
-    if metadata is None:
-        return []
-
-    required_field_keys = set(_coerce_metadata_string_list(metadata.get("required_field_keys")))
-    field_hints = metadata.get("field_hints")
-    if not isinstance(field_hints, list):
-        field_hints = []
-
-    fields: list[dict[str, Any]] = []
-    seen_field_keys: set[str] = set()
-
-    for index, raw_hint in enumerate(field_hints):
-        if not isinstance(raw_hint, dict):
-            continue
-
-        field_key = _coerce_metadata_string(raw_hint.get("field_key"))
-        if field_key is None or field_key in seen_field_keys:
-            continue
-
-        label = (
-            _coerce_metadata_string(raw_hint.get("label"))
-            or _humanize_field_key(field_key)
-        )
-        field_type = _coerce_metadata_string(raw_hint.get("value_type"))
-        field_metadata: dict[str, Any] = {}
-
-        description = _coerce_metadata_string(raw_hint.get("description"))
-        if description is not None:
-            field_metadata["description"] = description
-
-        controlled_vocabulary = _coerce_metadata_string_list(
-            raw_hint.get("controlled_vocabulary")
-        )
-        if controlled_vocabulary:
-            field_metadata["controlled_vocabulary"] = controlled_vocabulary
-
-        normalization_hints = _coerce_metadata_string_list(
-            raw_hint.get("normalization_hints")
-        )
-        if normalization_hints:
-            field_metadata["normalization_hints"] = normalization_hints
-
-        fields.append(
-            {
-                "field_key": field_key,
-                "label": label,
-                "value": None,
-                "seed_value": None,
-                "field_type": field_type,
-                "group_key": None,
-                "group_label": None,
-                "order": index,
-                "required": bool(raw_hint.get("required")) or field_key in required_field_keys,
-                "read_only": False,
-                "dirty": False,
-                "stale_validation": False,
-                "evidence_anchor_ids": [],
-                "metadata": field_metadata,
-            }
-        )
-        seen_field_keys.add(field_key)
-
-    for field_key in sorted(required_field_keys):
-        if field_key in seen_field_keys:
-            continue
-        fields.append(
-            {
-                "field_key": field_key,
-                "label": _humanize_field_key(field_key),
-                "value": None,
-                "seed_value": None,
-                "field_type": None,
-                "group_key": None,
-                "group_label": None,
-                "order": len(fields),
-                "required": True,
-                "read_only": False,
-                "dirty": False,
-                "stale_validation": False,
-                "evidence_anchor_ids": [],
-                "metadata": {},
-            }
-        )
-
-    return fields
-
-
-def _session_adapter_metadata(
-    db: Session,
-    session: ReviewSessionModel,
-) -> dict[str, Any]:
-    statement = (
-        select(ExtractionResultModel)
-        .where(ExtractionResultModel.agent_key == _CURATION_PREP_AGENT_KEY)
-        .where(ExtractionResultModel.document_id == session.document_id)
-        .where(ExtractionResultModel.adapter_key == session.adapter_key)
-        .where(ExtractionResultModel.created_at <= session.prepared_at)
-        .order_by(ExtractionResultModel.created_at.desc(), ExtractionResultModel.id.desc())
-    )
-
-    if session.profile_key is None:
-        statement = statement.where(ExtractionResultModel.profile_key.is_(None))
-    else:
-        statement = statement.where(
-            or_(
-                ExtractionResultModel.profile_key == session.profile_key,
-                ExtractionResultModel.profile_key.is_(None),
-            )
-        )
-
-    if session.flow_run_id is None:
-        statement = statement.where(ExtractionResultModel.flow_run_id.is_(None))
-    else:
-        statement = statement.where(ExtractionResultModel.flow_run_id == session.flow_run_id)
-
-    for extraction_result in db.scalars(statement).all():
-        template_fields = _manual_template_fields_from_prep_metadata(
-            session,
-            dict(extraction_result.extraction_metadata or {}),
-        )
-        if not template_fields:
-            continue
-        return {
-            _MANUAL_TEMPLATE_FIELDS_METADATA_KEY: template_fields,
-            _MANUAL_TEMPLATE_SOURCE_METADATA_KEY: "prep_adapter_metadata",
-        }
-
-    return {}
-
-
 def _adapter_ref(
     session: ReviewSessionModel,
     *,
@@ -1039,9 +851,7 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         profile_key=candidate.profile_key,
         display_label=candidate.display_label,
         secondary_label=candidate.secondary_label,
-        confidence=candidate.confidence,
         conversation_summary=candidate.conversation_summary,
-        unresolved_ambiguities=list(candidate.unresolved_ambiguities or []),
         extraction_result_id=(
             str(candidate.extraction_result_id) if candidate.extraction_result_id else None
         ),
@@ -1203,13 +1013,7 @@ def _session_detail(
     summary = _session_summary(session, document_map, user_map)
     latest_submission = _submission_record(session.submissions[-1]) if session.submissions else None
     summary_payload = summary.model_dump()
-    if session.total_candidates == 0:
-        summary_payload["adapter"] = _adapter_ref(
-            session,
-            metadata=_session_adapter_metadata(db, session),
-        )
-    else:
-        summary_payload["adapter"] = _adapter_ref(session)
+    summary_payload["adapter"] = _adapter_ref(session)
 
     return CurationReviewSession(
         **summary_payload,
@@ -1318,9 +1122,7 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         profile_key=candidate.profile_key,
         display_label=candidate.display_label,
         secondary_label=candidate.secondary_label,
-        confidence=candidate.confidence,
         conversation_summary=candidate.conversation_summary,
-        unresolved_ambiguities=list(candidate.unresolved_ambiguities or []),
         extraction_result_id=(
             str(candidate.extraction_result_id)
             if candidate.extraction_result_id is not None
@@ -1961,9 +1763,7 @@ def create_manual_candidate(
         profile_key=resolved_profile_key,
         display_label=resolved_display_label,
         secondary_label=None,
-        confidence=None,
         conversation_summary=None,
-        unresolved_ambiguities=[],
         extraction_result_id=None,
         normalized_payload=_manual_candidate_normalized_payload(field_inputs),
         candidate_metadata={},
@@ -2388,7 +2188,7 @@ def _candidate_submission_readiness(
         )
 
     blocking_reasons: list[str] = []
-    warnings = list(candidate.unresolved_ambiguities or [])
+    warnings: list[str] = []
 
     if candidate.status == CurationCandidateStatus.PENDING:
         blocking_reasons.append("Candidate is still pending curator review.")
@@ -4070,9 +3870,7 @@ def _persist_prepared_candidates(
             profile_key=candidate_input.profile_key,
             display_label=candidate_input.display_label,
             secondary_label=candidate_input.secondary_label,
-            confidence=candidate_input.confidence,
             conversation_summary=candidate_input.conversation_summary,
-            unresolved_ambiguities=list(candidate_input.unresolved_ambiguities),
             extraction_result_id=(
                 _normalize_uuid(
                     candidate_input.extraction_result_id,

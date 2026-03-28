@@ -176,8 +176,6 @@ describe('curation workspace substrate types', () => {
             order: 0,
             adapter_key: 'disease',
             display_label: 'APOE association',
-            confidence: 0.92,
-            unresolved_ambiguities: [],
             draft: {
               draft_id: 'draft-1',
               candidate_id: 'candidate-1',

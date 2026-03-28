@@ -55,7 +55,6 @@ function buildWorkspace(): CurationWorkspace {
         order: 0,
         adapter_key: 'gene',
         display_label: 'Candidate 1',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-1',
           candidate_id: 'candidate-1',
@@ -79,7 +78,6 @@ function buildWorkspace(): CurationWorkspace {
         order: 1,
         adapter_key: 'gene',
         display_label: 'Candidate 2',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-2',
           candidate_id: 'candidate-2',

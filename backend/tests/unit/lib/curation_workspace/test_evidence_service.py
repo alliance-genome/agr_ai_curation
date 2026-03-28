@@ -235,9 +235,7 @@ def _create_candidate(
         profile_key="primary",
         display_label=f"Candidate {order + 1}",
         secondary_label=None,
-        confidence=0.8,
         conversation_summary="Candidate summary.",
-        unresolved_ambiguities=[],
         extraction_result_id=extraction_result_id,
         normalized_payload={"gene": {"symbol": f"GENE{order + 1}"}},
         candidate_metadata={},
@@ -436,7 +434,7 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
         ),
     )
     monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._resolve_reference",
+        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._resolve_evidence_record",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("private resolver helper should not be called")
         ),

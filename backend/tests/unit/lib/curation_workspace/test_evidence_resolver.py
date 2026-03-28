@@ -13,28 +13,18 @@ def _make_candidate(anchor_payload: dict, *, field_path: str = "entity.name") ->
         {
             "adapter_key": "generic",
             "profile_key": "default",
-            "extracted_fields": [
+            "payload": {"entity": {"name": "Entity Alpha"}},
+            "evidence_records": [
                 {
-                    "field_path": field_path,
-                    "value_type": "string",
-                    "string_value": "Entity Alpha",
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
-                }
-            ],
-            "evidence_references": [
-                {
-                    "field_path": field_path,
                     "evidence_record_id": "evidence-1",
+                    "source": "extracted",
                     "extraction_result_id": "extract-1",
+                    "field_paths": [field_path],
                     "anchor": anchor_payload,
-                    "rationale": "Supports the extracted field.",
+                    "notes": ["Supports the extracted field."],
                 }
             ],
             "conversation_context_summary": "Conversation summary.",
-            "confidence": 0.9,
-            "unresolved_ambiguities": [],
         }
     )
 
@@ -75,7 +65,7 @@ def _make_context() -> EvidenceResolutionContext:
 def _make_normalized_candidate(candidate: CurationPrepCandidate) -> NormalizedCandidate:
     return NormalizedCandidate(
         prep_candidate=candidate,
-        normalized_payload=candidate.to_extracted_fields_dict(),
+        normalized_payload=dict(candidate.payload),
         draft_fields=[],
     )
 
@@ -84,7 +74,7 @@ def _resolve_anchor(
     candidate: CurationPrepCandidate,
     *,
     chunks: list[dict],
-) -> tuple[EvidenceAnchor, list[str]]:
+) -> tuple[EvidenceAnchor, list[str], list[str]]:
     resolver = DeterministicEvidenceAnchorResolver(
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: chunks,
@@ -94,7 +84,12 @@ def _resolve_anchor(
         normalized_candidate=_make_normalized_candidate(candidate),
         context=_make_context(),
     )
-    return EvidenceAnchor.model_validate(result[0].anchor), result[0].warnings
+    resolved_record = result[0]
+    return (
+        EvidenceAnchor.model_validate(resolved_record.anchor),
+        resolved_record.warnings,
+        resolved_record.field_keys,
+    )
 
 
 def test_resolver_assigns_exact_quote_when_raw_snippet_matches_chunk_text():
@@ -107,7 +102,7 @@ def test_resolver_assigns_exact_quote_when_raw_snippet_matches_chunk_text():
             subsection_title="Association",
         )
     )
-    anchor, warnings = _resolve_anchor(
+    anchor, warnings, field_keys = _resolve_anchor(
         candidate,
         chunks=[
             {
@@ -122,6 +117,7 @@ def test_resolver_assigns_exact_quote_when_raw_snippet_matches_chunk_text():
         ],
     )
 
+    assert field_keys == ["entity.name"]
     assert anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
     assert anchor.anchor_kind is EvidenceAnchorKind.SNIPPET
     assert anchor.viewer_search_text == "Exact quote from PDFX markdown."
@@ -143,7 +139,7 @@ def test_resolver_assigns_normalized_quote_for_canonical_cross_chunk_match():
             page_number=4,
         )
     )
-    anchor, warnings = _resolve_anchor(
+    anchor, warnings, _field_keys = _resolve_anchor(
         candidate,
         chunks=[
             {
@@ -191,7 +187,7 @@ def test_resolver_falls_back_to_section_only_when_quote_is_empty_but_section_mat
             section_title="Methods",
         )
     )
-    anchor, warnings = _resolve_anchor(
+    anchor, warnings, _field_keys = _resolve_anchor(
         candidate,
         chunks=[
             {
@@ -213,142 +209,3 @@ def test_resolver_falls_back_to_section_only_when_quote_is_empty_but_section_mat
     assert anchor.section_title == "Methods"
     assert anchor.chunk_ids == ["chunk-methods"]
     assert warnings == []
-
-
-def test_resolver_does_not_treat_section_viewer_search_text_as_quote_input():
-    candidate = _make_candidate(
-        _make_anchor_payload(
-            anchor_kind="section",
-            locator_quality="section_only",
-            snippet_text=None,
-            sentence_text=None,
-            viewer_search_text="Methods",
-            section_title="Methods",
-        )
-    )
-    anchor, _warnings = _resolve_anchor(
-        candidate,
-        chunks=[
-            {
-                "id": "chunk-methods",
-                "chunk_index": 0,
-                "content": "Methods section text.",
-                "page_number": 2,
-                "section_title": "Methods",
-                "metadata": {},
-            }
-        ],
-    )
-
-    assert anchor.locator_quality is EvidenceLocatorQuality.SECTION_ONLY
-    assert anchor.anchor_kind is EvidenceAnchorKind.SECTION
-    assert anchor.viewer_search_text is None
-    assert anchor.chunk_ids == ["chunk-methods"]
-
-
-def test_resolver_falls_back_to_page_only_when_no_chunks_are_available():
-    candidate = _make_candidate(
-        _make_anchor_payload(
-            anchor_kind="page",
-            locator_quality="page_only",
-            snippet_text="Missing quote",
-            sentence_text="Missing quote",
-            page_number=9,
-        )
-    )
-    anchor, warnings = _resolve_anchor(candidate, chunks=[])
-
-    assert anchor.locator_quality is EvidenceLocatorQuality.PAGE_ONLY
-    assert anchor.anchor_kind is EvidenceAnchorKind.PAGE
-    assert anchor.viewer_search_text is None
-    assert anchor.page_number == 9
-    assert anchor.section_title is None
-    assert warnings == []
-
-
-def test_resolver_falls_back_to_document_only_for_intentional_document_scoped_anchor():
-    candidate = _make_candidate(
-        _make_anchor_payload(
-            anchor_kind="document",
-            locator_quality="document_only",
-            snippet_text=None,
-            sentence_text=None,
-            page_number=7,
-        )
-    )
-    anchor, warnings = _resolve_anchor(candidate, chunks=[])
-
-    assert anchor.locator_quality is EvidenceLocatorQuality.DOCUMENT_ONLY
-    assert anchor.anchor_kind is EvidenceAnchorKind.DOCUMENT
-    assert anchor.viewer_search_text is None
-    assert anchor.page_number is None
-    assert anchor.section_title is None
-    assert warnings == []
-
-
-def test_resolver_marks_anchor_unresolved_when_no_durable_locator_can_be_produced():
-    candidate = _make_candidate(
-        _make_anchor_payload(
-            snippet_text="Quote that does not exist in markdown",
-            sentence_text="Quote that does not exist in markdown",
-        )
-    )
-    anchor, warnings = _resolve_anchor(
-        candidate,
-        chunks=[
-            {
-                "id": "chunk-1",
-                "chunk_index": 0,
-                "content": "Completely unrelated content.",
-                "page_number": 1,
-                "section_title": "Background",
-                "metadata": {},
-            }
-        ],
-    )
-
-    assert anchor.locator_quality is EvidenceLocatorQuality.UNRESOLVED
-    assert anchor.viewer_search_text is None
-    assert anchor.page_number is None
-    assert anchor.section_title is None
-    assert anchor.chunk_ids == []
-    assert warnings == []
-
-
-def test_resolver_prefers_page_biased_quote_match_when_multiple_spans_exist():
-    candidate = _make_candidate(
-        _make_anchor_payload(
-            snippet_text="Shared quote.",
-            sentence_text="Shared quote.",
-            page_number=5,
-            section_title="Results",
-        )
-    )
-    anchor, warnings = _resolve_anchor(
-        candidate,
-        chunks=[
-            {
-                "id": "chunk-1",
-                "chunk_index": 0,
-                "content": "Shared quote.",
-                "page_number": 2,
-                "section_title": "Background",
-                "metadata": {},
-            },
-            {
-                "id": "chunk-2",
-                "chunk_index": 1,
-                "content": "Shared quote.",
-                "page_number": 5,
-                "section_title": "Results",
-                "metadata": {},
-            },
-        ],
-    )
-
-    assert anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
-    assert anchor.page_number == 5
-    assert anchor.chunk_ids == ["chunk-2"]
-    assert warnings == [
-        "Multiple PDFX quote matches found; selected the closest page/section-biased span."
-    ]

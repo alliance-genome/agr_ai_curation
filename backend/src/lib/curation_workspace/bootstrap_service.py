@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -24,7 +25,6 @@ from src.lib.curation_workspace.session_service import (
     get_session_detail,
     upsert_prepared_session,
 )
-from src.lib.openai_agents.agents.curation_prep_agent import CURATION_PREP_AGENT_ID
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import CurationPrepAgentOutput
 from src.schemas.curation_workspace import (

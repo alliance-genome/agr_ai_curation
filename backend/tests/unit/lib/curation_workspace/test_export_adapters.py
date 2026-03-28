@@ -76,9 +76,7 @@ def _export_payload_context() -> dict[str, object]:
                 "profile_key": "primary",
                 "display_label": "APOE association",
                 "secondary_label": "Late onset phenotype",
-                "confidence": 0.94,
                 "conversation_summary": "Curator approved the extracted association.",
-                "unresolved_ambiguities": [],
                 "extraction_result_id": "extract-1",
                 "normalized_payload": {
                     "gene_symbol": "APOE",

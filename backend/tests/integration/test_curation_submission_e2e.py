@@ -173,53 +173,23 @@ def _reference_prep_output_payload() -> dict[str, object]:
             {
                 "adapter_key": "reference_adapter",
                 "profile_key": None,
-                "extracted_fields": [
-                    {
-                        "field_path": "citation.title",
-                        "value_type": "string",
-                        "string_value": "Adapter-owned reference scaffold in practice",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
+                "payload": {
+                    "citation": {
+                        "title": "Adapter-owned reference scaffold in practice",
+                        "authors": ["Ada Lovelace", "Grace Hopper"],
+                        "journal": "Journal of Adapter Boundaries",
+                        "publication_year": "2025",
                     },
-                    {
-                        "field_path": "citation.authors",
-                        "value_type": "json",
-                        "string_value": None,
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": '["Ada Lovelace", "Grace Hopper"]',
+                    "identifiers": {
+                        "doi": "10.1000/reference-1",
                     },
+                },
+                "evidence_records": [
                     {
-                        "field_path": "citation.journal",
-                        "value_type": "string",
-                        "string_value": "Journal of Adapter Boundaries",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "citation.publication_year",
-                        "value_type": "string",
-                        "string_value": "2025",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "identifiers.doi",
-                        "value_type": "string",
-                        "string_value": "10.1000/reference-1",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                ],
-                "evidence_references": [
-                    {
-                        "field_path": "citation.title",
                         "evidence_record_id": "reference-evidence-title",
+                        "source": "extracted",
                         "extraction_result_id": "prep-extract-reference",
+                        "field_paths": ["citation.title"],
                         "anchor": {
                             "anchor_kind": "snippet",
                             "locator_quality": "exact_quote",
@@ -238,12 +208,13 @@ def _reference_prep_output_payload() -> dict[str, object]:
                             "table_reference": None,
                             "chunk_ids": ["chunk-reference-title"],
                         },
-                        "rationale": "The title is quoted directly from the manuscript.",
+                        "notes": ["The title is quoted directly from the manuscript."],
                     },
                     {
-                        "field_path": "identifiers.doi",
                         "evidence_record_id": "reference-evidence-doi",
+                        "source": "extracted",
                         "extraction_result_id": "prep-extract-reference",
+                        "field_paths": ["identifiers.doi"],
                         "anchor": {
                             "anchor_kind": "snippet",
                             "locator_quality": "exact_quote",
@@ -262,14 +233,12 @@ def _reference_prep_output_payload() -> dict[str, object]:
                             "table_reference": None,
                             "chunk_ids": ["chunk-reference-doi"],
                         },
-                        "rationale": "The DOI is present in the reference block.",
+                        "notes": ["The DOI is present in the reference block."],
                     },
                 ],
                 "conversation_context_summary": (
                     "Conversation narrowed the workspace to a single supporting reference."
                 ),
-                "confidence": 0.93,
-                "unresolved_ambiguities": [],
             }
         ],
         "run_metadata": {

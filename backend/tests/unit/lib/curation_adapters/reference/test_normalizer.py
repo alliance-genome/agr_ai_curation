@@ -17,53 +17,23 @@ def _candidate() -> CurationPrepCandidate:
         {
             "adapter_key": REFERENCE_ADAPTER_KEY,
             "profile_key": None,
-            "extracted_fields": [
-                {
-                    "field_path": "citation.title",
-                    "value_type": "string",
-                    "string_value": "  Adapter-owned editor packs stay outside the shared editor  ",
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
+            "payload": {
+                "citation": {
+                    "title": "  Adapter-owned editor packs stay outside the shared editor  ",
+                    "authors": ["Ada Lovelace", " Grace Hopper "],
+                    "journal": "  Boundary Systems Journal  ",
+                    "publication_year": "2024",
                 },
-                {
-                    "field_path": "citation.authors",
-                    "value_type": "json",
-                    "string_value": None,
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": '["Ada Lovelace", " Grace Hopper "]',
+                "identifiers": {
+                    "doi": " doi:10.4242/Example-1 ",
                 },
+            },
+            "evidence_records": [
                 {
-                    "field_path": "citation.journal",
-                    "value_type": "string",
-                    "string_value": "  Boundary Systems Journal  ",
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
-                },
-                {
-                    "field_path": "citation.publication_year",
-                    "value_type": "string",
-                    "string_value": "2024",
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
-                },
-                {
-                    "field_path": "identifiers.doi",
-                    "value_type": "string",
-                    "string_value": " doi:10.4242/Example-1 ",
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
-                },
-            ],
-            "evidence_references": [
-                {
-                    "field_path": "citation.title",
                     "evidence_record_id": "evidence-title",
+                    "source": "extracted",
                     "extraction_result_id": "prep-extract-reference",
+                    "field_paths": ["citation.title"],
                     "anchor": {
                         "anchor_kind": "snippet",
                         "locator_quality": "exact_quote",
@@ -76,12 +46,10 @@ def _candidate() -> CurationPrepCandidate:
                         "section_title": "Results",
                         "chunk_ids": ["chunk-reference-title"],
                     },
-                    "rationale": "The manuscript title is directly quoted.",
+                    "notes": ["The manuscript title is directly quoted."],
                 }
             ],
             "conversation_context_summary": "Conversation narrowed to one reference citation.",
-            "confidence": 0.91,
-            "unresolved_ambiguities": [],
         }
     )
 
