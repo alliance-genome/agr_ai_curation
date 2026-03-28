@@ -75,10 +75,12 @@ class _PrepExtractionRecord:
                 "items": [{"label": "APOE", "entity_type": "gene"}],
                 "evidence_records": [
                     {
-                        "snippet": "APOE was associated with the disease phenotype.",
+                        "entity": "APOE",
+                        "verified_quote": "APOE was associated with the disease phenotype.",
                         "page": 3,
                         "section": "Results",
                         "subsection": "Disease association",
+                        "chunk_id": "chunk-apoe-1",
                         "figure_reference": "Fig. 2",
                     }
                 ],
@@ -834,9 +836,11 @@ def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
                         "label": "APOE disease association",
                         "evidence": [
                             {
-                                "snippet": "APOE was associated with disease severity.",
+                                "entity": "APOE",
+                                "verified_quote": "APOE was associated with disease severity.",
                                 "page": 7,
                                 "section": "Results",
+                                "chunk_id": "chunk-apoe-7",
                             }
                         ],
                     }
@@ -851,6 +855,7 @@ def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
     assert len(evidence_records) == 1
     assert evidence_records[0]["anchor"]["snippet_text"] == "APOE was associated with disease severity."
     assert evidence_records[0]["anchor"]["page_number"] == 7
+    assert evidence_records[0]["anchor"]["chunk_ids"] == ["chunk-apoe-7"]
 
 
 @pytest.mark.asyncio

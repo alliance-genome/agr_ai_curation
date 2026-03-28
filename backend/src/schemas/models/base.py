@@ -69,15 +69,17 @@ class ExclusionReasonCode(str, Enum):
 
 
 class EvidenceRecord(BaseModel):
-    """Evidence snippet used to support keep/exclude decisions."""
+    """Verified evidence record used to support keep/exclude decisions."""
 
     model_config = ConfigDict(extra='forbid')
 
+    entity: Optional[str] = Field(default=None, description="Human-readable entity label the extractor/tool was evaluating")
+    verified_quote: Optional[str] = Field(default=None, description="Verbatim paper text returned by evidence verification")
+    page: Optional[int] = Field(default=None, ge=1, description="1-based page number if known")
     section: Optional[str] = Field(default=None, description="Document section containing the evidence")
-    page: Optional[int] = Field(default=None, description="1-based page number if known")
-    snippet: str = Field(description="Quoted evidence text")
     subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
-    figure_reference: Optional[str] = Field(default=None, description="Figure/table reference, if available")
+    chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
+    figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
 
 
 class MentionCandidate(BaseModel):

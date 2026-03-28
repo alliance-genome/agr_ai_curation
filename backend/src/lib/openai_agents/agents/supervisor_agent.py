@@ -310,31 +310,15 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
         payload = getattr(record, "payload_json", None)
         extraction_result_id = str(getattr(record, "extraction_result_id", "") or "").strip()
         for index, evidence_payload in enumerate(_collect_evidence_payloads(payload)):
-            snippet_text = str(
-                evidence_payload.get("snippet")
-                or evidence_payload.get("snippet_text")
-                or evidence_payload.get("text")
-                or ""
-            ).strip()
+            snippet_text = str(evidence_payload.get("verified_quote") or "").strip()
             if not snippet_text:
                 continue
 
-            page_number = evidence_payload.get("page") or evidence_payload.get("page_number")
-            section_title = str(
-                evidence_payload.get("section")
-                or evidence_payload.get("section_title")
-                or ""
-            ).strip()
-            subsection_title = str(
-                evidence_payload.get("subsection")
-                or evidence_payload.get("subsection_title")
-                or ""
-            ).strip()
-            figure_reference = str(
-                evidence_payload.get("figure_reference")
-                or evidence_payload.get("figure")
-                or ""
-            ).strip()
+            page_number = evidence_payload.get("page")
+            section_title = str(evidence_payload.get("section") or "").strip()
+            subsection_title = str(evidence_payload.get("subsection") or "").strip()
+            figure_reference = str(evidence_payload.get("figure_reference") or "").strip()
+            chunk_id = str(evidence_payload.get("chunk_id") or "").strip()
 
             dedupe_key = (
                 extraction_result_id,
@@ -366,7 +350,7 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
                         "section_title": section_title or None,
                         "subsection_title": subsection_title or None,
                         "figure_reference": figure_reference or None,
-                        "chunk_ids": [],
+                        "chunk_ids": [chunk_id] if chunk_id else [],
                     },
                     "notes": [],
                 }

@@ -352,12 +352,10 @@ def _build_evidence_records(
         payload = extraction_result.payload_json
 
         for index, raw_record in enumerate(_collect_evidence_payloads(payload), start=1):
-            snippet_text = str(raw_record.get("snippet") or raw_record.get("snippet_text") or "").strip()
-            section_title = str(raw_record.get("section") or raw_record.get("section_title") or "").strip()
-            subsection_title = str(
-                raw_record.get("subsection") or raw_record.get("subsection_title") or ""
-            ).strip()
-            page_number = raw_record.get("page") or raw_record.get("page_number")
+            snippet_text = str(raw_record.get("verified_quote") or "").strip()
+            section_title = str(raw_record.get("section") or "").strip()
+            subsection_title = str(raw_record.get("subsection") or "").strip()
+            page_number = raw_record.get("page")
             dedupe_key = (
                 extraction_result.extraction_result_id,
                 snippet_text,
@@ -388,10 +386,11 @@ def _build_evidence_records(
 
 
 def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
-    snippet_text = str(raw_record.get("snippet") or "").strip() or None
+    snippet_text = str(raw_record.get("verified_quote") or "").strip() or None
     section_title = str(raw_record.get("section") or "").strip() or None
     subsection_title = str(raw_record.get("subsection") or "").strip() or None
     figure_reference = str(raw_record.get("figure_reference") or "").strip() or None
+    chunk_id = str(raw_record.get("chunk_id") or "").strip() or None
     page_number = raw_record.get("page")
 
     if isinstance(page_number, bool) or not isinstance(page_number, int):
@@ -422,6 +421,7 @@ def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
         section_title=section_title,
         subsection_title=subsection_title,
         figure_reference=figure_reference,
+        chunk_ids=[chunk_id] if chunk_id else [],
     )
 
 

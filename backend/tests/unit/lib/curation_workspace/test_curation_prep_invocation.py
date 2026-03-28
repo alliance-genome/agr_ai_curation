@@ -41,10 +41,12 @@ def _make_extraction_result(
                         "label": "APOE",
                         "evidence_records": [
                             {
-                                "snippet": "APOE was implicated in the disease model.",
+                                "entity": "APOE",
+                                "verified_quote": "APOE was implicated in the disease model.",
                                 "section": "Results",
                                 "subsection": "Disease findings",
                                 "page": 4,
+                                "chunk_id": "chunk-apoe-1",
                                 "figure_reference": "Fig. 2",
                             }
                         ],
@@ -91,7 +93,7 @@ def _make_prep_output(candidate_count: int = 2) -> CurationPrepAgentOutput:
                                 "section_title": "Results",
                                 "subsection_title": "Disease findings",
                                 "figure_reference": "Fig. 2",
-                                "chunk_ids": [],
+                                "chunk_ids": ["chunk-apoe-1"],
                             },
                             "rationale": "The retained evidence explicitly references APOE.",
                         }
@@ -304,9 +306,11 @@ async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeyp
                     "items": [{"label": "tinman"}],
                     "evidence_records": [
                         {
-                            "snippet": "tinman controls cardiogenesis in embryos.",
+                            "entity": "tinman",
+                            "verified_quote": "tinman controls cardiogenesis in embryos.",
                             "section": "Results",
                             "page": 3,
+                            "chunk_id": "chunk-tinman-3",
                         }
                     ],
                     "raw_mentions": [{"mention": "tinman", "evidence": []}],
