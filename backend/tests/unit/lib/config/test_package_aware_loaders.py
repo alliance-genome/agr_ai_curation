@@ -50,6 +50,42 @@ def test_load_agent_definitions_defaults_to_runtime_packages(monkeypatch):
     assert agents["gene_validation"].output_schema == "GeneResultEnvelope"
 
 
+def test_runtime_packages_gene_extractor_explicitly_declares_record_evidence(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    gene_extractor = agents["gene_extractor"]
+
+    assert gene_extractor.tools == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "agr_curation_query",
+    ]
+
+
+def test_runtime_packages_gene_extractor_prompt_teaches_verified_evidence_flow(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    source = next(
+        item
+        for item in agent_sources.resolve_agent_config_sources(REPO_PACKAGES_DIR)
+        if item.folder_name == "gene_extractor"
+    )
+
+    prompt_payload = yaml.safe_load(source.prompt_yaml.read_text(encoding="utf-8"))
+    prompt_content = str(prompt_payload["content"])
+
+    assert "<few_shot_examples>" in prompt_content
+    assert prompt_content.count("record_evidence(") >= 3
+    assert '"status": "verified"' in prompt_content
+    assert "`verified_quote`" in prompt_content
+    assert "`chunk_id`" in prompt_content
+    assert "Do not call `record_evidence` for every gene mentioned anywhere in the paper." in prompt_content
+    assert "Do not place free-text evidence summaries inside these fields." in prompt_content
+
+
 def test_load_prompts_defaults_to_runtime_packages_and_tracks_package_paths(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     db = MagicMock()
