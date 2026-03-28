@@ -826,7 +826,7 @@ def _iter_payload_field_items(payload: Any, *, prefix: str = "") -> list[tuple[s
 def _payload_field_type(value: Any) -> str:
     if isinstance(value, bool):
         return "boolean"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, (int, float)):
         return "number"
     if isinstance(value, str):
         return "string"

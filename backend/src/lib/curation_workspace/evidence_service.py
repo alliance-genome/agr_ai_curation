@@ -579,14 +579,23 @@ def _resolve_anchor_against_document(
     )
 
 
+MAX_ANCHOR_RESOLUTION_INDEX = 10_000
+
+
 def _build_anchor_resolution_payload(field_path: str, value: str) -> dict[str, Any]:
     """Build the smallest JSON payload that satisfies an evidence field path."""
 
     current: Any = value
     for segment in reversed(field_path.split(".")):
         if segment.isdigit():
-            items: list[Any] = [None] * (int(segment) + 1)
-            items[int(segment)] = current
+            segment_index = int(segment)
+            if segment_index > MAX_ANCHOR_RESOLUTION_INDEX:
+                raise ValueError(
+                    "field_path numeric segment too large to safely materialize: "
+                    f"{segment_index}"
+                )
+            items: list[Any] = [None] * (segment_index + 1)
+            items[segment_index] = current
             current = items
             continue
 
