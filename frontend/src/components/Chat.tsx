@@ -125,6 +125,20 @@ function withUpdatedReviewAndCurateSessionId(
   })
 }
 
+function buildEvidenceReviewAndCurateTarget(
+  documentId?: string | null,
+  originSessionId?: string | null
+): CurationWorkspaceLaunchTarget | null {
+  if (!documentId || !originSessionId) {
+    return null
+  }
+
+  return {
+    documentId,
+    originSessionId,
+  }
+}
+
 function isEvidenceRecord(value: unknown): value is EvidenceRecord {
   if (!value || typeof value !== 'object') {
     return false
@@ -150,7 +164,25 @@ function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
   return value.filter(isEvidenceRecord)
 }
 
-function withEvidenceRecords(messages: Message[], evidenceRecords: EvidenceRecord[]): Message[] {
+function withEvidenceReviewAndCurateTarget(
+  message: Message,
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message {
+  if (message.reviewAndCurateTarget || !reviewAndCurateTarget) {
+    return message
+  }
+
+  return {
+    ...message,
+    reviewAndCurateTarget,
+  }
+}
+
+function withEvidenceRecords(
+  messages: Message[],
+  evidenceRecords: EvidenceRecord[],
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role !== 'assistant') {
@@ -158,14 +190,42 @@ function withEvidenceRecords(messages: Message[], evidenceRecords: EvidenceRecor
     }
 
     const nextMessages = [...messages]
-    nextMessages[index] = {
+    nextMessages[index] = withEvidenceReviewAndCurateTarget({
       ...message,
       evidenceRecords,
-    }
+    }, reviewAndCurateTarget)
     return nextMessages
   }
 
   return messages
+}
+
+function withMissingEvidenceReviewAndCurateTargets(
+  messages: Message[],
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message[] {
+  if (!reviewAndCurateTarget) {
+    return messages
+  }
+
+  let didChange = false
+  const nextMessages = messages.map((message) => {
+    if (
+      message.role !== 'assistant' ||
+      (message.evidenceRecords?.length ?? 0) === 0 ||
+      message.reviewAndCurateTarget
+    ) {
+      return message
+    }
+
+    didChange = true
+    return {
+      ...message,
+      reviewAndCurateTarget,
+    }
+  })
+
+  return didChange ? nextMessages : messages
 }
 
 function shouldShowCurationDbWarning(status?: string | null): boolean {
@@ -745,13 +805,31 @@ function Chat({
           return
         }
 
-        setMessages(prev => withEvidenceRecords(prev, evidenceRecords))
+        const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
+          activeDocument?.id,
+          propSessionId,
+        )
+
+        setMessages(prev => withEvidenceRecords(prev, evidenceRecords, reviewAndCurateTarget))
       }
     })
 
     // Mark all new events as processed
     processedEventIdsRef.current = new Set(Array.from({ length: events.length }, (_, i) => i))
-  }, [events, activeDocument, updateProgressMessage])
+  }, [events, activeDocument, propSessionId, updateProgressMessage])
+
+  useEffect(() => {
+    const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
+      activeDocument?.id,
+      propSessionId,
+    )
+
+    if (!reviewAndCurateTarget) {
+      return
+    }
+
+    setMessages(prev => withMissingEvidenceReviewAndCurateTargets(prev, reviewAndCurateTarget))
+  }, [activeDocument?.id, propSessionId])
 
   // Update conversation status when messages change (to update memory counter)
   useEffect(() => {

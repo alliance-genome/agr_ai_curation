@@ -316,6 +316,56 @@ describe('Chat persistence', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows the evidence footer action for streamed assistant messages with an active document', async () => {
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-evidence')
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-7',
+        filename: 'doc-7.pdf',
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Extraction complete for the highlighted entities.',
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumb',
+              verified_quote: 'Crumb is essential for maintaining epithelial polarity.',
+              page: 4,
+              section: 'Results',
+              subsection: 'Gene Expression Analysis',
+              chunk_id: 'chunk-1',
+            },
+          ],
+        },
+      ],
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'crumb 1' }))
+
+    expect(
+      await screen.findByText('Full evidence review with PDF highlighting →')
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Review & Curate'))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-7',
+          originSessionId: 'session-1',
+          navigate: mockNavigate,
+        })
+      )
+    })
+  })
+
   it('does not show the curation DB outage warning when the service is not configured', async () => {
     mockChatFetch({ curationDbStatus: 'not_configured' })
 
