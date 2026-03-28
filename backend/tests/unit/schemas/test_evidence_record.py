@@ -127,3 +127,43 @@ def test_evidence_record_normalizes_blank_optional_strings_to_none():
     assert evidence.subsection is None
     assert evidence.chunk_id == "abc123"
     assert evidence.figure_reference == "Table 1"
+
+
+@pytest.mark.parametrize(
+    ("payload", "field_name"),
+    [
+        ({"section": {"title": "Results"}}, "section"),
+        ({"verified_quote": ["quoted text"]}, "verified_quote"),
+        ({"entity": 123}, "entity"),
+        ({"subsection": ("gene", "expression")}, "subsection"),
+        ({"chunk_id": {"id": "abc123"}}, "chunk_id"),
+        ({"figure_reference": ["Figure 2A"]}, "figure_reference"),
+    ],
+)
+def test_evidence_record_rejects_non_string_optional_text_fields(payload, field_name):
+    with pytest.raises(ValidationError) as exc_info:
+        EvidenceRecord.model_validate(payload)
+
+    errors = exc_info.value.errors()
+
+    assert any(error["loc"] == (field_name,) for error in errors)
+
+
+def test_runtime_gene_extraction_envelope_rejects_non_string_evidence_fields():
+    with pytest.raises(ValidationError) as exc_info:
+        GeneExtractionResultEnvelope.model_validate(
+            {
+                "genes": [
+                    {
+                        "mention": "crumb",
+                        "evidence": [{"section": {"title": "Results"}}],
+                    }
+                ],
+                "evidence_records": [{"verified_quote": ["quoted text"]}],
+            }
+        )
+
+    errors = exc_info.value.errors()
+
+    assert any(error["loc"] == ("genes", 0, "evidence", 0, "section") for error in errors)
+    assert any(error["loc"] == ("evidence_records", 0, "verified_quote") for error in errors)

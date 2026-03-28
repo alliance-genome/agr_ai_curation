@@ -94,7 +94,9 @@ class EvidenceRecord(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> object:
         if value is None:
             return None
-        normalized = str(value).strip()
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip()
         return normalized or None
 
 
