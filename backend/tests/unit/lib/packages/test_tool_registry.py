@@ -340,6 +340,7 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
         "search_document": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "read_section": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "read_subsection": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
+        "record_evidence": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "curation_db_sql": ("context_factory", ("database_url",), "agr.alliance"),
         "chebi_api_call": ("static", (), "agr.alliance"),
         "quickgo_api_call": ("static", (), "agr.alliance"),

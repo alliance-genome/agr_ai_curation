@@ -37,13 +37,21 @@ class _DBStub:
         self.commit_calls += 1
 
 
-def _agent_definition(folder_name: str, agent_id: str) -> AgentDefinition:
+def _agent_definition(
+    folder_name: str,
+    agent_id: str,
+    *,
+    category: str = "Validation",
+    tools: list[str] | None = None,
+    output_schema: str | None = None,
+    requires_document: bool = False,
+) -> AgentDefinition:
     return AgentDefinition(
         folder_name=folder_name,
         agent_id=agent_id,
         name=f"{folder_name.title()} Agent",
         description=f"{folder_name} description",
-        category="Validation",
+        category=category,
         supervisor_routing=SupervisorRouting(
             enabled=True,
             description=f"Ask the {folder_name} agent",
@@ -51,9 +59,14 @@ def _agent_definition(folder_name: str, agent_id: str) -> AgentDefinition:
             batching_instructions="",
             batching_entity="",
         ),
-        tools=["agr_curation_query"],
-        output_schema="GeneValidationEnvelope" if folder_name == "gene" else None,
+        tools=list(tools or ["agr_curation_query"]),
+        output_schema=(
+            output_schema
+            if output_schema is not None
+            else ("GeneValidationEnvelope" if folder_name == "gene" else None)
+        ),
         model_config=ModelConfig(model="gpt-5-mini", temperature=0.2, reasoning="medium"),
+        requires_document=requires_document,
         group_rules_enabled=(folder_name == "gene"),
         frontend=FrontendConfig(icon="G", show_in_palette=True),
     )
@@ -182,6 +195,84 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
     assert result["inserted"] == 0
     assert result["discovered"] == 0
     assert len(db.added) == 0
+
+
+def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_agents(monkeypatch):
+    import src.lib.agent_studio.system_agent_sync as module
+
+    db = _DBStub([])
+
+    monkeypatch.setattr(
+        module,
+        "resolve_agent_config_sources",
+        lambda _agents_path=None: (SimpleNamespace(folder_name="gene_expression"),),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_agent_definitions",
+        lambda _agents_path=None, force_reload=False: {
+            "gene_expression_extraction": _agent_definition(
+                "gene_expression",
+                "gene_expression_extraction",
+                category="Extraction",
+                tools=["search_document", "read_section", "read_subsection", "agr_curation_query"],
+                output_schema="GeneExpressionEnvelope",
+                requires_document=True,
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_active_system_prompt",
+        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+    )
+
+    result = module.sync_system_agents(db, force_reload=True)
+
+    assert result["inserted"] == 1
+    assert db.added[0].tool_ids == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "agr_curation_query",
+        "record_evidence",
+    ]
+
+
+def test_sync_does_not_auto_attach_record_evidence_to_unstructured_pdf_agent(monkeypatch):
+    import src.lib.agent_studio.system_agent_sync as module
+
+    db = _DBStub([])
+
+    monkeypatch.setattr(
+        module,
+        "resolve_agent_config_sources",
+        lambda _agents_path=None: (SimpleNamespace(folder_name="pdf"),),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_agent_definitions",
+        lambda _agents_path=None, force_reload=False: {
+            "pdf_extraction": _agent_definition(
+                "pdf",
+                "pdf_extraction",
+                category="Extraction",
+                tools=["search_document", "read_section", "read_subsection"],
+                output_schema=None,
+                requires_document=True,
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_active_system_prompt",
+        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+    )
+
+    result = module.sync_system_agents(db, force_reload=True)
+
+    assert result["inserted"] == 1
+    assert db.added[0].tool_ids == ["search_document", "read_section", "read_subsection"]
 
 
 def test_sync_does_not_reenable_disabled_agent(monkeypatch):

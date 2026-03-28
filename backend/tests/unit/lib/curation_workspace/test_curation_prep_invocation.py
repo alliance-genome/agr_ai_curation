@@ -116,6 +116,35 @@ def _make_prep_output(candidate_count: int = 2) -> CurationPrepAgentOutput:
     )
 
 
+def test_build_evidence_records_accepts_verified_quote_and_chunk_id():
+    extraction_result = _make_extraction_result(
+        payload_json={
+            "items": [
+                {
+                    "label": "APOE",
+                    "evidence_records": [
+                        {
+                            "verified_quote": "APOE was implicated in the disease model.",
+                            "section": "Results",
+                            "subsection": "Disease findings",
+                            "page": 4,
+                            "chunk_id": "chunk-9",
+                        }
+                    ],
+                }
+            ],
+            "run_summary": {"candidate_count": 1},
+        }
+    )
+
+    evidence_records = module._build_evidence_records([extraction_result])
+
+    assert len(evidence_records) == 1
+    assert evidence_records[0].anchor.snippet_text == "APOE was implicated in the disease model."
+    assert evidence_records[0].anchor.chunk_ids == ["chunk-9"]
+    assert evidence_records[0].anchor.page_number == 4
+
+
 def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     monkeypatch.setattr(
         module,

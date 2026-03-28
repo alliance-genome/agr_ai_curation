@@ -149,6 +149,7 @@ export default function WorkspaceSessionNavigation({
   return (
     <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
       <Button
+        aria-label="Previous session"
         disabled={previousButtonDisabled}
         onClick={() => handleQueueNavigation(previousQuery.data)}
         size="small"
@@ -159,6 +160,7 @@ export default function WorkspaceSessionNavigation({
         Prev
       </Button>
       <Button
+        aria-label="Next session"
         disabled={nextButtonDisabled}
         endIcon={<NavigateNextRoundedIcon sx={{ fontSize: '1rem' }} />}
         onClick={() => handleQueueNavigation(nextQuery.data)}
@@ -169,7 +171,7 @@ export default function WorkspaceSessionNavigation({
         Next
       </Button>
       {isLoading ? <CircularProgress size={12} /> : null}
-      {queueRequest && !isLoading ? (
+      {!isLoading ? (
         <Typography
           color={errorMessage ? 'error.main' : 'text.secondary'}
           variant="caption"
