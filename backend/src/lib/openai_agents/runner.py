@@ -16,6 +16,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
@@ -56,6 +57,9 @@ from .config import (
 )
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
+from .evidence_summary import (
+    build_record_evidence_summary_record,
+)
 from .streaming_tools import (
     get_collected_events,
     clear_collected_events,
@@ -267,83 +271,6 @@ def _build_tool_complete_friendly_name(tool_name: str, custom_display_names: Dic
     return _shared_build_tool_complete_friendly_name(tool_name, custom_display_names)
 
 
-def _coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
-    """Parse tool event payloads that may be dicts or JSON strings."""
-
-    if isinstance(value, dict):
-        return value
-
-    if not isinstance(value, str):
-        return None
-
-    payload = value.strip()
-    if not payload:
-        return None
-
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError:
-        return None
-
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _build_record_evidence_summary_record(
-    *,
-    tool_name: str,
-    tool_input: Any,
-    tool_output: Any,
-) -> Optional[Dict[str, Any]]:
-    """Build a normalized evidence summary record from a record_evidence tool event."""
-
-    if tool_name != "record_evidence":
-        return None
-
-    output_payload = _coerce_tool_event_dict(tool_output)
-    input_payload = _coerce_tool_event_dict(tool_input)
-
-    if output_payload is None or input_payload is None:
-        return None
-
-    if str(output_payload.get("status") or "").strip().lower() != "verified":
-        return None
-
-    entity = str(input_payload.get("entity") or "").strip()
-    chunk_id = str(input_payload.get("chunk_id") or "").strip()
-    verified_quote = str(output_payload.get("verified_quote") or "").strip()
-    section = str(output_payload.get("section") or "").strip()
-    page = output_payload.get("page")
-
-    if (
-        not entity
-        or not chunk_id
-        or not verified_quote
-        or not section
-        or not isinstance(page, int)
-        or isinstance(page, bool)
-        or page <= 0
-    ):
-        return None
-
-    evidence_record: Dict[str, Any] = {
-        "entity": entity,
-        "verified_quote": verified_quote,
-        "page": page,
-        "section": section,
-        "chunk_id": chunk_id,
-    }
-
-    subsection = str(output_payload.get("subsection") or "").strip()
-    if subsection:
-        evidence_record["subsection"] = subsection
-
-    figure_reference = str(output_payload.get("figure_reference") or "").strip()
-    if figure_reference:
-        evidence_record["figure_reference"] = figure_reference
-
-    return evidence_record
-
-
 def _extract_model_identifier(model: Any) -> str:
     """Best-effort model ID extraction from agent model config."""
     if isinstance(model, str):
@@ -532,7 +459,7 @@ async def _run_agent_with_tracing(
     full_response = ""
     structured_result = None
     tools_called: List[str] = []
-    pending_tool_calls: List[Dict[str, Any]] = []
+    pending_tool_calls: deque[Dict[str, Any]] = deque()
     tool_calls_count = 0
     current_agent = agent.name
     agents_used = [agent.name]
@@ -758,10 +685,16 @@ async def _run_agent_with_tracing(
                                     tool_args = json.loads(tool_args_str)
                                 except Exception:
                                     pass
+                        tool_id = (
+                            getattr(item, "id", None)
+                            or getattr(raw_item, "id", None)
+                            or getattr(raw_item, "tool_call_id", None)
+                        )
                         tools_called.append(tool_name)
                         pending_tool_calls.append({
                             "tool_name": tool_name,
                             "tool_input": tool_args,
+                            "tool_id": tool_id,
                         })
                         logger.info(
                             "Tool call started: %s",
@@ -790,10 +723,28 @@ async def _run_agent_with_tracing(
 
                     elif item_type == "tool_call_output_item":
                         output = getattr(item, "output", "")
-                        completed_tool = pending_tool_calls.pop() if pending_tool_calls else {
-                            "tool_name": tools_called[-1] if tools_called else "tool",
-                            "tool_input": None,
-                        }
+                        output_tool_id = (
+                            getattr(item, "id", None)
+                            or getattr(item, "tool_id", None)
+                            or getattr(item, "tool_call_id", None)
+                        )
+                        completed_tool = None
+
+                        if pending_tool_calls:
+                            if output_tool_id is not None:
+                                for candidate_tool in list(pending_tool_calls):
+                                    if str(candidate_tool.get("tool_id")) == str(output_tool_id):
+                                        completed_tool = candidate_tool
+                                        pending_tool_calls.remove(candidate_tool)
+                                        break
+
+                            if completed_tool is None:
+                                completed_tool = pending_tool_calls.popleft()
+                        else:
+                            completed_tool = {
+                                "tool_name": tools_called[-1] if tools_called else "tool",
+                                "tool_input": None,
+                            }
                         # Truncate long outputs for the preview
                         output_preview = str(output)[:300]
                         if len(str(output)) > 300:
@@ -806,7 +757,7 @@ async def _run_agent_with_tracing(
                             extra={"trace_id": trace_id, "user_id": user_id, "tool_name": last_tool},
                         )
 
-                        evidence_record = _build_record_evidence_summary_record(
+                        evidence_record = build_record_evidence_summary_record(
                             tool_name=last_tool,
                             tool_input=completed_tool.get("tool_input"),
                             tool_output=output,

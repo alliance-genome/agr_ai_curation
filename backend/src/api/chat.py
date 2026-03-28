@@ -33,6 +33,10 @@ from ..lib.weaviate_client.documents import get_document
 from ..lib.conversation_manager import conversation_manager, SessionAccessError
 from ..lib.openai_agents import run_agent_streamed
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
+from ..lib.openai_agents.evidence_summary import (
+    build_record_evidence_summary_record,
+    normalize_evidence_records,
+)
 from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
 from ..schemas.curation_workspace import (
@@ -166,74 +170,9 @@ def _build_extraction_candidate_from_tool_event(
     )
 
 
-def _coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
-    """Parse a backend-only tool payload into a dictionary when possible."""
-
-    if isinstance(value, dict):
-        return value
-
-    if not isinstance(value, str):
-        return None
-
-    raw_value = value.strip()
-    if not raw_value:
-        return None
-
-    try:
-        parsed = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return None
-
-    return parsed if isinstance(parsed, dict) else None
-
-
 def _extract_evidence_records(value: Any) -> List[Dict[str, Any]]:
     """Parse a value into a list of normalized evidence records."""
-
-    if not isinstance(value, list):
-        return []
-
-    evidence_records: List[Dict[str, Any]] = []
-    for record in value:
-        if not isinstance(record, dict):
-            continue
-
-        entity = str(record.get("entity") or "").strip()
-        verified_quote = str(record.get("verified_quote") or "").strip()
-        section = str(record.get("section") or "").strip()
-        chunk_id = str(record.get("chunk_id") or "").strip()
-        page = record.get("page")
-
-        if (
-            not entity
-            or not verified_quote
-            or not section
-            or not chunk_id
-            or not isinstance(page, int)
-            or isinstance(page, bool)
-            or page <= 0
-        ):
-            continue
-
-        evidence_record = {
-            "entity": entity,
-            "verified_quote": verified_quote,
-            "page": page,
-            "section": section,
-            "chunk_id": chunk_id,
-        }
-
-        subsection = str(record.get("subsection") or "").strip()
-        if subsection:
-            evidence_record["subsection"] = subsection
-
-        figure_reference = str(record.get("figure_reference") or "").strip()
-        if figure_reference:
-            evidence_record["figure_reference"] = figure_reference
-
-        evidence_records.append(evidence_record)
-
-    return evidence_records
+    return normalize_evidence_records(value)
 
 
 def _build_evidence_record_from_tool_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -249,49 +188,11 @@ def _build_evidence_record_from_tool_event(event: Dict[str, Any]) -> Optional[Di
     if tool_name != "record_evidence" or not isinstance(internal_payload, dict):
         return None
 
-    tool_output = _coerce_tool_event_dict(internal_payload.get("tool_output"))
-    tool_input = _coerce_tool_event_dict(internal_payload.get("tool_input"))
-
-    if not tool_output or not tool_input:
-        return None
-
-    if str(tool_output.get("status") or "").strip().lower() != "verified":
-        return None
-
-    entity = str(tool_input.get("entity") or "").strip()
-    chunk_id = str(tool_input.get("chunk_id") or "").strip()
-    verified_quote = str(tool_output.get("verified_quote") or "").strip()
-    section = str(tool_output.get("section") or "").strip()
-    page = tool_output.get("page")
-
-    if (
-        not entity
-        or not chunk_id
-        or not verified_quote
-        or not isinstance(page, int)
-        or isinstance(page, bool)
-        or page <= 0
-        or not section
-    ):
-        return None
-
-    evidence_record: Dict[str, Any] = {
-        "entity": entity,
-        "verified_quote": verified_quote,
-        "page": page,
-        "section": section,
-        "chunk_id": chunk_id,
-    }
-
-    subsection = str(tool_output.get("subsection") or "").strip()
-    if subsection:
-        evidence_record["subsection"] = subsection
-
-    figure_reference = str(tool_output.get("figure_reference") or "").strip()
-    if figure_reference:
-        evidence_record["figure_reference"] = figure_reference
-
-    return evidence_record
+    return build_record_evidence_summary_record(
+        tool_name=tool_name,
+        tool_input=internal_payload.get("tool_input"),
+        tool_output=internal_payload.get("tool_output"),
+    )
 
 
 def _persist_extraction_candidates(

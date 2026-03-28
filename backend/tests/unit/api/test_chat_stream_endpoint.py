@@ -308,7 +308,7 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
             "section": "Results",
             "subsection": "Gene Expression Analysis",
             "chunk_id": "abc123",
-        "figure_reference": "Figure 2A",
+            "figure_reference": "Figure 2A",
         }
     ]
 
