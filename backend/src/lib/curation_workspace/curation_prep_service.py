@@ -329,7 +329,7 @@ def _runtime_gene_candidate_blueprints(
                 "sex_specificity": raw_annotation.get("sex_specificity"),
                 "is_negative": bool(raw_annotation.get("is_negative", False)),
             }
-        )
+        ) or {}
         if not _is_meaningful_gene_candidate_payload(candidate_payload):
             continue
 
@@ -380,7 +380,7 @@ def _core_gene_candidate_blueprints(
                     "sex_specificity": raw_pattern.get("sex_specificity"),
                     "is_negative": bool(raw_pattern.get("is_negative", False)),
                 }
-            )
+            ) or {}
             if not _is_meaningful_gene_candidate_payload(candidate_payload):
                 continue
             blueprints.append(
@@ -396,7 +396,7 @@ def _core_gene_candidate_blueprints(
             )
         return blueprints
 
-    candidate_payload = _compact_payload(common_fields)
+    candidate_payload = _compact_payload(common_fields) or {}
     if not _is_meaningful_gene_candidate_payload(candidate_payload):
         return []
 

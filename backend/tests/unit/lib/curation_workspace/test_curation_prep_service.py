@@ -344,3 +344,101 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
     assert context.document_id == "document-1"
     assert context.source_kind is CurationExtractionSourceKind.CHAT
     assert context.flow_run_id == "flow-1"
+
+
+def test_runtime_gene_candidate_blueprints_skip_empty_compacted_payload_without_error():
+    extraction_result = _make_extraction_result(
+        annotations=[
+            {
+                "gene_symbol": None,
+                "gene_id": None,
+                "reagent_type": None,
+                "reagent_name": None,
+                "reagent_genotype": None,
+                "reagent_strain": None,
+                "anatomy_label": None,
+                "life_stage_label": None,
+                "go_cc_label": None,
+                "temporal_qualifier": None,
+                "sex_specificity": None,
+            }
+        ]
+    )
+
+    blueprints = module._runtime_gene_candidate_blueprints(  # noqa: SLF001
+        extraction_result,
+        extraction_result.payload_json,
+    )
+
+    assert blueprints == []
+
+
+def test_core_gene_candidate_blueprints_skip_empty_compacted_payload_without_error():
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-core-empty",
+            "document_id": "document-1",
+            "adapter_key": "reference_adapter",
+            "profile_key": "pilot",
+            "domain_key": "gene",
+            "agent_key": "gene_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": 1,
+            "conversation_summary": None,
+            "payload_json": {
+                "gene_symbol": None,
+                "gene_id": None,
+                "organism": None,
+                "reagent": {},
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {},
+        }
+    )
+
+    blueprints = module._core_gene_candidate_blueprints(  # noqa: SLF001
+        extraction_result,
+        extraction_result.payload_json,
+    )
+
+    assert blueprints == []
+
+
+def test_core_gene_candidate_blueprints_skip_empty_expression_pattern_without_error():
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-core-pattern-empty",
+            "document_id": "document-1",
+            "adapter_key": "reference_adapter",
+            "profile_key": "pilot",
+            "domain_key": "gene",
+            "agent_key": "gene_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": 1,
+            "conversation_summary": None,
+            "payload_json": {
+                "gene_symbol": None,
+                "gene_id": None,
+                "organism": None,
+                "reagent": {},
+                "expression_patterns": [{}],
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {},
+        }
+    )
+
+    blueprints = module._core_gene_candidate_blueprints(  # noqa: SLF001
+        extraction_result,
+        extraction_result.payload_json,
+    )
+
+    assert blueprints == []
