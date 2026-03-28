@@ -27,7 +27,6 @@ function buildCandidate(
     order: 0,
     adapter_key: 'test',
     display_label: candidateId,
-    unresolved_ambiguities: [],
     draft: {
       draft_id: `draft-${candidateId}`,
       candidate_id: candidateId,

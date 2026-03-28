@@ -793,19 +793,9 @@ class CurationCandidate(CurationWorkspaceBaseModel):
         default=None,
         description="Secondary queue label or summary value",
     )
-    confidence: Optional[float] = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="AI confidence or ranking score when available",
-    )
     conversation_summary: Optional[str] = Field(
         default=None,
         description="Condensed upstream conversation or extraction context",
-    )
-    unresolved_ambiguities: list[str] = Field(
-        default_factory=list,
-        description="Open ambiguity notes the curator should resolve",
     )
     extraction_result_id: Optional[str] = Field(
         default=None,

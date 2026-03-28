@@ -530,37 +530,29 @@ def _resolve_anchor_against_document(
         {
             "adapter_key": adapter_key,
             "profile_key": profile_key,
-            "extracted_fields": [
+            "payload": _build_anchor_resolution_payload(
+                resolved_field_path,
+                _anchor_seed_text(anchor),
+            ),
+            "evidence_records": [
                 {
-                    "field_path": resolved_field_path,
-                    "value_type": "string",
-                    "string_value": _anchor_seed_text(anchor),
-                    "number_value": None,
-                    "boolean_value": None,
-                    "json_value": None,
-                }
-            ],
-            "evidence_references": [
-                {
-                    "field_path": resolved_field_path,
                     "evidence_record_id": "workspace-evidence",
                     "extraction_result_id": (
                         None
                         if prep_extraction_result_id == MANUAL_RESOLUTION_SENTINEL
                         else prep_extraction_result_id
                     ),
+                    "field_paths": [resolved_field_path],
                     "anchor": anchor.model_dump(mode="json"),
-                    "rationale": "Workspace evidence resolution request.",
+                    "notes": ["Workspace evidence resolution request."],
                 }
             ],
             "conversation_context_summary": "Workspace evidence resolution.",
-            "confidence": 1.0,
-            "unresolved_ambiguities": [],
         }
     )
     normalized_candidate = NormalizedCandidate(
         prep_candidate=prep_candidate,
-        normalized_payload=prep_candidate.to_extracted_fields_dict(),
+        normalized_payload=dict(prep_candidate.payload),
         draft_fields=[],
     )
     resolved_records = resolver.resolve(
@@ -585,6 +577,25 @@ def _resolve_anchor_against_document(
         EvidenceAnchor.model_validate(resolved_record.anchor),
         list(resolved_record.warnings),
     )
+
+
+def _build_anchor_resolution_payload(field_path: str, value: str) -> dict[str, Any]:
+    """Build the smallest JSON payload that satisfies an evidence field path."""
+
+    current: Any = value
+    for segment in reversed(field_path.split(".")):
+        if segment.isdigit():
+            items: list[Any] = [None] * (int(segment) + 1)
+            items[int(segment)] = current
+            current = items
+            continue
+
+        current = {segment: current}
+
+    if not isinstance(current, dict):
+        raise ValueError("field_path must start with a named top-level field")
+
+    return current
 
 
 def _anchor_seed_text(anchor: EvidenceAnchor) -> str:

@@ -66,7 +66,6 @@ function buildCandidates(): CurationCandidate[] {
       order: 0,
       adapter_key: 'reference_adapter',
       display_label: 'Accepted candidate',
-      unresolved_ambiguities: [],
       draft: {
         draft_id: 'draft-1',
         candidate_id: 'candidate-ready',
@@ -91,7 +90,6 @@ function buildCandidates(): CurationCandidate[] {
       order: 1,
       adapter_key: 'reference_adapter',
       display_label: 'Pending candidate',
-      unresolved_ambiguities: [],
       draft: {
         draft_id: 'draft-2',
         candidate_id: 'candidate-pending',

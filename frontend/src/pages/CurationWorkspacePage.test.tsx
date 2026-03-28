@@ -108,7 +108,6 @@ function buildWorkspace(): CurationWorkspace {
         order: 0,
         adapter_key: 'entity_adapter',
         display_label: 'Accepted candidate',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-accepted',
           candidate_id: 'candidate-accepted',
@@ -151,7 +150,6 @@ function buildWorkspace(): CurationWorkspace {
         adapter_key: 'entity_adapter',
         display_label: 'Pending candidate',
         conversation_summary: 'Needs curator review',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-pending',
           candidate_id: 'candidate-pending',
@@ -260,7 +258,6 @@ function buildReferenceWorkspace(): CurationWorkspace {
         adapter_key: 'reference',
         display_label: 'Adapter-owned reference scaffold in practice',
         conversation_summary: 'Reference adapter owns the editor pack and field layout.',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-reference',
           candidate_id: 'candidate-reference',
@@ -387,7 +384,6 @@ function buildQueueWorkspace(): CurationWorkspace {
     order: 2,
     adapter_key: 'entity_adapter',
     display_label: 'Next candidate',
-    unresolved_ambiguities: [],
     draft: {
       draft_id: 'draft-next',
       candidate_id: 'candidate-next',

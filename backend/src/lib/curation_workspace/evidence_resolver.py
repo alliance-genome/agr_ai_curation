@@ -16,7 +16,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_service import PreparedEvidenceRecordInput
 from src.models.sql.database import SessionLocal
-from src.schemas.curation_prep import CurationPrepCandidate, CurationPrepEvidenceReference
+from src.schemas.curation_prep import CurationPrepCandidate, CurationPrepEvidenceRecord
 from src.schemas.curation_workspace import (
     CurationEvidenceSource,
     EvidenceAnchor,
@@ -198,24 +198,27 @@ class DeterministicEvidenceAnchorResolver:
         user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
         document, load_warning = self._prepare_document(context.document_id, user_id)
 
-        for reference in candidate.evidence_references:
-            field_group_key = _field_group_key(reference.field_path)
-            resolved_anchor, warnings = self._resolve_reference(
-                reference,
+        for evidence_record in candidate.evidence_records:
+            field_keys = list(evidence_record.field_paths)
+            resolved_anchor, warnings = self._resolve_evidence_record(
+                evidence_record,
                 document=document,
                 load_warning=load_warning,
             )
             resolved_records.append(
                 PreparedEvidenceRecordInput(
                     source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=[reference.field_path],
-                    field_group_keys=[field_group_key] if field_group_key else [],
-                    is_primary=reference.field_path not in primary_fields,
+                    field_keys=field_keys,
+                    field_group_keys=_field_group_keys(field_keys),
+                    is_primary=(
+                        not field_keys
+                        or any(field_key not in primary_fields for field_key in field_keys)
+                    ),
                     anchor=resolved_anchor.model_dump(mode="json"),
                     warnings=warnings,
                 )
             )
-            primary_fields.add(reference.field_path)
+            primary_fields.update(field_keys)
 
         return resolved_records
 
@@ -252,14 +255,14 @@ class DeterministicEvidenceAnchorResolver:
 
         return _PreparedDocument.from_chunks(_coerce_resolution_chunks(raw_chunks)), None
 
-    def _resolve_reference(
+    def _resolve_evidence_record(
         self,
-        reference: CurationPrepEvidenceReference,
+        evidence_record: CurationPrepEvidenceRecord,
         *,
         document: _PreparedDocument,
         load_warning: str | None,
     ) -> tuple[EvidenceAnchor, list[str]]:
-        incoming_anchor = reference.anchor
+        incoming_anchor = evidence_record.anchor
         warnings: list[str] = [load_warning] if load_warning else []
 
         quote_resolution = _resolve_quote_reference(document, incoming_anchor)
@@ -1017,6 +1020,18 @@ def _field_group_key(field_path: str) -> str | None:
     if len(segments) <= 1:
         return None
     return ".".join(segments[:-1])
+
+
+def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    group_keys: list[str] = []
+    for field_path in field_paths:
+        group_key = _field_group_key(field_path)
+        if not group_key or group_key in seen:
+            continue
+        seen.add(group_key)
+        group_keys.append(group_key)
+    return group_keys
 
 
 def _raw_span_length(span: _ResolvedSpan) -> int:

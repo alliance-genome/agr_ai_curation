@@ -109,7 +109,6 @@ function buildWorkspace(): CurationWorkspace {
         adapter_key: 'test_adapter',
         profile_key: 'profile_a',
         display_label: 'Candidate one',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-1',
           candidate_id: 'candidate-1',
@@ -151,13 +150,6 @@ function buildZeroCandidateWorkspace(): CurationWorkspace {
       current_candidate_id: null,
       adapter: {
         ...buildWorkspace().session.adapter,
-        metadata: {
-          manual_draft_fields: buildTemplateFields().map((field) => ({
-            ...field,
-            value: null,
-            seed_value: null,
-          })),
-        },
       },
     },
     candidates: [],
@@ -359,7 +351,6 @@ describe('ManualAnnotationDialog', () => {
         adapter_key: 'test_adapter',
         profile_key: 'profile_a',
         display_label: 'Manual candidate',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-manual-1',
           candidate_id: 'candidate-manual-1',
@@ -498,44 +489,21 @@ describe('ManualAnnotationDialog', () => {
     })
   })
 
-  it('uses the session adapter template when the workspace has no existing candidates', async () => {
-    const user = userEvent.setup()
+  it('requires a shared template when the workspace has no existing candidates', async () => {
     serviceMocks.createManualCurationCandidate.mockReturnValue(new Promise(() => {}))
 
     renderDialog(buildZeroCandidateWorkspace())
     const dialog = await screen.findByRole('dialog')
 
-    expect(within(dialog).queryByText(/No shared draft-field template/i)).not.toBeInTheDocument()
-    expect(within(dialog).getByLabelText('Field A')).toHaveValue('')
-    expect(within(dialog).getByLabelText('Field B')).toHaveValue('')
-
-    await user.type(
-      within(dialog).getByLabelText('Annotation label'),
-      'Zero candidate manual annotation',
-    )
-    await user.type(within(dialog).getByLabelText('Field A'), 'value alpha')
-    await user.click(within(dialog).getByTestId('manual-annotation-create-button'))
+    expect(
+      within(dialog).getByText('No shared draft-field template is available for this adapter/profile yet.'),
+    ).toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Field A')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Field B')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Create annotation' })).toBeDisabled()
 
     await waitFor(() => {
-      expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledTimes(1)
+      expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledTimes(0)
     })
-
-    expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session_id: 'session-1',
-        adapter_key: 'test_adapter',
-        profile_key: 'profile_a',
-        source: 'manual',
-        display_label: expect.any(String),
-        draft: expect.objectContaining({
-          fields: expect.arrayContaining([
-            expect.objectContaining({
-              field_key: 'field_a',
-              value: 'value alpha',
-            }),
-          ]),
-        }),
-      }),
-    )
   })
 })

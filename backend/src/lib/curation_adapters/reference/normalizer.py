@@ -40,8 +40,7 @@ class ReferenceCandidateNormalizer:
     ) -> NormalizedCandidate:
         from src.lib.curation_workspace.pipeline import NormalizedCandidate
 
-        extracted_payload = candidate.to_extracted_fields_dict()
-        normalized_payload, defaulted_fields = _build_reference_payload(extracted_payload)
+        normalized_payload, defaulted_fields = _build_reference_payload(candidate.payload)
         draft_fields = _build_reference_draft_fields(
             normalized_payload,
             defaulted_fields=defaulted_fields,

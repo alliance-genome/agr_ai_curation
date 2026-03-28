@@ -325,9 +325,7 @@ export interface CurationCandidate {
   profile_key?: string | null
   display_label?: string | null
   secondary_label?: string | null
-  confidence?: number | null
   conversation_summary?: string | null
-  unresolved_ambiguities: string[]
   extraction_result_id?: string | null
   draft: CurationDraft
   evidence_anchors: CurationEvidenceRecord[]
