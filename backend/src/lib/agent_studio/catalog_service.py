@@ -46,6 +46,13 @@ from .models import (
 logger = logging.getLogger(__name__)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
+_RECORD_EVIDENCE_RUNTIME_NOTE = (
+    "EVIDENCE VERIFICATION RULES:\n"
+    "- Call `record_evidence` once for each evidence quote you intend to keep.\n"
+    "- Pass the entity label, the exact `chunk_id` from prior document search/read results, and the quote you believe appears in that chunk.\n"
+    "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
+    "- Only persist evidence records that came back `verified`.\n"
+)
 
 
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
@@ -468,6 +475,37 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "required": True,
                     "description": "Subsection name to read.",
+                },
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "record_evidence": {
+        "name": "Record Evidence",
+        "description": "Verify a claimed quote against a specific PDF chunk before persisting evidence.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
+        "documentation": {
+            "summary": "Checks whether a claimed quote appears in a known chunk and returns a verified verbatim quote plus locator metadata when it does.",
+            "parameters": [
+                {
+                    "name": "entity",
+                    "type": "string",
+                    "required": True,
+                    "description": "Entity label associated with this evidence record.",
+                },
+                {
+                    "name": "chunk_id",
+                    "type": "string",
+                    "required": True,
+                    "description": "Chunk identifier returned by search_document or read-section tools.",
+                },
+                {
+                    "name": "claimed_quote",
+                    "type": "string",
+                    "required": True,
+                    "description": "Quote text to verify against the target chunk.",
                 },
             ],
         },
@@ -1063,7 +1101,7 @@ def _tool_category_for_binding(binding: Any) -> str:
     """Infer a coarse tool category when curated metadata does not provide one."""
     if binding.tool_id in {"agr_curation_query", "curation_db_sql"}:
         return "Database"
-    if binding.tool_id in {"search_document", "read_section", "read_subsection"}:
+    if binding.tool_id in {"search_document", "read_section", "read_subsection", "record_evidence"}:
         return "Document"
     if binding.tool_id.startswith("save_"):
         return "Output"
@@ -1910,6 +1948,9 @@ def _build_runtime_instructions(
                 f'You are helping the user with the document: "{document_name}"\n\n'
                 + instructions
             )
+
+    if "record_evidence" in canonical_tool_ids:
+        instructions = instructions.rstrip() + "\n\n" + _RECORD_EVIDENCE_RUNTIME_NOTE
 
     # Reinforce structured-output generation when output schema is configured.
     if output_schema is not None:

@@ -858,6 +858,35 @@ def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
     assert evidence_records[0]["anchor"]["chunk_ids"] == ["chunk-apoe-7"]
 
 
+def test_build_prep_evidence_records_preserves_verified_quote_chunk_id():
+    records = [
+        _PrepExtractionRecord(
+            payload_json={
+                "items": [
+                    {
+                        "label": "APOE disease association",
+                        "evidence_records": [
+                            {
+                                "verified_quote": "APOE was associated with disease severity.",
+                                "page": 7,
+                                "section": "Results",
+                                "chunk_id": "chunk-7",
+                            }
+                        ],
+                    }
+                ],
+                "run_summary": {"candidate_count": 1},
+            }
+        )
+    ]
+
+    evidence_records = supervisor_agent._build_prep_evidence_records(records)
+
+    assert len(evidence_records) == 1
+    assert evidence_records[0]["anchor"]["snippet_text"] == "APOE was associated with disease severity."
+    assert evidence_records[0]["anchor"]["chunk_ids"] == ["chunk-7"]
+
+
 @pytest.mark.asyncio
 async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
     captured = {}

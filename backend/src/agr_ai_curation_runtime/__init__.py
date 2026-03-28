@@ -7,6 +7,7 @@ from .file_outputs import (
     get_current_file_output_context,
     persist_file_output,
 )
+from .record_evidence import create_record_evidence_tool
 from .weaviate_chunks import (
     get_chunks_by_parent_section,
     get_chunks_by_subsection,
@@ -22,6 +23,7 @@ __all__ = [
     "PersistedFileOutput",
     "get_current_file_output_context",
     "persist_file_output",
+    "create_record_evidence_tool",
     "get_chunks_by_parent_section",
     "get_chunks_by_subsection",
     "get_document_sections",

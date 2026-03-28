@@ -118,6 +118,35 @@ def _make_prep_output(candidate_count: int = 2) -> CurationPrepAgentOutput:
     )
 
 
+def test_build_evidence_records_accepts_verified_quote_and_chunk_id():
+    extraction_result = _make_extraction_result(
+        payload_json={
+            "items": [
+                {
+                    "label": "APOE",
+                    "evidence_records": [
+                        {
+                            "verified_quote": "APOE was implicated in the disease model.",
+                            "section": "Results",
+                            "subsection": "Disease findings",
+                            "page": 4,
+                            "chunk_id": "chunk-9",
+                        }
+                    ],
+                }
+            ],
+            "run_summary": {"candidate_count": 1},
+        }
+    )
+
+    evidence_records = module._build_evidence_records([extraction_result])
+
+    assert len(evidence_records) == 1
+    assert evidence_records[0].anchor.snippet_text == "APOE was implicated in the disease model."
+    assert evidence_records[0].anchor.chunk_ids == ["chunk-9"]
+    assert evidence_records[0].anchor.page_number == 4
+
+
 def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     monkeypatch.setattr(
         module,
@@ -223,7 +252,7 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
     assert "gene domain" in preview.summary_text
 
 
-def test_build_evidence_records_skips_records_without_verified_quote():
+def test_build_evidence_records_preserves_section_anchor_without_verified_quote():
     extraction_result = _make_extraction_result(
         payload_json={
             "evidence_records": [
@@ -247,11 +276,15 @@ def test_build_evidence_records_skips_records_without_verified_quote():
 
     evidence_records = module._build_evidence_records([extraction_result])
 
-    assert len(evidence_records) == 1
-    assert evidence_records[0].anchor.anchor_kind == "snippet"
-    assert evidence_records[0].anchor.locator_quality == "exact_quote"
-    assert evidence_records[0].anchor.snippet_text == "APOE was implicated in the disease model."
-    assert evidence_records[0].anchor.chunk_ids == ["chunk-apoe-1"]
+    assert len(evidence_records) == 2
+    assert evidence_records[0].anchor.anchor_kind == "section"
+    assert evidence_records[0].anchor.locator_quality == "section_only"
+    assert evidence_records[0].anchor.section_title == "Results"
+    assert evidence_records[0].anchor.chunk_ids == ["chunk-section-only"]
+    assert evidence_records[1].anchor.anchor_kind == "snippet"
+    assert evidence_records[1].anchor.locator_quality == "exact_quote"
+    assert evidence_records[1].anchor.snippet_text == "APOE was implicated in the disease model."
+    assert evidence_records[1].anchor.chunk_ids == ["chunk-apoe-1"]
 
 
 @pytest.mark.asyncio

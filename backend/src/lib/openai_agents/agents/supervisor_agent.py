@@ -304,21 +304,38 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
     """Translate persisted extraction envelope evidence into prep-agent evidence records."""
 
     evidence_records: list[dict[str, Any]] = []
-    seen_keys: set[tuple[str, str, str, str, str]] = set()
+    seen_keys: set[tuple[str, str, str, str, str, str]] = set()
 
     for record in extraction_results:
         payload = getattr(record, "payload_json", None)
         extraction_result_id = str(getattr(record, "extraction_result_id", "") or "").strip()
         for index, evidence_payload in enumerate(_collect_evidence_payloads(payload)):
-            snippet_text = str(evidence_payload.get("verified_quote") or "").strip()
+            snippet_text = str(
+                evidence_payload.get("verified_quote")
+                or evidence_payload.get("snippet_text")
+                or evidence_payload.get("text")
+                or ""
+            ).strip()
             if not snippet_text:
                 continue
 
-            page_number = evidence_payload.get("page")
-            section_title = str(evidence_payload.get("section") or "").strip()
-            subsection_title = str(evidence_payload.get("subsection") or "").strip()
-            figure_reference = str(evidence_payload.get("figure_reference") or "").strip()
+            page_number = evidence_payload.get("page") or evidence_payload.get("page_number")
             chunk_id = str(evidence_payload.get("chunk_id") or "").strip()
+            section_title = str(
+                evidence_payload.get("section")
+                or evidence_payload.get("section_title")
+                or ""
+            ).strip()
+            subsection_title = str(
+                evidence_payload.get("subsection")
+                or evidence_payload.get("subsection_title")
+                or ""
+            ).strip()
+            figure_reference = str(
+                evidence_payload.get("figure_reference")
+                or evidence_payload.get("figure")
+                or ""
+            ).strip()
 
             dedupe_key = (
                 extraction_result_id,
@@ -326,10 +343,19 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
                 str(page_number or ""),
                 section_title,
                 subsection_title,
+                chunk_id,
             )
             if dedupe_key in seen_keys:
                 continue
             seen_keys.add(dedupe_key)
+
+            chunk_ids = [
+                str(value).strip()
+                for value in (evidence_payload.get("chunk_ids") or [])
+                if str(value).strip()
+            ]
+            if chunk_id and chunk_id not in chunk_ids:
+                chunk_ids.append(chunk_id)
 
             evidence_records.append(
                 {
@@ -350,13 +376,15 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
                         "section_title": section_title or None,
                         "subsection_title": subsection_title or None,
                         "figure_reference": figure_reference or None,
-                        "chunk_ids": [chunk_id] if chunk_id else [],
+                        "chunk_ids": chunk_ids,
                     },
                     "notes": [],
                 }
             )
 
     return evidence_records
+
+
 def _build_curation_prep_conversation_history(
     session_history: Sequence[Dict[str, Any]],
     *,
