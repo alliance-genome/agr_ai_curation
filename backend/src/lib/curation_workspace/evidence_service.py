@@ -523,7 +523,8 @@ def _resolve_anchor_against_document(
         user_id_resolver=_build_user_id_resolver(
             db,
             current_user_id=current_user_id,
-        )
+        ),
+        resolve_against_document=True,
     )
     resolved_field_path = field_path or "workspace.evidence"
     prep_candidate = CurationPrepCandidate.model_validate(

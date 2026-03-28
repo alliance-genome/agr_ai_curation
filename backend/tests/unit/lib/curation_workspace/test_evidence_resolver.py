@@ -1,4 +1,4 @@
-"""Unit tests for deterministic evidence-anchor pass-through resolution."""
+"""Unit tests for deterministic evidence-anchor resolution."""
 
 from __future__ import annotations
 
@@ -74,6 +74,30 @@ def _make_normalized_candidate(candidate: CurationPrepCandidate) -> NormalizedCa
     )
 
 
+def _resolve_anchor(
+    candidate: CurationPrepCandidate,
+    *,
+    chunks: list[dict],
+    resolve_against_document: bool = True,
+) -> tuple[EvidenceAnchor, list[str], list[str]]:
+    resolver = DeterministicEvidenceAnchorResolver(
+        user_id_resolver=lambda _prep_result_id: "user-1",
+        chunk_loader=lambda _document_id, _user_id: chunks,
+        resolve_against_document=resolve_against_document,
+    )
+    result = resolver.resolve(
+        candidate,
+        normalized_candidate=_make_normalized_candidate(candidate),
+        context=_make_context(),
+    )
+    resolved_record = result[0]
+    return (
+        EvidenceAnchor.model_validate(resolved_record.anchor),
+        resolved_record.warnings,
+        resolved_record.field_keys,
+    )
+
+
 def test_resolver_preserves_tool_verified_anchor_payload():
     candidate = _make_candidate(_make_anchor_payload())
     resolver = DeterministicEvidenceAnchorResolver()
@@ -101,6 +125,44 @@ def test_resolver_preserves_tool_verified_anchor_payload():
     assert anchor.figure_reference == "Figure 2A"
     assert anchor.table_reference is None
     assert anchor.chunk_ids == ["chunk-1"]
+
+
+def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
+    candidate = _make_candidate(
+        _make_anchor_payload(
+            page_number=None,
+            section_title=None,
+            subsection_title=None,
+            figure_reference=None,
+            chunk_ids=[],
+        )
+    )
+
+    anchor, warnings, field_keys = _resolve_anchor(
+        candidate,
+        chunks=[
+            {
+                "id": "chunk-1",
+                "chunk_index": 0,
+                "content": "Introductory text. Verified quote from the paper. Closing text.",
+                "page_number": 3,
+                "section_title": "Results",
+                "subsection": "Association",
+                "metadata": {},
+            }
+        ],
+    )
+
+    assert field_keys == ["gene_symbol"]
+    assert anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
+    assert anchor.anchor_kind is EvidenceAnchorKind.SNIPPET
+    assert anchor.page_number == 3
+    assert anchor.section_title == "Results"
+    assert anchor.subsection_title == "Association"
+    assert anchor.chunk_ids == ["chunk-1"]
+    assert anchor.pdfx_markdown_offset_start is not None
+    assert anchor.pdfx_markdown_offset_end is not None
+    assert warnings == []
 
 
 def test_resolver_moves_table_literal_into_table_reference():

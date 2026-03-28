@@ -459,6 +459,54 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
     assert warnings == ["resolved via public resolver API"]
 
 
+def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(db_session, document_id=document.id)
+    resolver_cls = module.DeterministicEvidenceAnchorResolver
+
+    class _ChunkBackedResolver(resolver_cls):
+        def __init__(self, *args, **kwargs):
+            assert kwargs.get("resolve_against_document") is True
+            kwargs["chunk_loader"] = lambda _document_id, _user_id: [
+                {
+                    "id": "chunk-1",
+                    "chunk_index": 0,
+                    "content": "Introductory text. Example quote. Closing text.",
+                    "page_number": 3,
+                    "section_title": "Results",
+                    "subsection": "Association",
+                    "metadata": {},
+                }
+            ]
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _ChunkBackedResolver)
+
+    resolved_anchor, warnings = module._resolve_anchor_against_document(
+        db_session,
+        document_id=str(document.id),
+        anchor=_anchor(snippet_text="Example quote.", page_number=None),
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        field_path="gene.symbol",
+        current_user_id="curator-1",
+        prep_extraction_result_id=str(extraction_result.id),
+    )
+
+    assert resolved_anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
+    assert resolved_anchor.snippet_text == "Example quote."
+    assert resolved_anchor.page_number == 3
+    assert resolved_anchor.section_title == "Results"
+    assert resolved_anchor.subsection_title == "Association"
+    assert resolved_anchor.chunk_ids == ["chunk-1"]
+    assert resolved_anchor.pdfx_markdown_offset_start is not None
+    assert resolved_anchor.pdfx_markdown_offset_end is not None
+    assert warnings == []
+
+
 def test_recompute_evidence_updates_all_selected_records_including_manual(
     db_session,
     monkeypatch,
