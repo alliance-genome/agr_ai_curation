@@ -310,7 +310,7 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
         payload = getattr(record, "payload_json", None)
         extraction_result_id = str(getattr(record, "extraction_result_id", "") or "").strip()
         for index, evidence_payload in enumerate(_collect_evidence_payloads(payload)):
-            snippet_text = str(evidence_payload.get("verified_quote") or "").strip()
+            snippet_text = _resolve_evidence_quote(evidence_payload) or ""
             if not snippet_text:
                 continue
 
@@ -357,6 +357,10 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
             )
 
     return evidence_records
+
+
+def _resolve_evidence_quote(evidence_payload: dict[str, Any]) -> str | None:
+    return str(evidence_payload.get("verified_quote") or evidence_payload.get("snippet") or "").strip() or None
 
 
 def _build_curation_prep_conversation_history(

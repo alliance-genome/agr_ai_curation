@@ -82,6 +82,7 @@ export default function WorkspaceHeader({
         sx={{ minWidth: 0 }}
       >
         <Button
+          aria-label="Back to inventory"
           component={RouterLink}
           size="small"
           startIcon={<ArrowBackRoundedIcon sx={{ fontSize: '1rem' }} />}
@@ -160,6 +161,7 @@ export default function WorkspaceHeader({
       ) : (
         <Stack direction="row" justifyContent="flex-end" spacing={0.75}>
           <Button
+            aria-label="Previous session"
             disabled={previousDisabled}
             onClick={onPreviousSession}
             size="small"
@@ -169,6 +171,7 @@ export default function WorkspaceHeader({
             Prev
           </Button>
           <Button
+            aria-label="Next session"
             disabled={nextDisabled}
             onClick={onNextSession}
             size="small"

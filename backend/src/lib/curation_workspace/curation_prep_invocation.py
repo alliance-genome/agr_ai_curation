@@ -352,7 +352,7 @@ def _build_evidence_records(
         payload = extraction_result.payload_json
 
         for index, raw_record in enumerate(_collect_evidence_payloads(payload), start=1):
-            snippet_text = str(raw_record.get("verified_quote") or "").strip()
+            snippet_text = _resolve_evidence_quote(raw_record) or ""
             section_title = str(raw_record.get("section") or "").strip()
             subsection_title = str(raw_record.get("subsection") or "").strip()
             page_number = raw_record.get("page")
@@ -385,8 +385,12 @@ def _build_evidence_records(
     return evidence_records
 
 
+def _resolve_evidence_quote(raw_record: dict[str, Any]) -> str | None:
+    return str(raw_record.get("verified_quote") or raw_record.get("snippet") or "").strip() or None
+
+
 def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
-    snippet_text = str(raw_record.get("verified_quote") or "").strip() or None
+    snippet_text = _resolve_evidence_quote(raw_record)
     section_title = str(raw_record.get("section") or "").strip() or None
     subsection_title = str(raw_record.get("subsection") or "").strip() or None
     figure_reference = str(raw_record.get("figure_reference") or "").strip() or None

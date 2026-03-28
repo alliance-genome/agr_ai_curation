@@ -48,11 +48,17 @@ def test_evidence_record_accepts_partial_payloads_during_migration(payload, expe
     assert evidence.model_dump(exclude_none=True) == expected
 
 
-def test_evidence_record_rejects_legacy_and_unverified_fields():
+def test_evidence_record_accepts_legacy_snippet_alias_during_migration():
+    evidence = EvidenceRecord.model_validate({"snippet": "Legacy section summary."})
+
+    assert evidence.verified_quote == "Legacy section summary."
+    assert evidence.model_dump(exclude_none=True) == {"verified_quote": "Legacy section summary."}
+
+
+def test_evidence_record_rejects_unknown_tool_output_fields():
     with pytest.raises(ValidationError):
         EvidenceRecord.model_validate(
             {
-                "snippet": "Legacy section summary.",
                 "not_found": True,
                 "match_score": 0.42,
             }
@@ -100,6 +106,23 @@ def test_runtime_gene_extraction_envelope_accepts_partial_evidence_during_migrat
     assert envelope.genes[0].evidence[0].verified_quote is None
     assert envelope.evidence_records[0].page == 4
     assert envelope.evidence_records[0].verified_quote is None
+
+
+def test_runtime_gene_extraction_envelope_accepts_legacy_snippet_alias():
+    envelope = GeneExtractionResultEnvelope.model_validate(
+        {
+            "genes": [
+                {
+                    "mention": "crumb",
+                    "evidence": [{"snippet": "Legacy quoted evidence."}],
+                }
+            ],
+            "evidence_records": [{"snippet": "Legacy quoted evidence."}],
+        }
+    )
+
+    assert envelope.genes[0].evidence[0].verified_quote == "Legacy quoted evidence."
+    assert envelope.evidence_records[0].verified_quote == "Legacy quoted evidence."
 
 
 def test_evidence_record_schema_serialization_preserves_all_fields():
