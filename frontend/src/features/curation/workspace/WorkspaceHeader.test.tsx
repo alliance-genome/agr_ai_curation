@@ -67,9 +67,9 @@ describe('WorkspaceHeader', () => {
     expect(screen.getByText('Annotation-ready paper')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456 • DOI 10.1000/example')).toBeInTheDocument()
     expect(screen.getByText('Gene / Human')).toBeInTheDocument()
-    expect(screen.getByText('3/5 reviewed')).toBeInTheDocument()
+    expect(screen.getByText('3/5')).toBeInTheDocument()
     expect(screen.getByText('In Progress')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /prev session/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /previous session/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /next session/i })).toBeDisabled()
   })
 
@@ -85,7 +85,7 @@ describe('WorkspaceHeader', () => {
       previousDisabled: false,
     })
 
-    await user.click(screen.getByRole('button', { name: /prev session/i }))
+    await user.click(screen.getByRole('button', { name: /previous session/i }))
     await user.click(screen.getByRole('button', { name: /next session/i }))
 
     expect(onPreviousSession).toHaveBeenCalledTimes(1)
@@ -98,7 +98,7 @@ describe('WorkspaceHeader', () => {
     })
 
     expect(screen.getByText('Queue navigation slot')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /prev session/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /previous session/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /next session/i })).not.toBeInTheDocument()
   })
 })

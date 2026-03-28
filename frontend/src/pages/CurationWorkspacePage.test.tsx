@@ -659,7 +659,8 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByText('No evidence anchors are available for this candidate.'),
     ).toBeInTheDocument()
-    expect(screen.getAllByText('1/2 reviewed')).toHaveLength(2)
+    expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
+    expect(screen.getByText('1/2')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
@@ -686,7 +687,9 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
     expect(screen.getByText('Workspace Document')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456')).toBeInTheDocument()
-    expect(screen.getByText('Decision toolbar')).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: /decision toolbar panel/i }),
+    ).toBeInTheDocument()
     expect(
       screen.getByText('Candidate 1 of 2 — Entity / Accepted candidate'),
     ).toBeInTheDocument()
@@ -743,7 +746,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: '✓ Accept' }))
+    await user.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
@@ -782,7 +785,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Skip →' }))
+    await user.click(screen.getByRole('button', { name: 'Skip' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('location')).toHaveTextContent(
@@ -823,7 +826,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: '✕ Reject' }))
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
 
     expect(screen.getByText('Reject candidate?')).toBeInTheDocument()
 
