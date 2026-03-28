@@ -495,7 +495,7 @@ def _evidence_matches_candidate(
         return default_to_single_candidate
     if entity in blueprint.match_terms:
         return True
-    return default_to_single_candidate
+    return False
 
 
 def _candidate_match_terms(payload: Mapping[str, Any]) -> tuple[str, ...]:
