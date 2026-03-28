@@ -223,6 +223,37 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
     assert "gene domain" in preview.summary_text
 
 
+def test_build_evidence_records_skips_records_without_verified_quote():
+    extraction_result = _make_extraction_result(
+        payload_json={
+            "evidence_records": [
+                {
+                    "entity": "APOE",
+                    "section": "Results",
+                    "page": 4,
+                    "chunk_id": "chunk-section-only",
+                },
+                {
+                    "entity": "APOE",
+                    "verified_quote": "APOE was implicated in the disease model.",
+                    "section": "Results",
+                    "page": 4,
+                    "chunk_id": "chunk-apoe-1",
+                },
+            ],
+            "run_summary": {"candidate_count": 1},
+        }
+    )
+
+    evidence_records = module._build_evidence_records([extraction_result])
+
+    assert len(evidence_records) == 1
+    assert evidence_records[0].anchor.anchor_kind == "snippet"
+    assert evidence_records[0].anchor.locator_quality == "exact_quote"
+    assert evidence_records[0].anchor.snippet_text == "APOE was implicated in the disease model."
+    assert evidence_records[0].anchor.chunk_ids == ["chunk-apoe-1"]
+
+
 @pytest.mark.asyncio
 async def test_run_chat_curation_prep_builds_agent_input_and_returns_summary(monkeypatch):
     captured: dict[str, object] = {}

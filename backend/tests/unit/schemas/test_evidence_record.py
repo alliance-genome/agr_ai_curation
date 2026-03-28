@@ -21,16 +21,30 @@ def _tool_evidence_payload() -> dict[str, object]:
     }
 
 
-def test_evidence_record_defaults_optional_fields_to_none():
-    evidence = EvidenceRecord()
+def test_evidence_record_defaults_optional_fields_to_none_when_quote_present():
+    evidence = EvidenceRecord(verified_quote="Crumb is essential for epithelial polarity.")
 
     assert evidence.entity is None
-    assert evidence.verified_quote is None
+    assert evidence.verified_quote == "Crumb is essential for epithelial polarity."
     assert evidence.page is None
     assert evidence.section is None
     assert evidence.subsection is None
     assert evidence.chunk_id is None
     assert evidence.figure_reference is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"section": "Results"},
+        {"page": 4, "section": "Results"},
+        {"verified_quote": "   "},
+    ],
+)
+def test_evidence_record_requires_non_empty_verified_quote(payload):
+    with pytest.raises(ValidationError, match="verified_quote"):
+        EvidenceRecord.model_validate(payload)
 
 
 def test_evidence_record_rejects_legacy_and_unverified_fields():
@@ -75,3 +89,20 @@ def test_evidence_record_schema_serialization_preserves_all_fields():
     decoded = json.loads(encoded)
 
     assert decoded == evidence_payload
+
+
+def test_evidence_record_normalizes_blank_optional_strings_to_none():
+    evidence = EvidenceRecord(
+        verified_quote="Quoted support.",
+        entity="  crumb  ",
+        section="  Results  ",
+        subsection="   ",
+        chunk_id="  abc123  ",
+        figure_reference="  Table 1  ",
+    )
+
+    assert evidence.entity == "crumb"
+    assert evidence.section == "Results"
+    assert evidence.subsection is None
+    assert evidence.chunk_id == "abc123"
+    assert evidence.figure_reference == "Table 1"

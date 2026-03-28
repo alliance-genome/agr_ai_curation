@@ -396,27 +396,16 @@ def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
     if isinstance(page_number, bool) or not isinstance(page_number, int):
         page_number = None
 
-    if snippet_text:
-        anchor_kind = EvidenceAnchorKind.SNIPPET
-        locator_quality = EvidenceLocatorQuality.EXACT_QUOTE
-    elif section_title:
-        anchor_kind = EvidenceAnchorKind.SECTION
-        locator_quality = EvidenceLocatorQuality.SECTION_ONLY
-    elif page_number is not None:
-        anchor_kind = EvidenceAnchorKind.PAGE
-        locator_quality = EvidenceLocatorQuality.PAGE_ONLY
-    else:
+    if not snippet_text:
         return None
 
-    viewer_search_text = snippet_text or section_title
-
     return EvidenceAnchor(
-        anchor_kind=anchor_kind,
-        locator_quality=locator_quality,
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
         supports_decision=EvidenceSupportsDecision.SUPPORTS,
         snippet_text=snippet_text,
         sentence_text=snippet_text,
-        viewer_search_text=viewer_search_text,
+        viewer_search_text=snippet_text,
         page_number=page_number,
         section_title=section_title,
         subsection_title=subsection_title,

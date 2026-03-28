@@ -9,7 +9,7 @@ This module contains foundational types used across all schema models:
 
 from typing import List, Optional
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 class Destination(str, Enum):
@@ -80,6 +80,28 @@ class EvidenceRecord(BaseModel):
     subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
     chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
     figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
+
+    @field_validator(
+        "entity",
+        "verified_quote",
+        "section",
+        "subsection",
+        "chunk_id",
+        "figure_reference",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> object:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def _require_verified_quote(self) -> "EvidenceRecord":
+        if self.verified_quote is None:
+            raise ValueError("verified_quote is required for persisted evidence records")
+        return self
 
 
 class MentionCandidate(BaseModel):
