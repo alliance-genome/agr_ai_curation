@@ -81,6 +81,15 @@ class EvidenceRecord(BaseModel):
     chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
     figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
 
+    @field_validator("page", mode="before")
+    @classmethod
+    def _validate_page(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("must be an integer")
+        return value
+
     @field_validator(
         "entity",
         "verified_quote",

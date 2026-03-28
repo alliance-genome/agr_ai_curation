@@ -111,6 +111,26 @@ def test_evidence_record_schema_serialization_preserves_all_fields():
     assert decoded == evidence_payload
 
 
+@pytest.mark.parametrize("page", [0, -1])
+def test_evidence_record_rejects_non_positive_page_numbers(page):
+    with pytest.raises(ValidationError) as exc_info:
+        EvidenceRecord.model_validate({"page": page})
+
+    errors = exc_info.value.errors()
+
+    assert any(error["loc"] == ("page",) for error in errors)
+
+
+@pytest.mark.parametrize("page", [True, "1", 1.5])
+def test_evidence_record_rejects_non_integer_page_values(page):
+    with pytest.raises(ValidationError) as exc_info:
+        EvidenceRecord.model_validate({"page": page})
+
+    errors = exc_info.value.errors()
+
+    assert any(error["loc"] == ("page",) for error in errors)
+
+
 def test_evidence_record_normalizes_blank_optional_strings_to_none():
     evidence = EvidenceRecord(
         verified_quote="   ",
@@ -167,3 +187,23 @@ def test_runtime_gene_extraction_envelope_rejects_non_string_evidence_fields():
 
     assert any(error["loc"] == ("genes", 0, "evidence", 0, "section") for error in errors)
     assert any(error["loc"] == ("evidence_records", 0, "verified_quote") for error in errors)
+
+
+def test_runtime_gene_extraction_envelope_rejects_invalid_page_values():
+    with pytest.raises(ValidationError) as exc_info:
+        GeneExtractionResultEnvelope.model_validate(
+            {
+                "genes": [
+                    {
+                        "mention": "crumb",
+                        "evidence": [{"page": True}],
+                    }
+                ],
+                "evidence_records": [{"page": "1"}],
+            }
+        )
+
+    errors = exc_info.value.errors()
+
+    assert any(error["loc"] == ("genes", 0, "evidence", 0, "page") for error in errors)
+    assert any(error["loc"] == ("evidence_records", 0, "page") for error in errors)
