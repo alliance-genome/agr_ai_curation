@@ -492,7 +492,7 @@ def _evidence_matches_candidate(
 ) -> bool:
     entity = _normalized_optional_string(evidence_record.entity)
     if entity is None:
-        return True
+        return default_to_single_candidate
     if entity in blueprint.match_terms:
         return True
     return default_to_single_candidate

@@ -184,6 +184,70 @@ async def test_run_curation_prep_gates_candidates_without_verified_evidence(monk
 
 
 @pytest.mark.asyncio
+async def test_run_curation_prep_rejects_ambiguous_verified_evidence_without_entity(monkeypatch):
+    extraction_result = _make_extraction_result(
+        annotations=[
+            {
+                "gene_symbol": "tinman",
+                "anatomy_label": "embryonic heart",
+                "is_negative": False,
+            },
+            {
+                "gene_symbol": "hand",
+                "anatomy_label": "dorsal vessel",
+                "is_negative": False,
+            },
+        ],
+        evidence_records=[
+            {
+                "verified_quote": "tinman was detected in the embryonic heart.",
+                "page": 5,
+                "section": "Results",
+                "chunk_id": "chunk-1",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(
+        ValueError,
+        match="No evidence-verified candidates were available",
+    ):
+        await module.run_curation_prep(
+            [extraction_result],
+            scope_confirmation=_make_scope_confirmation(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_allows_single_candidate_verified_evidence_without_entity(monkeypatch):
+    extraction_result = _make_extraction_result(
+        evidence_records=[
+            {
+                "verified_quote": "tinman was detected in the embryonic heart.",
+                "page": 5,
+                "section": "Results",
+                "chunk_id": "chunk-1",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=_make_scope_confirmation(),
+    )
+
+    assert [candidate.payload["gene_symbol"] for candidate in prep_output.candidates] == ["tinman"]
+    assert (
+        prep_output.candidates[0].evidence_records[0].anchor.snippet_text
+        == "tinman was detected in the embryonic heart."
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_curation_prep_rejects_when_all_candidates_fail_evidence_gate(monkeypatch):
     extraction_result = _make_extraction_result(
         evidence_records=[
