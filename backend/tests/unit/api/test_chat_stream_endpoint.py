@@ -221,6 +221,326 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
 
 
+def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-evidence"}}
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "record_evidence"},
+            "internal": {
+                "tool_input": {
+                    "entity": "crumb",
+                    "chunk_id": "abc123",
+                    "claimed_quote": "Crumb is essential for maintaining epithelial polarity.",
+                },
+                "tool_output": json.dumps(
+                    {
+                        "status": "verified",
+                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                        "page": 4,
+                        "section": "Results",
+                        "subsection": "Gene Expression Analysis",
+                        "figure_reference": "Figure 2A",
+                    }
+                ),
+            },
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="Extract verified evidence", session_id="session-chat-evidence"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "TOOL_COMPLETE",
+        "evidence_summary",
+        "RUN_FINISHED",
+    ]
+    assert events[2]["evidence_records"] == [
+        {
+            "entity": "crumb",
+            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+            "page": 4,
+            "section": "Results",
+            "subsection": "Gene Expression Analysis",
+            "chunk_id": "abc123",
+            "figure_reference": "Figure 2A",
+        }
+    ]
+
+
+def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-evidence-runner-summary"}}
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "record_evidence"},
+            "internal": {
+                "tool_input": {
+                    "entity": "crumb",
+                    "chunk_id": "abc123",
+                    "claimed_quote": "Crumb is essential for maintaining epithelial polarity.",
+                },
+                "tool_output": json.dumps(
+                    {
+                        "status": "verified",
+                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                        "page": 4,
+                        "section": "Results",
+                        "subsection": "Gene Expression Analysis",
+                        "figure_reference": "Figure 2A",
+                    }
+                ),
+            },
+        }
+        yield {
+            "type": "evidence_summary",
+            "timestamp": "2026-03-28T12:00:00Z",
+            "evidence_records": [
+                {
+                    "entity": "crumb",
+                    "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                    "page": 4,
+                    "section": "Results",
+                    "subsection": "Gene Expression Analysis",
+                    "chunk_id": "abc123",
+                    "figure_reference": "Figure 2A",
+                }
+            ],
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="Extract verified evidence", session_id="session-chat-evidence-runner"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "TOOL_COMPLETE",
+        "evidence_summary",
+        "RUN_FINISHED",
+    ]
+    assert sum(1 for event in events if event.get("type") == "evidence_summary") == 1
+    evidence_summary_event = next(
+        (event for event in events if event.get("type") == "evidence_summary"),
+        None
+    )
+    assert evidence_summary_event is not None
+    assert evidence_summary_event["evidence_records"] == [
+        {
+            "entity": "crumb",
+            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+            "page": 4,
+            "section": "Results",
+            "subsection": "Gene Expression Analysis",
+            "chunk_id": "abc123",
+            "figure_reference": "Figure 2A",
+        }
+    ]
+
+
+def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-evidence-legacy-summary"}}
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "record_evidence"},
+            "internal": {
+                "tool_input": {
+                    "entity": "crumb",
+                    "chunk_id": "abc123",
+                    "claimed_quote": "Crumb is essential for maintaining epithelial polarity.",
+                },
+                "tool_output": json.dumps(
+                    {
+                        "status": "verified",
+                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                        "page": 4,
+                        "section": "Results",
+                        "subsection": "Gene Expression Analysis",
+                        "figure_reference": "Figure 2A",
+                    }
+                ),
+            },
+        }
+        yield {
+            "type": "evidence_summary",
+            "timestamp": "2026-03-28T12:00:00Z",
+            "details": {
+                "evidence_records": [
+                    {
+                        "entity": "crumb",
+                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                        "page": 4,
+                        "section": "Results",
+                        "subsection": "Gene Expression Analysis",
+                        "chunk_id": "abc123",
+                        "figure_reference": "Figure 2A",
+                    }
+                ],
+            },
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="legacy evidence summary", session_id="session-chat-evidence-legacy"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "TOOL_COMPLETE",
+        "evidence_summary",
+        "RUN_FINISHED",
+    ]
+
+    evidence_summary_event = next(
+        (event for event in events if event.get("type") == "evidence_summary"),
+        None
+    )
+    assert evidence_summary_event is not None
+    assert evidence_summary_event["evidence_records"] == [
+        {
+            "entity": "crumb",
+            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+            "page": 4,
+            "section": "Results",
+            "subsection": "Gene Expression Analysis",
+            "chunk_id": "abc123",
+            "figure_reference": "Figure 2A",
+        }
+    ]
+
+
 def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()

@@ -1,6 +1,7 @@
 """Contract tests for TOOL_START/TOOL_COMPLETE friendlyName emission."""
 
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -119,6 +120,81 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
 
     assert tool_events[0]["details"]["friendlyName"] == "Calling Gene Validation Agent..."
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent complete"
+    assert tool_events[1]["internal"]["tool_input"] == {"query": "test"}
+
+
+@pytest.mark.asyncio
+async def test_runner_emits_evidence_summary_for_record_evidence_tool_calls(monkeypatch):
+    fake_events = [
+        _tool_call_stream_event(
+            "record_evidence",
+            arguments='{"entity":"crumb","chunk_id":"chunk-1","claimed_quote":"Crumb is essential"}',
+        ),
+        _tool_output_stream_event(
+            json.dumps(
+                {
+                    "status": "verified",
+                    "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                    "page": 4,
+                    "section": "Results",
+                    "subsection": "Gene Expression Analysis",
+                    "figure_reference": "Figure 2A",
+                }
+            )
+        ),
+    ]
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(fake_events, final_output="done"),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[
+            SimpleNamespace(
+                name="record_evidence",
+                description="Ask the Evidence Recorder",
+            )
+        ],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-evidence",
+        )
+    ]
+
+    event_types = [event.get("type") for event in emitted_events]
+
+    assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
+    assert "SUPERVISOR_COMPLETE" in event_types
+    assert emitted_events[event_types.index("evidence_summary")]["evidence_records"] == [
+        {
+            "entity": "crumb",
+            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+            "page": 4,
+            "section": "Results",
+            "chunk_id": "chunk-1",
+            "subsection": "Gene Expression Analysis",
+            "figure_reference": "Figure 2A",
+        }
+    ]
 
 
 @pytest.mark.asyncio
