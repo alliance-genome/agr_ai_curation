@@ -34,17 +34,18 @@ def test_evidence_record_defaults_optional_fields_to_none_when_quote_present():
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected"),
     [
-        {},
-        {"section": "Results"},
-        {"page": 4, "section": "Results"},
-        {"verified_quote": "   "},
+        ({}, {}),
+        ({"section": "Results"}, {"section": "Results"}),
+        ({"page": 4, "section": "Results"}, {"page": 4, "section": "Results"}),
+        ({"verified_quote": "   "}, {}),
     ],
 )
-def test_evidence_record_requires_non_empty_verified_quote(payload):
-    with pytest.raises(ValidationError, match="verified_quote"):
-        EvidenceRecord.model_validate(payload)
+def test_evidence_record_accepts_partial_payloads_during_migration(payload, expected):
+    evidence = EvidenceRecord.model_validate(payload)
+
+    assert evidence.model_dump(exclude_none=True) == expected
 
 
 def test_evidence_record_rejects_legacy_and_unverified_fields():
@@ -82,6 +83,25 @@ def test_runtime_gene_extraction_envelope_round_trips_verified_evidence_json():
     assert round_tripped.model_dump(mode="json") == dumped
 
 
+def test_runtime_gene_extraction_envelope_accepts_partial_evidence_during_migration():
+    envelope = GeneExtractionResultEnvelope.model_validate(
+        {
+            "genes": [
+                {
+                    "mention": "crumb",
+                    "evidence": [{"section": "Results"}],
+                }
+            ],
+            "evidence_records": [{"page": 4, "section": "Results"}],
+        }
+    )
+
+    assert envelope.genes[0].evidence[0].section == "Results"
+    assert envelope.genes[0].evidence[0].verified_quote is None
+    assert envelope.evidence_records[0].page == 4
+    assert envelope.evidence_records[0].verified_quote is None
+
+
 def test_evidence_record_schema_serialization_preserves_all_fields():
     evidence_payload = _tool_evidence_payload()
 
@@ -93,7 +113,7 @@ def test_evidence_record_schema_serialization_preserves_all_fields():
 
 def test_evidence_record_normalizes_blank_optional_strings_to_none():
     evidence = EvidenceRecord(
-        verified_quote="Quoted support.",
+        verified_quote="   ",
         entity="  crumb  ",
         section="  Results  ",
         subsection="   ",
@@ -102,6 +122,7 @@ def test_evidence_record_normalizes_blank_optional_strings_to_none():
     )
 
     assert evidence.entity == "crumb"
+    assert evidence.verified_quote is None
     assert evidence.section == "Results"
     assert evidence.subsection is None
     assert evidence.chunk_id == "abc123"

@@ -9,7 +9,7 @@ This module contains foundational types used across all schema models:
 
 from typing import List, Optional
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class Destination(str, Enum):
@@ -96,12 +96,6 @@ class EvidenceRecord(BaseModel):
             return None
         normalized = str(value).strip()
         return normalized or None
-
-    @model_validator(mode="after")
-    def _require_verified_quote(self) -> "EvidenceRecord":
-        if self.verified_quote is None:
-            raise ValueError("verified_quote is required for persisted evidence records")
-        return self
 
 
 class MentionCandidate(BaseModel):
