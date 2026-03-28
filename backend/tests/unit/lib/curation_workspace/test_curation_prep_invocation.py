@@ -223,35 +223,6 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
     assert "gene domain" in preview.summary_text
 
 
-def test_build_evidence_records_accepts_legacy_snippet_during_migration():
-    extraction_result = _make_extraction_result(
-        payload_json={
-            "items": [
-                {
-                    "label": "APOE",
-                    "evidence_records": [
-                        {
-                            "snippet": "Legacy snippet still supports the disease model.",
-                            "section": "Results",
-                            "subsection": "Disease findings",
-                            "page": 4,
-                            "chunk_id": "chunk-legacy-1",
-                        }
-                    ],
-                }
-            ],
-            "run_summary": {"candidate_count": 1},
-        }
-    )
-
-    evidence_records = module._build_evidence_records([extraction_result])
-
-    assert len(evidence_records) == 1
-    assert evidence_records[0].anchor.snippet_text == "Legacy snippet still supports the disease model."
-    assert evidence_records[0].anchor.chunk_ids == ["chunk-legacy-1"]
-    assert evidence_records[0].anchor.page_number == 4
-
-
 def test_build_evidence_records_skips_records_without_verified_quote():
     extraction_result = _make_extraction_result(
         payload_json={

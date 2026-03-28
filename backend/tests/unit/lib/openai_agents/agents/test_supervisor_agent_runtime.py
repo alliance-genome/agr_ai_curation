@@ -858,36 +858,6 @@ def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
     assert evidence_records[0]["anchor"]["chunk_ids"] == ["chunk-apoe-7"]
 
 
-def test_build_prep_evidence_records_accepts_legacy_snippet_during_migration():
-    records = [
-        _PrepExtractionRecord(
-            payload_json={
-                "custom_candidates": [
-                    {
-                        "label": "APOE disease association",
-                        "evidence": [
-                            {
-                                "snippet": "Legacy snippet still supports the disease model.",
-                                "page": 7,
-                                "section": "Results",
-                                "chunk_id": "chunk-legacy-7",
-                            }
-                        ],
-                    }
-                ],
-                "run_summary": {"candidate_count": 1},
-            }
-        )
-    ]
-
-    evidence_records = supervisor_agent._build_prep_evidence_records(records)
-
-    assert len(evidence_records) == 1
-    assert evidence_records[0]["anchor"]["snippet_text"] == "Legacy snippet still supports the disease model."
-    assert evidence_records[0]["anchor"]["page_number"] == 7
-    assert evidence_records[0]["anchor"]["chunk_ids"] == ["chunk-legacy-7"]
-
-
 @pytest.mark.asyncio
 async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
     captured = {}

@@ -9,7 +9,7 @@ This module contains foundational types used across all schema models:
 
 from typing import List, Optional
 from enum import Enum
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Destination(str, Enum):
@@ -74,11 +74,7 @@ class EvidenceRecord(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     entity: Optional[str] = Field(default=None, description="Human-readable entity label the extractor/tool was evaluating")
-    verified_quote: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("verified_quote", "snippet"),
-        description="Verbatim paper text returned by evidence verification",
-    )
+    verified_quote: Optional[str] = Field(default=None, description="Verbatim paper text returned by evidence verification")
     page: Optional[int] = Field(default=None, ge=1, description="1-based page number if known")
     section: Optional[str] = Field(default=None, description="Document section containing the evidence")
     subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
