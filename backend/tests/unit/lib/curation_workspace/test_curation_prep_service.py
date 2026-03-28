@@ -17,59 +17,74 @@ def _make_scope_confirmation() -> CurationPrepScopeConfirmation:
         confirmed=True,
         adapter_keys=["reference_adapter"],
         profile_keys=["pilot"],
-        domain_keys=["gene"],
+        domain_keys=["observation"],
         notes=["User confirmed the current chat extraction scope."],
     )
 
 
+def _make_item(
+    *,
+    label: str | None = "Candidate Alpha",
+    entity_type: str | None = "observation",
+    normalized_id: str | None = "OBS:0001",
+    source_mentions: list[str] | None = None,
+    evidence: list[dict] | None = None,
+) -> dict:
+    return {
+        "label": label,
+        "entity_type": entity_type,
+        "normalized_id": normalized_id,
+        "source_mentions": source_mentions if source_mentions is not None else ["Alpha mention"],
+        "evidence": evidence
+        if evidence is not None
+        else [
+            {
+                "entity": "Candidate Alpha",
+                "verified_quote": "Candidate Alpha was supported by a verified observation.",
+                "page": 5,
+                "section": "Results",
+                "subsection": "Observation set",
+                "chunk_id": "chunk-1",
+                "figure_reference": "Table 2",
+            }
+        ],
+    }
+
+
 def _make_extraction_result(
     *,
-    annotations: list[dict] | None = None,
+    items: list[dict] | None = None,
     evidence_records: list[dict] | None = None,
     document_id: str = "document-1",
+    adapter_key: str | None = "reference_adapter",
+    profile_key: str | None = "pilot",
+    domain_key: str | None = "observation",
+    conversation_summary: str | None = (
+        "Conversation focused on evidence-backed extraction findings."
+    ),
 ) -> CurationExtractionResultRecord:
-    annotations = annotations or [
-        {
-            "gene_symbol": "tinman",
-            "gene_id": "FB:FBgn0004110",
-            "reagent_name": "tinman::GFP",
-            "anatomy_label": "embryonic heart",
-            "life_stage_label": "embryo",
-            "is_negative": False,
-        }
-    ]
-    evidence_records = evidence_records or [
-        {
-            "entity": "tinman",
-            "verified_quote": "tinman::GFP was detected in the embryonic heart.",
-            "page": 5,
-            "section": "Results",
-            "subsection": "Expression analysis",
-            "chunk_id": "chunk-1",
-            "figure_reference": "Table 2",
-        }
-    ]
+    items = items or [_make_item()]
+    evidence_records = evidence_records or list(items[0].get("evidence", []))
 
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-1",
             "document_id": document_id,
-            "adapter_key": "reference_adapter",
-            "profile_key": "pilot",
-            "domain_key": "gene",
-            "agent_key": "gene_extractor",
+            "adapter_key": adapter_key,
+            "profile_key": profile_key,
+            "domain_key": domain_key,
+            "agent_key": "observation_extractor",
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": "chat-session-1",
             "trace_id": "trace-upstream",
             "flow_run_id": None,
             "user_id": "user-upstream",
-            "candidate_count": len(annotations),
-            "conversation_summary": "Conversation focused on evidence-backed gene findings.",
+            "candidate_count": len(items),
+            "conversation_summary": conversation_summary,
             "payload_json": {
-                "organism": "D. melanogaster",
-                "annotations": annotations,
+                "items": items,
                 "evidence_records": evidence_records,
-                "run_summary": {"candidate_count": len(annotations)},
+                "run_summary": {"candidate_count": len(items)},
             },
             "created_at": "2026-03-20T21:55:00Z",
             "metadata": {},
@@ -78,7 +93,7 @@ def _make_extraction_result(
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_maps_gene_annotations_and_persists_output(monkeypatch):
+async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypatch):
     extraction_result = _make_extraction_result()
     captured: dict[str, object] = {}
 
@@ -97,32 +112,26 @@ async def test_run_curation_prep_maps_gene_annotations_and_persists_output(monke
 
     assert len(prep_output.candidates) == 1
     candidate = prep_output.candidates[0]
-    assert candidate.adapter_key == "gene"
+    assert candidate.adapter_key == "observation"
     assert candidate.profile_key == "pilot"
     assert candidate.payload == {
-        "gene_symbol": "tinman",
-        "gene_id": "FB:FBgn0004110",
-        "organism": "D. melanogaster",
-        "reagent_name": "tinman::GFP",
-        "anatomy_label": "embryonic heart",
-        "life_stage_label": "embryo",
-        "is_negative": False,
+        "label": "Candidate Alpha",
+        "entity_type": "observation",
+        "normalized_id": "OBS:0001",
+        "source_mentions": ["Alpha mention"],
     }
     assert candidate.evidence_records[0].field_paths == [
-        "gene_symbol",
-        "gene_id",
-        "organism",
-        "reagent_name",
-        "anatomy_label",
-        "life_stage_label",
-        "is_negative",
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0",
     ]
     assert candidate.evidence_records[0].anchor.snippet_text == (
-        "tinman::GFP was detected in the embryonic heart."
+        "Candidate Alpha was supported by a verified observation."
     )
     assert candidate.evidence_records[0].anchor.page_number == 5
     assert candidate.evidence_records[0].anchor.section_title == "Results"
-    assert candidate.evidence_records[0].anchor.subsection_title == "Expression analysis"
+    assert candidate.evidence_records[0].anchor.subsection_title == "Observation set"
     assert candidate.evidence_records[0].anchor.figure_reference is None
     assert candidate.evidence_records[0].anchor.table_reference == "Table 2"
     assert candidate.evidence_records[0].anchor.chunk_ids == ["chunk-1"]
@@ -132,9 +141,9 @@ async def test_run_curation_prep_maps_gene_annotations_and_persists_output(monke
     assert persisted_request.document_id == "document-1"
     assert persisted_request.agent_key == "curation_prep"
     assert persisted_request.source_kind is CurationExtractionSourceKind.CHAT
-    assert persisted_request.adapter_key == "gene"
+    assert persisted_request.adapter_key == "observation"
     assert persisted_request.profile_key == "pilot"
-    assert persisted_request.domain_key == "gene"
+    assert persisted_request.domain_key == "observation"
     assert persisted_request.origin_session_id == "chat-session-1"
     assert persisted_request.trace_id == "trace-upstream"
     assert persisted_request.user_id == "user-upstream"
@@ -147,29 +156,30 @@ async def test_run_curation_prep_maps_gene_annotations_and_persists_output(monke
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_gates_candidates_without_verified_evidence(monkeypatch):
+async def test_run_curation_prep_gates_candidates_without_item_level_evidence(monkeypatch):
     extraction_result = _make_extraction_result(
-        annotations=[
-            {
-                "gene_symbol": "tinman",
-                "anatomy_label": "embryonic heart",
-                "is_negative": False,
-            },
-            {
-                "gene_symbol": "hand",
-                "anatomy_label": "dorsal vessel",
-                "is_negative": False,
-            },
-        ],
-        evidence_records=[
-            {
-                "entity": "tinman",
-                "verified_quote": "tinman was detected in the embryonic heart.",
-                "page": 5,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
-        ],
+        items=[
+            _make_item(
+                label="Candidate Alpha",
+                normalized_id="OBS:0001",
+                source_mentions=["Alpha mention"],
+                evidence=[
+                    {
+                        "entity": "Candidate Alpha",
+                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
+                        "page": 5,
+                        "section": "Results",
+                        "chunk_id": "chunk-1",
+                    }
+                ],
+            ),
+            _make_item(
+                label="Candidate Beta",
+                normalized_id="OBS:0002",
+                source_mentions=["Beta mention"],
+                evidence=[],
+            ),
+        ]
     )
 
     monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
@@ -179,88 +189,29 @@ async def test_run_curation_prep_gates_candidates_without_verified_evidence(monk
         scope_confirmation=_make_scope_confirmation(),
     )
 
-    assert [candidate.payload["gene_symbol"] for candidate in prep_output.candidates] == ["tinman"]
+    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
+        "Candidate Alpha"
+    ]
     assert prep_output.run_metadata.warnings == ["Skipped 1 candidate without verified evidence."]
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_rejects_ambiguous_verified_evidence_without_entity(monkeypatch):
+async def test_run_curation_prep_does_not_fall_back_to_top_level_evidence_records(monkeypatch):
     extraction_result = _make_extraction_result(
-        annotations=[
-            {
-                "gene_symbol": "tinman",
-                "anatomy_label": "embryonic heart",
-                "is_negative": False,
-            },
-            {
-                "gene_symbol": "hand",
-                "anatomy_label": "dorsal vessel",
-                "is_negative": False,
-            },
+        items=[
+            _make_item(
+                evidence=[],
+            )
         ],
         evidence_records=[
             {
-                "verified_quote": "tinman was detected in the embryonic heart.",
+                "entity": "Candidate Alpha",
+                "verified_quote": "Candidate Alpha was supported by a verified observation.",
                 "page": 5,
                 "section": "Results",
                 "chunk_id": "chunk-1",
             }
         ],
-    )
-
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
-
-    with pytest.raises(
-        ValueError,
-        match="No evidence-verified candidates were available",
-    ):
-        await module.run_curation_prep(
-            [extraction_result],
-            scope_confirmation=_make_scope_confirmation(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_allows_single_candidate_verified_evidence_without_entity(monkeypatch):
-    extraction_result = _make_extraction_result(
-        evidence_records=[
-            {
-                "verified_quote": "tinman was detected in the embryonic heart.",
-                "page": 5,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
-        ]
-    )
-
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
-
-    prep_output = await module.run_curation_prep(
-        [extraction_result],
-        scope_confirmation=_make_scope_confirmation(),
-    )
-
-    assert [candidate.payload["gene_symbol"] for candidate in prep_output.candidates] == ["tinman"]
-    assert (
-        prep_output.candidates[0].evidence_records[0].anchor.snippet_text
-        == "tinman was detected in the embryonic heart."
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_rejects_single_candidate_verified_evidence_with_mismatched_entity(
-    monkeypatch,
-):
-    extraction_result = _make_extraction_result(
-        evidence_records=[
-            {
-                "entity": "hand",
-                "verified_quote": "hand was detected in the dorsal vessel.",
-                "page": 5,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
-        ]
     )
 
     persist_called = False
@@ -286,13 +237,17 @@ async def test_run_curation_prep_rejects_single_candidate_verified_evidence_with
 @pytest.mark.asyncio
 async def test_run_curation_prep_rejects_when_all_candidates_fail_evidence_gate(monkeypatch):
     extraction_result = _make_extraction_result(
-        evidence_records=[
-            {
-                "entity": "tinman",
-                "page": 5,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
+        items=[
+            _make_item(
+                evidence=[
+                    {
+                        "entity": "Candidate Alpha",
+                        "page": 5,
+                        "section": "Results",
+                        "chunk_id": "chunk-1",
+                    }
+                ],
+            )
         ]
     )
 
@@ -346,99 +301,40 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
     assert context.flow_run_id == "flow-1"
 
 
-def test_runtime_gene_candidate_blueprints_skip_empty_compacted_payload_without_error():
+def test_candidate_blueprints_skip_empty_compacted_payload_without_error():
     extraction_result = _make_extraction_result(
-        annotations=[
-            {
-                "gene_symbol": None,
-                "gene_id": None,
-                "reagent_type": None,
-                "reagent_name": None,
-                "reagent_genotype": None,
-                "reagent_strain": None,
-                "anatomy_label": None,
-                "life_stage_label": None,
-                "go_cc_label": None,
-                "temporal_qualifier": None,
-                "sex_specificity": None,
-            }
-        ]
+        items=[
+            _make_item(
+                label=None,
+                entity_type=None,
+                normalized_id=None,
+                source_mentions=[],
+                evidence=[],
+            )
+        ],
+        conversation_summary=None,
     )
 
-    blueprints = module._runtime_gene_candidate_blueprints(  # noqa: SLF001
+    blueprints = module._candidate_blueprints(  # noqa: SLF001
         extraction_result,
         extraction_result.payload_json,
+        candidate_adapter_key="observation",
     )
 
     assert blueprints == []
 
 
-def test_core_gene_candidate_blueprints_skip_empty_compacted_payload_without_error():
-    extraction_result = CurationExtractionResultRecord.model_validate(
-        {
-            "extraction_result_id": "extract-core-empty",
-            "document_id": "document-1",
-            "adapter_key": "reference_adapter",
-            "profile_key": "pilot",
-            "domain_key": "gene",
-            "agent_key": "gene_extractor",
-            "source_kind": CurationExtractionSourceKind.CHAT,
-            "origin_session_id": "chat-session-1",
-            "trace_id": "trace-upstream",
-            "flow_run_id": None,
-            "user_id": "user-upstream",
-            "candidate_count": 1,
-            "conversation_summary": None,
-            "payload_json": {
-                "gene_symbol": None,
-                "gene_id": None,
-                "organism": None,
-                "reagent": {},
-            },
-            "created_at": "2026-03-20T21:55:00Z",
-            "metadata": {},
-        }
-    )
+def test_candidate_conversation_summary_falls_back_to_generic_item_context():
+    extraction_result = _make_extraction_result(conversation_summary=None)
 
-    blueprints = module._core_gene_candidate_blueprints(  # noqa: SLF001
+    blueprints = module._candidate_blueprints(  # noqa: SLF001
         extraction_result,
         extraction_result.payload_json,
+        candidate_adapter_key="observation",
     )
 
-    assert blueprints == []
-
-
-def test_core_gene_candidate_blueprints_skip_empty_expression_pattern_without_error():
-    extraction_result = CurationExtractionResultRecord.model_validate(
-        {
-            "extraction_result_id": "extract-core-pattern-empty",
-            "document_id": "document-1",
-            "adapter_key": "reference_adapter",
-            "profile_key": "pilot",
-            "domain_key": "gene",
-            "agent_key": "gene_extractor",
-            "source_kind": CurationExtractionSourceKind.CHAT,
-            "origin_session_id": "chat-session-1",
-            "trace_id": "trace-upstream",
-            "flow_run_id": None,
-            "user_id": "user-upstream",
-            "candidate_count": 1,
-            "conversation_summary": None,
-            "payload_json": {
-                "gene_symbol": None,
-                "gene_id": None,
-                "organism": None,
-                "reagent": {},
-                "expression_patterns": [{}],
-            },
-            "created_at": "2026-03-20T21:55:00Z",
-            "metadata": {},
-        }
+    assert len(blueprints) == 1
+    assert (
+        blueprints[0].conversation_context_summary
+        == "Prepared deterministic observation candidate for Candidate Alpha."
     )
-
-    blueprints = module._core_gene_candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-    )
-
-    assert blueprints == []

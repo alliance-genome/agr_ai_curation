@@ -14,8 +14,8 @@ def _make_extraction_result(
     candidate_count: int = 2,
     adapter_key: str | None = "reference_adapter",
     profile_key: str | None = "pilot",
-    domain_key: str | None = "gene",
-    agent_key: str = "gene_extractor",
+    domain_key: str | None = "observation",
+    agent_key: str = "observation_extractor",
     payload_json: dict | None = None,
     metadata: dict | None = None,
 ) -> CurationExtractionResultRecord:
@@ -33,18 +33,35 @@ def _make_extraction_result(
             "flow_run_id": None,
             "user_id": "user-1",
             "candidate_count": candidate_count,
-            "conversation_summary": "Conversation focused on evidence-backed gene findings.",
+            "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
             "payload_json": payload_json
             or {
-                "annotations": [{"gene_symbol": "tinman"}],
+                "items": [
+                    {
+                        "label": "Candidate Alpha",
+                        "entity_type": "observation",
+                        "normalized_id": "OBS:0001",
+                        "source_mentions": ["Alpha mention"],
+                        "evidence": [
+                            {
+                                "entity": "Candidate Alpha",
+                                "verified_quote": "Candidate Alpha was supported by a verified observation.",
+                                "section": "Results",
+                                "subsection": "Observation set",
+                                "page": 4,
+                                "chunk_id": "chunk-alpha-1",
+                            }
+                        ],
+                    }
+                ],
                 "evidence_records": [
                     {
-                        "entity": "tinman",
-                        "verified_quote": "tinman was detected in the embryonic heart.",
+                        "entity": "Candidate Alpha",
+                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
                         "section": "Results",
-                        "subsection": "Expression analysis",
+                        "subsection": "Observation set",
                         "page": 4,
-                        "chunk_id": "chunk-tinman-1",
+                        "chunk_id": "chunk-alpha-1",
                     }
                 ],
                 "run_summary": {"candidate_count": candidate_count},
@@ -60,19 +77,25 @@ def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
         {
             "candidates": [
                 {
-                    "adapter_key": "gene",
+                    "adapter_key": "observation",
                     "profile_key": "pilot",
                     "payload": {
-                        "gene_symbol": f"GENE{index + 1}",
-                        "anatomy_label": "embryonic heart",
-                        "is_negative": False,
+                        "label": f"Candidate {index + 1}",
+                        "entity_type": "observation",
+                        "normalized_id": f"OBS:000{index + 1}",
+                        "source_mentions": [f"Mention {index + 1}"],
                     },
                     "evidence_records": [
                         {
-                            "evidence_record_id": f"extract-{index + 1}:evidence:1",
+                            "evidence_record_id": f"extract-{index + 1}:candidate:1:evidence:1",
                             "source": "extracted",
                             "extraction_result_id": f"extract-{index + 1}",
-                            "field_paths": ["gene_symbol", "anatomy_label", "is_negative"],
+                            "field_paths": [
+                                "label",
+                                "entity_type",
+                                "normalized_id",
+                                "source_mentions.0",
+                            ],
                             "anchor": {
                                 "anchor_kind": "snippet",
                                 "locator_quality": "exact_quote",
@@ -86,7 +109,7 @@ def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
                                 "page_number": 4,
                                 "page_label": None,
                                 "section_title": "Results",
-                                "subsection_title": "Expression analysis",
+                                "subsection_title": "Observation set",
                                 "figure_reference": None,
                                 "table_reference": None,
                                 "chunk_ids": ["chunk-1"],
@@ -94,7 +117,9 @@ def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
                             "notes": [],
                         }
                     ],
-                    "conversation_context_summary": "Conversation focused on evidence-backed gene findings.",
+                    "conversation_context_summary": (
+                        "Conversation focused on evidence-backed extraction findings."
+                    ),
                 }
                 for index in range(candidate_count)
             ],
@@ -130,9 +155,11 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.extraction_result_count == 1
     assert preview.conversation_message_count == 0
     assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.domain_keys == ["gene"]
+    assert preview.domain_keys == ["observation"]
     assert preview.blocking_reasons == []
     assert "You discussed 2 candidate annotations" in preview.summary_text
+    assert "reference adapter" in preview.summary_text
+    assert "observation domain" in preview.summary_text
 
 
 def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch):
@@ -165,8 +192,15 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
                 profile_key=None,
                 domain_key=None,
                 payload_json={
-                    "genes": [{"mention": "tinman"}],
-                    "items": [{"label": "tinman"}],
+                    "items": [
+                        {
+                            "label": "Candidate Alpha",
+                            "entity_type": "observation",
+                            "normalized_id": "OBS:0001",
+                            "source_mentions": ["Alpha mention"],
+                            "evidence": [],
+                        }
+                    ],
                     "run_summary": {"candidate_count": 4},
                 },
             )
@@ -181,10 +215,10 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
 
     assert preview.ready is True
     assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.domain_keys == ["gene"]
+    assert preview.domain_keys == ["observation"]
     assert preview.blocking_reasons == []
-    assert "reference_adapter" not in preview.summary_text
-    assert "gene domain" in preview.summary_text
+    assert "reference adapter" in preview.summary_text
+    assert "observation domain" in preview.summary_text
 
 
 @pytest.mark.asyncio
@@ -222,11 +256,11 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
     assert result.candidate_count == 2
     assert result.adapter_keys == ["reference_adapter"]
     assert result.profile_keys == ["pilot"]
-    assert result.domain_keys == ["gene"]
+    assert result.domain_keys == ["observation"]
     assert len(captured["extraction_results"]) == 1
     assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
     assert captured["scope_confirmation"].profile_keys == ["pilot"]
-    assert captured["scope_confirmation"].domain_keys == ["gene"]
+    assert captured["scope_confirmation"].domain_keys == ["observation"]
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
 
@@ -244,8 +278,15 @@ async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeyp
                 profile_key=None,
                 domain_key=None,
                 payload_json={
-                    "genes": [{"mention": "tinman"}],
-                    "items": [{"label": "tinman"}],
+                    "items": [
+                        {
+                            "label": "Candidate Alpha",
+                            "entity_type": "observation",
+                            "normalized_id": "OBS:0001",
+                            "source_mentions": ["Alpha mention"],
+                            "evidence": [],
+                        }
+                    ],
                     "run_summary": {"candidate_count": 4},
                 },
             )
@@ -272,4 +313,4 @@ async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeyp
     )
 
     assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
-    assert captured["scope_confirmation"].domain_keys == ["gene"]
+    assert captured["scope_confirmation"].domain_keys == ["observation"]

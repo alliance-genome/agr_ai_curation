@@ -276,39 +276,51 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
 
     extraction_result = CurationExtractionResultRecord.model_validate(
         {
-            "extraction_result_id": "extract-gene-1",
+            "extraction_result_id": "extract-observation-1",
             "document_id": submission_e2e_context["document_id"],
             "adapter_key": "reference_adapter",
             "profile_key": "pilot",
-            "domain_key": "gene",
-            "agent_key": "gene_extractor",
+            "domain_key": "observation",
+            "agent_key": "observation_extractor",
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": "chat-session-1",
-            "trace_id": "trace-gene-1",
+            "trace_id": "trace-observation-1",
             "flow_run_id": None,
             "user_id": submission_e2e_context["current_user_auth_sub"],
             "candidate_count": 1,
-            "conversation_summary": "Conversation focused on evidence-backed gene findings.",
+            "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
             "payload_json": {
-                "organism": "D. melanogaster",
-                "annotations": [
+                "items": [
                     {
-                        "gene_symbol": "tinman",
-                        "gene_id": "FB:FBgn0004110",
-                        "reagent_name": "tinman::GFP",
-                        "anatomy_label": "embryonic heart",
-                        "life_stage_label": "embryo",
-                        "is_negative": False,
+                        "label": "Candidate Alpha",
+                        "entity_type": "observation",
+                        "normalized_id": "OBS:0001",
+                        "source_mentions": ["Alpha mention"],
+                        "evidence": [
+                            {
+                                "entity": "Candidate Alpha",
+                                "verified_quote": (
+                                    "Candidate Alpha was supported by a verified observation."
+                                ),
+                                "page": 6,
+                                "section": "Results",
+                                "subsection": "Observation set",
+                                "chunk_id": "chunk-alpha-1",
+                                "figure_reference": "Figure 3B",
+                            }
+                        ],
                     }
                 ],
                 "evidence_records": [
                     {
-                        "entity": "tinman",
-                        "verified_quote": "tinman::GFP was detected in the embryonic heart.",
+                        "entity": "Candidate Alpha",
+                        "verified_quote": (
+                            "Candidate Alpha was supported by a verified observation."
+                        ),
                         "page": 6,
                         "section": "Results",
-                        "subsection": "Expression analysis",
-                        "chunk_id": "chunk-tinman-1",
+                        "subsection": "Observation set",
+                        "chunk_id": "chunk-alpha-1",
                         "figure_reference": "Figure 3B",
                     }
                 ],
@@ -325,7 +337,7 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
             confirmed=True,
             adapter_keys=["reference_adapter"],
             profile_keys=["pilot"],
-            domain_keys=["gene"],
+            domain_keys=["observation"],
             notes=["Confirmed from chat session bootstrap test."],
         ),
         db=test_db,
@@ -346,31 +358,28 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
     )
 
     assert bootstrap_response.created is True
-    assert bootstrap_response.session.adapter.adapter_key == "gene"
+    assert bootstrap_response.session.adapter.adapter_key == "observation"
     assert bootstrap_response.session.progress.total_candidates == 1
 
     workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
     candidate = workspace.workspace.candidates[0]
-    assert candidate.adapter_key == "gene"
-    gene_symbol_field = next(
-        field for field in candidate.draft.fields if field.field_key == "gene_symbol"
+    assert candidate.adapter_key == "observation"
+    label_field = next(
+        field for field in candidate.draft.fields if field.field_key == "label"
     )
-    assert gene_symbol_field.value == "tinman"
+    assert label_field.value == "Candidate Alpha"
     assert candidate.evidence_anchors[0].field_keys == [
-        "gene_symbol",
-        "gene_id",
-        "organism",
-        "reagent_name",
-        "anatomy_label",
-        "life_stage_label",
-        "is_negative",
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0",
     ]
     assert candidate.evidence_anchors[0].anchor.snippet_text == (
-        "tinman::GFP was detected in the embryonic heart."
+        "Candidate Alpha was supported by a verified observation."
     )
     assert candidate.evidence_anchors[0].anchor.page_number == 6
     assert candidate.evidence_anchors[0].anchor.section_title == "Results"
-    assert candidate.evidence_anchors[0].anchor.subsection_title == "Expression analysis"
+    assert candidate.evidence_anchors[0].anchor.subsection_title == "Observation set"
     assert candidate.evidence_anchors[0].anchor.figure_reference == "Figure 3B"
     assert candidate.evidence_anchors[0].anchor.table_reference is None
 

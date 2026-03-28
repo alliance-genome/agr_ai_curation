@@ -31,8 +31,6 @@ from src.schemas.curation_workspace import (
 
 
 _DETERMINISTIC_PREP_MODEL_NAME = "deterministic_programmatic_mapper_v1"
-_GENE_ADAPTER_KEY = "gene"
-_GENE_DOMAIN_KEYS = frozenset({"gene", "gene_expression"})
 _FIGURE_REFERENCE_PATTERN = re.compile(r"\bfig(?:ure)?\b", re.IGNORECASE)
 _TABLE_REFERENCE_PATTERN = re.compile(r"\btable\b", re.IGNORECASE)
 
@@ -52,17 +50,17 @@ class CurationPrepPersistenceContext:
 
 @dataclass(frozen=True)
 class _CandidateBlueprint:
+    adapter_key: str
     payload: dict[str, Any]
-    match_terms: tuple[str, ...]
+    evidence_records: list["_CandidateEvidence"]
     conversation_context_summary: str
     profile_key: str | None
 
 
 @dataclass(frozen=True)
-class _SourceEvidenceRecord:
+class _CandidateEvidence:
     evidence_record_id: str
     extraction_result_id: str
-    entity: str | None
     anchor: EvidenceAnchor
 
 
@@ -203,53 +201,48 @@ def _map_extraction_result(
             skipped_unmappable=max(int(extraction_result.candidate_count), 1),
         )
 
-    if not _is_gene_payload(extraction_result, payload):
+    candidate_adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    if candidate_adapter_key is None:
         return _RecordMappingOutcome(
             warnings=[
                 (
                     "Skipped extraction result "
-                    f"{extraction_result.extraction_result_id} because deterministic prep only "
-                    "supports the current gene pilot payload shape."
+                    f"{extraction_result.extraction_result_id} because it did not include a "
+                    "target adapter or domain key for prep mapping."
                 )
             ],
             skipped_unmappable=max(int(extraction_result.candidate_count), 1),
         )
 
-    blueprints = _gene_candidate_blueprints(extraction_result, payload)
+    blueprints = _candidate_blueprints(
+        extraction_result,
+        payload,
+        candidate_adapter_key=candidate_adapter_key,
+    )
     if not blueprints:
         return _RecordMappingOutcome(
             warnings=[
                 (
                     "Skipped extraction result "
                     f"{extraction_result.extraction_result_id} because it did not contain any "
-                    "mappable gene candidates."
+                    "mappable extraction items."
                 )
             ],
             skipped_unmappable=max(int(extraction_result.candidate_count), 1),
         )
 
-    evidence_records = _source_evidence_records(extraction_result, payload)
     candidates: list[CurationPrepCandidate] = []
     skipped_without_evidence = 0
 
     for blueprint in blueprints:
-        field_paths = _payload_field_paths(blueprint.payload)
-        matched_evidence = [
-            source_record
-            for source_record in evidence_records
-            if _evidence_matches_candidate(
-                source_record,
-                blueprint,
-                default_to_single_candidate=len(blueprints) == 1,
-            )
-        ]
-        if not matched_evidence:
+        if not blueprint.evidence_records:
             skipped_without_evidence += 1
             continue
 
+        field_paths = _payload_field_paths(blueprint.payload)
         candidates.append(
             CurationPrepCandidate(
-                adapter_key=_GENE_ADAPTER_KEY,
+                adapter_key=blueprint.adapter_key,
                 profile_key=blueprint.profile_key,
                 payload=blueprint.payload,
                 evidence_records=[
@@ -260,7 +253,7 @@ def _map_extraction_result(
                         field_paths=field_paths,
                         anchor=source_record.anchor,
                     )
-                    for source_record in matched_evidence
+                    for source_record in blueprint.evidence_records
                 ],
                 conversation_context_summary=blueprint.conversation_context_summary,
             )
@@ -272,157 +265,84 @@ def _map_extraction_result(
     )
 
 
-def _is_gene_payload(
+def _resolve_candidate_adapter_key(
     extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-) -> bool:
+) -> str | None:
+    # Extraction persistence may use a transport adapter key while the review
+    # session should target the extracted domain-specific adapter/runtime.
     domain_key = _normalized_optional_string(extraction_result.domain_key)
-    agent_key = _normalized_optional_string(extraction_result.agent_key)
-    if domain_key in _GENE_DOMAIN_KEYS:
-        return True
-    if agent_key and agent_key.startswith("gene"):
-        return True
-    return any(
-        key in payload
-        for key in (
-            "annotations",
-            "expression_patterns",
-            "gene_symbol",
-            "gene_id",
-            "genes_found",
-        )
-    )
+    if domain_key is not None:
+        return domain_key
+    return _normalized_optional_string(extraction_result.adapter_key)
 
 
-def _gene_candidate_blueprints(
+def _candidate_blueprints(
     extraction_result: CurationExtractionResultRecord,
     payload: Mapping[str, Any],
+    *,
+    candidate_adapter_key: str,
 ) -> list[_CandidateBlueprint]:
-    if isinstance(payload.get("annotations"), list):
-        return _runtime_gene_candidate_blueprints(extraction_result, payload)
-    return _core_gene_candidate_blueprints(extraction_result, payload)
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        return []
 
-
-def _runtime_gene_candidate_blueprints(
-    extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-) -> list[_CandidateBlueprint]:
-    organism = _normalized_optional_string(payload.get("organism"))
     blueprints: list[_CandidateBlueprint] = []
+    profile_key = _normalized_optional_string(extraction_result.profile_key)
 
-    for raw_annotation in payload.get("annotations", []):
-        if not isinstance(raw_annotation, Mapping):
+    for candidate_index, raw_item in enumerate(raw_items, start=1):
+        if not isinstance(raw_item, Mapping):
             continue
-        candidate_payload = _compact_payload(
-            {
-                "gene_symbol": raw_annotation.get("gene_symbol"),
-                "gene_id": raw_annotation.get("gene_id"),
-                "organism": organism,
-                "reagent_type": raw_annotation.get("reagent_type"),
-                "reagent_name": raw_annotation.get("reagent_name"),
-                "reagent_genotype": raw_annotation.get("reagent_genotype"),
-                "reagent_strain": raw_annotation.get("reagent_strain"),
-                "anatomy_label": raw_annotation.get("anatomy_label"),
-                "life_stage_label": raw_annotation.get("life_stage_label"),
-                "go_cc_label": raw_annotation.get("go_cc_label"),
-                "temporal_qualifier": raw_annotation.get("temporal_qualifier"),
-                "sex_specificity": raw_annotation.get("sex_specificity"),
-                "is_negative": bool(raw_annotation.get("is_negative", False)),
-            }
-        ) or {}
-        if not _is_meaningful_gene_candidate_payload(candidate_payload):
+        candidate_payload = _candidate_payload_from_item(raw_item)
+        if not candidate_payload:
             continue
 
         blueprints.append(
             _CandidateBlueprint(
+                adapter_key=candidate_adapter_key,
                 payload=candidate_payload,
-                match_terms=_candidate_match_terms(candidate_payload),
+                evidence_records=_candidate_evidence_records(
+                    extraction_result,
+                    raw_item,
+                    candidate_index=candidate_index,
+                ),
                 conversation_context_summary=_candidate_conversation_summary(
                     extraction_result,
                     candidate_payload,
                 ),
-                profile_key=_normalized_optional_string(extraction_result.profile_key),
+                profile_key=profile_key,
             )
         )
 
     return blueprints
 
 
-def _core_gene_candidate_blueprints(
+def _candidate_payload_from_item(
+    raw_item: Mapping[str, Any],
+) -> dict[str, Any]:
+    candidate_payload = _compact_payload(
+        {
+            key: value
+            for key, value in raw_item.items()
+            if key != "evidence"
+        }
+    )
+    if not isinstance(candidate_payload, dict):
+        return {}
+    return candidate_payload
+
+
+def _candidate_evidence_records(
     extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-) -> list[_CandidateBlueprint]:
-    reagent = payload.get("reagent")
-    reagent_payload = reagent if isinstance(reagent, Mapping) else {}
-    common_fields = {
-        "gene_symbol": payload.get("gene_symbol"),
-        "gene_id": payload.get("gene_id"),
-        "organism": payload.get("organism"),
-        "reagent_type": reagent_payload.get("reagent_type"),
-        "reagent_name": reagent_payload.get("reagent_name"),
-        "reagent_genotype": reagent_payload.get("genotype") or reagent_payload.get("reagent_genotype"),
-        "reagent_strain": reagent_payload.get("strain") or reagent_payload.get("reagent_strain"),
-    }
-
-    expression_patterns = payload.get("expression_patterns")
-    blueprints: list[_CandidateBlueprint] = []
-    if isinstance(expression_patterns, list) and expression_patterns:
-        for raw_pattern in expression_patterns:
-            if not isinstance(raw_pattern, Mapping):
-                continue
-            candidate_payload = _compact_payload(
-                {
-                    **common_fields,
-                    "anatomy_label": raw_pattern.get("anatomy_label"),
-                    "life_stage_label": raw_pattern.get("life_stage_label"),
-                    "go_cc_label": raw_pattern.get("go_cc_label"),
-                    "temporal_qualifier": raw_pattern.get("temporal_qualifier"),
-                    "sex_specificity": raw_pattern.get("sex_specificity"),
-                    "is_negative": bool(raw_pattern.get("is_negative", False)),
-                }
-            ) or {}
-            if not _is_meaningful_gene_candidate_payload(candidate_payload):
-                continue
-            blueprints.append(
-                _CandidateBlueprint(
-                    payload=candidate_payload,
-                    match_terms=_candidate_match_terms(candidate_payload),
-                    conversation_context_summary=_candidate_conversation_summary(
-                        extraction_result,
-                        candidate_payload,
-                    ),
-                    profile_key=_normalized_optional_string(extraction_result.profile_key),
-                )
-            )
-        return blueprints
-
-    candidate_payload = _compact_payload(common_fields) or {}
-    if not _is_meaningful_gene_candidate_payload(candidate_payload):
-        return []
-
-    return [
-        _CandidateBlueprint(
-            payload=candidate_payload,
-            match_terms=_candidate_match_terms(candidate_payload),
-            conversation_context_summary=_candidate_conversation_summary(
-                extraction_result,
-                candidate_payload,
-            ),
-            profile_key=_normalized_optional_string(extraction_result.profile_key),
-        )
-    ]
-
-
-def _source_evidence_records(
-    extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-) -> list[_SourceEvidenceRecord]:
-    raw_records = payload.get("evidence_records")
+    raw_item: Mapping[str, Any],
+    *,
+    candidate_index: int,
+) -> list[_CandidateEvidence]:
+    raw_records = raw_item.get("evidence")
     if not isinstance(raw_records, list):
         return []
 
-    source_records: list[_SourceEvidenceRecord] = []
-    for index, raw_record in enumerate(raw_records, start=1):
+    source_records: list[_CandidateEvidence] = []
+    for evidence_index, raw_record in enumerate(raw_records, start=1):
         if not isinstance(raw_record, Mapping):
             continue
         anchor = _build_source_evidence_anchor(raw_record)
@@ -430,10 +350,12 @@ def _source_evidence_records(
             continue
 
         source_records.append(
-            _SourceEvidenceRecord(
-                evidence_record_id=f"{extraction_result.extraction_result_id}:evidence:{index}",
+            _CandidateEvidence(
+                evidence_record_id=(
+                    f"{extraction_result.extraction_result_id}:"
+                    f"candidate:{candidate_index}:evidence:{evidence_index}"
+                ),
                 extraction_result_id=extraction_result.extraction_result_id,
-                entity=_normalized_optional_string(raw_record.get("entity")),
                 anchor=anchor,
             )
         )
@@ -484,31 +406,6 @@ def _split_figure_reference(value: str | None) -> tuple[str | None, str | None]:
     return value, None
 
 
-def _evidence_matches_candidate(
-    evidence_record: _SourceEvidenceRecord,
-    blueprint: _CandidateBlueprint,
-    *,
-    default_to_single_candidate: bool,
-) -> bool:
-    entity = _normalized_optional_string(evidence_record.entity)
-    if entity is None:
-        return default_to_single_candidate
-    if entity in blueprint.match_terms:
-        return True
-    return False
-
-
-def _candidate_match_terms(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    values = _unique_non_empty(
-        (
-            _normalized_optional_string(payload.get("gene_symbol")),
-            _normalized_optional_string(payload.get("gene_id")),
-            _normalized_optional_string(payload.get("reagent_name")),
-        )
-    )
-    return tuple(values)
-
-
 def _candidate_conversation_summary(
     extraction_result: CurationExtractionResultRecord,
     payload: Mapping[str, Any],
@@ -517,25 +414,13 @@ def _candidate_conversation_summary(
     if summary is not None:
         return summary
 
-    gene_symbol = _normalized_optional_string(payload.get("gene_symbol"))
-    anatomy_label = _normalized_optional_string(payload.get("anatomy_label"))
-    go_cc_label = _normalized_optional_string(payload.get("go_cc_label"))
-    location = anatomy_label or go_cc_label
-    if gene_symbol and location:
-        return f"Prepared deterministic gene candidate for {gene_symbol} in {location}."
-    if gene_symbol:
-        return f"Prepared deterministic gene candidate for {gene_symbol}."
-    return "Prepared deterministic gene candidate from structured extraction output."
-
-
-def _is_meaningful_gene_candidate_payload(payload: Mapping[str, Any]) -> bool:
-    return bool(
-        _normalized_optional_string(payload.get("gene_symbol"))
-        or _normalized_optional_string(payload.get("gene_id"))
-        or _normalized_optional_string(payload.get("anatomy_label"))
-        or _normalized_optional_string(payload.get("go_cc_label"))
-        or _normalized_optional_string(payload.get("reagent_name"))
-    )
+    label = _normalized_optional_string(payload.get("label"))
+    entity_type = _normalized_optional_string(payload.get("entity_type"))
+    if label and entity_type:
+        return f"Prepared deterministic {entity_type} candidate for {label}."
+    if label:
+        return f"Prepared deterministic candidate for {label}."
+    return "Prepared deterministic candidate from structured extraction output."
 
 
 def _compact_payload(value: Any) -> Any:
