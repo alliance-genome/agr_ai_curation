@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agr_ai_curation_runtime.record_evidence import (
+    create_record_evidence_tool as _create_record_evidence_tool,
+)
+
 from .weaviate_search import (
     create_read_section_tool as _create_read_section_tool,
     create_read_subsection_tool as _create_read_subsection_tool,
@@ -42,8 +46,17 @@ def create_read_subsection_tool(context: dict[str, Any]):
     )
 
 
+def create_record_evidence_tool(context: dict[str, Any]):
+    """Create the package-exported record_evidence tool."""
+    return _create_record_evidence_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
 __all__ = [
     "create_read_section_tool",
     "create_read_subsection_tool",
+    "create_record_evidence_tool",
     "create_search_document_tool",
 ]

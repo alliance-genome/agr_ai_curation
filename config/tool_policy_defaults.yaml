@@ -35,6 +35,15 @@ tool_policies:
     allow_execute: true
     config: {}
 
+  record_evidence:
+    display_name: Record Evidence
+    description: Verify a claimed quote against a specific chunk before evidence is persisted.
+    category: Document
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
   curation_db_sql:
     display_name: Curation DB SQL
     description: Direct SQL access to curation database (advanced/developer tool).

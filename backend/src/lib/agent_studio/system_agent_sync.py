@@ -18,6 +18,10 @@ from src.models.sql.prompts import PromptTemplate
 logger = logging.getLogger(__name__)
 
 
+_AUTO_ATTACHED_EXTRACTION_TOOL_IDS = ("record_evidence",)
+_DOCUMENT_EXTRACTION_TOOL_IDS = frozenset({"search_document", "read_section", "read_subsection"})
+
+
 def canonical_system_agent_key(agent: AgentDefinition) -> str:
     """Return the unified-agents key for a shipped/package-owned system agent."""
     if agent.folder_name == "pdf":
@@ -63,6 +67,12 @@ def _build_system_agent_values(
     *,
     instructions: str,
 ) -> dict[str, Any]:
+    tool_ids = list(agent.tools)
+    if _is_document_extraction_agent(agent):
+        for tool_id in _AUTO_ATTACHED_EXTRACTION_TOOL_IDS:
+            if tool_id not in tool_ids:
+                tool_ids.append(tool_id)
+
     agent_key = canonical_system_agent_key(agent)
     return {
         "agent_key": agent_key,
@@ -73,7 +83,7 @@ def _build_system_agent_values(
         "model_id": agent.model_config.model,
         "model_temperature": float(agent.model_config.temperature),
         "model_reasoning": agent.model_config.reasoning,
-        "tool_ids": list(agent.tools),
+        "tool_ids": tool_ids,
         "output_schema_key": agent.output_schema,
         "group_rules_enabled": bool(agent.group_rules_enabled),
         "group_rules_component": agent_key if agent.group_rules_enabled else None,
@@ -91,6 +101,18 @@ def _build_system_agent_values(
         "show_in_palette": bool(agent.frontend.show_in_palette),
         "is_active": True,
     }
+
+
+def _is_document_extraction_agent(agent: AgentDefinition) -> bool:
+    """Return whether the agent performs structured document extraction."""
+
+    if str(agent.category or "").strip().lower() != "extraction":
+        return False
+    if not bool(agent.requires_document):
+        return False
+    if not str(agent.output_schema or "").strip():
+        return False
+    return bool(set(agent.tools) & _DOCUMENT_EXTRACTION_TOOL_IDS)
 
 
 def sync_system_agents(

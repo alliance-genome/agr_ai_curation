@@ -29,6 +29,7 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "search_document": "Search Document",
     "read_section": "Read Section",
     "read_subsection": "Read Subsection",
+    "record_evidence": "Record Evidence",
     "agr_curation_query": "AGR Curation Query",
     "sql_query": "SQL Query",
     "alliance_api_call": "Alliance API",
