@@ -354,7 +354,6 @@ def _build_evidence_records(
         for index, raw_record in enumerate(_collect_evidence_payloads(payload), start=1):
             snippet_text = str(
                 raw_record.get("verified_quote")
-                or raw_record.get("snippet")
                 or raw_record.get("snippet_text")
                 or ""
             ).strip()
@@ -397,7 +396,6 @@ def _build_evidence_records(
 def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
     snippet_text = str(
         raw_record.get("verified_quote")
-        or raw_record.get("snippet")
         or raw_record.get("snippet_text")
         or ""
     ).strip() or None
@@ -407,7 +405,7 @@ def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
         or None
     )
     figure_reference = str(raw_record.get("figure_reference") or "").strip() or None
-    page_number = raw_record.get("page")
+    page_number = raw_record.get("page") or raw_record.get("page_number")
 
     if isinstance(page_number, bool) or not isinstance(page_number, int):
         page_number = None
@@ -430,7 +428,6 @@ def _build_evidence_anchor(raw_record: dict[str, Any]) -> EvidenceAnchor | None:
         chunk_ids.append(chunk_id)
 
     viewer_search_text = snippet_text or section_title
-
     return EvidenceAnchor(
         anchor_kind=anchor_kind,
         locator_quality=locator_quality,

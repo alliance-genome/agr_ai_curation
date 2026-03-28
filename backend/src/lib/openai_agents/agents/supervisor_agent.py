@@ -312,7 +312,6 @@ def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict
         for index, evidence_payload in enumerate(_collect_evidence_payloads(payload)):
             snippet_text = str(
                 evidence_payload.get("verified_quote")
-                or evidence_payload.get("snippet")
                 or evidence_payload.get("snippet_text")
                 or evidence_payload.get("text")
                 or ""

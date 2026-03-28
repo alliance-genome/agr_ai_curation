@@ -971,4 +971,5 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
     )
 
     assert response.candidate_count == 2
+    assert response.document_id == "document-1"
     assert response.summary_text == "Prepared 2 candidate annotations for curation review."

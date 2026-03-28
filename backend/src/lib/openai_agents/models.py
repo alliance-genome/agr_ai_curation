@@ -264,7 +264,7 @@ class GeneExpressionEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -328,7 +328,7 @@ class PhenotypeObservation(BaseModel):
     )
     evidence: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence supporting this phenotype assertion"
+        description="Verified evidence supporting this phenotype assertion"
     )
 
 
@@ -352,7 +352,7 @@ class PhenotypeResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -400,7 +400,7 @@ class AlleleExtractionFinding(BaseModel):
     )
     evidence: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence supporting this retained allele/variant assertion"
+        description="Verified evidence supporting this retained allele/variant assertion"
     )
 
 
@@ -424,7 +424,7 @@ class AlleleExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -472,7 +472,7 @@ class DiseaseExtractionFinding(BaseModel):
     )
     evidence: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence supporting this retained disease assertion"
+        description="Verified evidence supporting this retained disease assertion"
     )
 
 
@@ -496,7 +496,7 @@ class DiseaseExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -552,7 +552,7 @@ class ChemicalExtractionFinding(BaseModel):
     )
     evidence: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence supporting this retained chemical assertion"
+        description="Verified evidence supporting this retained chemical assertion"
     )
 
 
@@ -576,7 +576,7 @@ class ChemicalExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -624,7 +624,7 @@ class GeneExtractionFinding(BaseModel):
     )
     evidence: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence supporting this retained gene assertion"
+        description="Verified evidence supporting this retained gene assertion"
     )
 
 
@@ -648,7 +648,7 @@ class GeneExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Evidence snippets supporting retained/excluded decisions"
+        description="Verified evidence records supporting retained/excluded decisions"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
