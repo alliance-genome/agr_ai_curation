@@ -267,6 +267,83 @@ def _build_tool_complete_friendly_name(tool_name: str, custom_display_names: Dic
     return _shared_build_tool_complete_friendly_name(tool_name, custom_display_names)
 
 
+def _coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
+    """Parse tool event payloads that may be dicts or JSON strings."""
+
+    if isinstance(value, dict):
+        return value
+
+    if not isinstance(value, str):
+        return None
+
+    payload = value.strip()
+    if not payload:
+        return None
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _build_record_evidence_summary_record(
+    *,
+    tool_name: str,
+    tool_input: Any,
+    tool_output: Any,
+) -> Optional[Dict[str, Any]]:
+    """Build a normalized evidence summary record from a record_evidence tool event."""
+
+    if tool_name != "record_evidence":
+        return None
+
+    output_payload = _coerce_tool_event_dict(tool_output)
+    input_payload = _coerce_tool_event_dict(tool_input)
+
+    if output_payload is None or input_payload is None:
+        return None
+
+    if str(output_payload.get("status") or "").strip().lower() != "verified":
+        return None
+
+    entity = str(input_payload.get("entity") or "").strip()
+    chunk_id = str(input_payload.get("chunk_id") or "").strip()
+    verified_quote = str(output_payload.get("verified_quote") or "").strip()
+    section = str(output_payload.get("section") or "").strip()
+    page = output_payload.get("page")
+
+    if (
+        not entity
+        or not chunk_id
+        or not verified_quote
+        or not section
+        or not isinstance(page, int)
+        or isinstance(page, bool)
+        or page <= 0
+    ):
+        return None
+
+    evidence_record: Dict[str, Any] = {
+        "entity": entity,
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "chunk_id": chunk_id,
+    }
+
+    subsection = str(output_payload.get("subsection") or "").strip()
+    if subsection:
+        evidence_record["subsection"] = subsection
+
+    figure_reference = str(output_payload.get("figure_reference") or "").strip()
+    if figure_reference:
+        evidence_record["figure_reference"] = figure_reference
+
+    return evidence_record
+
+
 def _extract_model_identifier(model: Any) -> str:
     """Best-effort model ID extraction from agent model config."""
     if isinstance(model, str):
@@ -479,6 +556,7 @@ async def _run_agent_with_tracing(
         "Live event list enabled for real-time streaming",
         extra={"trace_id": trace_id, "user_id": user_id},
     )
+    evidence_records: List[Dict[str, Any]] = []
 
     # max_turns from config gives agents more time to think and process complex queries
     max_turns = get_max_turns()
@@ -728,6 +806,14 @@ async def _run_agent_with_tracing(
                             extra={"trace_id": trace_id, "user_id": user_id, "tool_name": last_tool},
                         )
 
+                        evidence_record = _build_record_evidence_summary_record(
+                            tool_name=last_tool,
+                            tool_input=completed_tool.get("tool_input"),
+                            tool_output=output,
+                        )
+                        if evidence_record is not None:
+                            evidence_records.append(evidence_record)
+
                         # Emit any remaining collected specialist events (fallback for batch mode)
                         # Most events should have been streamed via queue, this catches any stragglers
                         specialist_events = get_collected_events()
@@ -959,6 +1045,14 @@ async def _run_agent_with_tracing(
             "totalSteps": len(agents_used)
         }
     }
+
+    # Emit consolidated evidence summary for verified extraction records.
+    if evidence_records:
+        yield {
+            "type": "evidence_summary",
+            "timestamp": _now_iso(),
+            "evidence_records": evidence_records,
+        }
 
     # Emit completion event with summary for updating the span
     yield {
