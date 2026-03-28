@@ -55,8 +55,10 @@ def _candidate() -> CurationPrepCandidate:
 
 
 def test_reference_candidate_normalizer_builds_adapter_owned_payload_and_layout():
+    candidate = _candidate()
     normalized = ReferenceCandidateNormalizer().normalize(
-        _candidate(),
+        candidate.payload,
+        prep_candidate=candidate,
         context=CandidateNormalizationContext(
             document_id="document-1",
             adapter_key=REFERENCE_ADAPTER_KEY,

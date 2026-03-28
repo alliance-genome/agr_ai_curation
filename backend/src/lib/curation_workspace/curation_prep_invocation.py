@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
-    CURATION_PREP_UNAVAILABLE_MESSAGE,
 )
 from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
@@ -53,10 +52,9 @@ def build_chat_curation_prep_preview(
 
     context = _load_chat_prep_context(session_id=session_id, user_id=user_id, db=db)
     blocking_reasons = _build_blocking_reasons(context)
-    preview_blocking_reasons = blocking_reasons or [CURATION_PREP_UNAVAILABLE_MESSAGE]
 
     return CurationPrepChatPreviewResponse(
-        ready=not preview_blocking_reasons,
+        ready=not blocking_reasons,
         summary_text=_build_summary_text(context, blocking_reasons),
         candidate_count=context.candidate_count,
         extraction_result_count=len(context.extraction_results),
@@ -64,7 +62,7 @@ def build_chat_curation_prep_preview(
         adapter_keys=context.adapter_keys,
         profile_keys=context.profile_keys,
         domain_keys=context.domain_keys,
-        blocking_reasons=preview_blocking_reasons,
+        blocking_reasons=blocking_reasons,
     )
 
 
@@ -107,21 +105,16 @@ async def run_chat_curation_prep(
         ],
     )
 
-    try:
-        prep_output = await run_curation_prep(
-            context.extraction_results,
-            scope_confirmation=scope_confirmation,
-            db=db,
-            persistence_context=CurationPrepPersistenceContext(
-                origin_session_id=request.session_id,
-                user_id=user_id,
-                source_kind=CurationExtractionSourceKind.CHAT,
-            ),
-        )
-    except RuntimeError as exc:
-        if str(exc) == CURATION_PREP_UNAVAILABLE_MESSAGE:
-            raise ValueError(str(exc)) from exc
-        raise
+    prep_output = await run_curation_prep(
+        context.extraction_results,
+        scope_confirmation=scope_confirmation,
+        db=db,
+        persistence_context=CurationPrepPersistenceContext(
+            origin_session_id=request.session_id,
+            user_id=user_id,
+            source_kind=CurationExtractionSourceKind.CHAT,
+        ),
+    )
 
     return CurationPrepChatRunResponse(
         summary_text=(

@@ -34,20 +34,21 @@ class ReferenceCandidateNormalizer:
 
     def normalize(
         self,
-        candidate: CurationPrepCandidate,
+        payload: dict[str, Any],
         *,
+        prep_candidate: CurationPrepCandidate,
         context: CandidateNormalizationContext,
     ) -> NormalizedCandidate:
         from src.lib.curation_workspace.pipeline import NormalizedCandidate
 
-        normalized_payload, defaulted_fields = _build_reference_payload(candidate.payload)
+        normalized_payload, defaulted_fields = _build_reference_payload(payload)
         draft_fields = _build_reference_draft_fields(
             normalized_payload,
             defaulted_fields=defaulted_fields,
         )
 
         return NormalizedCandidate(
-            prep_candidate=candidate,
+            prep_candidate=prep_candidate,
             normalized_payload=normalized_payload,
             draft_fields=draft_fields,
             display_label=_build_display_label(normalized_payload, candidate_index=context.candidate_index),

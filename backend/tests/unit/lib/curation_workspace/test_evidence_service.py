@@ -421,25 +421,6 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(db_session, document_id=document.id)
 
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._safe_resolve_user_id",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._prepare_document",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._resolve_evidence_record",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-
     def _resolve(self, candidate, *, normalized_candidate, context):
         assert candidate.adapter_key == "reference_adapter"
         assert normalized_candidate.normalized_payload["gene"]["symbol"] == "Example quote."

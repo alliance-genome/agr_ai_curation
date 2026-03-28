@@ -186,8 +186,9 @@ class CurationCandidateNormalizer(Protocol):
 
     def normalize(
         self,
-        candidate: CurationPrepCandidate,
+        payload: dict[str, Any],
         *,
+        prep_candidate: CurationPrepCandidate,
         context: CandidateNormalizationContext,
     ) -> NormalizedCandidate:
         """Normalize one prep candidate into deterministic draft/session payloads."""
@@ -230,18 +231,19 @@ class PassthroughCandidateNormalizer:
 
     def normalize(
         self,
-        candidate: CurationPrepCandidate,
+        payload: dict[str, Any],
         *,
+        prep_candidate: CurationPrepCandidate,
         context: CandidateNormalizationContext,
     ) -> NormalizedCandidate:
-        normalized_payload = dict(candidate.payload)
+        normalized_payload = dict(payload)
         draft_fields = _build_passthrough_draft_fields(normalized_payload)
         display_values = _scalar_display_values(normalized_payload)
         display_label = display_values[0] if display_values else f"Candidate {context.candidate_index + 1}"
         secondary_label = display_values[1] if len(display_values) > 1 else None
 
         return NormalizedCandidate(
-            prep_candidate=candidate,
+            prep_candidate=prep_candidate,
             normalized_payload=normalized_payload,
             draft_fields=draft_fields,
             display_label=display_label,
@@ -496,7 +498,8 @@ def _execute_pipeline_steps(
             dependencies.default_candidate_normalizer,
         )
         normalized_candidate = normalizer.normalize(
-            candidate,
+            candidate.payload,
+            prep_candidate=candidate,
             context=CandidateNormalizationContext(
                 document_id=request.document_id,
                 adapter_key=adapter_key,

@@ -256,6 +256,125 @@ def _reference_prep_output_payload() -> dict[str, object]:
     }
 
 
+@pytest.mark.asyncio
+async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anchors(
+    submission_e2e_context,
+    test_db,
+):
+    from src.lib.curation_workspace.bootstrap_service import bootstrap_document_session
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
+    from src.lib.curation_workspace.session_service import get_session_workspace
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
+    from src.schemas.curation_workspace import (
+        CurationDocumentBootstrapRequest,
+        CurationExtractionResultRecord,
+        CurationExtractionSourceKind,
+    )
+
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-gene-1",
+            "document_id": submission_e2e_context["document_id"],
+            "adapter_key": "reference_adapter",
+            "profile_key": "pilot",
+            "domain_key": "gene",
+            "agent_key": "gene_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-gene-1",
+            "flow_run_id": None,
+            "user_id": submission_e2e_context["current_user_auth_sub"],
+            "candidate_count": 1,
+            "conversation_summary": "Conversation focused on evidence-backed gene findings.",
+            "payload_json": {
+                "organism": "D. melanogaster",
+                "annotations": [
+                    {
+                        "gene_symbol": "tinman",
+                        "gene_id": "FB:FBgn0004110",
+                        "reagent_name": "tinman::GFP",
+                        "anatomy_label": "embryonic heart",
+                        "life_stage_label": "embryo",
+                        "is_negative": False,
+                    }
+                ],
+                "evidence_records": [
+                    {
+                        "entity": "tinman",
+                        "verified_quote": "tinman::GFP was detected in the embryonic heart.",
+                        "page": 6,
+                        "section": "Results",
+                        "subsection": "Expression analysis",
+                        "chunk_id": "chunk-tinman-1",
+                        "figure_reference": "Figure 3B",
+                    }
+                ],
+                "run_summary": {"candidate_count": 1},
+            },
+            "created_at": "2026-03-28T12:00:00Z",
+            "metadata": {},
+        }
+    )
+
+    prep_output = await run_curation_prep(
+        [extraction_result],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=["reference_adapter"],
+            profile_keys=["pilot"],
+            domain_keys=["gene"],
+            notes=["Confirmed from chat session bootstrap test."],
+        ),
+        db=test_db,
+        persistence_context=CurationPrepPersistenceContext(
+            origin_session_id="chat-session-1",
+            user_id=submission_e2e_context["current_user_auth_sub"],
+            source_kind=CurationExtractionSourceKind.CHAT,
+        ),
+    )
+
+    assert len(prep_output.candidates) == 1
+
+    bootstrap_response = await bootstrap_document_session(
+        submission_e2e_context["document_id"],
+        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+        current_user_id=submission_e2e_context["current_user_auth_sub"],
+        db=test_db,
+    )
+
+    assert bootstrap_response.created is True
+    assert bootstrap_response.session.adapter.adapter_key == "gene"
+    assert bootstrap_response.session.progress.total_candidates == 1
+
+    workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
+    candidate = workspace.workspace.candidates[0]
+    assert candidate.adapter_key == "gene"
+    gene_symbol_field = next(
+        field for field in candidate.draft.fields if field.field_key == "gene_symbol"
+    )
+    assert gene_symbol_field.value == "tinman"
+    assert candidate.evidence_anchors[0].field_keys == [
+        "gene_symbol",
+        "gene_id",
+        "organism",
+        "reagent_name",
+        "anatomy_label",
+        "life_stage_label",
+        "is_negative",
+    ]
+    assert candidate.evidence_anchors[0].anchor.snippet_text == (
+        "tinman::GFP was detected in the embryonic heart."
+    )
+    assert candidate.evidence_anchors[0].anchor.page_number == 6
+    assert candidate.evidence_anchors[0].anchor.section_title == "Results"
+    assert candidate.evidence_anchors[0].anchor.subsection_title == "Expression analysis"
+    assert candidate.evidence_anchors[0].anchor.figure_reference == "Figure 3B"
+    assert candidate.evidence_anchors[0].anchor.table_reference is None
+
+
 def test_submission_workflow_e2e_with_retry_and_history(
     client: TestClient,
     submission_e2e_context,
