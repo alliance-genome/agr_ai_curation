@@ -1281,7 +1281,7 @@ class TestExecuteFlowTermination:
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"
-        assert persisted_request.adapter_key == "gene_expression"
+        assert persisted_request.adapter_key is None
         assert persisted_request.domain_key == "gene_expression"
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW

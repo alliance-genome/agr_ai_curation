@@ -181,7 +181,7 @@ def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch)
     ]
 
 
-def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(monkeypatch):
+def test_build_chat_curation_prep_preview_blocks_when_adapter_scope_is_missing(monkeypatch):
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -213,12 +213,13 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
         db=object(),
     )
 
-    assert preview.ready is True
-    assert preview.adapter_keys == ["reference_adapter"]
+    assert preview.ready is False
+    assert preview.adapter_keys == []
     assert preview.domain_keys == ["observation"]
-    assert preview.blocking_reasons == []
-    assert "reference adapter" in preview.summary_text
-    assert "observation domain" in preview.summary_text
+    assert preview.blocking_reasons == [
+        "The current chat extraction results do not include adapter scope, so prep cannot determine what to prepare."
+    ]
+    assert preview.summary_text == preview.blocking_reasons[0]
 
 
 @pytest.mark.asyncio
@@ -266,8 +267,7 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
 
 
 @pytest.mark.asyncio
-async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeypatch):
-    captured: dict[str, object] = {}
+async def test_run_chat_curation_prep_blocks_when_adapter_scope_is_missing(monkeypatch):
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -293,24 +293,14 @@ async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeyp
         ],
     )
 
-    async def _fake_run_curation_prep(
-        _extraction_results,
-        *,
-        scope_confirmation,
-        db=None,
-        persistence_context=None,
-    ):
-        _ = (db, persistence_context)
-        captured["scope_confirmation"] = scope_confirmation
-        return _make_prep_output()
+    async def _fake_run_curation_prep(*_args, **_kwargs):
+        raise AssertionError("run_curation_prep should not be called when adapter scope is missing")
 
     monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
 
-    await module.run_chat_curation_prep(
-        CurationPrepChatRunRequest(session_id="session-1"),
-        user_id="user-1",
-        db=object(),
-    )
-
-    assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
-    assert captured["scope_confirmation"].domain_keys == ["observation"]
+    with pytest.raises(ValueError, match="do not include adapter scope"):
+        await module.run_chat_curation_prep(
+            CurationPrepChatRunRequest(session_id="session-1"),
+            user_id="user-1",
+            db=object(),
+        )

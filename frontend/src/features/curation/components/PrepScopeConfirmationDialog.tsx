@@ -21,36 +21,21 @@ interface PrepScopeConfirmationDialogProps {
   onClose: () => void
   onConfirm: () => Promise<void> | void
 }
-
-const DEFAULT_REFERENCE_ADAPTER_KEYS = new Set(['reference', 'reference_adapter'])
-
 function humanizeScopeValue(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
-function displayScopeValues(label: string, values: string[]) {
-  const normalizedValues = values.map((value) => value.trim()).filter(Boolean)
-
-  if (
-    label === 'Adapters' &&
-    normalizedValues.length === 1 &&
-    DEFAULT_REFERENCE_ADAPTER_KEYS.has(normalizedValues[0])
-  ) {
-    return []
-  }
-
-  return normalizedValues.map((value) => {
-    if (label === 'Adapters' && DEFAULT_REFERENCE_ADAPTER_KEYS.has(value)) {
-      return 'Reference Curation'
-    }
-    return humanizeScopeValue(value)
-  })
+function displayScopeValues(values: string[]) {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(humanizeScopeValue)
 }
 
 function ScopePill({ label, values }: { label: string; values: string[] }) {
-  const displayValues = displayScopeValues(label, values)
+  const displayValues = displayScopeValues(values)
 
   if (displayValues.length === 0) {
     return null

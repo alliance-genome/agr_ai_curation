@@ -246,7 +246,7 @@ def test_build_extraction_envelope_candidate_prefers_envelope_adapter_key_over_c
     assert candidate.domain_key == "caller_domain"
 
 
-def test_build_extraction_envelope_candidate_uses_destination_as_adapter_fallback():
+def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one():
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_legacy_envelope_payload()),
         agent_key="gene-expression",
@@ -254,11 +254,11 @@ def test_build_extraction_envelope_candidate_uses_destination_as_adapter_fallbac
     )
 
     assert candidate is not None
-    assert candidate.adapter_key == "gene_expression"
+    assert candidate.adapter_key == "caller_adapter"
     assert candidate.domain_key == "gene_expression"
 
 
-def test_build_extraction_envelope_candidate_defaults_reference_adapter_and_inferrs_domain():
+def test_build_extraction_envelope_candidate_leaves_adapter_unset_and_inferrs_domain():
     candidate = build_extraction_envelope_candidate(
         json.dumps(
             {
@@ -280,9 +280,8 @@ def test_build_extraction_envelope_candidate_defaults_reference_adapter_and_infe
     )
 
     assert candidate is not None
-    assert candidate.adapter_key == "reference_adapter"
+    assert candidate.adapter_key is None
     assert candidate.domain_key == "gene"
-    assert candidate.metadata["inferred_adapter_key"] == "reference_adapter"
     assert candidate.metadata["inferred_domain_key"] == "gene"
 
 
