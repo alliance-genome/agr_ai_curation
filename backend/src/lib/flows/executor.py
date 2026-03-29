@@ -26,13 +26,16 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 from agents import Agent, function_tool
 
+from src.lib.context import get_current_trace_id
 from src.lib.curation_workspace import (
+    CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
     persist_extraction_results,
+    run_curation_prep,
 )
 from src.lib.curation_workspace.curation_prep_constants import (
-    CURATION_PREP_UNAVAILABLE_MESSAGE,
+    CURATION_PREP_AGENT_ID,
 )
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
@@ -49,12 +52,13 @@ from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
+    CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
+from src.schemas.curation_prep import CurationPrepScopeConfirmation
 
 logger = logging.getLogger(__name__)
 
-CURATION_PREP_AGENT_ID = "curation_prep"
 _FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
 
 
@@ -106,6 +110,97 @@ def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) 
 
     normalized = str(candidate.adapter_key or "").strip()
     return normalized or None
+
+
+def _unique_non_empty_scope_values(values: list[Optional[str]]) -> list[str]:
+    """Return distinct non-empty scope values in first-seen order."""
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _build_flow_prep_extraction_results(
+    *,
+    completed_steps: list[dict[str, Any]],
+    document_id: str,
+    user_id: str,
+    session_id: str,
+    flow_run_id: Optional[str],
+    conversation_summary: str,
+) -> list[CurationExtractionResultRecord]:
+    """Convert completed flow extraction steps into prep-service input records."""
+
+    created_at = datetime.now(timezone.utc)
+    trace_id = get_current_trace_id()
+    extraction_results: list[CurationExtractionResultRecord] = []
+
+    for step in completed_steps:
+        candidate = step.get("candidate")
+        if not isinstance(candidate, ExtractionEnvelopeCandidate):
+            continue
+        if candidate.agent_key == CURATION_PREP_AGENT_ID:
+            continue
+
+        step_number = int(step.get("step") or 0)
+        extraction_results.append(
+            CurationExtractionResultRecord.model_validate(
+                {
+                    "extraction_result_id": (
+                        f"flow:{session_id}:step:{step_number}:{candidate.agent_key}"
+                    ),
+                    "document_id": document_id,
+                    "adapter_key": candidate.adapter_key,
+                    "profile_key": candidate.profile_key,
+                    "domain_key": candidate.domain_key,
+                    "agent_key": candidate.agent_key,
+                    "source_kind": CurationExtractionSourceKind.FLOW,
+                    "origin_session_id": session_id,
+                    "trace_id": trace_id,
+                    "flow_run_id": flow_run_id,
+                    "user_id": user_id,
+                    "candidate_count": candidate.candidate_count,
+                    "conversation_summary": candidate.conversation_summary or conversation_summary,
+                    "payload_json": candidate.payload_json,
+                    "created_at": created_at,
+                    "metadata": dict(candidate.metadata),
+                }
+            )
+        )
+
+    return extraction_results
+
+
+def _build_flow_scope_confirmation(
+    extraction_results: list[CurationExtractionResultRecord],
+    *,
+    flow_name: str,
+) -> CurationPrepScopeConfirmation:
+    """Build deterministic prep scope from upstream flow extraction results."""
+
+    adapter_keys = _unique_non_empty_scope_values(
+        [record.adapter_key for record in extraction_results]
+    )
+    profile_keys = _unique_non_empty_scope_values(
+        [record.profile_key for record in extraction_results]
+    )
+    domain_keys = _unique_non_empty_scope_values(
+        [record.domain_key for record in extraction_results]
+    )
+
+    return CurationPrepScopeConfirmation(
+        confirmed=True,
+        adapter_keys=adapter_keys,
+        profile_keys=profile_keys,
+        domain_keys=domain_keys,
+        notes=[f"Confirmed from flow '{flow_name}' execution context."],
+    )
 
 
 def _resolve_flow_agent_entry(
@@ -520,7 +615,41 @@ def get_all_agent_tools(
                 @function_tool(name_override=tool_name, description_override=tool_description)
                 async def _curation_prep_tool(query: str) -> str:
                     _ = (current_step_goal, current_custom_instructions, query)
-                    raise RuntimeError(CURATION_PREP_UNAVAILABLE_MESSAGE)
+                    if not document_id or not user_id or not session_id:
+                        raise RuntimeError(
+                            "Curation prep flow steps require document_id, user_id, and session_id."
+                        )
+
+                    extraction_results = _build_flow_prep_extraction_results(
+                        completed_steps=execution_state["completed_steps"],
+                        document_id=document_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        flow_run_id=flow_run_id,
+                        conversation_summary=flow_conversation_summary,
+                    )
+                    if not extraction_results:
+                        raise RuntimeError(
+                            "Curation prep flow steps require at least one upstream extraction envelope."
+                        )
+
+                    prep_output = await run_curation_prep(
+                        extraction_results,
+                        scope_confirmation=_build_flow_scope_confirmation(
+                            extraction_results,
+                            flow_name=flow.name,
+                        ),
+                        persistence_context=CurationPrepPersistenceContext(
+                            document_id=document_id,
+                            source_kind=CurationExtractionSourceKind.FLOW,
+                            origin_session_id=session_id,
+                            trace_id=get_current_trace_id(),
+                            flow_run_id=flow_run_id,
+                            user_id=user_id,
+                            conversation_summary=flow_conversation_summary,
+                        ),
+                    )
+                    return prep_output.model_dump_json()
 
                 return _curation_prep_tool
 

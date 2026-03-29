@@ -506,11 +506,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_curation_prep_step_is_temporarily_unavailable(
+    def test_curation_prep_step_runs_deterministic_prep(
         self, mock_get_agent, mock_streaming
     ):
-        """Curation prep steps should fail fast until the deterministic mapper lands."""
+        """Curation prep steps should hand upstream flow extractions to the deterministic mapper."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        captured = {}
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -534,27 +535,145 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = _make_streaming_tool
 
+        async def _fake_run_curation_prep(
+            extraction_results,
+            *,
+            scope_confirmation,
+            persistence_context=None,
+            db=None,
+        ):
+            captured["extraction_results"] = extraction_results
+            captured["scope_confirmation"] = scope_confirmation
+            captured["persistence_context"] = persistence_context
+            captured["db"] = db
+            return SimpleNamespace(
+                model_dump_json=lambda: json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "adapter_key": "gene_expression",
+                                "profile_key": None,
+                                "payload": {"label": "unc-54"},
+                                "evidence_records": [
+                                    {
+                                        "evidence_record_id": "extract-1",
+                                        "field_paths": ["label"],
+                                        "anchor": {
+                                            "anchor_kind": "snippet",
+                                            "locator_quality": "exact_quote",
+                                            "supports_decision": "supports",
+                                            "snippet_text": "unc-54 was observed.",
+                                            "sentence_text": "unc-54 was observed.",
+                                            "normalized_text": None,
+                                            "viewer_search_text": "unc-54 was observed.",
+                                            "viewer_highlightable": False,
+                                            "pdfx_markdown_offset_start": None,
+                                            "pdfx_markdown_offset_end": None,
+                                            "page_number": 2,
+                                            "page_label": None,
+                                            "section_title": "Results",
+                                            "subsection_title": None,
+                                            "figure_reference": None,
+                                            "table_reference": None,
+                                            "chunk_ids": ["chunk-1"],
+                                        },
+                                        "notes": [],
+                                    }
+                                ],
+                                "conversation_context_summary": "Prepared from flow context.",
+                            }
+                        ],
+                        "run_metadata": {
+                            "model_name": "deterministic_programmatic_mapper_v1",
+                            "token_usage": {
+                                "input_tokens": 0,
+                                "output_tokens": 0,
+                                "total_tokens": 0,
+                            },
+                            "processing_notes": ["Prepared from flow extraction context."],
+                            "warnings": [],
+                        },
+                    }
+                )
+            )
+
+        mock_get_agent.side_effect = lambda agent_id, **_kwargs: MagicMock(spec=Agent, instructions="Base")
+
+        with patch("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep), patch(
+            "src.lib.flows.executor.get_current_trace_id",
+            lambda: "trace-123",
+        ):
+            flow = _make_flow([
+                _task_input_node("Prepare the extracted gene-expression findings for review."),
+                _agent_node("n1", "gene", step_goal="Extract gene-expression findings"),
+                _agent_node(
+                    "n2",
+                    "curation_prep",
+                    step_goal="Prepare candidates for the workspace",
+                    custom_instructions="Prioritize experimentally supported findings only.",
+                ),
+            ])
+
+            tools, created_names = get_all_agent_tools(
+                flow,
+                document_id="doc-123",
+                user_id="user-123",
+                session_id="session-123",
+                flow_run_id="flow-run-123",
+                user_query="Focus on the confirmed findings.",
+            )
+
+            assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
+
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
+            prep_output = asyncio.run(
+                tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+            )
+
+        payload = json.loads(prep_output)
+        assert payload["run_metadata"]["model_name"] == "deterministic_programmatic_mapper_v1"
+        assert len(captured["extraction_results"]) == 1
+        assert captured["extraction_results"][0].agent_key == "gene"
+        assert captured["extraction_results"][0].source_kind is _executor_module().CurationExtractionSourceKind.FLOW
+        assert captured["scope_confirmation"].confirmed is True
+        assert captured["scope_confirmation"].domain_keys == ["gene"]
+        assert captured["persistence_context"].document_id == "doc-123"
+        assert captured["persistence_context"].origin_session_id == "session-123"
+        assert captured["persistence_context"].flow_run_id == "flow-run-123"
+        assert captured["persistence_context"].trace_id == "trace-123"
+        assert captured["persistence_context"].user_id == "user-123"
+        assert mock_get_agent.call_count == 1
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_prep_step_requires_upstream_extraction_envelope(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Curation prep should fail clearly when earlier flow steps did not produce extraction envelopes."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return "not a structured extraction envelope"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
         flow = _make_flow([
-            _task_input_node("Prepare the extracted gene-expression findings for review."),
+            _task_input_node("Prepare the extracted findings for review."),
             _agent_node("n1", "gene", step_goal="Extract gene-expression findings"),
-            _agent_node(
-                "n2",
-                "curation_prep",
-                step_goal="Prepare candidates for the workspace",
-                custom_instructions="Prioritize experimentally supported findings only.",
-            ),
+            _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, created_names = get_all_agent_tools(
+        tools, _ = get_all_agent_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
             session_id="session-123",
-            flow_run_id="flow-run-123",
-            user_query="Focus on the confirmed findings.",
         )
-
-        assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
 
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
@@ -562,8 +681,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
         )
 
-        assert "temporarily unavailable" in prep_output
-        assert mock_get_agent.call_count == 1
+        assert "require at least one upstream extraction envelope" in prep_output
 
 
 # ===========================================================================
