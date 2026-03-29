@@ -352,7 +352,9 @@ const buildEvidenceSpikeWindowFragments = (words: string[]): string[] => {
 
   const trailingStart = Math.max(0, words.length - windowSize)
   const trailingFragment = words.slice(trailingStart).join(' ')
-  if (trailingFragment) {
+  // The trailing fragment keeps the tail of the quote searchable when the
+  // sliding window does not land exactly on the end of the passage.
+  if (trailingFragment && trailingFragment !== fragments[fragments.length - 1]) {
     fragments.push(trailingFragment)
   }
 

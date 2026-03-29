@@ -15,6 +15,7 @@ Runtime instantiation resolves directly from unified DB-backed agent records.
 """
 
 import asyncio
+import errno
 import importlib
 import json
 import logging
@@ -56,6 +57,16 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
+
+
+def _is_thread_exhaustion_error(exc: BaseException) -> bool:
+    """Recognize thread-creation failures across Python/runtime variants."""
+
+    if isinstance(exc, OSError) and exc.errno == errno.EAGAIN:
+        return True
+
+    message = str(exc).lower()
+    return "can't start new thread" in message or "cannot start new thread" in message
 
 
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
@@ -1096,9 +1107,8 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
                 tool_id,
                 **execute_kwargs,
             )
-        except RuntimeError as exc:
-            message = str(exc).lower()
-            if "can't start new thread" not in message and "cannot start new thread" not in message:
+        except (RuntimeError, OSError) as exc:
+            if not _is_thread_exhaustion_error(exc):
                 raise
             logger.warning(
                 "Falling back to inline package tool execution for %s after thread exhaustion: %s",

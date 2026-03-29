@@ -1,5 +1,8 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
@@ -50,6 +53,10 @@ def _normalize_evidence_record(
 
     record_dict = _coerce_evidence_record_dict(value)
     if not isinstance(record_dict, dict):
+        logger.debug(
+            "Dropping evidence record that could not be coerced into a dictionary: value_type=%s",
+            type(value).__name__,
+        )
         return None
 
     entity_source = entity_override if entity_override is not None else record_dict.get("entity")
@@ -68,6 +75,24 @@ def _normalize_evidence_record(
         or isinstance(page, bool)
         or page <= 0
     ):
+        invalid_fields: List[str] = []
+        if not entity:
+            invalid_fields.append("entity")
+        if not verified_quote:
+            invalid_fields.append("verified_quote")
+        if not section:
+            invalid_fields.append("section")
+        if not chunk_id:
+            invalid_fields.append("chunk_id")
+        if not isinstance(page, int) or isinstance(page, bool) or page <= 0:
+            invalid_fields.append(f"page={page!r}")
+
+        logger.debug(
+            "Dropping malformed evidence record with invalid fields %s; keys=%s entity_override=%r",
+            ",".join(invalid_fields),
+            sorted(record_dict.keys()),
+            entity_override,
+        )
         return None
 
     evidence_record: Dict[str, Any] = {
@@ -210,6 +235,9 @@ def _merge_normalized_evidence_records(
             if evidence_record is None:
                 continue
 
+            # chunk_id is the stable passage anchor after verification, so records
+            # that share entity/quote/page/section/chunk_id are treated as the
+            # same evidence even when optional labels are absent in one payload.
             key = (
                 evidence_record.get("entity"),
                 evidence_record.get("verified_quote"),
@@ -389,6 +417,8 @@ def _consolidate_retained_normalized_list(
         return None
 
     return consolidated
+
+
 def build_record_evidence_summary_record(
     *,
     tool_name: str,
@@ -404,6 +434,11 @@ def build_record_evidence_summary_record(
     input_payload = coerce_tool_event_dict(tool_input)
 
     if output_payload is None or input_payload is None:
+        logger.debug(
+            "Skipping record_evidence summary event with malformed payloads: input_type=%s output_type=%s",
+            type(tool_input).__name__,
+            type(tool_output).__name__,
+        )
         return None
 
     if str(output_payload.get("status") or "").strip().lower() != "verified":
@@ -424,6 +459,13 @@ def build_record_evidence_summary_record(
         or isinstance(page, bool)
         or page <= 0
     ):
+        logger.debug(
+            "Skipping verified record_evidence payload with invalid fields: entity=%r chunk_id=%r section=%r page=%r",
+            entity,
+            chunk_id,
+            section,
+            page,
+        )
         return None
 
     evidence_record: Dict[str, Any] = {

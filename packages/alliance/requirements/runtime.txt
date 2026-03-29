@@ -9,5 +9,8 @@ psycopg2-binary
 # Public runtime Weaviate helpers import the official client directly.
 weaviate-client>=4.0
 grpcio>=1.72.0
-# Match the backend-locked AGR curation client so isolated package tools can normalize IDs.
+# Keep this pinned to the same commit as the backend curation client because
+# package-tool runners install into an isolated venv and must match the backend's
+# normalization API surface exactly. Update this hash in lockstep with the
+# backend pin after validating AGR normalization end to end.
 agr-curation-api-client @ git+https://github.com/alliance-genome/agr_curation_api_client.git@eda8b8525c61dc382413662b237120a94c4798f9
