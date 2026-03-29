@@ -29,7 +29,6 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 
-
 @dataclass(frozen=True)
 class _ChatPrepContext:
     extraction_results: list[CurationExtractionResultRecord]
