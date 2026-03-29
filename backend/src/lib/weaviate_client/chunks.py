@@ -15,6 +15,11 @@ from .connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def _run_sync_in_package_tool_subprocess() -> bool:
+    """Package tool workers can execute blocking Weaviate calls inline."""
+    return os.getenv("AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS") == "1"
+
+
 def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -> Dict[str, Any]:
     """Store document chunks in Weaviate.
 
@@ -239,6 +244,92 @@ def fetch_document_chunks_for_resolution(
     return chunks
 
 
+async def get_chunk_by_id(
+    chunk_id: str,
+    user_id: str,
+    *,
+    document_id: str | None = None,
+) -> Dict[str, Any] | None:
+    """Fetch one tenant-scoped chunk by Weaviate object ID."""
+
+    if not chunk_id:
+        raise ValueError("chunk_id is required for tenant-scoped chunk retrieval")
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk retrieval")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    def _fetch() -> Dict[str, Any] | None:
+        with connection.session() as client:
+            from ..weaviate_helpers import get_user_collections
+
+            chunk_collection, _ = get_user_collections(client, user_id)
+            obj = chunk_collection.query.fetch_object_by_id(chunk_id)
+            if not obj:
+                return None
+
+            props = obj.properties or {}
+            if document_id and props.get("documentId") != document_id:
+                logger.warning(
+                    "Chunk %s belongs to document %s, expected %s",
+                    chunk_id,
+                    props.get("documentId"),
+                    document_id,
+                )
+                return None
+
+            metadata = props.get("metadata") or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            elif not isinstance(metadata, dict):
+                metadata = {}
+
+            doc_items = []
+            doc_items_str = props.get("docItemProvenance")
+            if doc_items_str:
+                try:
+                    doc_items = (
+                        json.loads(doc_items_str)
+                        if isinstance(doc_items_str, str)
+                        else doc_items_str
+                    )
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse docItemProvenance for chunk %s", chunk_id)
+
+            return {
+                "id": str(getattr(obj, "uuid", chunk_id) or chunk_id),
+                "document_id": props.get("documentId"),
+                "text": props.get("content"),
+                "content_preview": props.get("contentPreview"),
+                "chunk_index": props.get("chunkIndex"),
+                "section_title": props.get("sectionTitle"),
+                "parent_section": props.get("parentSection"),
+                "subsection": props.get("subsection"),
+                "page_number": props.get("pageNumber"),
+                "metadata": metadata,
+                "doc_items": doc_items,
+            }
+
+    if _run_sync_in_package_tool_subprocess():
+        return _fetch()
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except RuntimeError as e:
+        message = str(e).lower()
+        if "no running event loop" in message or "can't start new thread" in message:
+            logger.warning(
+                "Falling back to synchronous chunk fetch for %s: %s",
+                chunk_id,
+                e,
+            )
+            return _fetch()
+        raise
 
 
 async def hybrid_search_chunks(

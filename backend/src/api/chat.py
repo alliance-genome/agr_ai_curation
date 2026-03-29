@@ -803,6 +803,15 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
 
+                if event_type == "evidence_summary":
+                    if "evidence_records" not in flat_event:
+                        if "evidence_records" in event:
+                            flat_event["evidence_records"] = event["evidence_records"]
+                        elif "evidence_records" in (event.get("details") or {}):
+                            flat_event["evidence_records"] = event["details"]["evidence_records"]
+                    yield f"data: {json.dumps(flat_event, default=str)}\n\n"
+                    continue
+
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,

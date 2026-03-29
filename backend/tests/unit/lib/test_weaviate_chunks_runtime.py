@@ -230,6 +230,51 @@ async def test_get_chunks_success_parses_metadata_and_doc_items(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_chunk_by_id_falls_back_when_thread_creation_is_unavailable(monkeypatch):
+    obj = SimpleNamespace(
+        uuid="chunk-uuid-1",
+        properties={
+            "documentId": "doc-1",
+            "content": "Alpha beta",
+            "contentPreview": "Alpha beta",
+            "chunkIndex": 0,
+            "sectionTitle": "Intro",
+            "parentSection": "Intro",
+            "subsection": "Overview",
+            "pageNumber": 1,
+            "metadata": '{"kind":"narrative"}',
+            "docItemProvenance": '[{"id":"bbox-1"}]',
+        },
+    )
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_object_by_id.return_value = obj
+    connection = _connection_with_client(MagicMock())
+
+    async def _broken_to_thread(_func, *args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(asyncio, "to_thread", _broken_to_thread)
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        result = await chunks.get_chunk_by_id("chunk-uuid-1", "user-1", document_id="doc-1")
+
+    assert result == {
+        "id": "chunk-uuid-1",
+        "document_id": "doc-1",
+        "text": "Alpha beta",
+        "content_preview": "Alpha beta",
+        "chunk_index": 0,
+        "section_title": "Intro",
+        "parent_section": "Intro",
+        "subsection": "Overview",
+        "page_number": 1,
+        "metadata": {"kind": "narrative"},
+        "doc_items": [{"id": "bbox-1"}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_chunks_raises_when_query_fails(monkeypatch):
     _sync_to_thread(monkeypatch)
 
@@ -242,6 +287,57 @@ async def test_get_chunks_raises_when_query_fails(monkeypatch):
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
         with pytest.raises(RuntimeError, match="fetch failed"):
             await chunks.get_chunks("doc-1", {"page": 1, "page_size": 5}, "user-1")
+
+
+@pytest.mark.asyncio
+async def test_get_chunk_by_id_runs_inline_in_package_tool_subprocess(monkeypatch):
+    monkeypatch.setenv("AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS", "1")
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_object_by_id.return_value = SimpleNamespace(
+        uuid="chunk-uuid-1",
+        properties={
+            "documentId": "doc-1",
+            "content": "Inline chunk content",
+            "contentPreview": "Inline chunk",
+            "chunkIndex": 3,
+            "sectionTitle": "Results",
+            "parentSection": "Results",
+            "subsection": "Evidence",
+            "pageNumber": 5,
+            "metadata": '{"word_count": 3}',
+            "docItemProvenance": '[{"id":"bbox-1"}]',
+        },
+    )
+    pdf_collection = MagicMock()
+    connection = _connection_with_client(MagicMock())
+
+    async def _explode_to_thread(*args, **kwargs):
+        raise AssertionError("asyncio.to_thread should not run in package tool subprocesses")
+
+    monkeypatch.setattr(asyncio, "to_thread", _explode_to_thread)
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
+        result = await chunks.get_chunk_by_id(
+            "chunk-uuid-1",
+            "user-1",
+            document_id="doc-1",
+        )
+
+    assert result == {
+        "id": "chunk-uuid-1",
+        "document_id": "doc-1",
+        "text": "Inline chunk content",
+        "content_preview": "Inline chunk",
+        "chunk_index": 3,
+        "section_title": "Results",
+        "parent_section": "Results",
+        "subsection": "Evidence",
+        "page_number": 5,
+        "metadata": {"word_count": 3},
+        "doc_items": [{"id": "bbox-1"}],
+    }
 
 
 @pytest.mark.asyncio

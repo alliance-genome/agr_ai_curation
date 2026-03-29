@@ -29,6 +29,11 @@ from agents.models.openai_provider import OpenAIProvider
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns
+from .evidence_summary import (
+    canonicalize_structured_result_payload,
+    extract_evidence_records_from_structured_result,
+    structured_result_requires_evidence,
+)
 
 # Prompt context tracking for execution logging
 from src.lib.prompts.context import commit_pending_prompts
@@ -380,6 +385,102 @@ def _required_tool_failure_message(
         f"{specialist_name} did not call required AGR DB tools before answering. "
         f"Required: {required_text}. Called: {called_text}."
     )
+
+
+def _emit_specialist_evidence_summary_or_raise(
+    *,
+    specialist_name: str,
+    expected_output_type: Any,
+    final_output: Any,
+):
+    """Emit specialist evidence summary from structured output or fail fast if it is missing."""
+    evidence_records = extract_evidence_records_from_structured_result(final_output)
+    if evidence_records:
+        add_specialist_event({
+            "type": "evidence_summary",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "evidence_records": evidence_records,
+        })
+        return
+
+    if not structured_result_requires_evidence(final_output):
+        return
+
+    output_type_name = getattr(expected_output_type, "__name__", "response")
+    error_message = (
+        f"{specialist_name} completed extraction output without the required evidence records."
+    )
+    logger.error("%s", error_message)
+    add_specialist_event({
+        "type": "SPECIALIST_ERROR",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "specialist": specialist_name,
+            "output_type": output_type_name,
+            "error": error_message,
+            "reason": "missing_evidence_records",
+            "severity": "error",
+        }
+    })
+    raise SpecialistOutputError(
+        specialist_name=specialist_name,
+        output_type_name=output_type_name,
+        message=error_message,
+    )
+
+
+def _canonicalize_structured_output_text(
+    final_output: str,
+    *,
+    expected_output_type: Any,
+) -> str:
+    """Collapse duplicate normalized items before the supervisor reads structured output."""
+
+    if expected_output_type is None:
+        return final_output
+
+    try:
+        payload = json.loads(final_output)
+    except Exception:
+        return final_output
+
+    if not isinstance(payload, dict):
+        return final_output
+
+    canonical_payload = canonicalize_structured_result_payload(payload)
+    if not isinstance(canonical_payload, dict):
+        return final_output
+
+    try:
+        validated_output = expected_output_type.model_validate(canonical_payload)
+        return json.dumps(validated_output.model_dump())
+    except Exception:
+        return json.dumps(canonical_payload)
+
+
+def _reduce_specialist_output_for_supervisor(
+    final_output: str,
+    *,
+    expected_output_type: Any,
+) -> str:
+    """Return concise answer text when structured output carries a dedicated answer field."""
+
+    if expected_output_type is None:
+        return final_output
+
+    try:
+        payload = json.loads(final_output)
+    except Exception:
+        return final_output
+
+    if not isinstance(payload, dict):
+        return final_output
+
+    answer_text = str(payload.get("answer") or "").strip()
+    if answer_text:
+        return answer_text
+
+    return final_output
 
 
 # =============================================================================
@@ -1734,6 +1835,22 @@ async def run_specialist_with_events(
                         output_type_name=output_type_name,
                         message=f"{specialist_name} retry failed with error: {str(e)}"
                     )
+
+    final_output = _canonicalize_structured_output_text(
+        final_output,
+        expected_output_type=expected_output_type,
+    )
+
+    _emit_specialist_evidence_summary_or_raise(
+        specialist_name=specialist_name,
+        expected_output_type=expected_output_type,
+        final_output=final_output,
+    )
+
+    final_output = _reduce_specialist_output_for_supervisor(
+        final_output,
+        expected_output_type=expected_output_type,
+    )
 
     # Emit summary event
     add_specialist_event({

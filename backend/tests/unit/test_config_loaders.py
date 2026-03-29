@@ -84,6 +84,8 @@ class TestAgentLoader:
         assert pdf is not None
         assert pdf.supervisor_routing.enabled is True
         assert pdf.supervisor_routing.batchable is False
+        assert pdf.output_schema == "PdfExtractionResultEnvelope"
+        assert "record_evidence" in pdf.tools
 
     def test_get_supervisor_tools(self):
         """Test generating supervisor tool list."""
@@ -1932,6 +1934,14 @@ class TestPromptLoaderYAMLValidation:
         missing = []
         for agent_folder in CONFIG_AGENTS_PATH.iterdir():
             if not agent_folder.is_dir() or agent_folder.name.startswith("_"):
+                continue
+
+            non_cache_files = [
+                path
+                for path in agent_folder.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            ]
+            if not non_cache_files:
                 continue
 
             prompt_yaml = agent_folder / "prompt.yaml"

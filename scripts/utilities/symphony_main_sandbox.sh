@@ -136,6 +136,35 @@ require_repo() {
   fi
 }
 
+resolve_git_common_dir() {
+  local repo_path="$1"
+  local git_common_dir=""
+
+  if ! git_common_dir="$(git -C "${repo_path}" rev-parse --git-common-dir 2>/dev/null)"; then
+    return 1
+  fi
+
+  if [[ "${git_common_dir}" != /* ]]; then
+    git_common_dir="${repo_path}/${git_common_dir}"
+  fi
+
+  (
+    cd "${git_common_dir}" && pwd -P
+  )
+}
+
+resolve_hooks_source_dir() {
+  local repo_path="$1"
+  local git_common_dir=""
+
+  if git_common_dir="$(resolve_git_common_dir "${repo_path}")"; then
+    printf '%s/hooks\n' "${git_common_dir}"
+    return 0
+  fi
+
+  printf '%s/.git/hooks\n' "${repo_path}"
+}
+
 run_and_print() {
   local output_file
   output_file="$(mktemp)"
@@ -381,8 +410,11 @@ export_sandbox_runtime_env() {
   local selected_weaviate_grpc_host_port="${WEAVIATE_GRPC_HOST_PORT}"
   local selected_trace_review_frontend_port="${TRACE_REVIEW_FRONTEND_HOST_PORT}"
   local selected_trace_review_backend_port="${TRACE_REVIEW_BACKEND_HOST_PORT}"
+  local hooks_source_dir=""
 
   load_exported_env_file "${PRIVATE_ENV_FILE}"
+
+  hooks_source_dir="$(resolve_hooks_source_dir "${REPO_ROOT}")"
 
   FRONTEND_HOST_PORT="${selected_frontend_host_port}"
   BACKEND_HOST_PORT="${selected_backend_host_port}"
@@ -406,7 +438,7 @@ export_sandbox_runtime_env() {
   export CURATION_DB_TUNNEL_LOCAL_PORT="${DB_TUNNEL_LOCAL_PORT}"
   export CURATION_DB_TUNNEL_DOCKER_PORT="${DB_TUNNEL_DOCKER_PORT}"
   export SYMPHONY_LOCAL_SOURCE_ROOT="${REPO_ROOT}"
-  export SYMPHONY_HOOKS_SOURCE="${REPO_ROOT}/.git/hooks"
+  export SYMPHONY_HOOKS_SOURCE="${hooks_source_dir}"
   export SYMPHONY_RUNTIME_REFRESH_MODE="ensure"
   export SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK="1"
   export TRACE_REVIEW_URL="http://host.docker.internal:${TRACE_REVIEW_BACKEND_HOST_PORT}"

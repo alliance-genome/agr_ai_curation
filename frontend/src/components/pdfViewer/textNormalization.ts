@@ -5,13 +5,45 @@ export interface NormalizedTextSourceMap {
 
 const SOFT_HYPHEN = '\u00ad'
 const NBSP = '\u00a0'
+const ELLIPSIS_PATTERN = /(?:\u2026|\.{3,})/g
 const DASH_PATTERN = /[\u2010\u2011\u2012\u2013\u2014\u2212]/g
 const SINGLE_QUOTE_PATTERN = /[\u2018\u2019\u201A\u201B]/g
 const DOUBLE_QUOTE_PATTERN = /[\u201C\u201D\u201E\u201F]/g
 const OPENING_BRACKETS = new Set(['(', '[', '{'])
 const TRAILING_SPACE_PUNCTUATION = new Set([',', '.', ';', ':', '!', '?', ')', ']', '}'])
+const INLINE_MARKDOWN_WRAPPER_PATTERNS: Array<[RegExp, string]> = [
+  [/(^|[\s([{])\*\*([^*]+?)\*\*(?=$|[\s)\]}.,;:!?])/g, '$1$2'],
+  [/(^|[\s([{])\*([^*]+?)\*(?=$|[\s)\]}.,;:!?])/g, '$1$2'],
+  [/(^|[\s([{])__([^_]+?)__(?=$|[\s)\]}.,;:!?])/g, '$1$2'],
+  [/(^|[\s([{])_([^_]+?)_(?=$|[\s)\]}.,;:!?])/g, '$1$2'],
+  [/(^|[\s([{])`([^`]+?)`(?=$|[\s)\]}.,;:!?])/g, '$1$2'],
+]
 
 const isWhitespaceCharacter = (value: string): boolean => /\s/.test(value)
+
+export const sanitizeEvidenceSearchText = (value: string): string => {
+  if (!value) {
+    return ''
+  }
+
+  let sanitized = value.replace(ELLIPSIS_PATTERN, ' ')
+
+  // Evidence quotes can pick up lightweight markdown emphasis from model output
+  // even though the underlying PDF text is plain. Strip only wrapper syntax and
+  // keep the quoted content intact for downstream matching.
+  for (let index = 0; index < 2; index += 1) {
+    let nextValue = sanitized
+    INLINE_MARKDOWN_WRAPPER_PATTERNS.forEach(([pattern, replacement]) => {
+      nextValue = nextValue.replace(pattern, replacement)
+    })
+    if (nextValue === sanitized) {
+      break
+    }
+    sanitized = nextValue
+  }
+
+  return sanitized
+}
 
 const transformNormalizedCharacter = (value: string): string => {
   if (value === SOFT_HYPHEN) {

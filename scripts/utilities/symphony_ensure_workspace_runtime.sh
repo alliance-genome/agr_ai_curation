@@ -55,6 +55,34 @@ workspace_dir="$(cd "${workspace_dir}" && pwd -P)"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/../.." && pwd -P)"
 
+resolve_git_common_dir() {
+  local repo_path="$1"
+  local git_common_dir=""
+
+  if ! git_common_dir="$(git -C "${repo_path}" rev-parse --git-common-dir 2>/dev/null)"; then
+    return 1
+  fi
+
+  if [[ "${git_common_dir}" != /* ]]; then
+    git_common_dir="${repo_path}/${git_common_dir}"
+  fi
+
+  (
+    cd "${git_common_dir}" && pwd -P
+  )
+}
+
+resolve_hooks_source_dir() {
+  local repo_path="$1"
+  local git_common_dir=""
+
+  if ! git_common_dir="$(resolve_git_common_dir "${repo_path}")"; then
+    return 1
+  fi
+
+  printf '%s/hooks\n' "${git_common_dir}"
+}
+
 workspace_git_common_dir=""
 if git_common_dir="$(git -C "${workspace_dir}" rev-parse --git-common-dir 2>/dev/null)"; then
   if [[ "${git_common_dir}" == /* ]]; then
@@ -64,8 +92,17 @@ if git_common_dir="$(git -C "${workspace_dir}" rev-parse --git-common-dir 2>/dev
   fi
 fi
 
-hooks_source="${SYMPHONY_HOOKS_SOURCE:-${repo_root}/.git/hooks}"
 local_source_root="${SYMPHONY_LOCAL_SOURCE_ROOT:-${repo_root}}"
+hooks_source="${SYMPHONY_HOOKS_SOURCE:-}"
+if [[ -z "${hooks_source}" || ! -f "${hooks_source}/pre-commit" || ! -f "${hooks_source}/pre-push" ]]; then
+  if resolved_hooks_source="$(resolve_hooks_source_dir "${local_source_root}" 2>/dev/null)"; then
+    hooks_source="${resolved_hooks_source}"
+  elif resolved_hooks_source="$(resolve_hooks_source_dir "${repo_root}" 2>/dev/null)"; then
+    hooks_source="${resolved_hooks_source}"
+  else
+    hooks_source="${repo_root}/.git/hooks"
+  fi
+fi
 workspace_hooks_dir="${workspace_git_common_dir:-${workspace_dir}/.git}/hooks"
 
 copied=0

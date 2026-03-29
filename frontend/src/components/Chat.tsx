@@ -5,6 +5,7 @@ import { dispatchClearHighlights, dispatchPDFDocumentChanged } from '@/component
 import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
 import FileDownloadCard, { FileInfo } from '@/components/Chat/FileDownloadCard'
+import EvidenceCard from '@/components/Chat/EvidenceCard'
 import PrepScopeConfirmationDialog from '@/features/curation/components/PrepScopeConfirmationDialog'
 import {
   fetchCurationPrepPreview,
@@ -15,6 +16,7 @@ import {
   openCurationWorkspace,
   type CurationWorkspaceLaunchTarget,
 } from '@/features/curation/navigation/openCurationWorkspace'
+import type { EvidenceRecord } from '@/features/curation/types'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
@@ -33,6 +35,7 @@ interface Message {
   type?: 'text' | 'file_download'  // Message type for special rendering
   fileData?: FileInfo              // File info for file_download type
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+  evidenceRecords?: EvidenceRecord[]
 }
 
 // Type for serialized messages (timestamp as string)
@@ -45,6 +48,7 @@ interface SerializedMessage {
   type?: 'text' | 'file_download'
   fileData?: FileInfo
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+  evidenceRecords?: EvidenceRecord[]
 }
 
 interface ActiveDocument {
@@ -121,6 +125,166 @@ function withUpdatedReviewAndCurateSessionId(
   })
 }
 
+function buildEvidenceReviewAndCurateTarget(
+  documentId?: string | null,
+  originSessionId?: string | null
+): CurationWorkspaceLaunchTarget | null {
+  if (!documentId || !originSessionId) {
+    return null
+  }
+
+  return {
+    documentId,
+    originSessionId,
+  }
+}
+
+function isEvidenceRecord(value: unknown): value is EvidenceRecord {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const record = value as Record<string, unknown>
+
+  return (
+    typeof record.entity === 'string' &&
+    typeof record.verified_quote === 'string' &&
+    typeof record.page === 'number' &&
+    Number.isFinite(record.page) &&
+    typeof record.section === 'string' &&
+    typeof record.chunk_id === 'string'
+  )
+}
+
+function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.filter(isEvidenceRecord)
+}
+
+const DUPLICATE_EVIDENCE_LABEL_RE = /^(?:[-*]\s+)?\*{0,2}(evidence|citations|sources)\*{0,2}:/i
+
+function stripDuplicateEvidenceSections(content: string): string {
+  if (!content) {
+    return content
+  }
+
+  const lines = content.split('\n')
+  const keptLines: string[] = []
+  let skippingBlock = false
+  let skipIndent = 0
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const indent = line.length - line.trimStart().length
+
+    if (DUPLICATE_EVIDENCE_LABEL_RE.test(trimmed)) {
+      skippingBlock = true
+      skipIndent = indent
+      continue
+    }
+
+    if (skippingBlock) {
+      if (!trimmed) {
+        continue
+      }
+
+      const isContinuation = indent > skipIndent || /^[>*-]/.test(trimmed)
+      if (isContinuation) {
+        continue
+      }
+
+      skippingBlock = false
+    }
+
+    keptLines.push(line)
+  }
+
+  return keptLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function sanitizeStoredMessage(message: SerializedMessage): Message {
+  const hasEvidenceRecords = (message.evidenceRecords?.length ?? 0) > 0
+
+  return {
+    ...message,
+    content: hasEvidenceRecords
+      ? stripDuplicateEvidenceSections(message.content)
+      : message.content,
+    timestamp: new Date(message.timestamp),
+  }
+}
+
+function withEvidenceReviewAndCurateTarget(
+  message: Message,
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message {
+  if (message.reviewAndCurateTarget || !reviewAndCurateTarget) {
+    return message
+  }
+
+  return {
+    ...message,
+    reviewAndCurateTarget,
+  }
+}
+
+function withEvidenceRecords(
+  messages: Message[],
+  evidenceRecords: EvidenceRecord[],
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role !== 'assistant') {
+      continue
+    }
+
+    const nextMessages = [...messages]
+    nextMessages[index] = withEvidenceReviewAndCurateTarget({
+      ...message,
+      content: stripDuplicateEvidenceSections(message.content),
+      evidenceRecords,
+    }, reviewAndCurateTarget)
+    return nextMessages
+  }
+
+  return messages
+}
+
+function withMissingEvidenceReviewAndCurateTargets(
+  messages: Message[],
+  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+): Message[] {
+  if (!reviewAndCurateTarget) {
+    return messages
+  }
+
+  let didChange = false
+  const nextMessages = messages.map((message) => {
+    if (
+      message.role !== 'assistant' ||
+      (message.evidenceRecords?.length ?? 0) === 0 ||
+      message.reviewAndCurateTarget
+    ) {
+      return message
+    }
+
+    didChange = true
+    return {
+      ...message,
+      reviewAndCurateTarget,
+    }
+  })
+
+  return didChange ? nextMessages : messages
+}
+
 function shouldShowCurationDbWarning(status?: string | null): boolean {
   return status !== 'connected' && status !== 'not_configured'
 }
@@ -150,10 +314,7 @@ function loadMessagesFromStorage(sessionId?: string | null): Message[] {
         // Only restore messages if they belong to the current session
         if (data.session_id === currentSessionId) {
           debug.log('[Chat] Session match - restoring messages')
-          return data.messages.map(msg => ({
-            ...msg,
-            timestamp: new Date(msg.timestamp)
-          }))
+          return data.messages.map(sanitizeStoredMessage)
         } else {
           // Session mismatch can happen transiently during route/session initialization.
           // Do not delete stored chat here; keep it available if session state catches up.
@@ -165,10 +326,7 @@ function loadMessagesFromStorage(sessionId?: string | null): Message[] {
       // Handle legacy format (array of messages without session_id)
       if (Array.isArray(data)) {
         debug.log('[Chat] Found legacy format (no session_id), restoring', data.length, 'messages')
-        return data.map(msg => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        }))
+        return data.map(sanitizeStoredMessage)
       }
     }
   } catch (error) {
@@ -689,12 +847,40 @@ function Chat({
             traceIds: [...sessionTraceIds.current]
           }
         ])
+        return
+      }
+
+      if (parsed.type === 'evidence_summary') {
+        const evidenceRecords = extractEvidenceRecords(parsed.evidence_records)
+        if (evidenceRecords.length === 0) {
+          return
+        }
+
+        const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
+          activeDocument?.id,
+          propSessionId,
+        )
+
+        setMessages(prev => withEvidenceRecords(prev, evidenceRecords, reviewAndCurateTarget))
       }
     })
 
     // Mark all new events as processed
     processedEventIdsRef.current = new Set(Array.from({ length: events.length }, (_, i) => i))
-  }, [events, activeDocument, updateProgressMessage])
+  }, [events, activeDocument, propSessionId, updateProgressMessage])
+
+  useEffect(() => {
+    const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
+      activeDocument?.id,
+      propSessionId,
+    )
+
+    if (!reviewAndCurateTarget) {
+      return
+    }
+
+    setMessages(prev => withMissingEvidenceReviewAndCurateTargets(prev, reviewAndCurateTarget))
+  }, [activeDocument?.id, propSessionId])
 
   // Update conversation status when messages change (to update memory counter)
   useEffect(() => {
@@ -1601,37 +1787,82 @@ function Chat({
             Ask a question to get started...
           </div>
         ) : (
-          messages.map((message, index) => (
-            <div
-              key={message.id || index}
-              className={`message ${message.role === 'user' ? 'user-message' : 'assistant-message'}`}
-            >
-              <div className="message-role">
-                {message.role === 'user' ? 'You' : 'AI Assistant'}
-              </div>
-              <div className="message-content">
-                {message.type === 'file_download' && message.fileData ? (
-                  <FileDownloadCard file={message.fileData} />
-                ) : (
-                  message.content
-                )}
-              </div>
-              {message.role === 'assistant' ? (
-                <MessageActions
-                  messageContent={message.content}
-                  traceId={message.traceIds && message.traceIds.length > 0 ? message.traceIds[message.traceIds.length - 1] : undefined}
-                  onFeedbackClick={() => handleFeedbackClick(message.content, message.traceIds)}
-                  reviewAndCurateTarget={message.reviewAndCurateTarget}
-                  onReviewAndCurateOpened={(sessionId) => {
-                    const messageId = message.id
-                    if (!messageId) {
-                      return
-                    }
+          messages.map((message, index) => {
+            const hasEvidenceCard = (message.evidenceRecords?.length ?? 0) > 0
 
-                    setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
+            if (message.role === 'assistant') {
+              return (
+                <div
+                  key={message.id || index}
+                  style={{
+                    alignSelf: 'flex-start',
+                    maxWidth: '85%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minWidth: 0,
                   }}
-                />
-              ) : (
+                >
+                  <div
+                    className="message assistant-message"
+                    style={{
+                      maxWidth: '100%',
+                      borderRadius: hasEvidenceCard ? '18px 18px 4px 4px' : undefined,
+                    }}
+                  >
+                    <div className="message-role">
+                      AI Assistant
+                    </div>
+                    <div className="message-content">
+                      {message.type === 'file_download' && message.fileData ? (
+                        <FileDownloadCard file={message.fileData} />
+                      ) : (
+                        message.content
+                      )}
+                    </div>
+                    <MessageActions
+                      messageContent={message.content}
+                      traceId={message.traceIds && message.traceIds.length > 0 ? message.traceIds[message.traceIds.length - 1] : undefined}
+                      onFeedbackClick={() => handleFeedbackClick(message.content, message.traceIds)}
+                      reviewAndCurateTarget={message.reviewAndCurateTarget}
+                      onReviewAndCurateOpened={(sessionId) => {
+                        const messageId = message.id
+                        if (!messageId) {
+                          return
+                        }
+
+                        setMessages(prev => withUpdatedReviewAndCurateSessionId(prev, messageId, sessionId))
+                      }}
+                    />
+                  </div>
+
+                  {hasEvidenceCard ? (
+                    <EvidenceCard
+                      evidenceRecords={message.evidenceRecords ?? []}
+                      reviewAndCurateTarget={message.reviewAndCurateTarget}
+                      onReviewAndCurateClick={message.reviewAndCurateTarget ? () => {
+                        const messageId = message.id
+                        void handleOpenCurationWorkspace(
+                          message.reviewAndCurateTarget!,
+                          messageId ? { messageId } : undefined,
+                        )
+                      } : null}
+                    />
+                  ) : null}
+                </div>
+              )
+            }
+
+            return (
+              <div
+                key={message.id || index}
+                className="message user-message"
+              >
+                <div className="message-role">
+                  You
+                </div>
+                <div className="message-content">
+                  {message.content}
+                </div>
                 <button
                   className="copy-button"
                   onClick={() => handleCopyMessage(message.content)}
@@ -1641,9 +1872,9 @@ function Chat({
                     <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
                   </svg>
                 </button>
-              )}
-            </div>
-          ))
+              </div>
+            )
+          })
         )}
         {isLoading && (
           <div className="loading-indicator">

@@ -147,11 +147,36 @@ def test_query_returns_db_not_configured_error(monkeypatch):
         def get_db_client():
             return None
 
+        @staticmethod
+        def get_connection_url():
+            return None
+
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     result = query_fn(method="search_genes", gene_symbol="abc")
 
     assert result.status == "error"
     assert "not configured" in (result.message or "").lower()
+
+
+def test_query_returns_runtime_unavailable_error_when_db_is_configured(monkeypatch):
+    """agr_curation_query should distinguish configured DBs from missing runtime dependencies."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return None
+
+        @staticmethod
+        def get_connection_url():
+            return "postgresql://db.invalid:5432/agr"
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    result = query_fn(method="search_genes", gene_symbol="abc")
+
+    assert result.status == "error"
+    assert "configured" in (result.message or "").lower()
+    assert "runtime" in (result.message or "").lower()
 
 
 def test_query_returns_mapping_error_for_provider_methods(monkeypatch):

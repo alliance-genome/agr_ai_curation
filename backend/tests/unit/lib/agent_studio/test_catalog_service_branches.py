@@ -356,6 +356,21 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     assert "RULES" in runtime_text
     assert "SCHEMA:SchemaX" in runtime_text
 
+    runtime_text_with_evidence = catalog_service._build_runtime_instructions(
+        db_agent=db_agent,
+        runtime_kwargs={
+            "active_groups": ["WB"],
+            "hierarchy": {},
+            "sections": [],
+            "abstract": None,
+            "document_name": "Paper A",
+        },
+        output_schema="SchemaX",
+        canonical_tool_ids=["search_document", "record_evidence"],
+    )
+    assert "Use multiple evidence records when one quote alone does not fully support" in runtime_text_with_evidence
+    assert "Each claimed quote should be a single contiguous excerpt." in runtime_text_with_evidence
+
     monkeypatch.setattr(
         catalog_service,
         "_inject_group_rules_with_overrides",

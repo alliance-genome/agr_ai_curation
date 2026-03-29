@@ -280,6 +280,135 @@ describe('Chat persistence', () => {
     window.removeEventListener('pdf-overlay-update', listener as EventListener)
   })
 
+  it('attaches evidence summaries to the latest assistant message', async () => {
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Extraction complete for the highlighted entities.',
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumb',
+              verified_quote: 'Crumb is essential for maintaining epithelial polarity.',
+              page: 4,
+              section: 'Results',
+              subsection: 'Gene Expression Analysis',
+              chunk_id: 'chunk-1',
+              figure_reference: 'Figure 2A',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(
+      await screen.findByText('Extraction complete for the highlighted entities.')
+    ).toBeInTheDocument()
+    expect(await screen.findByText('1 evidence quotes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'crumb 1' }))
+
+    expect(
+      await screen.findByText('"Crumb is essential for maintaining epithelial polarity."')
+    ).toBeInTheDocument()
+  })
+
+  it('removes duplicate inline evidence sections once evidence records are attached', async () => {
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: [
+            'The genes that are the focus of this publication are:',
+            '',
+            '1. **crumbs (crb)**',
+            '   - Normalized ID: FB:FBgn0000368',
+            '   - Evidence: Changes in molecular organization following abnormal PRC development in crumbs mutants.',
+            '',
+            '**Citations:**',
+            '- Section: Results and Discussion, Page: 1',
+            '',
+            '**Sources:**',
+            '- Gene Extraction Analysis',
+          ].join('\n'),
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumbs',
+              verified_quote: 'Changes in molecular organization following abnormal PRC development in crumbs mutants.',
+              page: 1,
+              section: 'Results and Discussion',
+              chunk_id: 'chunk-1',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(
+      await screen.findByText(/The genes that are the focus of this publication are:/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Evidence:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Citations:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Sources:/)).not.toBeInTheDocument()
+    expect(await screen.findByText('1 evidence quotes')).toBeInTheDocument()
+  })
+
+  it('shows the evidence footer action for streamed assistant messages with an active document', async () => {
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-evidence')
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-7',
+        filename: 'doc-7.pdf',
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Extraction complete for the highlighted entities.',
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumb',
+              verified_quote: 'Crumb is essential for maintaining epithelial polarity.',
+              page: 4,
+              section: 'Results',
+              subsection: 'Gene Expression Analysis',
+              chunk_id: 'chunk-1',
+            },
+          ],
+        },
+      ],
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'crumb 1' }))
+
+    expect(
+      await screen.findByText('Full evidence review with PDF highlighting →')
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Review & Curate'))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-7',
+          originSessionId: 'session-1',
+          navigate: mockNavigate,
+        })
+      )
+    })
+  })
+
   it('does not show the curation DB outage warning when the service is not configured', async () => {
     mockChatFetch({ curationDbStatus: 'not_configured' })
 

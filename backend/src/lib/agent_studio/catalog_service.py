@@ -46,6 +46,16 @@ from .models import (
 logger = logging.getLogger(__name__)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
+_RECORD_EVIDENCE_RUNTIME_NOTE = (
+    "EVIDENCE VERIFICATION RULES:\n"
+    "- Call `record_evidence` once for each distinct evidence quote you intend to keep.\n"
+    "- Use multiple evidence records when one quote alone does not fully support the retained item or claim.\n"
+    "- Prefer complementary quotes when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
+    "- Each claimed quote should be a single contiguous excerpt. A short multi-sentence passage is fine when that is the tightest support, but do not stitch together disconnected text.\n"
+    "- Pass the entity label, the exact `chunk_id` from prior document search/read results, and the quote you believe appears in that chunk.\n"
+    "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
+    "- Only persist evidence records that came back `verified`.\n"
+)
 
 
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
@@ -468,6 +478,37 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "required": True,
                     "description": "Subsection name to read.",
+                },
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "record_evidence": {
+        "name": "Record Evidence",
+        "description": "Verify one contiguous claimed quote against a specific PDF chunk before persisting evidence.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
+        "documentation": {
+            "summary": "Checks whether a claimed quote appears in a known chunk and returns a verified verbatim quote plus locator metadata when it does. Use separate calls for multiple complementary quotes when one quote is not enough.",
+            "parameters": [
+                {
+                    "name": "entity",
+                    "type": "string",
+                    "required": True,
+                    "description": "Entity label associated with this evidence record.",
+                },
+                {
+                    "name": "chunk_id",
+                    "type": "string",
+                    "required": True,
+                    "description": "Chunk identifier returned by search_document or read-section tools.",
+                },
+                {
+                    "name": "claimed_quote",
+                    "type": "string",
+                    "required": True,
+                    "description": "One contiguous quote to verify against the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
                 },
             ],
         },
@@ -1043,12 +1084,31 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         if tracker:
             tracker.record_call(tool_id)
 
-        result = await asyncio.to_thread(
-            runner.execute_tool,
-            tool_id,
-            kwargs=_decode_tool_input(tool_id, input_str),
-            context=context_payload,
-        )
+        decoded_kwargs = _decode_tool_input(tool_id, input_str)
+        execute_kwargs = {
+            "kwargs": decoded_kwargs,
+            "context": context_payload,
+        }
+
+        try:
+            result = await asyncio.to_thread(
+                runner.execute_tool,
+                tool_id,
+                **execute_kwargs,
+            )
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "can't start new thread" not in message and "cannot start new thread" not in message:
+                raise
+            logger.warning(
+                "Falling back to inline package tool execution for %s after thread exhaustion: %s",
+                tool_id,
+                exc,
+            )
+            result = runner.execute_tool(
+                tool_id,
+                **execute_kwargs,
+            )
         if not result.ok:
             error_message = result.error.message if result.error else "Unknown package tool error"
             raise RuntimeError(
@@ -1063,7 +1123,7 @@ def _tool_category_for_binding(binding: Any) -> str:
     """Infer a coarse tool category when curated metadata does not provide one."""
     if binding.tool_id in {"agr_curation_query", "curation_db_sql"}:
         return "Database"
-    if binding.tool_id in {"search_document", "read_section", "read_subsection"}:
+    if binding.tool_id in {"search_document", "read_section", "read_subsection", "record_evidence"}:
         return "Document"
     if binding.tool_id.startswith("save_"):
         return "Output"
@@ -1910,6 +1970,9 @@ def _build_runtime_instructions(
                 f'You are helping the user with the document: "{document_name}"\n\n'
                 + instructions
             )
+
+    if "record_evidence" in canonical_tool_ids:
+        instructions = instructions.rstrip() + "\n\n" + _RECORD_EVIDENCE_RUNTIME_NOTE
 
     # Reinforce structured-output generation when output schema is configured.
     if output_schema is not None:
