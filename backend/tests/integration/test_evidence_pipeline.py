@@ -47,6 +47,21 @@ def _record_to_schema(record):
     )
 
 
+def _first_scope_key(extraction: dict[str, object], key: str) -> str | None:
+    scope_confirmation = extraction.get("scope_confirmation") or {}
+    if not isinstance(scope_confirmation, dict):
+        return None
+
+    values = scope_confirmation.get(key) or []
+    if not isinstance(values, list):
+        return None
+
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def _fixture_extraction_result(
     evidence_fixture: dict[str, object],
     *,
@@ -65,9 +80,10 @@ def _fixture_extraction_result(
         {
             "extraction_result_id": "fixture-extract-1",
             "document_id": document_id,
-            "adapter_key": None,
-            "profile_key": extraction["profile_key"],
-            "domain_key": "gene",
+            "adapter_key": _first_scope_key(extraction, "adapter_keys"),
+            "profile_key": extraction["profile_key"]
+            or _first_scope_key(extraction, "profile_keys"),
+            "domain_key": _first_scope_key(extraction, "domain_keys"),
             "agent_key": extraction["agent_key"],
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": origin_session_id,
@@ -81,6 +97,22 @@ def _fixture_extraction_result(
             "metadata": {"fixture_id": evidence_fixture["fixture_id"]},
         }
     )
+
+
+def test_fixture_extraction_result_uses_scope_confirmation_domain_key(
+    evidence_fixture,
+):
+    disease_fixture = copy.deepcopy(evidence_fixture)
+    disease_fixture["extraction"]["scope_confirmation"]["domain_keys"] = ["disease"]
+
+    extraction_result = _fixture_extraction_result(
+        disease_fixture,
+        document_id="document-fixture",
+        user_id="user-fixture",
+        origin_session_id="session-fixture",
+    )
+
+    assert extraction_result.domain_key == "disease"
 
 
 @pytest.mark.asyncio
