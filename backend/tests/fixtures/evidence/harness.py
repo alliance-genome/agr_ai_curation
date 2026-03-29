@@ -91,6 +91,9 @@ def build_extraction_scope(source: dict[str, Any]) -> dict[str, str | None]:
     if not isinstance(scope_confirmation, dict):
         scope_confirmation = {}
 
+    # Fixtures are currently single-valued per scope dimension; this helper intentionally
+    # resolves the first non-empty value and will need a contract update when multi-scope
+    # fixtures are introduced.
     return {
         "adapter_key": _normalized_optional_string(extraction.get("adapter_key"))
         or _first_non_empty_scope_value(scope_confirmation.get("adapter_keys")),
