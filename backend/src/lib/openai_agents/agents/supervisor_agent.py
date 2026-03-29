@@ -37,19 +37,23 @@ from ..streaming_tools import run_specialist_with_events
 # Prompt cache and context tracking imports
 from src.lib.context import (
     get_current_session_id,
+    get_current_trace_id,
     get_current_user_id,
 )
 from src.lib.chat_state import document_state
 from src.lib.conversation_manager import conversation_manager
-from src.lib.curation_workspace.curation_prep_constants import (
-    CURATION_PREP_UNAVAILABLE_MESSAGE,
+from src.lib.curation_workspace import (
+    CurationPrepPersistenceContext,
+    run_curation_prep,
 )
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import (
     enrich_extraction_result_scope,
     list_extraction_results,
 )
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
+from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
@@ -275,26 +279,19 @@ def _filter_extraction_results_for_scope(
     return [], []
 
 
-def _collect_evidence_payloads(payload: Any) -> list[dict[str, Any]]:
-    """Collect evidence payloads from persisted extraction envelopes."""
+def _resolved_scope_values(
+    confirmed_values: Sequence[str],
+    extraction_results: Sequence[Any],
+    attr_name: str,
+) -> list[str]:
+    """Combine confirmed scope with persisted record scope in stable order."""
 
-    collected: list[dict[str, Any]] = []
-    if isinstance(payload, dict):
-        for key in ("evidence_records", "evidence"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                collected.extend(item for item in value if isinstance(item, dict))
-
-        for key, value in payload.items():
-            if key in {"evidence_records", "evidence"}:
-                continue
-            if isinstance(value, (dict, list)):
-                collected.extend(_collect_evidence_payloads(value))
-    elif isinstance(payload, list):
-        for item in payload:
-            collected.extend(_collect_evidence_payloads(item))
-
-    return collected
+    return _unique_scope_values(
+        [
+            *confirmed_values,
+            *(getattr(record, attr_name, None) for record in extraction_results),
+        ]
+    )
 
 async def _dispatch_curation_prep_from_chat_context(
     *,
@@ -336,7 +333,7 @@ async def _dispatch_curation_prep_from_chat_context(
         user_id=user_id,
         source_kind=CurationExtractionSourceKind.CHAT,
         document_id=active_document_id,
-        exclude_agent_keys=("curation_prep",),
+        exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
     )
     extraction_results = [
         enrich_extraction_result_scope(record)
@@ -389,11 +386,10 @@ async def _dispatch_curation_prep_from_chat_context(
             available_scope=available_scope,
         )
 
-    resolved_adapter_keys = _unique_scope_values(
-        [
-            *confirmed_scope["adapter_keys"],
-            *(getattr(record, "adapter_key", None) for record in scoped_extraction_results),
-        ]
+    resolved_adapter_keys = _resolved_scope_values(
+        confirmed_scope["adapter_keys"],
+        scoped_extraction_results,
+        "adapter_key",
     )
     if not resolved_adapter_keys:
         return _tool_response(
@@ -401,15 +397,66 @@ async def _dispatch_curation_prep_from_chat_context(
             "The persisted extraction context is missing adapter ownership, so curation prep cannot safely run yet.",
             available_scope=available_scope,
         )
-    _ = (
-        confirmed_scope,
-        resolved_adapter_keys,
+    resolved_profile_keys = _resolved_scope_values(
+        confirmed_scope["profile_keys"],
         scoped_extraction_results,
-        scope_resolution_notes,
-        scope_summary,
-        user_confirmation,
+        "profile_key",
     )
-    return _tool_response("unavailable", CURATION_PREP_UNAVAILABLE_MESSAGE)
+    resolved_domain_keys = _resolved_scope_values(
+        confirmed_scope["domain_keys"],
+        scoped_extraction_results,
+        "domain_key",
+    )
+
+    scope_confirmation = CurationPrepScopeConfirmation(
+        confirmed=True,
+        adapter_keys=resolved_adapter_keys,
+        profile_keys=resolved_profile_keys,
+        domain_keys=resolved_domain_keys,
+        notes=_unique_scope_values(
+            [
+                *scope_resolution_notes,
+                f"Confirmed from chat session {session_id}.",
+                f"Prep requested by user {user_id}.",
+                (f"Supervisor scope summary: {scope_summary}" if scope_summary else None),
+                (f"Curator confirmation: {user_confirmation}" if user_confirmation else None),
+            ]
+        ),
+    )
+
+    try:
+        prep_output = await run_curation_prep(
+            scoped_extraction_results,
+            scope_confirmation=scope_confirmation,
+            persistence_context=CurationPrepPersistenceContext(
+                document_id=(
+                    active_document_id
+                    or (scoped_extraction_results[0].document_id if scoped_extraction_results else None)
+                ),
+                source_kind=CurationExtractionSourceKind.CHAT,
+                origin_session_id=session_id,
+                trace_id=get_current_trace_id(),
+                user_id=user_id,
+            ),
+        )
+    except ValueError as exc:
+        return _tool_response("unable_to_prepare", str(exc))
+
+    candidate_count = len(prep_output.candidates)
+    return _tool_response(
+        "prepared",
+        (
+            f"Prepared {candidate_count} candidate annotation"
+            f"{'s' if candidate_count != 1 else ''} for curation review."
+        ),
+        candidate_count=candidate_count,
+        document_id=scoped_extraction_results[0].document_id,
+        adapter_keys=resolved_adapter_keys,
+        profile_keys=resolved_profile_keys,
+        domain_keys=resolved_domain_keys,
+        warnings=list(prep_output.run_metadata.warnings),
+        processing_notes=list(prep_output.run_metadata.processing_notes),
+    )
 
 
 def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[str, Any]]:
