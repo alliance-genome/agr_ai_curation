@@ -3,6 +3,11 @@
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
+from tests.fixtures.evidence.harness import chunk_map, load_evidence_fixture, tool_case_map
+
+
+FIXTURE = load_evidence_fixture()
+TOOL_CASES = tool_case_map(FIXTURE)
 
 
 class _Tracker:
@@ -19,85 +24,69 @@ def identity_function_tool(monkeypatch):
 
 
 def test_find_verified_quote_handles_fuzzy_quote_variants():
+    case = TOOL_CASES["verified_fuzzy"]
+    chunk = chunk_map(FIXTURE)[case["tool_input"]["chunk_id"]]
     quote, match = record_evidence._find_verified_quote(
-        "Crb is required for epithelial polarity during embryogenesis.",
-        "Crb is required for epithelial polarity during early embryogenesis.",
+        case["tool_input"]["claimed_quote"],
+        chunk["text"],
     )
 
-    assert quote == "Crb is required for epithelial polarity during early embryogenesis."
+    assert quote == case["expected_tool_result"]["verified_quote"]
     assert match is not None
     assert match.score >= 0.87
 
 
 @pytest.mark.asyncio
-async def test_record_evidence_returns_verified_payload(monkeypatch):
+async def test_record_evidence_records_exact_match_and_tracker_usage(monkeypatch):
+    case = TOOL_CASES["verified_exact"]
+    chunks = chunk_map(FIXTURE)
     captured = {}
 
     async def _fake_get_chunk_by_id(**kwargs):
         captured.update(kwargs)
-        return {
-            "id": "chunk-1",
-            "text": "Figure 2A. Crumb is essential for maintaining epithelial polarity in the embryo.",
-            "page_number": 4,
-            "parent_section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "metadata": {},
-        }
+        return chunks.get(kwargs["chunk_id"])
 
     tracker = _Tracker()
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     tool = record_evidence.create_record_evidence_tool("doc-12345678", "user-1", tracker=tracker)
 
-    result = await tool(
-        entity="crumb",
-        chunk_id="chunk-1",
-        claimed_quote="Crumb is essential for maintaining epithelial polarity in the embryo.",
-    )
+    result = await tool(**case["tool_input"])
 
-    assert result == {
-        "status": "verified",
-        "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
-        "page": 4,
-        "section": "Results",
-        "subsection": "Gene Expression Analysis",
-        "figure_reference": "Figure 2A",
-    }
+    assert result == case["expected_tool_result"]
     assert captured == {
-        "chunk_id": "chunk-1",
+        "chunk_id": case["tool_input"]["chunk_id"],
         "user_id": "user-1",
         "document_id": "doc-12345678",
     }
     assert tracker.calls == ["record_evidence"]
 
 
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        "verified_fuzzy",
+        "not_found_absent_quote",
+        "not_found_wrong_chunk_id",
+    ],
+)
 @pytest.mark.asyncio
-async def test_record_evidence_returns_not_found_payload(monkeypatch):
-    async def _fake_get_chunk_by_id(**_kwargs):
-        return {
-            "id": "chunk-2",
-            "text": "Crb is required for epithelial polarity during embryogenesis and localizes to the apical membrane.",
-            "page_number": 4,
-            "parent_section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "metadata": {},
-        }
+async def test_record_evidence_fixture_cases(monkeypatch, case_id):
+    case = TOOL_CASES[case_id]
+    chunks = chunk_map(FIXTURE)
+    captured = {}
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        captured.update(kwargs)
+        return chunks.get(kwargs["chunk_id"])
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
 
-    result = await tool(
-        entity="crumb",
-        chunk_id="chunk-2",
-        claimed_quote="Crumb is essential for maintaining epithelial polarity in the embryo.",
-    )
+    result = await tool(**case["tool_input"])
 
-    assert result["status"] == "not_found"
-    assert result["page"] == 4
-    assert result["section"] == "Results"
-    assert result["subsection"] == "Gene Expression Analysis"
-    assert result["message"] == (
-        "Quote not found in this chunk. Retry with text from the chunk or drop this evidence."
-    )
-    assert result["chunk_content_preview"].startswith(
-        "Crb is required for epithelial polarity during embryogenesis"
-    )
+    assert result == case["expected_tool_result"]
+    assert captured == {
+        "chunk_id": case["tool_input"]["chunk_id"],
+        "user_id": "user-1",
+        "document_id": "doc-123",
+    }
