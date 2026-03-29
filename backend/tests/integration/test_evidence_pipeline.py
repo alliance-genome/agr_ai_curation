@@ -132,7 +132,6 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         filename=evidence_integration_context["paper"]["filename"],
         tool_agent_map={extraction["tool_name"]: extraction["agent_key"]},
         run_agent_streamed=make_fixture_runner(evidence_fixture),
-        evidence_fixture=evidence_fixture,
     )
 
     with client.stream(
@@ -231,66 +230,75 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
 
 
 @pytest.mark.asyncio
-async def test_fixture_chat_extraction_preserves_profile_scope_for_chat_persistence(
+async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace_candidate(
     client,
     evidence_fixture,
     evidence_integration_context,
-    monkeypatch,
     test_db,
 ):
-    from src.lib.curation_workspace.curation_prep_service import run_curation_prep
+    from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
     from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionResultModel
     from src.schemas.curation_prep import CurationPrepScopeConfirmation
 
     scoped_fixture = copy.deepcopy(evidence_fixture)
     scoped_fixture["extraction"]["profile_key"] = "pilot"
     scoped_fixture["extraction"]["scope_confirmation"]["profile_keys"] = ["pilot"]
-    extraction = scoped_fixture["extraction"]
     session_id = "session-evidence-profile-scope"
 
-    configure_chat_stream_mocks(
-        monkeypatch,
+    extraction_result = _fixture_extraction_result(
+        scoped_fixture,
         document_id=evidence_integration_context["document_id"],
-        filename=evidence_integration_context["paper"]["filename"],
-        tool_agent_map={extraction["tool_name"]: extraction["agent_key"]},
-        run_agent_streamed=make_fixture_runner(scoped_fixture),
-        evidence_fixture=scoped_fixture,
+        user_id=evidence_integration_context["current_user_auth_sub"],
+        origin_session_id=session_id,
     )
 
-    with client.stream(
-        "POST",
-        "/api/chat/stream",
-        json={
-            "message": evidence_integration_context["paper"]["conversation_summary"],
-            "session_id": session_id,
-        },
-    ) as stream_response:
-        collect_sse_events(stream_response)
-        assert stream_response.status_code == 200
-
-    extraction_record = test_db.scalars(
-        select(ExtractionResultModel).where(
-            ExtractionResultModel.origin_session_id == session_id,
-            ExtractionResultModel.agent_key == extraction["agent_key"],
-        )
-    ).one()
-    persisted_extraction = _record_to_schema(extraction_record)
-
-    assert persisted_extraction.profile_key == "pilot"
-    assert persisted_extraction.payload_json["profile_key"] == "pilot"
-    assert persisted_extraction.payload_json["scope_confirmation"]["profile_keys"] == [
-        "pilot"
-    ]
-
     prep_output = await run_curation_prep(
-        [persisted_extraction],
+        [extraction_result],
         scope_confirmation=CurationPrepScopeConfirmation.model_validate(
-            extraction["scope_confirmation"]
+            scoped_fixture["extraction"]["scope_confirmation"]
+        ),
+        db=test_db,
+        persistence_context=CurationPrepPersistenceContext(
+            origin_session_id=session_id,
+            user_id=evidence_integration_context["current_user_auth_sub"],
         ),
     )
 
     assert len(prep_output.candidates) == 1
     assert prep_output.candidates[0].profile_key == "pilot"
+
+    prep_record = test_db.scalars(
+        select(ExtractionResultModel).where(
+            ExtractionResultModel.origin_session_id == session_id,
+            ExtractionResultModel.agent_key == CURATION_PREP_AGENT_ID,
+        )
+    ).one()
+    persisted_prep = _record_to_schema(prep_record)
+
+    assert persisted_prep.profile_key == "pilot"
+    assert persisted_prep.payload_json["candidates"][0]["profile_key"] == "pilot"
+
+    bootstrap_response = client.post(
+        (
+            "/api/curation-workspace/documents/"
+            f"{evidence_integration_context['document_id']}/bootstrap"
+        ),
+        json={"origin_session_id": session_id},
+    )
+    assert bootstrap_response.status_code == 200, bootstrap_response.text
+
+    workspace_response = client.get(
+        f"/api/curation-workspace/sessions/{bootstrap_response.json()['session']['session_id']}",
+        params={"include_workspace": "true"},
+    )
+    assert workspace_response.status_code == 200, workspace_response.text
+    workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
+
+    assert workspace_candidate["profile_key"] == "pilot"
 
 
 @pytest.mark.asyncio
