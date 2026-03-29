@@ -42,17 +42,18 @@ from src.lib.context import (
 )
 from src.lib.chat_state import document_state
 from src.lib.conversation_manager import conversation_manager
-from src.lib.curation_workspace.curation_prep_service import (
+from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     run_curation_prep,
 )
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import (
     enrich_extraction_result_scope,
     list_extraction_results,
 )
 from src.lib.prompts.cache import get_prompt
 from src.lib.prompts.context import set_pending_prompts
-from src.schemas.curation_prep import CurationPrepAgentInput
+from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
@@ -278,217 +279,19 @@ def _filter_extraction_results_for_scope(
     return [], []
 
 
-def _collect_evidence_payloads(payload: Any) -> list[dict[str, Any]]:
-    """Collect evidence payloads from persisted extraction envelopes."""
-
-    collected: list[dict[str, Any]] = []
-    if isinstance(payload, dict):
-        for key in ("evidence_records", "evidence"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                collected.extend(item for item in value if isinstance(item, dict))
-
-        for key, value in payload.items():
-            if key in {"evidence_records", "evidence"}:
-                continue
-            if isinstance(value, (dict, list)):
-                collected.extend(_collect_evidence_payloads(value))
-    elif isinstance(payload, list):
-        for item in payload:
-            collected.extend(_collect_evidence_payloads(item))
-
-    return collected
-
-
-def _build_prep_evidence_records(extraction_results: Sequence[Any]) -> list[dict[str, Any]]:
-    """Translate persisted extraction envelope evidence into prep-agent evidence records."""
-
-    evidence_records: list[dict[str, Any]] = []
-    seen_keys: set[tuple[str, str, str, str, str]] = set()
-
-    for record in extraction_results:
-        payload = getattr(record, "payload_json", None)
-        extraction_result_id = str(getattr(record, "extraction_result_id", "") or "").strip()
-        for index, evidence_payload in enumerate(_collect_evidence_payloads(payload)):
-            snippet_text = str(
-                evidence_payload.get("snippet")
-                or evidence_payload.get("snippet_text")
-                or evidence_payload.get("text")
-                or ""
-            ).strip()
-            if not snippet_text:
-                continue
-
-            page_number = evidence_payload.get("page") or evidence_payload.get("page_number")
-            section_title = str(
-                evidence_payload.get("section")
-                or evidence_payload.get("section_title")
-                or ""
-            ).strip()
-            subsection_title = str(
-                evidence_payload.get("subsection")
-                or evidence_payload.get("subsection_title")
-                or ""
-            ).strip()
-            figure_reference = str(
-                evidence_payload.get("figure_reference")
-                or evidence_payload.get("figure")
-                or ""
-            ).strip()
-
-            dedupe_key = (
-                extraction_result_id,
-                snippet_text,
-                str(page_number or ""),
-                section_title,
-                subsection_title,
-            )
-            if dedupe_key in seen_keys:
-                continue
-            seen_keys.add(dedupe_key)
-
-            evidence_records.append(
-                {
-                    "evidence_record_id": f"{extraction_result_id}:evidence:{index}",
-                    "source": "extracted",
-                    "extraction_result_id": extraction_result_id or None,
-                    "field_paths": _normalize_scope_values(
-                        evidence_payload.get("field_paths") if isinstance(evidence_payload, dict) else None
-                    ),
-                    "anchor": {
-                        "anchor_kind": "snippet",
-                        "locator_quality": "exact_quote",
-                        "supports_decision": "supports",
-                        "snippet_text": snippet_text,
-                        "sentence_text": snippet_text,
-                        "viewer_search_text": snippet_text,
-                        "page_number": page_number,
-                        "section_title": section_title or None,
-                        "subsection_title": subsection_title or None,
-                        "figure_reference": figure_reference or None,
-                        "chunk_ids": [],
-                    },
-                    "notes": [],
-                }
-            )
-
-    return evidence_records
-
-
-def _build_curation_prep_conversation_history(
-    session_history: Sequence[Dict[str, Any]],
-    *,
-    session_id: str,
-    latest_user_message: str,
-) -> list[dict[str, Any]]:
-    """Build prep-agent conversation history from stored chat exchanges plus current turn."""
-
-    messages: list[dict[str, Any]] = []
-
-    for index, exchange in enumerate(session_history):
-        user_message = str(exchange.get("user") or "").strip()
-        assistant_message = str(exchange.get("assistant") or "").strip()
-        created_at = exchange.get("timestamp")
-
-        if user_message:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_message,
-                    "message_id": f"{session_id}:user:{index}",
-                    "created_at": created_at,
-                }
-            )
-        if assistant_message:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_message,
-                    "message_id": f"{session_id}:assistant:{index}",
-                    "created_at": created_at,
-                }
-            )
-
-    latest_confirmation = str(latest_user_message or "").strip()
-    if latest_confirmation:
-        messages.append(
-            {
-                "role": "user",
-                "content": latest_confirmation,
-                "message_id": f"{session_id}:user:current",
-                "created_at": None,
-            }
-        )
-
-    return messages
-
-
-def _build_adapter_metadata(
-    confirmed_scope: dict[str, list[str]],
-    *,
-    scope_summary: str | None,
-) -> list[dict[str, Any]]:
-    """Build the lightest valid adapter metadata from confirmed scope."""
-
-    metadata_targets = list(confirmed_scope["adapter_keys"])
-    profile_key = confirmed_scope["profile_keys"][0] if len(confirmed_scope["profile_keys"]) == 1 else None
-
-    adapter_metadata: list[dict[str, Any]] = []
-    for adapter_key in metadata_targets:
-        notes: list[str] = []
-        if scope_summary:
-            notes.append(f"Confirmed scope summary: {scope_summary}")
-
-        adapter_metadata.append(
-            {
-                "adapter_key": adapter_key,
-                "profile_key": profile_key,
-                "required_field_keys": [],
-                "field_hints": [],
-                "notes": notes,
-            }
-        )
-
-    return adapter_metadata
-
-
-def _build_curation_prep_agent_input(
-    *,
-    session_history: Sequence[Dict[str, Any]],
-    session_id: str,
-    user_confirmation: str,
+def _resolved_scope_values(
+    confirmed_values: Sequence[str],
     extraction_results: Sequence[Any],
-    confirmed_scope: dict[str, list[str]],
-    scope_summary: str | None,
-    scope_notes: Sequence[str],
-) -> CurationPrepAgentInput:
-    """Assemble the prep-agent input payload from confirmed chat-session context."""
+    attr_name: str,
+) -> list[str]:
+    """Combine confirmed scope with persisted record scope in stable order."""
 
-    return CurationPrepAgentInput.model_validate(
-        {
-            "conversation_history": _build_curation_prep_conversation_history(
-                session_history,
-                session_id=session_id,
-                latest_user_message=user_confirmation,
-            ),
-            "extraction_results": [
-                record.model_dump(mode="json") for record in extraction_results
-            ],
-            "evidence_records": _build_prep_evidence_records(extraction_results),
-            "scope_confirmation": {
-                "confirmed": True,
-                "adapter_keys": list(confirmed_scope["adapter_keys"]),
-                "profile_keys": list(confirmed_scope["profile_keys"]),
-                "domain_keys": list(confirmed_scope["domain_keys"]),
-                "notes": [note for note in scope_notes if str(note or "").strip()],
-            },
-            "adapter_metadata": _build_adapter_metadata(
-                confirmed_scope,
-                scope_summary=scope_summary,
-            ),
-        }
+    return _unique_scope_values(
+        [
+            *confirmed_values,
+            *(getattr(record, attr_name, None) for record in extraction_results),
+        ]
     )
-
 
 async def _dispatch_curation_prep_from_chat_context(
     *,
@@ -530,7 +333,7 @@ async def _dispatch_curation_prep_from_chat_context(
         user_id=user_id,
         source_kind=CurationExtractionSourceKind.CHAT,
         document_id=active_document_id,
-        exclude_agent_keys=("curation_prep",),
+        exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
     )
     extraction_results = [
         enrich_extraction_result_scope(record)
@@ -583,11 +386,10 @@ async def _dispatch_curation_prep_from_chat_context(
             available_scope=available_scope,
         )
 
-    resolved_adapter_keys = _unique_scope_values(
-        [
-            *confirmed_scope["adapter_keys"],
-            *(getattr(record, "adapter_key", None) for record in scoped_extraction_results),
-        ]
+    resolved_adapter_keys = _resolved_scope_values(
+        confirmed_scope["adapter_keys"],
+        scoped_extraction_results,
+        "adapter_key",
     )
     if not resolved_adapter_keys:
         return _tool_response(
@@ -595,43 +397,63 @@ async def _dispatch_curation_prep_from_chat_context(
             "The persisted extraction context is missing adapter ownership, so curation prep cannot safely run yet.",
             available_scope=available_scope,
         )
-    confirmed_scope["adapter_keys"] = resolved_adapter_keys
-
-    normalized_scope_summary = str(scope_summary or "").strip() or None
-    scope_notes = [
-        f"User confirmation: {str(user_confirmation or '').strip()}",
-        *scope_resolution_notes,
-    ]
-    if normalized_scope_summary:
-        scope_notes.append(f"Confirmed scope summary: {normalized_scope_summary}")
-
-    agent_input = _build_curation_prep_agent_input(
-        session_history=session_history,
-        session_id=session_id,
-        user_confirmation=user_confirmation,
-        extraction_results=scoped_extraction_results,
-        confirmed_scope=confirmed_scope,
-        scope_summary=normalized_scope_summary,
-        scope_notes=scope_notes,
+    resolved_profile_keys = _resolved_scope_values(
+        confirmed_scope["profile_keys"],
+        scoped_extraction_results,
+        "profile_key",
+    )
+    resolved_domain_keys = _resolved_scope_values(
+        confirmed_scope["domain_keys"],
+        scoped_extraction_results,
+        "domain_key",
     )
 
-    prep_output = await run_curation_prep(
-        agent_input,
-        persistence_context=CurationPrepPersistenceContext(
-            document_id=scoped_extraction_results[0].document_id,
-            origin_session_id=session_id,
-            trace_id=get_current_trace_id(),
-            user_id=user_id,
-            source_kind=CurationExtractionSourceKind.CHAT,
-            conversation_summary=normalized_scope_summary or str(user_confirmation or "").strip() or None,
+    scope_confirmation = CurationPrepScopeConfirmation(
+        confirmed=True,
+        adapter_keys=resolved_adapter_keys,
+        profile_keys=resolved_profile_keys,
+        domain_keys=resolved_domain_keys,
+        notes=_unique_scope_values(
+            [
+                *scope_resolution_notes,
+                f"Confirmed from chat session {session_id}.",
+                f"Prep requested by user {user_id}.",
+                (f"Supervisor scope summary: {scope_summary}" if scope_summary else None),
+                (f"Curator confirmation: {user_confirmation}" if user_confirmation else None),
+            ]
         ),
     )
 
+    try:
+        prep_output = await run_curation_prep(
+            scoped_extraction_results,
+            scope_confirmation=scope_confirmation,
+            persistence_context=CurationPrepPersistenceContext(
+                document_id=(
+                    active_document_id
+                    or (scoped_extraction_results[0].document_id if scoped_extraction_results else None)
+                ),
+                source_kind=CurationExtractionSourceKind.CHAT,
+                origin_session_id=session_id,
+                trace_id=get_current_trace_id(),
+                user_id=user_id,
+            ),
+        )
+    except ValueError as exc:
+        return _tool_response("unable_to_prepare", str(exc))
+
+    candidate_count = len(prep_output.candidates)
     return _tool_response(
         "prepared",
-        "Curation prep completed and the result was persisted for downstream workspace handling.",
-        candidate_count=len(prep_output.candidates),
-        scope_confirmation=agent_input.scope_confirmation.model_dump(mode="json"),
+        (
+            f"Prepared {candidate_count} candidate annotation"
+            f"{'s' if candidate_count != 1 else ''} for curation review."
+        ),
+        candidate_count=candidate_count,
+        document_id=scoped_extraction_results[0].document_id,
+        adapter_keys=resolved_adapter_keys,
+        profile_keys=resolved_profile_keys,
+        domain_keys=resolved_domain_keys,
         warnings=list(prep_output.run_metadata.warnings),
         processing_notes=list(prep_output.run_metadata.processing_notes),
     )

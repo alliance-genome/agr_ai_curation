@@ -235,9 +235,7 @@ def _create_candidate(
         profile_key="primary",
         display_label=f"Candidate {order + 1}",
         secondary_label=None,
-        confidence=0.8,
         conversation_summary="Candidate summary.",
-        unresolved_ambiguities=[],
         extraction_result_id=extraction_result_id,
         normalized_payload={"gene": {"symbol": f"GENE{order + 1}"}},
         candidate_metadata={},
@@ -423,27 +421,15 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(db_session, document_id=document.id)
 
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._safe_resolve_user_id",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._prepare_document",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver._resolve_reference",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("private resolver helper should not be called")
-        ),
-    )
-
     def _resolve(self, candidate, *, normalized_candidate, context):
         assert candidate.adapter_key == "reference_adapter"
+        assert set(candidate.model_dump(mode="json").keys()) == {
+            "adapter_key",
+            "profile_key",
+            "payload",
+            "evidence_records",
+            "conversation_context_summary",
+        }
         assert normalized_candidate.normalized_payload["gene"]["symbol"] == "Example quote."
         assert context.document_id == str(document.id)
         assert context.prep_extraction_result_id == str(extraction_result.id)
@@ -478,6 +464,54 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
     assert resolved_anchor.locator_quality is EvidenceLocatorQuality.NORMALIZED_QUOTE
     assert resolved_anchor.snippet_text == "Resolved via public resolver API."
     assert warnings == ["resolved via public resolver API"]
+
+
+def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(db_session, document_id=document.id)
+    resolver_cls = module.DeterministicEvidenceAnchorResolver
+
+    class _ChunkBackedResolver(resolver_cls):
+        def __init__(self, *args, **kwargs):
+            assert kwargs.get("resolve_against_document") is True
+            kwargs["chunk_loader"] = lambda _document_id, _user_id: [
+                {
+                    "id": "chunk-1",
+                    "chunk_index": 0,
+                    "content": "Introductory text. Example quote. Closing text.",
+                    "page_number": 3,
+                    "section_title": "Results",
+                    "subsection": "Association",
+                    "metadata": {},
+                }
+            ]
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _ChunkBackedResolver)
+
+    resolved_anchor, warnings = module._resolve_anchor_against_document(
+        db_session,
+        document_id=str(document.id),
+        anchor=_anchor(snippet_text="Example quote.", page_number=None),
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        field_path="gene.symbol",
+        current_user_id="curator-1",
+        prep_extraction_result_id=str(extraction_result.id),
+    )
+
+    assert resolved_anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
+    assert resolved_anchor.snippet_text == "Example quote."
+    assert resolved_anchor.page_number == 3
+    assert resolved_anchor.section_title == "Results"
+    assert resolved_anchor.subsection_title == "Association"
+    assert resolved_anchor.chunk_ids == ["chunk-1"]
+    assert resolved_anchor.pdfx_markdown_offset_start is not None
+    assert resolved_anchor.pdfx_markdown_offset_end is not None
+    assert warnings == []
 
 
 def test_recompute_evidence_updates_all_selected_records_including_manual(

@@ -58,6 +58,7 @@ from .config import (
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
 from .evidence_summary import (
+    build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
     extract_evidence_records_from_structured_result,
     normalize_evidence_records,
@@ -791,6 +792,14 @@ async def _run_agent_with_tracing(
                             len(str(output)),
                             extra={"trace_id": trace_id, "user_id": user_id, "tool_name": last_tool},
                         )
+
+                        evidence_record = build_record_evidence_summary_record(
+                            tool_name=last_tool,
+                            tool_input=completed_tool.get("tool_input"),
+                            tool_output=output,
+                        )
+                        if evidence_record is not None:
+                            evidence_records.append(evidence_record)
 
                         # Emit any remaining collected specialist events (fallback for batch mode)
                         # Most events should have been streamed via queue, this catches any stragglers

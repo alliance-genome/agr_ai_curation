@@ -660,35 +660,13 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
     assert exc.value.detail == "Manual candidate creation only supports source=manual"
 
 
-def test_get_session_detail_exposes_adapter_template_fields_for_zero_candidate_sessions(db_session):
+def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_sessions(db_session):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(
         db_session,
         document_id=str(document.id),
         domain_key="alpha",
         candidate_count=0,
-        metadata={
-            "final_run_metadata": {"model_name": "gpt-5-mini"},
-            "adapter_metadata": [
-                {
-                    "adapter_key": "reference_adapter",
-                    "profile_key": "primary",
-                    "required_field_keys": ["field_a", "field_b"],
-                    "field_hints": [
-                        {
-                            "field_key": "field_a",
-                            "required": True,
-                            "label": "Field A",
-                            "value_type": "string",
-                            "description": "Primary field",
-                            "controlled_vocabulary": ["alpha"],
-                            "normalization_hints": ["Use canonical value."],
-                        }
-                    ],
-                    "notes": ["Adapter-owned field hints persisted from prep."],
-                }
-            ],
-        },
     )
     session_row = ReviewSessionModel(
         id=uuid4(),
@@ -717,45 +695,7 @@ def test_get_session_detail_exposes_adapter_template_fields_for_zero_candidate_s
     response = module.get_session_detail(db_session, str(session_row.id))
 
     assert response.progress.total_candidates == 0
-    assert response.adapter.metadata["manual_template_source"] == "prep_adapter_metadata"
-    assert response.adapter.metadata["manual_draft_fields"] == [
-        {
-            "field_key": "field_a",
-            "label": "Field A",
-            "value": None,
-            "seed_value": None,
-            "field_type": "string",
-            "group_key": None,
-            "group_label": None,
-            "order": 0,
-            "required": True,
-            "read_only": False,
-            "dirty": False,
-            "stale_validation": False,
-            "evidence_anchor_ids": [],
-            "metadata": {
-                "description": "Primary field",
-                "controlled_vocabulary": ["alpha"],
-                "normalization_hints": ["Use canonical value."],
-            },
-        },
-        {
-            "field_key": "field_b",
-            "label": "Field B",
-            "value": None,
-            "seed_value": None,
-            "field_type": None,
-            "group_key": None,
-            "group_label": None,
-            "order": 1,
-            "required": True,
-            "read_only": False,
-            "dirty": False,
-            "stale_validation": False,
-            "evidence_anchor_ids": [],
-            "metadata": {},
-        },
-    ]
+    assert response.adapter.metadata == {}
 
 
 def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db_session):

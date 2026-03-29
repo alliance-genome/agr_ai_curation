@@ -33,6 +33,10 @@ from ..lib.weaviate_client.documents import get_document
 from ..lib.conversation_manager import conversation_manager, SessionAccessError
 from ..lib.openai_agents import run_agent_streamed
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
+from ..lib.openai_agents.evidence_summary import (
+    build_record_evidence_summary_record,
+    normalize_evidence_records,
+)
 from ..lib.flows.executor import execute_flow
 from ..models.sql import get_db, CurationFlow
 from ..schemas.curation_workspace import (
@@ -163,6 +167,31 @@ def _build_extraction_candidate_from_tool_event(
         agent_key=agent_key,
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
+    )
+
+
+def _extract_evidence_records(value: Any) -> List[Dict[str, Any]]:
+    """Parse a value into a list of normalized evidence records."""
+    return normalize_evidence_records(value)
+
+
+def _build_evidence_record_from_tool_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse a record_evidence tool-complete event into an SSE-ready evidence record."""
+
+    if event.get("type") != "TOOL_COMPLETE":
+        return None
+
+    details = event.get("details", {}) or {}
+    internal_payload = event.get("internal", {}) or {}
+    tool_name = str(details.get("toolName") or "").strip()
+
+    if tool_name != "record_evidence" or not isinstance(internal_payload, dict):
+        return None
+
+    return build_record_evidence_summary_record(
+        tool_name=tool_name,
+        tool_input=internal_payload.get("tool_input"),
+        tool_output=internal_payload.get("tool_output"),
     )
 
 
@@ -756,6 +785,8 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         run_finished = False
         pending_run_finished_event: Optional[Dict[str, Any]] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
+        evidence_records: List[Dict[str, Any]] = []
+        evidence_summary_event_received = False
 
         try:
             async for event in run_agent_streamed(
@@ -804,8 +835,18 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                     trace_id = event_data.get("trace_id")
 
                 if event_type == "evidence_summary":
+                    event_evidence_records = _extract_evidence_records(event.get("evidence_records"))
+                    if not event_evidence_records:
+                        event_evidence_records = _extract_evidence_records(
+                            (event.get("details") or {}).get("evidence_records", [])
+                        )
+                    if event_evidence_records:
+                        evidence_records = event_evidence_records
+                        evidence_summary_event_received = True
                     if "evidence_records" not in flat_event:
-                        if "evidence_records" in event:
+                        if event_evidence_records:
+                            flat_event["evidence_records"] = event_evidence_records
+                        elif "evidence_records" in event:
                             flat_event["evidence_records"] = event["evidence_records"]
                         elif "evidence_records" in (event.get("details") or {}):
                             flat_event["evidence_records"] = event["details"]["evidence_records"]
@@ -821,6 +862,11 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 if candidate:
                     extraction_candidates.append(candidate)
 
+                if not evidence_summary_event_received:
+                    evidence_record = _build_evidence_record_from_tool_event(event)
+                    if evidence_record:
+                        evidence_records.append(evidence_record)
+
                 # Capture response for history
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
@@ -832,6 +878,11 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
 
             # Save to conversation history
             if run_finished:
+                if evidence_records and not evidence_summary_event_received:
+                    yield (
+                        "data: "
+                        f"{json.dumps({'type': 'evidence_summary', 'timestamp': datetime.now(timezone.utc).isoformat(), 'session_id': current_session_id, 'sessionId': current_session_id, 'evidence_records': evidence_records}, default=str)}\n\n"
+                    )
                 _persist_extraction_candidates(
                     candidates=extraction_candidates,
                     document_id=document_id,

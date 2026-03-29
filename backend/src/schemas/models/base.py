@@ -9,7 +9,7 @@ This module contains foundational types used across all schema models:
 
 from typing import List, Optional
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Destination(str, Enum):
@@ -69,15 +69,44 @@ class ExclusionReasonCode(str, Enum):
 
 
 class EvidenceRecord(BaseModel):
-    """Evidence snippet used to support keep/exclude decisions."""
+    """Verified evidence record used to support keep/exclude decisions."""
 
     model_config = ConfigDict(extra='forbid')
 
+    entity: Optional[str] = Field(default=None, description="Human-readable entity label the extractor/tool was evaluating")
+    verified_quote: Optional[str] = Field(default=None, description="Verbatim paper text returned by evidence verification")
+    page: Optional[int] = Field(default=None, ge=1, description="1-based page number if known")
     section: Optional[str] = Field(default=None, description="Document section containing the evidence")
-    page: Optional[int] = Field(default=None, description="1-based page number if known")
-    snippet: str = Field(description="Quoted evidence text")
     subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
-    figure_reference: Optional[str] = Field(default=None, description="Figure/table reference, if available")
+    chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
+    figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
+
+    @field_validator("page", mode="before")
+    @classmethod
+    def _validate_page(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("must be an integer")
+        return value
+
+    @field_validator(
+        "entity",
+        "verified_quote",
+        "section",
+        "subsection",
+        "chunk_id",
+        "figure_reference",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip()
+        return normalized or None
 
 
 class MentionCandidate(BaseModel):

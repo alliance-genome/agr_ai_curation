@@ -389,8 +389,6 @@ def _consolidate_retained_normalized_list(
         return None
 
     return consolidated
-
-
 def build_record_evidence_summary_record(
     *,
     tool_name: str,

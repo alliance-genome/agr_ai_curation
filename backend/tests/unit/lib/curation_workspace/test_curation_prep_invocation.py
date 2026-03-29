@@ -1,6 +1,6 @@
 """Unit tests for chat-driven curation prep preview and execution."""
 
-from types import SimpleNamespace
+from __future__ import annotations
 
 import pytest
 
@@ -13,9 +13,9 @@ def _make_extraction_result(
     *,
     candidate_count: int = 2,
     adapter_key: str | None = "reference_adapter",
-    profile_key: str | None = "primary",
-    domain_key: str | None = "disease",
-    agent_key: str = "disease_extractor",
+    profile_key: str | None = "pilot",
+    domain_key: str | None = "observation",
+    agent_key: str = "observation_extractor",
     payload_json: dict | None = None,
     metadata: dict | None = None,
 ) -> CurationExtractionResultRecord:
@@ -33,21 +33,35 @@ def _make_extraction_result(
             "flow_run_id": None,
             "user_id": "user-1",
             "candidate_count": candidate_count,
-            "conversation_summary": "Conversation focused on disease findings.",
+            "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
             "payload_json": payload_json
             or {
                 "items": [
                     {
-                        "label": "APOE",
-                        "evidence_records": [
+                        "label": "Candidate Alpha",
+                        "entity_type": "observation",
+                        "normalized_id": "OBS:0001",
+                        "source_mentions": ["Alpha mention"],
+                        "evidence": [
                             {
-                                "snippet": "APOE was implicated in the disease model.",
+                                "entity": "Candidate Alpha",
+                                "verified_quote": "Candidate Alpha was supported by a verified observation.",
                                 "section": "Results",
-                                "subsection": "Disease findings",
+                                "subsection": "Observation set",
                                 "page": 4,
-                                "figure_reference": "Fig. 2",
+                                "chunk_id": "chunk-alpha-1",
                             }
                         ],
+                    }
+                ],
+                "evidence_records": [
+                    {
+                        "entity": "Candidate Alpha",
+                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
+                        "section": "Results",
+                        "subsection": "Observation set",
+                        "page": 4,
+                        "chunk_id": "chunk-alpha-1",
                     }
                 ],
                 "run_summary": {"candidate_count": candidate_count},
@@ -58,76 +72,72 @@ def _make_extraction_result(
     )
 
 
-def _make_prep_output(candidate_count: int = 2) -> CurationPrepAgentOutput:
+def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
     return CurationPrepAgentOutput.model_validate(
         {
             "candidates": [
                 {
-                    "adapter_key": "reference_adapter",
-                    "profile_key": "primary",
-                    "extracted_fields": [
+                    "adapter_key": "observation",
+                    "profile_key": "pilot",
+                    "payload": {
+                        "label": f"Candidate {index + 1}",
+                        "entity_type": "observation",
+                        "normalized_id": f"OBS:000{index + 1}",
+                        "source_mentions": [f"Mention {index + 1}"],
+                    },
+                    "evidence_records": [
                         {
-                            "field_path": "gene_symbol",
-                            "value_type": "string",
-                            "string_value": "APOE",
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": None,
-                        }
-                    ],
-                    "evidence_references": [
-                        {
-                            "field_path": "gene_symbol",
-                            "evidence_record_id": "extract-1:evidence:1",
-                            "extraction_result_id": "extract-1",
+                            "evidence_record_id": f"extract-{index + 1}:candidate:1:evidence:1",
+                            "source": "extracted",
+                            "extraction_result_id": f"extract-{index + 1}",
+                            "field_paths": [
+                                "label",
+                                "entity_type",
+                                "normalized_id",
+                                "source_mentions.0",
+                            ],
                             "anchor": {
                                 "anchor_kind": "snippet",
                                 "locator_quality": "exact_quote",
                                 "supports_decision": "supports",
-                                "snippet_text": "APOE was implicated in the disease model.",
-                                "sentence_text": "APOE was implicated in the disease model.",
-                                "viewer_search_text": "APOE was implicated in the disease model.",
+                                "snippet_text": "Verified quote.",
+                                "sentence_text": "Verified quote.",
+                                "normalized_text": None,
+                                "viewer_search_text": "Verified quote.",
+                                "pdfx_markdown_offset_start": None,
+                                "pdfx_markdown_offset_end": None,
                                 "page_number": 4,
+                                "page_label": None,
                                 "section_title": "Results",
-                                "subsection_title": "Disease findings",
-                                "figure_reference": "Fig. 2",
-                                "chunk_ids": [],
+                                "subsection_title": "Observation set",
+                                "figure_reference": None,
+                                "table_reference": None,
+                                "chunk_ids": ["chunk-1"],
                             },
-                            "rationale": "The retained evidence explicitly references APOE.",
+                            "notes": [],
                         }
                     ],
-                    "conversation_context_summary": "Conversation narrowed to disease findings for APOE.",
-                    "confidence": 0.91,
-                    "unresolved_ambiguities": [],
+                    "conversation_context_summary": (
+                        "Conversation focused on evidence-backed extraction findings."
+                    ),
                 }
-            ]
-            * candidate_count,
+                for index in range(candidate_count)
+            ],
             "run_metadata": {
-                "model_name": "gpt-5-mini",
+                "model_name": "deterministic_programmatic_mapper_v1",
                 "token_usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 12,
-                    "total_tokens": 22,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
                 },
-                "processing_notes": ["Prepared from chat extraction context."],
-                "warnings": ["Review evidence alignment before downstream normalization."],
+                "processing_notes": ["Deterministic prep mapper prepared 1 evidence-backed candidate."],
+                "warnings": [],
             },
         }
     )
 
 
 def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
-    monkeypatch.setattr(
-        module,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_stats=lambda _user_id, _session_id: {
-                "history": [
-                    {"user": "Prepare disease annotations for APOE", "assistant": "I found two disease candidates."}
-                ]
-            }
-        ),
-    )
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -143,18 +153,16 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.ready is True
     assert preview.candidate_count == 2
     assert preview.extraction_result_count == 1
-    assert preview.conversation_message_count == 2
+    assert preview.conversation_message_count == 0
     assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.domain_keys == ["disease"]
+    assert preview.domain_keys == ["observation"]
+    assert preview.blocking_reasons == []
     assert "You discussed 2 candidate annotations" in preview.summary_text
+    assert "reference adapter" in preview.summary_text
+    assert "observation domain" in preview.summary_text
 
 
 def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch):
-    monkeypatch.setattr(
-        module,
-        "conversation_manager",
-        SimpleNamespace(get_session_stats=lambda _user_id, _session_id: {"history": []}),
-    )
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -173,18 +181,7 @@ def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch)
     ]
 
 
-def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(monkeypatch):
-    monkeypatch.setattr(
-        module,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_stats=lambda _user_id, _session_id: {
-                "history": [
-                    {"user": "Prepare the central gene findings", "assistant": "I found four gene candidates."}
-                ]
-            }
-        ),
-    )
+def test_build_chat_curation_prep_preview_blocks_when_adapter_scope_is_missing(monkeypatch):
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -194,13 +191,16 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
                 adapter_key=None,
                 profile_key=None,
                 domain_key=None,
-                agent_key="gene_extractor",
                 payload_json={
-                    "genes": [{"mention": "tinman"}],
-                    "items": [{"label": "tinman"}],
-                    "raw_mentions": [{"mention": "tinman", "evidence": []}],
-                    "exclusions": [],
-                    "ambiguities": [],
+                    "items": [
+                        {
+                            "label": "Candidate Alpha",
+                            "entity_type": "observation",
+                            "normalized_id": "OBS:0001",
+                            "source_mentions": ["Alpha mention"],
+                            "evidence": [],
+                        }
+                    ],
                     "run_summary": {"candidate_count": 4},
                 },
             )
@@ -213,37 +213,33 @@ def test_build_chat_curation_prep_preview_infers_scope_from_unscoped_results(mon
         db=object(),
     )
 
-    assert preview.ready is True
-    assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.domain_keys == ["gene"]
-    assert preview.blocking_reasons == []
-    assert "reference_adapter" not in preview.summary_text
-    assert "gene domain" in preview.summary_text
+    assert preview.ready is False
+    assert preview.adapter_keys == []
+    assert preview.domain_keys == ["observation"]
+    assert preview.blocking_reasons == [
+        "The current chat extraction results do not include adapter scope, so prep cannot determine what to prepare."
+    ]
+    assert preview.summary_text == preview.blocking_reasons[0]
 
 
 @pytest.mark.asyncio
-async def test_run_chat_curation_prep_builds_agent_input_and_returns_summary(monkeypatch):
+async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summary(monkeypatch):
     captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        module,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_stats=lambda _user_id, _session_id: {
-                "history": [
-                    {"user": "Prepare disease annotations for APOE", "assistant": "I found two disease candidates."}
-                ]
-            }
-        ),
-    )
     monkeypatch.setattr(
         module,
         "list_extraction_results",
         lambda **_kwargs: [_make_extraction_result(candidate_count=2)],
     )
 
-    async def _fake_run_curation_prep(agent_input, *, db=None, persistence_context=None):
-        captured["agent_input"] = agent_input
+    async def _fake_run_curation_prep(
+        extraction_results,
+        *,
+        scope_confirmation,
+        db=None,
+        persistence_context=None,
+    ):
+        captured["extraction_results"] = extraction_results
+        captured["scope_confirmation"] = scope_confirmation
         captured["db"] = db
         captured["persistence_context"] = persistence_context
         return _make_prep_output(candidate_count=2)
@@ -256,39 +252,22 @@ async def test_run_chat_curation_prep_builds_agent_input_and_returns_summary(mon
         db=object(),
     )
 
-    agent_input = captured["agent_input"]
-    assert len(agent_input.conversation_history) == 2
-    assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
-    assert agent_input.scope_confirmation.profile_keys == ["primary"]
-    assert agent_input.scope_confirmation.domain_keys == ["disease"]
-    assert len(agent_input.adapter_metadata) == 1
-    assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
-    assert len(agent_input.evidence_records) == 1
-    assert agent_input.evidence_records[0].anchor.page_number == 4
+    assert result.summary_text == "Prepared 2 candidate annotations for curation review."
+    assert result.document_id == "document-1"
+    assert result.candidate_count == 2
+    assert result.adapter_keys == ["reference_adapter"]
+    assert result.profile_keys == ["pilot"]
+    assert result.domain_keys == ["observation"]
+    assert len(captured["extraction_results"]) == 1
+    assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
+    assert captured["scope_confirmation"].profile_keys == ["pilot"]
+    assert captured["scope_confirmation"].domain_keys == ["observation"]
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
 
-    assert result.candidate_count == 2
-    assert result.adapter_keys == ["reference_adapter"]
-    assert result.warnings == ["Review evidence alignment before downstream normalization."]
-    assert "Prepared 2 candidate annotations for curation review." == result.summary_text
-
 
 @pytest.mark.asyncio
-async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeypatch):
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        module,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_stats=lambda _user_id, _session_id: {
-                "history": [
-                    {"user": "Prepare the central gene findings", "assistant": "I found four gene candidates."}
-                ]
-            }
-        ),
-    )
+async def test_run_chat_curation_prep_blocks_when_adapter_scope_is_missing(monkeypatch):
     monkeypatch.setattr(
         module,
         "list_extraction_results",
@@ -298,42 +277,30 @@ async def test_run_chat_curation_prep_infers_scope_from_unscoped_results(monkeyp
                 adapter_key=None,
                 profile_key=None,
                 domain_key=None,
-                agent_key="gene_extractor",
                 payload_json={
-                    "genes": [{"mention": "tinman"}],
-                    "items": [{"label": "tinman"}],
-                    "evidence_records": [
+                    "items": [
                         {
-                            "snippet": "tinman controls cardiogenesis in embryos.",
-                            "section": "Results",
-                            "page": 3,
+                            "label": "Candidate Alpha",
+                            "entity_type": "observation",
+                            "normalized_id": "OBS:0001",
+                            "source_mentions": ["Alpha mention"],
+                            "evidence": [],
                         }
                     ],
-                    "raw_mentions": [{"mention": "tinman", "evidence": []}],
-                    "exclusions": [],
-                    "ambiguities": [],
                     "run_summary": {"candidate_count": 4},
                 },
             )
         ],
     )
 
-    async def _fake_run_curation_prep(agent_input, *, db=None, persistence_context=None):
-        captured["agent_input"] = agent_input
-        captured["db"] = db
-        captured["persistence_context"] = persistence_context
-        return _make_prep_output(candidate_count=1)
+    async def _fake_run_curation_prep(*_args, **_kwargs):
+        raise AssertionError("run_curation_prep should not be called when adapter scope is missing")
 
     monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
 
-    result = await module.run_chat_curation_prep(
-        CurationPrepChatRunRequest(session_id="session-1"),
-        user_id="user-1",
-        db=object(),
-    )
-
-    agent_input = captured["agent_input"]
-    assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
-    assert agent_input.scope_confirmation.domain_keys == ["gene"]
-    assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
-    assert result.adapter_keys == ["reference_adapter"]
+    with pytest.raises(ValueError, match="do not include adapter scope"):
+        await module.run_chat_curation_prep(
+            CurationPrepChatRunRequest(session_id="session-1"),
+            user_id="user-1",
+            db=object(),
+        )

@@ -64,7 +64,6 @@ function buildWorkspace(
         order: 0,
         adapter_key: 'gene',
         display_label: 'Candidate 1',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-1',
           candidate_id: 'candidate-1',

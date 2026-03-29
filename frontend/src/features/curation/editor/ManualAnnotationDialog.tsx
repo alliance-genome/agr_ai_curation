@@ -70,7 +70,7 @@ interface ManualTemplateOption {
   profileKey: string | null
   label: string
   description: string
-  source: 'candidate' | 'adapter_metadata' | 'empty'
+  source: 'candidate' | 'empty'
   fields: CurationDraftField[]
 }
 
@@ -164,46 +164,6 @@ function parseTemplateFieldMetadata(value: unknown): Record<string, unknown> {
   return { ...(value as Record<string, unknown>) }
 }
 
-function readTemplateFieldsFromAdapterMetadata(
-  session: CurationReviewSession,
-): CurationDraftField[] {
-  const rawTemplateFields = session.adapter.metadata['manual_draft_fields']
-  if (!Array.isArray(rawTemplateFields)) {
-    return EMPTY_FIELDS
-  }
-
-  return rawTemplateFields.flatMap((rawField, index) => {
-    if (!rawField || typeof rawField !== 'object' || Array.isArray(rawField)) {
-      return []
-    }
-
-    const field = rawField as Record<string, unknown>
-    const fieldKey = typeof field.field_key === 'string' ? field.field_key.trim() : ''
-    const label = typeof field.label === 'string' ? field.label.trim() : ''
-    if (!fieldKey || !label) {
-      return []
-    }
-
-    return [{
-      field_key: fieldKey,
-      label,
-      value: field.value ?? null,
-      seed_value: field.seed_value ?? null,
-      field_type: typeof field.field_type === 'string' ? field.field_type : null,
-      group_key: typeof field.group_key === 'string' ? field.group_key : null,
-      group_label: typeof field.group_label === 'string' ? field.group_label : null,
-      order: parseTemplateFieldOrder(field.order, index),
-      required: field.required === true,
-      read_only: field.read_only === true,
-      dirty: false,
-      stale_validation: false,
-      evidence_anchor_ids: [],
-      validation_result: null,
-      metadata: parseTemplateFieldMetadata(field.metadata),
-    }]
-  })
-}
-
 function createTemplateOptionKey(
   adapterKey: string,
   profileKey: string | null,
@@ -261,9 +221,6 @@ function buildTemplateOptions(
     workspace.session.adapter.adapter_key,
     workspace.session.adapter.profile_key ?? null,
   )
-  const sessionTemplateFields = cloneTemplateFields(
-    readTemplateFieldsFromAdapterMetadata(workspace.session),
-  )
   if (!options.has(sessionKey)) {
     options.set(sessionKey, {
       key: sessionKey,
@@ -274,11 +231,9 @@ function buildTemplateOptions(
         workspace.session.adapter.adapter_key,
         workspace.session.adapter.profile_key ?? null,
       ),
-      description: sessionTemplateFields.length > 0
-        ? `${sessionTemplateFields.length} field${sessionTemplateFields.length === 1 ? '' : 's'} from the session adapter template`
-        : 'No shared draft-field template is available yet for this adapter/profile.',
-      source: sessionTemplateFields.length > 0 ? 'adapter_metadata' : 'empty',
-      fields: sessionTemplateFields,
+      description: 'No shared draft-field template is available yet for this adapter/profile.',
+      source: 'empty',
+      fields: EMPTY_FIELDS,
     })
   }
 
@@ -492,9 +447,7 @@ function buildOptimisticCandidate(args: {
     profile_key: args.profileKey,
     display_label: args.displayLabel,
     secondary_label: null,
-    confidence: null,
     conversation_summary: null,
-    unresolved_ambiguities: [],
     extraction_result_id: null,
     draft,
     evidence_anchors: args.evidenceRecords,

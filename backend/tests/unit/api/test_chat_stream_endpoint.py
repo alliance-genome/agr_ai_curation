@@ -216,12 +216,14 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.trace_id == "trace-123"
     assert persisted_request.user_id == "auth-sub"
     assert persisted_request.candidate_count == 1
-    assert persisted_request.adapter_key == "gene_expression"
+    assert persisted_request.adapter_key is None
     assert persisted_request.domain_key == "gene_expression"
     assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
+    assert persisted_request.metadata["envelope_destination"] == "gene_expression"
+    assert persisted_request.metadata["inferred_domain_key"] == "gene_expression"
 
 
-def test_chat_stream_endpoint_does_not_synthesize_evidence_summary(monkeypatch):
+def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -297,7 +299,19 @@ def test_chat_stream_endpoint_does_not_synthesize_evidence_summary(monkeypatch):
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
         "TOOL_COMPLETE",
+        "evidence_summary",
         "RUN_FINISHED",
+    ]
+    assert events[2]["evidence_records"] == [
+        {
+            "entity": "crumb",
+            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+            "page": 4,
+            "section": "Results",
+            "subsection": "Gene Expression Analysis",
+            "chunk_id": "abc123",
+            "figure_reference": "Figure 2A",
+        }
     ]
 
 
@@ -618,9 +632,9 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     assert len(persisted_requests) == 1
     persisted_request = persisted_requests[0]
     assert persisted_request.agent_key == "gene_extractor"
-    assert persisted_request.adapter_key == "reference_adapter"
+    assert persisted_request.adapter_key is None
     assert persisted_request.domain_key == "gene"
-    assert persisted_request.metadata["inferred_adapter_key"] == "reference_adapter"
+    assert "inferred_adapter_key" not in persisted_request.metadata
     assert persisted_request.metadata["inferred_domain_key"] == "gene"
 
 

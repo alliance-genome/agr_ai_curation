@@ -1,0 +1,170 @@
+{
+  "fixture_id": "tool_verified_allele_paper",
+  "paper": {
+    "title": "daf-2 allele evidence fixture paper",
+    "filename": "test_tool_verified_allele_paper.pdf",
+    "conversation_summary": "Extract evidence-backed allele findings from a known paper fixture."
+  },
+  "chunks": [
+    {
+      "id": "chunk-allele-phenotype",
+      "text": "Figure 3B. daf-2(m41) animals formed dauer larvae at 25 C.",
+      "page_number": 3,
+      "parent_section": "Results",
+      "subsection": "Dauer phenotype",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-allele-lesion",
+      "text": "Sequencing identified a glycine-to-glutamate substitution in daf-2(m41), confirming the allele lesion.",
+      "page_number": 4,
+      "parent_section": "Results",
+      "subsection": "Molecular characterization",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-allele-background",
+      "text": "The daf-2(e1368) strain was maintained as described previously and crossed into the reporter background.",
+      "page_number": 6,
+      "parent_section": "Methods",
+      "subsection": "Strains",
+      "metadata": {}
+    }
+  ],
+  "tool_cases": [
+    {
+      "case_id": "verified_exact",
+      "tool_input": {
+        "entity": "daf-2(m41)",
+        "chunk_id": "chunk-allele-phenotype",
+        "claimed_quote": "daf-2(m41) animals formed dauer larvae at 25 C."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
+        "page": 3,
+        "section": "Results",
+        "subsection": "Dauer phenotype",
+        "figure_reference": "Figure 3B"
+      }
+    },
+    {
+      "case_id": "verified_supporting",
+      "tool_input": {
+        "entity": "daf-2(m41)",
+        "chunk_id": "chunk-allele-lesion",
+        "claimed_quote": "Sequencing identified a glycine-to-glutamate substitution in daf-2(m41), confirming the allele lesion."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "Sequencing identified a glycine-to-glutamate substitution in daf-2(m41), confirming the allele lesion.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Molecular characterization"
+      }
+    },
+    {
+      "case_id": "not_found_absent_quote",
+      "tool_input": {
+        "entity": "daf-2(e1368)",
+        "chunk_id": "chunk-allele-background",
+        "claimed_quote": "daf-2(e1368) animals formed dauer larvae at 25 C."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "page": 6,
+        "section": "Methods",
+        "subsection": "Strains",
+        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
+        "chunk_content_preview": "The daf-2(e1368) strain was maintained as described previously and crossed into the reporter background."
+      }
+    },
+    {
+      "case_id": "not_found_wrong_chunk_id",
+      "tool_input": {
+        "entity": "daf-2(m41)",
+        "chunk_id": "chunk-allele-missing",
+        "claimed_quote": "daf-2(m41) animals formed dauer larvae at 25 C."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "chunk_content_preview": "",
+        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+      }
+    }
+  ],
+  "extraction": {
+    "tool_name": "ask_allele_extractor_specialist",
+    "agent_key": "allele_extractor",
+    "profile_key": null,
+    "scope_confirmation": {
+      "confirmed": true,
+      "adapter_keys": [],
+      "profile_keys": [],
+      "domain_keys": [
+        "allele"
+      ],
+      "notes": [
+        "Confirmed tool-verified allele fixture scope."
+      ]
+    },
+    "items": [
+      {
+        "label": "daf-2(m41)",
+        "entity_type": "allele",
+        "normalized_id": "WB:WBVar00000001",
+        "source_mentions": [
+          "daf-2(m41)"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_supporting"
+        ]
+      },
+      {
+        "label": "daf-2(e1368)",
+        "entity_type": "allele",
+        "normalized_id": "WB:WBVar00000002",
+        "source_mentions": [
+          "daf-2(e1368)"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
+    "top_level_evidence_case_ids": [
+      "verified_exact",
+      "verified_supporting"
+    ],
+    "run_summary": {
+      "candidate_count": 2
+    }
+  },
+  "expected_candidates": [
+    {
+      "adapter_key": "allele",
+      "profile_key": null,
+      "payload": {
+        "label": "daf-2(m41)",
+        "entity_type": "allele",
+        "normalized_id": "WB:WBVar00000001",
+        "source_mentions": [
+          "daf-2(m41)"
+        ]
+      },
+      "field_paths": [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0"
+      ],
+      "evidence_case_ids": [
+        "verified_exact",
+        "verified_supporting"
+      ]
+    }
+  ],
+  "expected_gating": {
+    "warning": "Skipped 1 candidate without verified evidence.",
+    "all_zero_error": "No evidence-verified candidates were available to prepare for curation review."
+  }
+}

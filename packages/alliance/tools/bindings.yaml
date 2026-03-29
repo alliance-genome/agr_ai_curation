@@ -31,6 +31,14 @@ tools:
       - user_id
     description: Read all content from a named document subsection
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+  - tool_id: record_evidence
+    binding_kind: context_factory
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_record_evidence_tool
+    required_context:
+      - document_id
+      - user_id
+    description: Verify a claimed quote against a specific document chunk
+    source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool

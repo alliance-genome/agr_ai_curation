@@ -108,7 +108,6 @@ function buildWorkspace(): CurationWorkspace {
         order: 0,
         adapter_key: 'entity_adapter',
         display_label: 'Accepted candidate',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-accepted',
           candidate_id: 'candidate-accepted',
@@ -151,7 +150,6 @@ function buildWorkspace(): CurationWorkspace {
         adapter_key: 'entity_adapter',
         display_label: 'Pending candidate',
         conversation_summary: 'Needs curator review',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-pending',
           candidate_id: 'candidate-pending',
@@ -260,7 +258,6 @@ function buildReferenceWorkspace(): CurationWorkspace {
         adapter_key: 'reference',
         display_label: 'Adapter-owned reference scaffold in practice',
         conversation_summary: 'Reference adapter owns the editor pack and field layout.',
-        unresolved_ambiguities: [],
         draft: {
           draft_id: 'draft-reference',
           candidate_id: 'candidate-reference',
@@ -387,7 +384,6 @@ function buildQueueWorkspace(): CurationWorkspace {
     order: 2,
     adapter_key: 'entity_adapter',
     display_label: 'Next candidate',
-    unresolved_ambiguities: [],
     draft: {
       draft_id: 'draft-next',
       candidate_id: 'candidate-next',
@@ -659,7 +655,8 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByText('No evidence anchors are available for this candidate.'),
     ).toBeInTheDocument()
-    expect(screen.getAllByText('1/2 reviewed')).toHaveLength(2)
+    expect(screen.getByText('1/2 reviewed')).toBeInTheDocument()
+    expect(screen.getByText('1/2')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
@@ -686,7 +683,9 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
     expect(screen.getByText('Workspace Document')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456')).toBeInTheDocument()
-    expect(screen.getByText('Decision toolbar')).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: /decision toolbar panel/i }),
+    ).toBeInTheDocument()
     expect(
       screen.getByText('Candidate 1 of 2 — Entity / Accepted candidate'),
     ).toBeInTheDocument()
@@ -743,7 +742,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: '✓ Accept' }))
+    await user.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
@@ -782,7 +781,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Skip →' }))
+    await user.click(screen.getByRole('button', { name: 'Skip' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('location')).toHaveTextContent(
@@ -823,7 +822,7 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('Pending candidate draft')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: '✕ Reject' }))
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
 
     expect(screen.getByText('Reject candidate?')).toBeInTheDocument()
 

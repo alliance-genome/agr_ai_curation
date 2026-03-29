@@ -27,7 +27,6 @@ function buildCandidate(
     order: 0,
     adapter_key: 'entity_adapter',
     display_label: `Candidate ${candidateId}`,
-    unresolved_ambiguities: [],
     draft: {
       draft_id: `draft-${candidateId}`,
       candidate_id: candidateId,

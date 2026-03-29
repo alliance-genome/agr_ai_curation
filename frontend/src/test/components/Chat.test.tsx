@@ -358,7 +358,6 @@ describe('Chat persistence', () => {
     expect(screen.queryByText(/Sources:/)).not.toBeInTheDocument()
     expect(await screen.findByText('1 evidence quotes')).toBeInTheDocument()
   })
-
   it('shows the evidence footer action for streamed assistant messages with an active document', async () => {
     openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-evidence')
     mockChatFetch({

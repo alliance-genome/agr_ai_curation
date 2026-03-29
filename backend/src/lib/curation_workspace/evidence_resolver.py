@@ -1,4 +1,4 @@
-"""Deterministic evidence-anchor resolution against PDFX markdown chunks."""
+"""Deterministic evidence-anchor resolver for prep evidence and workspace enrichment."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_service import PreparedEvidenceRecordInput
 from src.models.sql.database import SessionLocal
-from src.schemas.curation_prep import CurationPrepCandidate, CurationPrepEvidenceReference
+from src.schemas.curation_prep import CurationPrepCandidate, CurationPrepEvidenceRecord
 from src.schemas.curation_workspace import (
     CurationEvidenceSource,
     EvidenceAnchor,
@@ -167,7 +167,7 @@ def _default_chunk_loader(document_id: str, user_id: str) -> Sequence[Mapping[st
 
 
 class DeterministicEvidenceAnchorResolver:
-    """Resolve prep evidence anchors against PDFX markdown chunks without LLM calls."""
+    """Preserve verified prep anchors or enrich evidence anchors against PDFX chunks."""
 
     def __init__(
         self,
@@ -175,10 +175,12 @@ class DeterministicEvidenceAnchorResolver:
         session_factory: SessionFactory = SessionLocal,
         user_id_resolver: UserIdResolver | None = None,
         chunk_loader: ChunkLoader | None = None,
+        resolve_against_document: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._user_id_resolver = user_id_resolver or self._resolve_user_id
         self._chunk_loader = chunk_loader or _default_chunk_loader
+        self._resolve_against_document = resolve_against_document
 
     def resolve(
         self,
@@ -189,33 +191,39 @@ class DeterministicEvidenceAnchorResolver:
     ) -> list[PreparedEvidenceRecordInput]:
         # The protocol includes the normalized candidate for future adapter-aware
         # enrichment, even though this resolver currently resolves from evidence
-        # references plus document chunks only.
+        # references plus document chunks only when explicitly requested.
         _ = normalized_candidate
 
         primary_fields: set[str] = set()
         resolved_records: list[PreparedEvidenceRecordInput] = []
 
-        user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
-        document, load_warning = self._prepare_document(context.document_id, user_id)
+        document = _PreparedDocument.from_chunks(())
+        load_warning: str | None = None
+        if self._resolve_against_document:
+            user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
+            document, load_warning = self._prepare_document(context.document_id, user_id)
 
-        for reference in candidate.evidence_references:
-            field_group_key = _field_group_key(reference.field_path)
-            resolved_anchor, warnings = self._resolve_reference(
-                reference,
+        for evidence_record in candidate.evidence_records:
+            field_keys = list(evidence_record.field_paths)
+            resolved_anchor, warnings = self._resolve_evidence_record(
+                evidence_record,
                 document=document,
                 load_warning=load_warning,
             )
             resolved_records.append(
                 PreparedEvidenceRecordInput(
                     source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=[reference.field_path],
-                    field_group_keys=[field_group_key] if field_group_key else [],
-                    is_primary=reference.field_path not in primary_fields,
+                    field_keys=field_keys,
+                    field_group_keys=_field_group_keys(field_keys),
+                    is_primary=(
+                        not field_keys
+                        or any(field_key not in primary_fields for field_key in field_keys)
+                    ),
                     anchor=resolved_anchor.model_dump(mode="json"),
                     warnings=warnings,
                 )
             )
-            primary_fields.add(reference.field_path)
+            primary_fields.update(field_keys)
 
         return resolved_records
 
@@ -252,33 +260,49 @@ class DeterministicEvidenceAnchorResolver:
 
         return _PreparedDocument.from_chunks(_coerce_resolution_chunks(raw_chunks)), None
 
-    def _resolve_reference(
+    def _resolve_evidence_record(
         self,
-        reference: CurationPrepEvidenceReference,
+        evidence_record: CurationPrepEvidenceRecord,
         *,
         document: _PreparedDocument,
         load_warning: str | None,
     ) -> tuple[EvidenceAnchor, list[str]]:
-        incoming_anchor = reference.anchor
+        incoming_anchor = _normalized_anchor(evidence_record.anchor)
+        if not self._resolve_against_document:
+            return incoming_anchor, []
+
         warnings: list[str] = [load_warning] if load_warning else []
 
         quote_resolution = _resolve_quote_reference(document, incoming_anchor)
         if quote_resolution is not None:
             warnings.extend(quote_resolution.warnings)
-            return _build_quote_anchor(incoming_anchor, quote_resolution), _dedupe_strings(warnings)
+            return _normalized_anchor(
+                _build_quote_anchor(incoming_anchor, quote_resolution)
+            ), _dedupe_strings(warnings)
 
         section_resolution = _resolve_section_reference(document, incoming_anchor)
         if section_resolution is not None:
             warnings.extend(section_resolution.warnings)
-            return _build_section_anchor(incoming_anchor, section_resolution), _dedupe_strings(warnings)
+            return _normalized_anchor(
+                _build_section_anchor(incoming_anchor, section_resolution)
+            ), _dedupe_strings(warnings)
+
+        if _has_existing_location(incoming_anchor):
+            return incoming_anchor, _dedupe_strings(warnings)
 
         if _is_document_only_anchor(incoming_anchor):
-            return _build_document_anchor(incoming_anchor), _dedupe_strings(warnings)
+            return _normalized_anchor(_build_document_anchor(incoming_anchor)), _dedupe_strings(
+                warnings
+            )
 
         if incoming_anchor.page_number is not None:
-            return _build_page_anchor(incoming_anchor), _dedupe_strings(warnings)
+            return _normalized_anchor(_build_page_anchor(incoming_anchor)), _dedupe_strings(
+                warnings
+            )
 
-        return _build_unresolved_anchor(incoming_anchor), _dedupe_strings(warnings)
+        return _normalized_anchor(_build_unresolved_anchor(incoming_anchor)), _dedupe_strings(
+            warnings
+        )
 
     def _resolve_user_id(self, prep_extraction_result_id: str) -> str | None:
         with self._session_factory() as session:
@@ -741,6 +765,47 @@ def _label_match_strength(
     return best_score
 
 
+def _normalized_anchor(anchor: EvidenceAnchor) -> EvidenceAnchor:
+    figure_reference, table_reference = _normalized_references(
+        anchor.figure_reference,
+        anchor.table_reference,
+    )
+    return anchor.model_copy(
+        update={
+            "figure_reference": figure_reference,
+            "table_reference": table_reference,
+        }
+    )
+
+
+def _normalized_references(
+    figure_reference: str | None,
+    table_reference: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_figure = _first_non_empty(figure_reference)
+    normalized_table = _first_non_empty(table_reference)
+
+    if normalized_figure and TABLE_REFERENCE_PATTERN.search(normalized_figure):
+        return None, normalized_figure
+    if normalized_table and FIGURE_REFERENCE_PATTERN.search(normalized_table):
+        return normalized_table, None
+
+    return normalized_figure, normalized_table
+
+
+def _has_existing_location(anchor: EvidenceAnchor) -> bool:
+    return bool(
+        anchor.chunk_ids
+        or anchor.page_number is not None
+        or _first_non_empty(
+            anchor.section_title,
+            anchor.subsection_title,
+            anchor.figure_reference,
+            anchor.table_reference,
+        )
+    )
+
+
 def _anchor_kind_for_quality(
     incoming_anchor: EvidenceAnchor,
     locator_quality: EvidenceLocatorQuality,
@@ -1017,6 +1082,18 @@ def _field_group_key(field_path: str) -> str | None:
     if len(segments) <= 1:
         return None
     return ".".join(segments[:-1])
+
+
+def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    group_keys: list[str] = []
+    for field_path in field_paths:
+        group_key = _field_group_key(field_path)
+        if not group_key or group_key in seen:
+            continue
+        seen.add(group_key)
+        group_keys.append(group_key)
+    return group_keys
 
 
 def _raw_span_length(span: _ResolvedSpan) -> int:

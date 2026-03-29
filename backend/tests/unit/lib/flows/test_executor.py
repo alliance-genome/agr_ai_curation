@@ -167,34 +167,6 @@ def _metadata_from_registry(
     }
 
 
-def _make_curation_prep_output():
-    return SimpleNamespace(
-        model_dump=lambda mode="json": {
-            "candidates": [
-                {
-                    "adapter_key": "gene_expression",
-                    "profile_key": None,
-                    "extracted_fields": [],
-                    "evidence_references": [],
-                    "conversation_context_summary": "Prepared from flow context.",
-                    "confidence": 0.8,
-                    "unresolved_ambiguities": [],
-                }
-            ],
-            "run_metadata": {
-                "model_name": "gpt-5-mini",
-                "token_usage": {
-                    "input_tokens": 1,
-                    "output_tokens": 1,
-                    "total_tokens": 2,
-                },
-                "processing_notes": [],
-                "warnings": [],
-            },
-        }
-    )
-
-
 @pytest.fixture(autouse=True)
 def _mock_executor_agent_metadata(monkeypatch):
     """Default test metadata source for flow agents under test."""
@@ -534,11 +506,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_curation_prep_step_assembles_context_and_propagates_flow_run_id(
-        self, mock_get_agent, mock_streaming, monkeypatch
+    def test_curation_prep_step_runs_deterministic_prep(
+        self, mock_get_agent, mock_streaming
     ):
-        """Curation prep steps should run via the service with accumulated flow context."""
+        """Curation prep steps should hand upstream flow extractions to the deterministic mapper."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        captured = {}
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -560,39 +533,147 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             return _tool
 
-        captured = {}
+        mock_streaming.side_effect = _make_streaming_tool
 
-        async def _fake_run_curation_prep(agent_input, *, db=None, persistence_context=None):
-            captured["agent_input"] = agent_input
+        async def _fake_run_curation_prep(
+            extraction_results,
+            *,
+            scope_confirmation,
+            persistence_context=None,
+            db=None,
+        ):
+            captured["extraction_results"] = extraction_results
+            captured["scope_confirmation"] = scope_confirmation
             captured["persistence_context"] = persistence_context
             captured["db"] = db
-            return _make_curation_prep_output()
+            return SimpleNamespace(
+                model_dump_json=lambda: json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "adapter_key": "gene_expression",
+                                "profile_key": None,
+                                "payload": {"label": "unc-54"},
+                                "evidence_records": [
+                                    {
+                                        "evidence_record_id": "extract-1",
+                                        "field_paths": ["label"],
+                                        "anchor": {
+                                            "anchor_kind": "snippet",
+                                            "locator_quality": "exact_quote",
+                                            "supports_decision": "supports",
+                                            "snippet_text": "unc-54 was observed.",
+                                            "sentence_text": "unc-54 was observed.",
+                                            "normalized_text": None,
+                                            "viewer_search_text": "unc-54 was observed.",
+                                            "viewer_highlightable": False,
+                                            "pdfx_markdown_offset_start": None,
+                                            "pdfx_markdown_offset_end": None,
+                                            "page_number": 2,
+                                            "page_label": None,
+                                            "section_title": "Results",
+                                            "subsection_title": None,
+                                            "figure_reference": None,
+                                            "table_reference": None,
+                                            "chunk_ids": ["chunk-1"],
+                                        },
+                                        "notes": [],
+                                    }
+                                ],
+                                "conversation_context_summary": "Prepared from flow context.",
+                            }
+                        ],
+                        "run_metadata": {
+                            "model_name": "deterministic_programmatic_mapper_v1",
+                            "token_usage": {
+                                "input_tokens": 0,
+                                "output_tokens": 0,
+                                "total_tokens": 0,
+                            },
+                            "processing_notes": ["Prepared from flow extraction context."],
+                            "warnings": [],
+                        },
+                    }
+                )
+            )
+
+        mock_get_agent.side_effect = lambda agent_id, **_kwargs: MagicMock(spec=Agent, instructions="Base")
+
+        with patch("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep), patch(
+            "src.lib.flows.executor.get_current_trace_id",
+            lambda: "trace-123",
+        ):
+            flow = _make_flow([
+                _task_input_node("Prepare the extracted gene-expression findings for review."),
+                _agent_node("n1", "gene", step_goal="Extract gene-expression findings"),
+                _agent_node(
+                    "n2",
+                    "curation_prep",
+                    step_goal="Prepare candidates for the workspace",
+                    custom_instructions="Prioritize experimentally supported findings only.",
+                ),
+            ])
+
+            tools, created_names = get_all_agent_tools(
+                flow,
+                document_id="doc-123",
+                user_id="user-123",
+                session_id="session-123",
+                flow_run_id="flow-run-123",
+                user_query="Focus on the confirmed findings.",
+            )
+
+            assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
+
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
+            prep_output = asyncio.run(
+                tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+            )
+
+        payload = json.loads(prep_output)
+        assert payload["run_metadata"]["model_name"] == "deterministic_programmatic_mapper_v1"
+        assert len(captured["extraction_results"]) == 1
+        assert captured["extraction_results"][0].agent_key == "gene"
+        assert captured["extraction_results"][0].source_kind is _executor_module().CurationExtractionSourceKind.FLOW
+        assert captured["scope_confirmation"].confirmed is True
+        assert captured["scope_confirmation"].domain_keys == ["gene"]
+        assert captured["persistence_context"].document_id == "doc-123"
+        assert captured["persistence_context"].origin_session_id == "session-123"
+        assert captured["persistence_context"].flow_run_id == "flow-run-123"
+        assert captured["persistence_context"].trace_id == "trace-123"
+        assert captured["persistence_context"].user_id == "user-123"
+        assert mock_get_agent.call_count == 1
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_prep_step_requires_upstream_extraction_envelope(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Curation prep should fail clearly when earlier flow steps did not produce extraction envelopes."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return "not a structured extraction envelope"
+
+            return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr("src.lib.flows.executor.run_curation_prep", _fake_run_curation_prep)
-        monkeypatch.setattr("src.lib.flows.executor.get_current_trace_id", lambda: "trace-flow-1")
 
         flow = _make_flow([
-            _task_input_node("Prepare the extracted gene-expression findings for review."),
+            _task_input_node("Prepare the extracted findings for review."),
             _agent_node("n1", "gene", step_goal="Extract gene-expression findings"),
-            _agent_node(
-                "n2",
-                "curation_prep",
-                step_goal="Prepare candidates for the workspace",
-                custom_instructions="Prioritize experimentally supported findings only.",
-            ),
+            _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, created_names = get_all_agent_tools(
+        tools, _ = get_all_agent_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
             session_id="session-123",
-            flow_run_id="flow-run-123",
-            user_query="Focus on the confirmed findings.",
         )
-
-        assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
 
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
@@ -600,99 +681,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
         )
 
-        assert "gene_expression" in prep_output
-        assert mock_get_agent.call_count == 1
-
-        agent_input = captured["agent_input"]
-        assert len(agent_input.extraction_results) == 1
-        assert agent_input.extraction_results[0].document_id == "doc-123"
-        assert agent_input.extraction_results[0].adapter_key == "reference_adapter"
-        assert agent_input.extraction_results[0].domain_key == "gene_expression"
-        assert agent_input.extraction_results[0].flow_run_id == "flow-run-123"
-        assert agent_input.scope_confirmation.confirmed is True
-        assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
-        assert agent_input.scope_confirmation.domain_keys == ["gene_expression"]
-        assert len(agent_input.adapter_metadata) == 1
-        assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
-        history_texts = [message.content for message in agent_input.conversation_history]
-        assert any("Prepare the extracted gene-expression findings for review." in text for text in history_texts)
-        assert any("Focus on the confirmed findings." in text for text in history_texts)
-        assert any("Prioritize experimentally supported findings only." in text for text in history_texts)
-        assert any("prepare for review" in text for text in history_texts)
-
-        persistence_context = captured["persistence_context"]
-        assert persistence_context.document_id == "doc-123"
-        assert persistence_context.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
-        assert persistence_context.origin_session_id == "session-123"
-        assert persistence_context.flow_run_id == "flow-run-123"
-        assert persistence_context.user_id == "user-123"
-        assert persistence_context.trace_id == "trace-flow-1"
-
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_curation_prep_step_rejects_multi_adapter_flow_scope(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Mixed upstream adapter ownership should fail in prep before persistence."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
-            adapter_key = "gene_adapter" if tool_name == "ask_gene_specialist" else "disease_adapter"
-            destination = "gene" if tool_name == "ask_gene_specialist" else "disease"
-
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                return json.dumps(
-                    {
-                        "adapter_key": adapter_key,
-                        "actor": specialist_name,
-                        "destination": destination,
-                        "confidence": 0.92,
-                        "reasoning": "matched",
-                        "items": [{"label": query}],
-                        "raw_mentions": [{"mention": query}],
-                        "exclusions": [],
-                        "ambiguities": [],
-                        "run_summary": {"candidate_count": 1},
-                    }
-                )
-
-            return _tool
-
-        mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr("src.lib.flows.executor.get_current_trace_id", lambda: "trace-flow-1")
-
-        flow = _make_flow([
-            _task_input_node("Prepare mixed extraction findings for review."),
-            _agent_node("n1", "gene", step_goal="Extract gene findings"),
-            _agent_node("n2", "disease", step_goal="Extract disease findings"),
-            _agent_node("n3", "curation_prep", step_goal="Prepare candidates for the workspace"),
-        ])
-
-        tools, created_names = get_all_agent_tools(
-            flow,
-            document_id="doc-123",
-            user_id="user-123",
-            session_id="session-123",
-            flow_run_id="flow-run-123",
-            user_query="Keep the gene and disease findings together.",
-        )
-
-        assert created_names == {
-            "ask_gene_specialist",
-            "ask_disease_specialist",
-            "ask_curation_prep_specialist",
-        }
-
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract gene"})))
-        asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "extract disease"})))
-
-        prep_output = asyncio.run(
-            tools[2].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
-        )
-
-        assert "exactly one adapter key" in prep_output
+        assert "require at least one upstream extraction envelope" in prep_output
 
 
 # ===========================================================================
@@ -1410,7 +1399,7 @@ class TestExecuteFlowTermination:
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"
-        assert persisted_request.adapter_key == "gene_expression"
+        assert persisted_request.adapter_key is None
         assert persisted_request.domain_key == "gene_expression"
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW

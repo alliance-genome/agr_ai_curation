@@ -133,37 +133,17 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
             {
                 "adapter_key": "disease",
                 "profile_key": "primary",
-                "extracted_fields": [
+                "payload": {
+                    "gene": {"symbol": gene_symbol},
+                    "condition": {"label": disease_label},
+                    "evidence": {"score": 0.8 + (index * 0.05)},
+                },
+                "evidence_records": [
                     {
-                        "field_path": "gene.symbol",
-                        "value_type": "string",
-                        "string_value": gene_symbol,
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "condition.label",
-                        "value_type": "string",
-                        "string_value": disease_label,
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "evidence.score",
-                        "value_type": "number",
-                        "string_value": None,
-                        "number_value": 0.8 + (index * 0.05),
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                ],
-                "evidence_references": [
-                    {
-                        "field_path": "gene.symbol",
                         "evidence_record_id": f"evidence-{index + 1}",
+                        "source": "extracted",
                         "extraction_result_id": "prep-extract",
+                        "field_paths": ["gene.symbol"],
                         "anchor": {
                             "anchor_kind": "snippet",
                             "locator_quality": "exact_quote",
@@ -182,21 +162,10 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
                             "table_reference": None,
                             "chunk_ids": [f"chunk-{index + 1}"],
                         },
-                        "rationale": "The paper names the gene directly in the finding.",
+                        "notes": ["The paper names the gene directly in the finding."],
                     }
                 ],
                 "conversation_context_summary": f"Conversation narrowed to {gene_symbol}.",
-                "confidence": 0.9,
-                "unresolved_ambiguities": [
-                    {
-                        "field_path": "condition.label",
-                        "description": "Specific disease subclass remains ambiguous.",
-                        "candidate_values": ["Disease 1A", "Disease 1B"],
-                        "evidence_record_ids": [f"evidence-{index + 1}"],
-                    }
-                ]
-                if index == 0
-                else [],
             }
         )
 
@@ -289,53 +258,23 @@ def _make_reference_prep_output() -> CurationPrepAgentOutput:
                 {
                     "adapter_key": REFERENCE_ADAPTER_KEY,
                     "profile_key": None,
-                    "extracted_fields": [
-                        {
-                            "field_path": "citation.title",
-                            "value_type": "string",
-                            "string_value": "  Adapter-owned reference scaffold in practice  ",
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": None,
+                    "payload": {
+                        "citation": {
+                            "title": "  Adapter-owned reference scaffold in practice  ",
+                            "authors": ["Ada Lovelace", " Grace Hopper "],
+                            "journal": "  Journal of Adapter Boundaries  ",
+                            "publication_year": "2025",
                         },
-                        {
-                            "field_path": "citation.authors",
-                            "value_type": "json",
-                            "string_value": None,
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": '["Ada Lovelace", " Grace Hopper "]',
+                        "identifiers": {
+                            "doi": " DOI:10.1000/Reference-1 ",
                         },
+                    },
+                    "evidence_records": [
                         {
-                            "field_path": "citation.journal",
-                            "value_type": "string",
-                            "string_value": "  Journal of Adapter Boundaries  ",
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": None,
-                        },
-                        {
-                            "field_path": "citation.publication_year",
-                            "value_type": "string",
-                            "string_value": "2025",
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": None,
-                        },
-                        {
-                            "field_path": "identifiers.doi",
-                            "value_type": "string",
-                            "string_value": " DOI:10.1000/Reference-1 ",
-                            "number_value": None,
-                            "boolean_value": None,
-                            "json_value": None,
-                        },
-                    ],
-                    "evidence_references": [
-                        {
-                            "field_path": "citation.title",
                             "evidence_record_id": "reference-evidence-title",
+                            "source": "extracted",
                             "extraction_result_id": "prep-extract-reference",
+                            "field_paths": ["citation.title"],
                             "anchor": {
                                 "anchor_kind": "snippet",
                                 "locator_quality": "exact_quote",
@@ -354,12 +293,13 @@ def _make_reference_prep_output() -> CurationPrepAgentOutput:
                                 "table_reference": None,
                                 "chunk_ids": ["chunk-reference-title"],
                             },
-                            "rationale": "The title is quoted directly from the manuscript.",
+                            "notes": ["The title is quoted directly from the manuscript."],
                         },
                         {
-                            "field_path": "identifiers.doi",
                             "evidence_record_id": "reference-evidence-doi",
+                            "source": "extracted",
                             "extraction_result_id": "prep-extract-reference",
+                            "field_paths": ["identifiers.doi"],
                             "anchor": {
                                 "anchor_kind": "snippet",
                                 "locator_quality": "exact_quote",
@@ -378,14 +318,12 @@ def _make_reference_prep_output() -> CurationPrepAgentOutput:
                                 "table_reference": None,
                                 "chunk_ids": ["chunk-reference-doi"],
                             },
-                            "rationale": "The DOI is present in the reference block.",
+                            "notes": ["The DOI is present in the reference block."],
                         },
                     ],
                     "conversation_context_summary": (
                         "Conversation narrowed the workspace to a single supporting reference."
                     ),
-                    "confidence": 0.93,
-                    "unresolved_ambiguities": [],
                 }
             ],
             "run_metadata": {
@@ -430,7 +368,8 @@ def test_passthrough_candidate_normalizer_builds_payload_and_draft_fields():
     candidate: CurationPrepCandidate = prep_output.candidates[0]
 
     normalized = module.PassthroughCandidateNormalizer().normalize(
-        candidate,
+        candidate.payload,
+        prep_candidate=candidate,
         context=module.CandidateNormalizationContext(
             document_id=str(uuid4()),
             adapter_key="disease",
@@ -481,7 +420,6 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert session_row.warnings == [
         "Prep run warning.",
         "Deterministic structural validation completed; downstream adapter validation is pending.",
-        "Candidate contains unresolved ambiguities that require curator review.",
     ]
 
     candidate_row = db_session.scalars(
@@ -491,7 +429,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert candidate_row.status is CurationCandidateStatus.PENDING
     assert candidate_row.extraction_result_id == prep_record.id
     assert candidate_row.normalized_payload["gene"]["symbol"] == "GENE1"
-    assert candidate_row.candidate_metadata["prep_evidence_references"][0]["field_path"] == "gene.symbol"
+    assert candidate_row.candidate_metadata["prep_evidence_records"][0]["field_paths"] == ["gene.symbol"]
     assert candidate_row.candidate_metadata["evidence_summary"] == {
         "total_anchor_count": 1,
         "resolved_anchor_count": 1,
@@ -666,9 +604,7 @@ def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_s
         adapter_key="disease",
         profile_key="primary",
         display_label="Old candidate",
-        confidence=0.4,
         conversation_summary="Old candidate",
-        unresolved_ambiguities=[],
         extraction_result_id=prep_record.id,
         normalized_payload={"old": True},
         candidate_metadata={},

@@ -28,13 +28,14 @@ from agents import Agent, function_tool
 
 from src.lib.context import get_current_trace_id
 from src.lib.curation_workspace import (
+    CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
     persist_extraction_results,
-)
-from src.lib.curation_workspace.curation_prep_service import (
-    CurationPrepPersistenceContext,
     run_curation_prep,
+)
+from src.lib.curation_workspace.curation_prep_constants import (
+    CURATION_PREP_AGENT_ID,
 )
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
@@ -49,24 +50,16 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
-from src.schemas.curation_prep import (
-    CurationPrepAdapterMetadata,
-    CurationPrepAgentInput,
-    CurationPrepConversationMessage,
-    CurationPrepConversationRole,
-    CurationPrepScopeConfirmation,
-)
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
+from src.schemas.curation_prep import CurationPrepScopeConfirmation
 
 logger = logging.getLogger(__name__)
 
-CURATION_PREP_AGENT_ID = "curation_prep"
 _FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
-_FLOW_PREP_MAX_STEP_MESSAGES = 8
 
 
 def _now_iso() -> str:
@@ -77,20 +70,6 @@ def _now_iso() -> str:
 def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     return agent_id.replace("-", "_")
-
-
-def _ordered_unique_strings(values: List[Optional[str]]) -> List[str]:
-    """Return non-empty unique strings while preserving insertion order."""
-
-    seen: Set[str] = set()
-    ordered: List[str] = []
-    for value in values:
-        normalized = str(value or "").strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        ordered.append(normalized)
-    return ordered
 
 
 def _stringify_tool_output(value: Any) -> str:
@@ -133,202 +112,94 @@ def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) 
     return normalized or None
 
 
-def _build_flow_curation_prep_conversation_history(
-    *,
-    flow: CurationFlow,
-    user_query: Optional[str],
-    completed_steps: List[Dict[str, Any]],
-    step_goal: Optional[str] = None,
-    custom_instructions: Optional[str] = None,
-    invocation_query: Optional[str] = None,
-) -> List[CurationPrepConversationMessage]:
-    """Convert accumulated flow context into the prep agent's conversation history."""
+def _unique_non_empty_scope_values(values: list[Optional[str]]) -> list[str]:
+    """Return distinct non-empty scope values in first-seen order."""
 
-    messages: List[CurationPrepConversationMessage] = [
-        CurationPrepConversationMessage(
-            role=CurationPrepConversationRole.SYSTEM,
-            content=(
-                f"Flow '{flow.name}' reached an explicit Curation Prep step. "
-                "Use the accumulated flow context and extraction envelopes to prepare candidates."
-            ),
-        )
-    ]
-
-    normalized_step_goal = str(step_goal or "").strip()
-    if normalized_step_goal:
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.SYSTEM,
-                content=f"Curation Prep step goal: {normalized_step_goal}",
-            )
-        )
-
-    normalized_custom_instructions = str(custom_instructions or "").strip()
-    if normalized_custom_instructions:
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.SYSTEM,
-                content=(
-                    "Flow-specific custom instructions for this Curation Prep step:\n"
-                    f"{normalized_custom_instructions}"
-                ),
-            )
-        )
-    normalized_invocation_query = str(invocation_query or "").strip()
-    if normalized_invocation_query:
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.SYSTEM,
-                content=(
-                    "Supervisor handoff for this Curation Prep step:\n"
-                    f"{normalized_invocation_query}"
-                ),
-            )
-        )
-
-    task_instructions = str(get_task_instructions(flow) or "").strip()
-    if task_instructions:
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.USER,
-                content=task_instructions,
-            )
-        )
-
-    normalized_user_query = str(user_query or "").strip()
-    if normalized_user_query and normalized_user_query != task_instructions:
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.USER,
-                content=normalized_user_query,
-            )
-        )
-
-    for step in completed_steps[-_FLOW_PREP_MAX_STEP_MESSAGES:]:
-        preview = str(step.get("output_preview") or "").strip()
-        if not preview:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
             continue
-        messages.append(
-            CurationPrepConversationMessage(
-                role=CurationPrepConversationRole.ASSISTANT,
-                content=(
-                    f"Flow step {step.get('step')} ({step.get('agent_name') or step.get('agent_id')}) "
-                    f"output:\n{preview}"
-                ),
-            )
-        )
-
-    return messages
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
 
 
-def _build_flow_curation_prep_input(
+def _build_flow_prep_extraction_results(
     *,
-    flow: CurationFlow,
-    document_id: Optional[str],
-    user_id: Optional[str],
-    session_id: Optional[str],
+    completed_steps: list[dict[str, Any]],
+    document_id: str,
+    user_id: str,
+    session_id: str,
     flow_run_id: Optional[str],
-    user_query: Optional[str],
-    completed_steps: List[Dict[str, Any]],
-    trace_id: Optional[str],
-    step_goal: Optional[str] = None,
-    custom_instructions: Optional[str] = None,
-    invocation_query: Optional[str] = None,
-) -> CurationPrepAgentInput:
-    """Assemble a valid prep-agent input from accumulated flow context."""
+    conversation_summary: str,
+) -> list[CurationExtractionResultRecord]:
+    """Convert completed flow extraction steps into prep-service input records."""
 
-    normalized_document_id = str(document_id or "").strip()
-    if not normalized_document_id:
-        raise ValueError("Curation prep flow steps require a document_id context.")
+    created_at = datetime.now(timezone.utc)
+    trace_id = get_current_trace_id()
+    extraction_results: list[CurationExtractionResultRecord] = []
 
-    flow_summary = _build_flow_conversation_summary(flow, user_query)
-    extraction_results: List[CurationExtractionResultRecord] = []
-
-    for index, step in enumerate(completed_steps, start=1):
+    for step in completed_steps:
         candidate = step.get("candidate")
         if not isinstance(candidate, ExtractionEnvelopeCandidate):
             continue
+        if candidate.agent_key == CURATION_PREP_AGENT_ID:
+            continue
 
+        step_number = int(step.get("step") or 0)
         extraction_results.append(
-            CurationExtractionResultRecord(
-                extraction_result_id=(
-                    f"{step.get('tool_name') or 'flow-step'}-{index}"
-                ),
-                document_id=normalized_document_id,
-                adapter_key=_resolve_flow_candidate_adapter_key(candidate),
-                profile_key=candidate.profile_key,
-                domain_key=candidate.domain_key,
-                agent_key=candidate.agent_key,
-                source_kind=CurationExtractionSourceKind.FLOW,
-                origin_session_id=session_id,
-                trace_id=trace_id,
-                flow_run_id=flow_run_id,
-                user_id=user_id,
-                candidate_count=candidate.candidate_count,
-                conversation_summary=candidate.conversation_summary or flow_summary,
-                payload_json=candidate.payload_json,
-                created_at=datetime.now(timezone.utc),
-                metadata=dict(candidate.metadata),
+            CurationExtractionResultRecord.model_validate(
+                {
+                    "extraction_result_id": (
+                        f"flow:{session_id}:step:{step_number}:{candidate.agent_key}"
+                    ),
+                    "document_id": document_id,
+                    "adapter_key": candidate.adapter_key,
+                    "profile_key": candidate.profile_key,
+                    "domain_key": candidate.domain_key,
+                    "agent_key": candidate.agent_key,
+                    "source_kind": CurationExtractionSourceKind.FLOW,
+                    "origin_session_id": session_id,
+                    "trace_id": trace_id,
+                    "flow_run_id": flow_run_id,
+                    "user_id": user_id,
+                    "candidate_count": candidate.candidate_count,
+                    "conversation_summary": candidate.conversation_summary or conversation_summary,
+                    "payload_json": candidate.payload_json,
+                    "created_at": created_at,
+                    "metadata": dict(candidate.metadata),
+                }
             )
         )
 
-    if not extraction_results:
-        raise ValueError(
-            "Curation prep flow steps require at least one upstream extraction envelope."
-        )
+    return extraction_results
 
-    adapter_metadata: List[CurationPrepAdapterMetadata] = []
-    seen_adapters: Set[tuple[str, Optional[str]]] = set()
-    for record in extraction_results:
-        adapter_key = str(record.adapter_key or "").strip()
-        if not adapter_key:
-            continue
-        adapter_signature = (adapter_key, record.profile_key)
-        if adapter_signature in seen_adapters:
-            continue
-        seen_adapters.add(adapter_signature)
-        adapter_metadata.append(
-            CurationPrepAdapterMetadata(
-                adapter_key=adapter_key,
-                profile_key=record.profile_key,
-                required_field_keys=[],
-                field_hints=[],
-                notes=[
-                    "Adapter metadata was inferred from upstream flow extraction context. "
-                    "No adapter-owned field hints were available in the flow payload."
-                ],
-            )
-        )
 
-    if not adapter_metadata:
-        raise ValueError(
-            "Curation prep flow steps require upstream extraction envelopes with "
-            "adapter ownership metadata."
-        )
+def _build_flow_scope_confirmation(
+    extraction_results: list[CurationExtractionResultRecord],
+    *,
+    flow_name: str,
+) -> CurationPrepScopeConfirmation:
+    """Build deterministic prep scope from upstream flow extraction results."""
 
-    adapter_keys = _ordered_unique_strings([record.adapter_key for record in extraction_results])
-    profile_keys = _ordered_unique_strings([record.profile_key for record in extraction_results])
-    domain_keys = _ordered_unique_strings([record.domain_key for record in extraction_results])
+    adapter_keys = _unique_non_empty_scope_values(
+        [record.adapter_key for record in extraction_results]
+    )
+    profile_keys = _unique_non_empty_scope_values(
+        [record.profile_key for record in extraction_results]
+    )
+    domain_keys = _unique_non_empty_scope_values(
+        [record.domain_key for record in extraction_results]
+    )
 
-    return CurationPrepAgentInput(
-        conversation_history=_build_flow_curation_prep_conversation_history(
-            flow=flow,
-            user_query=user_query,
-            completed_steps=completed_steps,
-            step_goal=step_goal,
-            custom_instructions=custom_instructions,
-            invocation_query=invocation_query,
-        ),
-        extraction_results=extraction_results,
-        evidence_records=[],
-        scope_confirmation=CurationPrepScopeConfirmation(
-            confirmed=True,
-            adapter_keys=adapter_keys,
-            profile_keys=profile_keys,
-            domain_keys=domain_keys,
-            notes=["Scope was inferred from the accumulated flow extraction context."],
-        ),
-        adapter_metadata=adapter_metadata,
+    return CurationPrepScopeConfirmation(
+        confirmed=True,
+        adapter_keys=adapter_keys,
+        profile_keys=profile_keys,
+        domain_keys=domain_keys,
+        notes=[f"Confirmed from flow '{flow_name}' execution context."],
     )
 
 
@@ -743,21 +614,31 @@ def get_all_agent_tools(
             ):
                 @function_tool(name_override=tool_name, description_override=tool_description)
                 async def _curation_prep_tool(query: str) -> str:
-                    prep_input = _build_flow_curation_prep_input(
-                        flow=flow,
+                    _ = (current_step_goal, current_custom_instructions, query)
+                    if not document_id or not user_id or not session_id:
+                        raise RuntimeError(
+                            "Curation prep flow steps require document_id, user_id, and session_id."
+                        )
+
+                    extraction_results = _build_flow_prep_extraction_results(
+                        completed_steps=execution_state["completed_steps"],
                         document_id=document_id,
                         user_id=user_id,
                         session_id=session_id,
                         flow_run_id=flow_run_id,
-                        user_query=user_query,
-                        completed_steps=execution_state["completed_steps"],
-                        trace_id=get_current_trace_id(),
-                        step_goal=current_step_goal,
-                        custom_instructions=current_custom_instructions,
-                        invocation_query=query,
+                        conversation_summary=flow_conversation_summary,
                     )
+                    if not extraction_results:
+                        raise RuntimeError(
+                            "Curation prep flow steps require at least one upstream extraction envelope."
+                        )
+
                     prep_output = await run_curation_prep(
-                        prep_input,
+                        extraction_results,
+                        scope_confirmation=_build_flow_scope_confirmation(
+                            extraction_results,
+                            flow_name=flow.name,
+                        ),
                         persistence_context=CurationPrepPersistenceContext(
                             document_id=document_id,
                             source_kind=CurationExtractionSourceKind.FLOW,
@@ -768,7 +649,7 @@ def get_all_agent_tools(
                             conversation_summary=flow_conversation_summary,
                         ),
                     )
-                    return json.dumps(prep_output.model_dump(mode="json"))
+                    return prep_output.model_dump_json()
 
                 return _curation_prep_tool
 

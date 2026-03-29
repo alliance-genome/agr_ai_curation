@@ -219,7 +219,6 @@ function sanitizeStoredMessage(message: SerializedMessage): Message {
     timestamp: new Date(message.timestamp),
   }
 }
-
 function withEvidenceReviewAndCurateTarget(
   message: Message,
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null

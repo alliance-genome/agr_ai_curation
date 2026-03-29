@@ -1,0 +1,170 @@
+{
+  "fixture_id": "tool_verified_phenotype_paper",
+  "paper": {
+    "title": "Brood size phenotype evidence fixture paper",
+    "filename": "test_tool_verified_phenotype_paper.pdf",
+    "conversation_summary": "Extract evidence-backed phenotype findings from a known paper fixture."
+  },
+  "chunks": [
+    {
+      "id": "chunk-phenotype-count",
+      "text": "Figure 5A. daf-2(e1370) adults produced 40% fewer progeny than wild type.",
+      "page_number": 5,
+      "parent_section": "Results",
+      "subsection": "Fertility defects",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-phenotype-supporting",
+      "text": "Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls.",
+      "page_number": 6,
+      "parent_section": "Results",
+      "subsection": "Quantification",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-phenotype-heading",
+      "text": "Developmental defects have been reported for unc-40.",
+      "page_number": 2,
+      "parent_section": "Introduction",
+      "subsection": "Background",
+      "metadata": {}
+    }
+  ],
+  "tool_cases": [
+    {
+      "case_id": "verified_exact",
+      "tool_input": {
+        "entity": "reduced brood size",
+        "chunk_id": "chunk-phenotype-count",
+        "claimed_quote": "daf-2(e1370) adults produced 40% fewer progeny than wild type."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "daf-2(e1370) adults produced 40% fewer progeny than wild type.",
+        "page": 5,
+        "section": "Results",
+        "subsection": "Fertility defects",
+        "figure_reference": "Figure 5A"
+      }
+    },
+    {
+      "case_id": "verified_supporting",
+      "tool_input": {
+        "entity": "reduced brood size",
+        "chunk_id": "chunk-phenotype-supporting",
+        "claimed_quote": "Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls.",
+        "page": 6,
+        "section": "Results",
+        "subsection": "Quantification"
+      }
+    },
+    {
+      "case_id": "not_found_absent_quote",
+      "tool_input": {
+        "entity": "developmental defects",
+        "chunk_id": "chunk-phenotype-heading",
+        "claimed_quote": "daf-2(e1370) adults produced 40% fewer progeny than wild type."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "page": 2,
+        "section": "Introduction",
+        "subsection": "Background",
+        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
+        "chunk_content_preview": "Developmental defects have been reported for unc-40."
+      }
+    },
+    {
+      "case_id": "not_found_wrong_chunk_id",
+      "tool_input": {
+        "entity": "reduced brood size",
+        "chunk_id": "chunk-phenotype-missing",
+        "claimed_quote": "daf-2(e1370) adults produced 40% fewer progeny than wild type."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "chunk_content_preview": "",
+        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+      }
+    }
+  ],
+  "extraction": {
+    "tool_name": "ask_phenotype_extractor_specialist",
+    "agent_key": "phenotype_extractor",
+    "profile_key": null,
+    "scope_confirmation": {
+      "confirmed": true,
+      "adapter_keys": [],
+      "profile_keys": [],
+      "domain_keys": [
+        "phenotype"
+      ],
+      "notes": [
+        "Confirmed tool-verified phenotype fixture scope."
+      ]
+    },
+    "items": [
+      {
+        "label": "reduced brood size",
+        "entity_type": "phenotype",
+        "normalized_id": "WBPhenotype:0000886",
+        "source_mentions": [
+          "reduced brood size"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_supporting"
+        ]
+      },
+      {
+        "label": "developmental defects",
+        "entity_type": "phenotype",
+        "normalized_id": "WBPhenotype:0001174",
+        "source_mentions": [
+          "developmental defects"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
+    "top_level_evidence_case_ids": [
+      "verified_exact",
+      "verified_supporting"
+    ],
+    "run_summary": {
+      "candidate_count": 2
+    }
+  },
+  "expected_candidates": [
+    {
+      "adapter_key": "phenotype",
+      "profile_key": null,
+      "payload": {
+        "label": "reduced brood size",
+        "entity_type": "phenotype",
+        "normalized_id": "WBPhenotype:0000886",
+        "source_mentions": [
+          "reduced brood size"
+        ]
+      },
+      "field_paths": [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0"
+      ],
+      "evidence_case_ids": [
+        "verified_exact",
+        "verified_supporting"
+      ]
+    }
+  ],
+  "expected_gating": {
+    "warning": "Skipped 1 candidate without verified evidence.",
+    "all_zero_error": "No evidence-verified candidates were available to prepare for curation review."
+  }
+}

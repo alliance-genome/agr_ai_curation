@@ -11,7 +11,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -311,14 +310,7 @@ class CurationCandidate(Base):
     profile_key: Mapped[str | None] = mapped_column(String(), nullable=True)
     display_label: Mapped[str | None] = mapped_column(String(), nullable=True)
     secondary_label: Mapped[str | None] = mapped_column(String(), nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     conversation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    unresolved_ambiguities: Mapped[list[str]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=list,
-        server_default=JSONB_EMPTY_ARRAY,
-    )
     extraction_result_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
         _fk("extraction_results.id"),
@@ -381,10 +373,6 @@ class CurationCandidate(Base):
 
     __table_args__ = (
         CheckConstraint('"order" >= 0', name="ck_curation_candidates_order"),
-        CheckConstraint(
-            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
-            name="ck_curation_candidates_confidence",
-        ),
         Index("ix_curation_candidates_session", "session_id", "order"),
         Index("ix_curation_candidates_status", "session_id", "status"),
     )

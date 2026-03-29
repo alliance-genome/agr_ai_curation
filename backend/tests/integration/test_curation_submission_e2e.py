@@ -173,53 +173,23 @@ def _reference_prep_output_payload() -> dict[str, object]:
             {
                 "adapter_key": "reference_adapter",
                 "profile_key": None,
-                "extracted_fields": [
-                    {
-                        "field_path": "citation.title",
-                        "value_type": "string",
-                        "string_value": "Adapter-owned reference scaffold in practice",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
+                "payload": {
+                    "citation": {
+                        "title": "Adapter-owned reference scaffold in practice",
+                        "authors": ["Ada Lovelace", "Grace Hopper"],
+                        "journal": "Journal of Adapter Boundaries",
+                        "publication_year": "2025",
                     },
-                    {
-                        "field_path": "citation.authors",
-                        "value_type": "json",
-                        "string_value": None,
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": '["Ada Lovelace", "Grace Hopper"]',
+                    "identifiers": {
+                        "doi": "10.1000/reference-1",
                     },
+                },
+                "evidence_records": [
                     {
-                        "field_path": "citation.journal",
-                        "value_type": "string",
-                        "string_value": "Journal of Adapter Boundaries",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "citation.publication_year",
-                        "value_type": "string",
-                        "string_value": "2025",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                    {
-                        "field_path": "identifiers.doi",
-                        "value_type": "string",
-                        "string_value": "10.1000/reference-1",
-                        "number_value": None,
-                        "boolean_value": None,
-                        "json_value": None,
-                    },
-                ],
-                "evidence_references": [
-                    {
-                        "field_path": "citation.title",
                         "evidence_record_id": "reference-evidence-title",
+                        "source": "extracted",
                         "extraction_result_id": "prep-extract-reference",
+                        "field_paths": ["citation.title"],
                         "anchor": {
                             "anchor_kind": "snippet",
                             "locator_quality": "exact_quote",
@@ -238,12 +208,13 @@ def _reference_prep_output_payload() -> dict[str, object]:
                             "table_reference": None,
                             "chunk_ids": ["chunk-reference-title"],
                         },
-                        "rationale": "The title is quoted directly from the manuscript.",
+                        "notes": ["The title is quoted directly from the manuscript."],
                     },
                     {
-                        "field_path": "identifiers.doi",
                         "evidence_record_id": "reference-evidence-doi",
+                        "source": "extracted",
                         "extraction_result_id": "prep-extract-reference",
+                        "field_paths": ["identifiers.doi"],
                         "anchor": {
                             "anchor_kind": "snippet",
                             "locator_quality": "exact_quote",
@@ -262,14 +233,12 @@ def _reference_prep_output_payload() -> dict[str, object]:
                             "table_reference": None,
                             "chunk_ids": ["chunk-reference-doi"],
                         },
-                        "rationale": "The DOI is present in the reference block.",
+                        "notes": ["The DOI is present in the reference block."],
                     },
                 ],
                 "conversation_context_summary": (
                     "Conversation narrowed the workspace to a single supporting reference."
                 ),
-                "confidence": 0.93,
-                "unresolved_ambiguities": [],
             }
         ],
         "run_metadata": {
@@ -285,6 +254,134 @@ def _reference_prep_output_payload() -> dict[str, object]:
             "warnings": [],
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anchors(
+    submission_e2e_context,
+    test_db,
+):
+    from src.lib.curation_workspace.bootstrap_service import bootstrap_document_session
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
+    from src.lib.curation_workspace.session_service import get_session_workspace
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
+    from src.schemas.curation_workspace import (
+        CurationDocumentBootstrapRequest,
+        CurationExtractionResultRecord,
+        CurationExtractionSourceKind,
+    )
+
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-observation-1",
+            "document_id": submission_e2e_context["document_id"],
+            "adapter_key": "reference_adapter",
+            "profile_key": "pilot",
+            "domain_key": "observation",
+            "agent_key": "observation_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-observation-1",
+            "flow_run_id": None,
+            "user_id": submission_e2e_context["current_user_auth_sub"],
+            "candidate_count": 1,
+            "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
+            "payload_json": {
+                "items": [
+                    {
+                        "label": "Candidate Alpha",
+                        "entity_type": "observation",
+                        "normalized_id": "OBS:0001",
+                        "source_mentions": ["Alpha mention"],
+                        "evidence": [
+                            {
+                                "entity": "Candidate Alpha",
+                                "verified_quote": (
+                                    "Candidate Alpha was supported by a verified observation."
+                                ),
+                                "page": 6,
+                                "section": "Results",
+                                "subsection": "Observation set",
+                                "chunk_id": "chunk-alpha-1",
+                                "figure_reference": "Figure 3B",
+                            }
+                        ],
+                    }
+                ],
+                "evidence_records": [
+                    {
+                        "entity": "Candidate Alpha",
+                        "verified_quote": (
+                            "Candidate Alpha was supported by a verified observation."
+                        ),
+                        "page": 6,
+                        "section": "Results",
+                        "subsection": "Observation set",
+                        "chunk_id": "chunk-alpha-1",
+                        "figure_reference": "Figure 3B",
+                    }
+                ],
+                "run_summary": {"candidate_count": 1},
+            },
+            "created_at": "2026-03-28T12:00:00Z",
+            "metadata": {},
+        }
+    )
+
+    prep_output = await run_curation_prep(
+        [extraction_result],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=["reference_adapter"],
+            profile_keys=["pilot"],
+            domain_keys=["observation"],
+            notes=["Confirmed from chat session bootstrap test."],
+        ),
+        db=test_db,
+        persistence_context=CurationPrepPersistenceContext(
+            origin_session_id="chat-session-1",
+            user_id=submission_e2e_context["current_user_auth_sub"],
+            source_kind=CurationExtractionSourceKind.CHAT,
+        ),
+    )
+
+    assert len(prep_output.candidates) == 1
+
+    bootstrap_response = await bootstrap_document_session(
+        submission_e2e_context["document_id"],
+        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+        current_user_id=submission_e2e_context["current_user_auth_sub"],
+        db=test_db,
+    )
+
+    assert bootstrap_response.created is True
+    assert bootstrap_response.session.adapter.adapter_key == "observation"
+    assert bootstrap_response.session.progress.total_candidates == 1
+
+    workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
+    candidate = workspace.workspace.candidates[0]
+    assert candidate.adapter_key == "observation"
+    label_field = next(
+        field for field in candidate.draft.fields if field.field_key == "label"
+    )
+    assert label_field.value == "Candidate Alpha"
+    assert candidate.evidence_anchors[0].field_keys == [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0",
+    ]
+    assert candidate.evidence_anchors[0].anchor.snippet_text == (
+        "Candidate Alpha was supported by a verified observation."
+    )
+    assert candidate.evidence_anchors[0].anchor.page_number == 6
+    assert candidate.evidence_anchors[0].anchor.section_title == "Results"
+    assert candidate.evidence_anchors[0].anchor.subsection_title == "Observation set"
+    assert candidate.evidence_anchors[0].anchor.figure_reference == "Figure 3B"
+    assert candidate.evidence_anchors[0].anchor.table_reference is None
 
 
 def test_submission_workflow_e2e_with_retry_and_history(

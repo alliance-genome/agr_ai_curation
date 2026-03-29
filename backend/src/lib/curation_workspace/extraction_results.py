@@ -29,7 +29,6 @@ _EXTRACTION_TOOL_NAME_PATTERN = re.compile(
     r"^ask_(?P<tool_segment>.+?)(?:_step\d+)?_specialist$"
 )
 _ENVELOPE_EXTRACTION_KEYS = frozenset({"items", "raw_mentions", "exclusions", "ambiguities"})
-_DEFAULT_EXTRACTION_ADAPTER_KEY = "reference_adapter"
 _NUL_CHARACTER = "\x00"
 
 
@@ -114,21 +113,10 @@ def build_extraction_envelope_candidate(
 
         if envelope_adapter_key is not None:
             resolved_adapter_key = envelope_adapter_key
-        elif envelope_destination is not None:
-            # Legacy extraction envelopes only expose routing through `destination`.
-            # Persist that neutral adapter identifier so replay paths do not need to
-            # infer ownership from domain-only metadata later.
-            resolved_adapter_key = envelope_destination
         if actor:
             envelope_metadata.setdefault("envelope_actor", actor)
         if envelope_destination is not None:
             envelope_metadata.setdefault("envelope_destination", envelope_destination)
-            if resolved_domain_key is None:
-                resolved_domain_key = envelope_destination
-
-    if resolved_adapter_key is None:
-        resolved_adapter_key = _DEFAULT_EXTRACTION_ADAPTER_KEY
-        envelope_metadata.setdefault("inferred_adapter_key", resolved_adapter_key)
 
     if resolved_domain_key is None:
         inferred_domain_key = _infer_domain_key_from_agent_key(canonical_agent_key)

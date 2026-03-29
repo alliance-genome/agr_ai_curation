@@ -4,7 +4,6 @@ import { dispatchPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEve
 import type { EvidenceRecord } from '@/features/curation/types'
 
 import { buildChatEvidenceNavigationCommand } from './chatEvidenceNavigation'
-
 interface EvidenceQuoteProps {
   evidenceRecord: EvidenceRecord
   borderColor: string

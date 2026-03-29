@@ -953,6 +953,7 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
     async def _run_chat_prep(*_args, **_kwargs):
         return CurationPrepChatRunResponse(
             summary_text="Prepared 2 candidate annotations for curation review.",
+            document_id="document-1",
             candidate_count=2,
             warnings=["Review evidence alignment before downstream normalization."],
             processing_notes=["Prepared from chat extraction context."],
@@ -970,4 +971,5 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
     )
 
     assert response.candidate_count == 2
+    assert response.document_id == "document-1"
     assert response.summary_text == "Prepared 2 candidate annotations for curation review."

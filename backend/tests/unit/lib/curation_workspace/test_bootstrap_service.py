@@ -229,6 +229,87 @@ def test_get_document_bootstrap_availability_returns_false_when_no_matching_resu
     assert availability.eligible is False
 
 
+def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+    extraction_result.payload_json = {
+        "candidates": [
+            {
+                "adapter_key": "reference_adapter",
+                "profile_key": "primary",
+                "payload": {"title": "APOE"},
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "extract-1:candidate:1:evidence:1",
+                        "source": "extracted",
+                        "extraction_result_id": "extract-1",
+                        "field_paths": ["title"],
+                        "anchor": {
+                            "anchor_kind": "snippet",
+                            "locator_quality": "exact_quote",
+                            "supports_decision": "supports",
+                            "snippet_text": "APOE finding.",
+                            "sentence_text": "APOE finding.",
+                            "normalized_text": None,
+                            "viewer_search_text": "APOE finding.",
+                            "viewer_highlightable": False,
+                            "pdfx_markdown_offset_start": None,
+                            "pdfx_markdown_offset_end": None,
+                            "page_number": 2,
+                            "page_label": None,
+                            "section_title": "Results",
+                            "subsection_title": None,
+                            "figure_reference": None,
+                            "table_reference": None,
+                            "chunk_ids": ["chunk-1"],
+                        },
+                        "notes": [],
+                    }
+                ],
+                "conversation_context_summary": "Prepared from persisted prep output.",
+            }
+        ],
+        "run_metadata": {
+            "model_name": "stale-model-name",
+            "token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+            "processing_notes": [],
+            "warnings": [],
+        },
+    }
+    extraction_result.extraction_metadata = {
+        "final_run_metadata": {
+            "model_name": "deterministic_programmatic_mapper_v1",
+            "token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+            "processing_notes": ["Persisted prep metadata should win during replay."],
+            "warnings": [],
+        }
+    }
+    db_session.add(extraction_result)
+    db_session.commit()
+
+    prep_output = module._replayable_prep_output(extraction_result)
+
+    assert len(prep_output.candidates) == 1
+    assert prep_output.run_metadata.model_name == "deterministic_programmatic_mapper_v1"
+    assert prep_output.run_metadata.processing_notes == [
+        "Persisted prep metadata should win during replay."
+    ]
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_document_session_commits_persisted_session(monkeypatch):
     class FakeDb:

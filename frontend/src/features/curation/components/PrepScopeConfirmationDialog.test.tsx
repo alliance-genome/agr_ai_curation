@@ -4,7 +4,7 @@ import { render, screen } from '@/test/test-utils'
 import PrepScopeConfirmationDialog from './PrepScopeConfirmationDialog'
 
 describe('PrepScopeConfirmationDialog', () => {
-  it('hides the default reference adapter pill', () => {
+  it('shows adapter scope without special-casing reference adapters', () => {
     render(
       <PrepScopeConfirmationDialog
         open={true}
@@ -27,7 +27,8 @@ describe('PrepScopeConfirmationDialog', () => {
       />
     )
 
-    expect(screen.queryByText('Adapters')).not.toBeInTheDocument()
+    expect(screen.getByText('Adapters')).toBeInTheDocument()
+    expect(screen.getByText('Reference Adapter')).toBeInTheDocument()
     expect(screen.getByText('Domains')).toBeInTheDocument()
     expect(screen.getByText('Gene')).toBeInTheDocument()
   })

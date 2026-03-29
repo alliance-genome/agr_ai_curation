@@ -72,14 +72,21 @@ class _PrepExtractionRecord:
             "candidate_count": 1,
             "conversation_summary": "Disease extraction kept APOE-related findings.",
             "payload_json": {
-                "items": [{"label": "APOE", "entity_type": "gene"}],
-                "evidence_records": [
+                "items": [
                     {
-                        "snippet": "APOE was associated with the disease phenotype.",
-                        "page": 3,
-                        "section": "Results",
-                        "subsection": "Disease association",
-                        "figure_reference": "Fig. 2",
+                        "label": "APOE",
+                        "entity_type": "gene",
+                        "evidence": [
+                            {
+                                "entity": "APOE",
+                                "verified_quote": "APOE was associated with the disease phenotype.",
+                                "page": 3,
+                                "section": "Results",
+                                "subsection": "Disease association",
+                                "chunk_id": "chunk-apoe-1",
+                                "figure_reference": "Fig. 2",
+                            }
+                        ],
                     }
                 ],
                 "run_summary": {"candidate_count": 1},
@@ -700,12 +707,12 @@ async def test_dispatch_curation_prep_requires_prior_confirmation_prompt(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
+async def test_dispatch_curation_prep_runs_deterministic_prep_with_confirmed_scope(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
-    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-current")
+    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-1")
     monkeypatch.setattr(
         supervisor_agent,
         "document_state",
@@ -729,15 +736,22 @@ async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
         "list_extraction_results",
         lambda *_args, **_kwargs: [_PrepExtractionRecord()],
     )
-
-    async def _fake_run_curation_prep(agent_input, *, persistence_context):
-        captured["agent_input"] = agent_input
+    async def _fake_run_curation_prep(
+        extraction_results,
+        *,
+        scope_confirmation,
+        persistence_context=None,
+        db=None,
+    ):
+        captured["extraction_results"] = extraction_results
+        captured["scope_confirmation"] = scope_confirmation
         captured["persistence_context"] = persistence_context
+        captured["db"] = db
         return SimpleNamespace(
-            candidates=[{"candidate_id": "candidate-1"}],
+            candidates=[SimpleNamespace(adapter_key="disease")],
             run_metadata=SimpleNamespace(
-                warnings=["warning-1"],
-                processing_notes=["processing-note-1"],
+                warnings=[],
+                processing_notes=["Prepared from confirmed chat extraction context."],
             ),
         )
 
@@ -751,29 +765,28 @@ async def test_dispatch_curation_prep_runs_with_confirmed_scope(monkeypatch):
     payload = json.loads(response)
     assert payload["status"] == "prepared"
     assert payload["candidate_count"] == 1
-    assert payload["scope_confirmation"]["adapter_keys"] == ["reference_adapter"]
-    assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
-    assert payload["warnings"] == ["warning-1"]
-
-    agent_input = captured["agent_input"]
-    assert agent_input.scope_confirmation.confirmed is True
-    assert agent_input.scope_confirmation.adapter_keys == ["reference_adapter"]
-    assert agent_input.scope_confirmation.domain_keys == ["disease"]
-    assert agent_input.adapter_metadata[0].adapter_key == "reference_adapter"
-    assert agent_input.conversation_history[-1].content == "Yes, prepare the confirmed disease findings."
-    assert agent_input.evidence_records[0].anchor.page_number == 3
-
-    persistence_context = captured["persistence_context"]
-    assert persistence_context.origin_session_id == "session-1"
-    assert persistence_context.trace_id == "trace-current"
-    assert persistence_context.user_id == "user-1"
-    assert persistence_context.source_kind.value == "chat"
+    assert payload["document_id"] == "document-1"
+    assert payload["domain_keys"] == ["disease"]
+    assert payload["processing_notes"] == ["Prepared from confirmed chat extraction context."]
+    assert len(captured["extraction_results"]) == 1
+    assert captured["scope_confirmation"].confirmed is True
+    assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
+    assert captured["scope_confirmation"].domain_keys == ["disease"]
+    assert any(
+        "Disease findings for APOE." in note
+        for note in captured["scope_confirmation"].notes
+    )
+    assert any(
+        "Yes, prepare the confirmed disease findings." in note
+        for note in captured["scope_confirmation"].notes
+    )
+    assert captured["persistence_context"].origin_session_id == "session-1"
+    assert captured["persistence_context"].trace_id == "trace-1"
+    assert captured["persistence_context"].user_id == "user-1"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
-    run_called = False
-
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
     monkeypatch.setattr(
@@ -808,13 +821,6 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
         ],
     )
 
-    async def _unexpected_run(*_args, **_kwargs):
-        nonlocal run_called
-        run_called = True
-        return SimpleNamespace(candidates=[], run_metadata=SimpleNamespace(warnings=[], processing_notes=[]))
-
-    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _unexpected_run)
-
     response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
         user_confirmation="Yes, do it.",
     )
@@ -822,44 +828,15 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
     payload = json.loads(response)
     assert payload["status"] == "scope_confirmation_required"
     assert payload["available_scope"]["domain_keys"] == ["disease", "gene_expression"]
-    assert run_called is False
-
-
-def test_build_prep_evidence_records_walks_adapter_owned_nested_lists():
-    records = [
-        _PrepExtractionRecord(
-            payload_json={
-                "custom_candidates": [
-                    {
-                        "label": "APOE disease association",
-                        "evidence": [
-                            {
-                                "snippet": "APOE was associated with disease severity.",
-                                "page": 7,
-                                "section": "Results",
-                            }
-                        ],
-                    }
-                ],
-                "run_summary": {"candidate_count": 1},
-            }
-        )
-    ]
-
-    evidence_records = supervisor_agent._build_prep_evidence_records(records)
-
-    assert len(evidence_records) == 1
-    assert evidence_records[0]["anchor"]["snippet_text"] == "APOE was associated with disease severity."
-    assert evidence_records[0]["anchor"]["page_number"] == 7
 
 
 @pytest.mark.asyncio
-async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
+async def test_dispatch_curation_prep_still_filters_loaded_document_before_running(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
-    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-current")
+    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-2")
     monkeypatch.setattr(
         supervisor_agent,
         "document_state",
@@ -896,12 +873,17 @@ async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
         "list_extraction_results",
         _fake_list_extraction_results,
     )
-
-    async def _fake_run_curation_prep(agent_input, *, persistence_context):
-        captured["agent_input"] = agent_input
-        captured["persistence_context"] = persistence_context
+    async def _fake_run_curation_prep(
+        extraction_results,
+        *,
+        scope_confirmation,
+        persistence_context=None,
+        db=None,
+    ):
+        captured["run_scope_confirmation"] = scope_confirmation
+        captured["run_persistence_context"] = persistence_context
         return SimpleNamespace(
-            candidates=[{"candidate_id": "candidate-2"}],
+            candidates=[SimpleNamespace(adapter_key="disease")],
             run_metadata=SimpleNamespace(warnings=[], processing_notes=[]),
         )
 
@@ -914,14 +896,66 @@ async def test_dispatch_curation_prep_filters_to_loaded_document(monkeypatch):
     payload = json.loads(response)
     assert payload["status"] == "prepared"
     assert captured["query_kwargs"]["document_id"] == "document-2"
-    assert captured["agent_input"].extraction_results[0].document_id == "document-2"
-    assert captured["persistence_context"].document_id == "document-2"
+    assert captured["run_scope_confirmation"].domain_keys == ["disease"]
+    assert captured["run_persistence_context"].document_id == "document-2"
+    assert captured["run_persistence_context"].trace_id == "trace-2"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_curation_prep_does_not_fall_back_to_top_level_evidence_records(monkeypatch):
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "conversation_manager",
+        SimpleNamespace(
+            get_session_history=lambda _user_id, _session_id: [
+                {
+                    "user": "Prepare these findings.",
+                    "assistant": "Ready to prepare these for curation?",
+                    "timestamp": "2026-03-21T00:35:00Z",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        lambda *_args, **_kwargs: [
+            _PrepExtractionRecord(
+                payload_json={
+                    "items": [{"label": "APOE", "entity_type": "gene", "evidence": []}],
+                    "evidence_records": [
+                        {
+                            "verified_quote": "APOE was associated with the disease phenotype.",
+                            "page": 3,
+                            "section": "Results",
+                            "subsection": "Disease association",
+                            "chunk_id": "chunk-apoe-1",
+                        }
+                    ],
+                    "run_summary": {"candidate_count": 1},
+                }
+            )
+        ],
+    )
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, prepare them.",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unable_to_prepare"
+    assert "No evidence-verified candidates were available" in payload["message"]
 
 
 @pytest.mark.asyncio
 async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_document_session(monkeypatch):
-    run_called = False
-
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
     monkeypatch.setattr(
@@ -961,13 +995,6 @@ async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_docu
         ],
     )
 
-    async def _unexpected_run(*_args, **_kwargs):
-        nonlocal run_called
-        run_called = True
-        return SimpleNamespace(candidates=[], run_metadata=SimpleNamespace(warnings=[], processing_notes=[]))
-
-    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _unexpected_run)
-
     response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
         user_confirmation="Yes, prepare them.",
     )
@@ -976,4 +1003,3 @@ async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_docu
     assert payload["status"] == "scope_confirmation_required"
     assert payload["available_document_ids"] == ["document-1", "document-2"]
     assert "multiple documents" in payload["message"]
-    assert run_called is False

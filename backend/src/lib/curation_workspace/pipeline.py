@@ -22,6 +22,7 @@ from src.lib.curation_workspace.evidence_quality import (
     evidence_anchor_payload_with_quality,
     summarize_evidence_records,
 )
+from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
     field_validation_status,
@@ -39,12 +40,10 @@ from src.lib.curation_workspace.session_service import (
     PreparedValidationSnapshotInput,
     upsert_prepared_session,
 )
-from src.lib.openai_agents.agents.curation_prep_agent import CURATION_PREP_AGENT_ID
 from src.models.sql.database import SessionLocal
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepCandidate,
-    CurationPrepEvidenceReference,
 )
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
@@ -64,8 +63,7 @@ from src.schemas.curation_workspace import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
-PREP_EVIDENCE_REFERENCES_METADATA_KEY = "prep_evidence_references"
-PREP_UNRESOLVED_AMBIGUITIES_METADATA_KEY = "prep_unresolved_ambiguities"
+PREP_EVIDENCE_RECORDS_METADATA_KEY = "prep_evidence_records"
 NORMALIZER_METADATA_KEY = "normalizer"
 EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
 
@@ -188,8 +186,9 @@ class CurationCandidateNormalizer(Protocol):
 
     def normalize(
         self,
-        candidate: CurationPrepCandidate,
+        payload: dict[str, Any],
         *,
+        prep_candidate: CurationPrepCandidate,
         context: CandidateNormalizationContext,
     ) -> NormalizedCandidate:
         """Normalize one prep candidate into deterministic draft/session payloads."""
@@ -232,31 +231,19 @@ class PassthroughCandidateNormalizer:
 
     def normalize(
         self,
-        candidate: CurationPrepCandidate,
+        payload: dict[str, Any],
         *,
+        prep_candidate: CurationPrepCandidate,
         context: CandidateNormalizationContext,
     ) -> NormalizedCandidate:
-        normalized_payload = candidate.to_extracted_fields_dict()
-        draft_fields = [
-            PreparedDraftFieldInput(
-                field_key=field.field_path,
-                label=_humanize_path(field.field_path),
-                value=field.to_python_value(),
-                seed_value=field.to_python_value(),
-                field_type=field.value_type.value,
-                group_key=_field_group_key(field.field_path),
-                group_label=_humanize_path(_field_group_key(field.field_path)),
-                order=index,
-                metadata={"source_field_path": field.field_path},
-            )
-            for index, field in enumerate(candidate.extracted_fields)
-        ]
+        normalized_payload = dict(payload)
+        draft_fields = _build_passthrough_draft_fields(normalized_payload)
         display_values = _scalar_display_values(normalized_payload)
         display_label = display_values[0] if display_values else f"Candidate {context.candidate_index + 1}"
         secondary_label = display_values[1] if len(display_values) > 1 else None
 
         return NormalizedCandidate(
-            prep_candidate=candidate,
+            prep_candidate=prep_candidate,
             normalized_payload=normalized_payload,
             draft_fields=draft_fields,
             display_label=display_label,
@@ -278,19 +265,23 @@ class PassthroughEvidenceAnchorResolver:
         primary_fields: set[str] = set()
         resolved_records: list[PreparedEvidenceRecordInput] = []
 
-        for reference in candidate.evidence_references:
-            field_group_key = _field_group_key(reference.field_path)
+        for evidence_record in candidate.evidence_records:
+            field_keys = list(evidence_record.field_paths)
+            field_group_keys = _field_group_keys(field_keys)
             resolved_records.append(
                 PreparedEvidenceRecordInput(
                     source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=[reference.field_path],
-                    field_group_keys=[field_group_key] if field_group_key else [],
-                    is_primary=reference.field_path not in primary_fields,
-                    anchor=reference.anchor.model_dump(mode="json"),
+                    field_keys=field_keys,
+                    field_group_keys=field_group_keys,
+                    is_primary=(
+                        not field_keys
+                        or any(field_key not in primary_fields for field_key in field_keys)
+                    ),
+                    anchor=evidence_record.anchor.model_dump(mode="json"),
                     warnings=[],
                 )
             )
-            primary_fields.add(reference.field_path)
+            primary_fields.update(field_keys)
 
         return resolved_records
 
@@ -326,11 +317,6 @@ class DeterministicStructuralValidationService:
                 _increment_validation_count(candidate_counts, field_status)
                 _increment_validation_count(session_counts, field_status)
                 candidate_warnings.extend(field_warnings)
-
-            if normalized_candidate.prep_candidate.unresolved_ambiguities:
-                candidate_warnings.append(
-                    "Candidate contains unresolved ambiguities that require curator review."
-                )
 
             candidate_summary = CurationValidationSummary(
                 state=CurationValidationSnapshotState.COMPLETED,
@@ -512,7 +498,8 @@ def _execute_pipeline_steps(
             dependencies.default_candidate_normalizer,
         )
         normalized_candidate = normalizer.normalize(
-            candidate,
+            candidate.payload,
+            prep_candidate=candidate,
             context=CandidateNormalizationContext(
                 document_id=request.document_id,
                 adapter_key=adapter_key,
@@ -614,13 +601,9 @@ def _prepared_candidate_input(
     prep_candidate = normalized_candidate.prep_candidate
     metadata = dict(normalized_candidate.metadata)
     evidence_summary = summarize_evidence_records(evidence_records)
-    metadata[PREP_EVIDENCE_REFERENCES_METADATA_KEY] = [
-        _serialize_evidence_reference(reference)
-        for reference in prep_candidate.evidence_references
-    ]
-    metadata[PREP_UNRESOLVED_AMBIGUITIES_METADATA_KEY] = [
-        ambiguity.model_dump(mode="json")
-        for ambiguity in prep_candidate.unresolved_ambiguities
+    metadata[PREP_EVIDENCE_RECORDS_METADATA_KEY] = [
+        evidence_record.model_dump(mode="json")
+        for evidence_record in prep_candidate.evidence_records
     ]
     metadata["prep_candidate_index"] = candidate_index
     if evidence_summary is not None:
@@ -634,12 +617,7 @@ def _prepared_candidate_input(
         profile_key=prep_candidate.profile_key,
         display_label=normalized_candidate.display_label,
         secondary_label=normalized_candidate.secondary_label,
-        confidence=prep_candidate.confidence,
         conversation_summary=prep_candidate.conversation_context_summary,
-        unresolved_ambiguities=[
-            _ambiguity_message(ambiguity)
-            for ambiguity in prep_candidate.unresolved_ambiguities
-        ],
         extraction_result_id=prep_extraction_result_id,
         normalized_payload=normalized_candidate.normalized_payload,
         metadata=metadata,
@@ -795,6 +773,71 @@ def _field_group_key(field_path: str | None) -> str | None:
     return field_path.rsplit(".", 1)[0]
 
 
+def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    group_keys: list[str] = []
+    for field_path in field_paths:
+        group_key = _field_group_key(field_path)
+        if not group_key or group_key in seen:
+            continue
+        seen.add(group_key)
+        group_keys.append(group_key)
+    return group_keys
+
+
+def _build_passthrough_draft_fields(payload: dict[str, Any]) -> list[PreparedDraftFieldInput]:
+    return [
+        PreparedDraftFieldInput(
+            field_key=field_key,
+            label=_humanize_path(field_key),
+            value=value,
+            seed_value=value,
+            field_type=_payload_field_type(value),
+            group_key=_field_group_key(field_key),
+            group_label=_humanize_path(_field_group_key(field_key)),
+            order=index,
+            metadata={"source_field_path": field_key},
+        )
+        for index, (field_key, value) in enumerate(_iter_payload_field_items(payload))
+    ]
+
+
+def _iter_payload_field_items(payload: Any, *, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(payload, dict):
+        if not payload and prefix:
+            return [(prefix, {})]
+        items: list[tuple[str, Any]] = []
+        for key, value in payload.items():
+            field_key = f"{prefix}.{key}" if prefix else str(key)
+            items.extend(_iter_payload_field_items(value, prefix=field_key))
+        return items
+
+    if isinstance(payload, list):
+        if not payload and prefix:
+            return [(prefix, [])]
+        items: list[tuple[str, Any]] = []
+        for index, value in enumerate(payload):
+            field_key = f"{prefix}.{index}" if prefix else str(index)
+            items.extend(_iter_payload_field_items(value, prefix=field_key))
+        return items
+
+    if not prefix:
+        return []
+    return [(prefix, payload)]
+
+
+def _payload_field_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if value is None:
+        return "null"
+    return "json"
+
+
 def _humanize_path(path: str | None) -> str | None:
     if path is None:
         return None
@@ -839,17 +882,6 @@ def _increment_validation_count(
     status: FieldValidationStatus,
 ) -> None:
     increment_validation_count(counts, status)
-
-
-def _serialize_evidence_reference(
-    reference: CurationPrepEvidenceReference,
-) -> dict[str, Any]:
-    payload = reference.model_dump(mode="json")
-    return payload
-
-
-def _ambiguity_message(ambiguity: Any) -> str:
-    return f"{ambiguity.field_path}: {ambiguity.description}"
 
 
 def _dedupe(values: Sequence[str]) -> list[str]:

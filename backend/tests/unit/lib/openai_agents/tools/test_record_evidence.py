@@ -1,0 +1,92 @@
+"""Unit tests for the record_evidence document tool."""
+
+import pytest
+
+import src.lib.openai_agents.tools.record_evidence as record_evidence
+from tests.fixtures.evidence.harness import chunk_map, load_evidence_fixture, tool_case_map
+
+
+FIXTURE = load_evidence_fixture()
+TOOL_CASES = tool_case_map(FIXTURE)
+
+
+class _Tracker:
+    def __init__(self):
+        self.calls = []
+
+    def record_call(self, name: str):
+        self.calls.append(name)
+
+
+@pytest.fixture(autouse=True)
+def identity_function_tool(monkeypatch):
+    monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
+
+
+def test_find_verified_quote_handles_fuzzy_quote_variants():
+    case = TOOL_CASES["verified_fuzzy"]
+    chunk = chunk_map(FIXTURE)[case["tool_input"]["chunk_id"]]
+    quote, match = record_evidence._find_verified_quote(
+        case["tool_input"]["claimed_quote"],
+        chunk["text"],
+    )
+
+    assert quote == case["expected_tool_result"]["verified_quote"]
+    assert match is not None
+    assert match.score >= 0.87
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_records_exact_match_and_tracker_usage(monkeypatch):
+    case = TOOL_CASES["verified_exact"]
+    chunks = chunk_map(FIXTURE)
+    captured = {}
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        captured.update(kwargs)
+        return chunks.get(kwargs["chunk_id"])
+
+    tracker = _Tracker()
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-12345678", "user-1", tracker=tracker)
+
+    result = await tool(**case["tool_input"])
+
+    assert result == case["expected_tool_result"]
+    assert captured == {
+        "chunk_id": case["tool_input"]["chunk_id"],
+        "user_id": "user-1",
+        "document_id": "doc-12345678",
+    }
+    assert tracker.calls == ["record_evidence"]
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        "verified_fuzzy",
+        "not_found_absent_quote",
+        "not_found_wrong_chunk_id",
+    ],
+)
+@pytest.mark.asyncio
+async def test_record_evidence_fixture_cases(monkeypatch, case_id):
+    case = TOOL_CASES[case_id]
+    chunks = chunk_map(FIXTURE)
+    captured = {}
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        captured.update(kwargs)
+        return chunks.get(kwargs["chunk_id"])
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(**case["tool_input"])
+
+    assert result == case["expected_tool_result"]
+    assert captured == {
+        "chunk_id": case["tool_input"]["chunk_id"],
+        "user_id": "user-1",
+        "document_id": "doc-123",
+    }

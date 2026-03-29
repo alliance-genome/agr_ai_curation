@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef } from 'react'
-
 import { Box, Collapse } from '@mui/material'
 
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -66,7 +65,6 @@ export default function EvidenceQuoteList({
       }
     }
   }, [activeEntity, scrollExpandedEvidenceIntoView])
-
   return (
     <>
       {groups.map((group) => {

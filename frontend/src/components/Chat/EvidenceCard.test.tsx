@@ -67,7 +67,6 @@ describe('EvidenceCard', () => {
     HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     vi.useRealTimers()
   })
-
   it('renders collapsed by default with the header and entity chips', () => {
     renderEvidenceCard()
 
@@ -132,7 +131,6 @@ describe('EvidenceCard', () => {
 
     unsubscribe()
   })
-
   it('collapses the active entity when the same chip is clicked again', async () => {
     const user = userEvent.setup()
     renderEvidenceCard()

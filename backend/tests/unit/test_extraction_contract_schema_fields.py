@@ -25,7 +25,7 @@ def test_runtime_gene_expression_envelope_accepts_reason_coded_exclusions():
     exclusion = ExclusionRecord(
         mention="marker transgene only",
         reason_code=ExclusionReasonCode.MARKER_ONLY_VISUALIZATION,
-        evidence=[EvidenceRecord(snippet="marker used to visualize neurons only")],
+        evidence=[EvidenceRecord(verified_quote="marker used to visualize neurons only")],
     )
 
     envelope = RuntimeGeneExpressionEnvelope(exclusions=[exclusion])
