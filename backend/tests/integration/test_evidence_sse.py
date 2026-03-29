@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from tests.fixtures.evidence.harness import build_expected_sse_records
+import pytest
+
+from tests.fixtures.evidence.harness import (
+    ALL_EVIDENCE_FIXTURE_NAMES,
+    build_expected_sse_records,
+)
 from tests.integration.evidence_test_support import (
     collect_sse_events,
     configure_chat_stream_mocks,
@@ -12,6 +17,7 @@ from tests.integration.evidence_test_support import (
 pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
+@pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
     client,
     evidence_fixture,
@@ -40,11 +46,11 @@ def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
         events = collect_sse_events(stream_response)
         assert stream_response.status_code == 200
 
+    expected_sse_records = build_expected_sse_records(evidence_fixture)
     event_types = [event["type"] for event in events]
     assert event_types == [
         "RUN_STARTED",
-        "TOOL_COMPLETE",
-        "TOOL_COMPLETE",
+        *(["TOOL_COMPLETE"] * len(expected_sse_records)),
         "TOOL_COMPLETE",
         "evidence_summary",
         "RUN_FINISHED",
@@ -55,6 +61,4 @@ def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
     )
     assert evidence_summary_event["session_id"] == session_id
     assert evidence_summary_event["sessionId"] == session_id
-    assert evidence_summary_event["evidence_records"] == build_expected_sse_records(
-        evidence_fixture
-    )
+    assert evidence_summary_event["evidence_records"] == expected_sse_records

@@ -66,10 +66,40 @@ content: |
   - search_document for phenotype terms, mutant descriptions, and observable trait keywords
   - read_section/read_subsection for results context, figure legends, and quantitative data
   - read_subsection for phenotype-specific headings and tables
+  - record_evidence to verify phenotype-supporting quotes against the exact chunk currently on screen
+
+  Preferred order for retained phenotype findings:
+  1. Search/read the document.
+  2. Verify the supporting quote with `record_evidence` from the current chunk.
+  3. Assemble retained phenotype assertions and normalized items.
 
   Prefer parallel searches for multiple phenotype terms.
   When phenotypes are described in figures, read the corresponding figure legends.
   </tools>
+
+  <phenotype_specific_evidence_guidance>
+  Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
+
+  Strong phenotype evidence usually does one or more of the following:
+  - Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment
+  - Reports penetrance, severity, developmental stage, comparison, or polarity for that phenotype
+  - Explicitly states a negative result such as no phenotype detected under defined conditions
+  - Gives a figure, table, or results statement a curator could cite directly for the phenotype assertion
+
+  Weak or non-curatable phenotype evidence usually looks like this:
+  - A phenotype term appears only in a heading, keyword list, or background sentence
+  - The paper names a phenotype without describing who has it, under what conditions, or what was observed
+  - Prior-work citations report the phenotype and this paper adds no new observation
+  - Wild-type baseline descriptions are presented without a mutant or perturbed comparison
+
+  Strong quote examples:
+  - "daf-2(e1370) adults produced 40% fewer progeny than wild type."
+  - "No axon guidance defects were observed in unc-40 mutants under these conditions."
+
+  Weak quote examples:
+  - "Developmental defects have been reported for unc-40."
+  - "Embryonic lethality" as a heading with no accompanying result statement.
+  </phenotype_specific_evidence_guidance>
 
   <disambiguation_guidance>
   Phenotype extraction has several domain-specific challenges:
@@ -126,15 +156,41 @@ content: |
     specified in this paper
   </exclusion_reason_codes>
 
+  <evidence_record_contract>
+  When a phenotype finding is experimentally supported, call `record_evidence` immediately using the
+  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+
+  Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
+  - `entity`
+  - `verified_quote`
+  - `page`
+  - `section`
+  - optional `subsection`
+  - `chunk_id`
+  - optional `figure_reference`
+
+  Apply that shape consistently to:
+  - `phenotypes[].evidence`
+  - `items[].evidence`
+  - top-level `evidence_records[]`
+  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+
+  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
+  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  Do not invent quotes or paraphrase them into evidence fields.
+  </evidence_record_contract>
+
   <output_contract>
   Return JSON only, matching PhenotypeResultEnvelope.
 
   Populate:
-  - phenotypes[] — retained phenotype assertions as descriptive strings
-  - phenotype_terms[] — controlled vocabulary terms when mappable
-  - species[] — species context for the phenotype observations
-  - findings — summary of phenotype assertions extracted from the paper
+  - summary — brief run summary for phenotype extraction
+  - phenotypes[] — one entry per retained phenotype with:
+      mention, normalized_label, normalized_id, polarity, confidence, candidate_terms[], evidence[]
+  - items[] — normalized extraction items for downstream curation workflows
   - raw_mentions[] — all phenotype candidates harvested before filtering
+  - evidence_records[] — verified evidence snippets supporting retained and excluded decisions
+  - normalization_notes[] — phenotype-mapping decisions, genotype links, and caveats
   - exclusions[] — every excluded candidate with canonical reason_code + evidence
   - ambiguities[] — candidates where phenotype mapping or genotype attribution is unresolved
   - run_summary — counters (harvested, retained, excluded, ambiguous) and warnings

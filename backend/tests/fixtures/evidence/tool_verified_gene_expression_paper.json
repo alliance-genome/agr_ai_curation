@@ -1,0 +1,170 @@
+{
+  "fixture_id": "tool_verified_gene_expression_paper",
+  "paper": {
+    "title": "unc-25 expression evidence fixture paper",
+    "filename": "test_tool_verified_gene_expression_paper.pdf",
+    "conversation_summary": "Extract evidence-backed gene expression findings from a known paper fixture."
+  },
+  "chunks": [
+    {
+      "id": "chunk-expression-positive",
+      "text": "Figure 1D. endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward.",
+      "page_number": 4,
+      "parent_section": "Results",
+      "subsection": "Spatial expression",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-expression-negative",
+      "text": "No unc-25 expression was observed in the pharynx.",
+      "page_number": 5,
+      "parent_section": "Results",
+      "subsection": "Negative findings",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-expression-rescue",
+      "text": "Expression of unc-25 from the myo-3 promoter rescued locomotion.",
+      "page_number": 6,
+      "parent_section": "Results",
+      "subsection": "Rescue assays",
+      "metadata": {}
+    }
+  ],
+  "tool_cases": [
+    {
+      "case_id": "verified_exact",
+      "tool_input": {
+        "entity": "unc-25",
+        "chunk_id": "chunk-expression-positive",
+        "claimed_quote": "endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Spatial expression",
+        "figure_reference": "Figure 1D"
+      }
+    },
+    {
+      "case_id": "verified_supporting",
+      "tool_input": {
+        "entity": "unc-25",
+        "chunk_id": "chunk-expression-negative",
+        "claimed_quote": "No unc-25 expression was observed in the pharynx."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "No unc-25 expression was observed in the pharynx.",
+        "page": 5,
+        "section": "Results",
+        "subsection": "Negative findings"
+      }
+    },
+    {
+      "case_id": "not_found_absent_quote",
+      "tool_input": {
+        "entity": "unc-25",
+        "chunk_id": "chunk-expression-rescue",
+        "claimed_quote": "endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "page": 6,
+        "section": "Results",
+        "subsection": "Rescue assays",
+        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
+        "chunk_content_preview": "Expression of unc-25 from the myo-3 promoter rescued locomotion."
+      }
+    },
+    {
+      "case_id": "not_found_wrong_chunk_id",
+      "tool_input": {
+        "entity": "unc-25",
+        "chunk_id": "chunk-expression-missing",
+        "claimed_quote": "endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "chunk_content_preview": "",
+        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+      }
+    }
+  ],
+  "extraction": {
+    "tool_name": "ask_gene_expression_specialist",
+    "agent_key": "gene_expression",
+    "profile_key": null,
+    "scope_confirmation": {
+      "confirmed": true,
+      "adapter_keys": [],
+      "profile_keys": [],
+      "domain_keys": [
+        "gene_expression"
+      ],
+      "notes": [
+        "Confirmed tool-verified gene expression fixture scope."
+      ]
+    },
+    "items": [
+      {
+        "label": "unc-25",
+        "entity_type": "gene_expression",
+        "normalized_id": "WB:WBGene00006763",
+        "source_mentions": [
+          "unc-25"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_supporting"
+        ]
+      },
+      {
+        "label": "myo-3 promoter rescue",
+        "entity_type": "gene_expression",
+        "normalized_id": null,
+        "source_mentions": [
+          "myo-3 promoter"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
+    "top_level_evidence_case_ids": [
+      "verified_exact",
+      "verified_supporting"
+    ],
+    "run_summary": {
+      "candidate_count": 2
+    }
+  },
+  "expected_candidates": [
+    {
+      "adapter_key": "gene_expression",
+      "profile_key": null,
+      "payload": {
+        "label": "unc-25",
+        "entity_type": "gene_expression",
+        "normalized_id": "WB:WBGene00006763",
+        "source_mentions": [
+          "unc-25"
+        ]
+      },
+      "field_paths": [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0"
+      ],
+      "evidence_case_ids": [
+        "verified_exact",
+        "verified_supporting"
+      ]
+    }
+  ],
+  "expected_gating": {
+    "warning": "Skipped 1 candidate without verified evidence.",
+    "all_zero_error": "No evidence-verified candidates were available to prepare for curation review."
+  }
+}

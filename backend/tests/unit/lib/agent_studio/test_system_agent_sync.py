@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.lib.config.agent_loader import (
     AgentDefinition,
     FrontendConfig,
@@ -197,7 +199,48 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
     assert len(db.added) == 0
 
 
-def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_agents(monkeypatch):
+@pytest.mark.parametrize(
+    ("folder_name", "agent_id", "output_schema", "base_tools"),
+    [
+        (
+            "allele_extractor",
+            "allele_extractor",
+            "AlleleExtractionResultEnvelope",
+            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+        ),
+        (
+            "disease_extractor",
+            "disease_extractor",
+            "DiseaseExtractionResultEnvelope",
+            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+        ),
+        (
+            "chemical_extractor",
+            "chemical_extractor",
+            "ChemicalExtractionResultEnvelope",
+            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+        ),
+        (
+            "phenotype_extractor",
+            "phenotype_extractor",
+            "PhenotypeResultEnvelope",
+            ["search_document", "read_section", "read_subsection"],
+        ),
+        (
+            "gene_expression",
+            "gene_expression_extraction",
+            "GeneExpressionEnvelope",
+            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+        ),
+    ],
+)
+def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_agents(
+    monkeypatch,
+    folder_name,
+    agent_id,
+    output_schema,
+    base_tools,
+):
     import src.lib.agent_studio.system_agent_sync as module
 
     db = _DBStub([])
@@ -205,18 +248,18 @@ def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_ag
     monkeypatch.setattr(
         module,
         "resolve_agent_config_sources",
-        lambda _agents_path=None: (SimpleNamespace(folder_name="gene_expression"),),
+        lambda _agents_path=None: (SimpleNamespace(folder_name=folder_name),),
     )
     monkeypatch.setattr(
         module,
         "load_agent_definitions",
         lambda _agents_path=None, force_reload=False: {
-            "gene_expression_extraction": _agent_definition(
-                "gene_expression",
-                "gene_expression_extraction",
+            agent_id: _agent_definition(
+                folder_name,
+                agent_id,
                 category="Extraction",
-                tools=["search_document", "read_section", "read_subsection", "agr_curation_query"],
-                output_schema="GeneExpressionEnvelope",
+                tools=base_tools,
+                output_schema=output_schema,
                 requires_document=True,
             ),
         },
@@ -230,13 +273,7 @@ def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_ag
     result = module.sync_system_agents(db, force_reload=True)
 
     assert result["inserted"] == 1
-    assert db.added[0].tool_ids == [
-        "search_document",
-        "read_section",
-        "read_subsection",
-        "agr_curation_query",
-        "record_evidence",
-    ]
+    assert db.added[0].tool_ids == [*base_tools, "record_evidence"]
 
 
 def test_sync_does_not_auto_attach_record_evidence_to_unstructured_pdf_agent(monkeypatch):

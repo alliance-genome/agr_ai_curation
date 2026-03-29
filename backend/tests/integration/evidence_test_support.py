@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
 from tests.fixtures.evidence.harness import (
+    DEFAULT_FIXTURE_NAME,
     build_expected_sse_records,
     build_extraction_payload,
     load_evidence_fixture,
@@ -28,8 +29,9 @@ def _hash(document_id: UUID) -> str:
 
 
 @pytest.fixture
-def evidence_fixture() -> dict[str, object]:
-    return load_evidence_fixture()
+def evidence_fixture(request) -> dict[str, object]:
+    fixture_name = getattr(request, "param", DEFAULT_FIXTURE_NAME)
+    return load_evidence_fixture(str(fixture_name))
 
 
 @pytest.fixture

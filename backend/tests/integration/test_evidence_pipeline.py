@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from tests.fixtures.evidence.harness import (
+    ALL_EVIDENCE_FIXTURE_NAMES,
     build_expected_candidates,
     build_extraction_payload,
     build_extraction_scope,
@@ -84,9 +85,21 @@ def _fixture_extraction_result(
     )
 
 
+@pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     evidence_fixture,
 ):
+    native_scope = build_extraction_scope(evidence_fixture)
+
+    native_extraction_result = _fixture_extraction_result(
+        evidence_fixture,
+        document_id="document-fixture",
+        user_id="user-fixture",
+        origin_session_id="session-fixture",
+    )
+    assert native_scope["domain_key"] is not None
+    assert native_extraction_result.domain_key == native_scope["domain_key"]
+
     scoped_fixture = copy.deepcopy(evidence_fixture)
     scoped_fixture["extraction"]["profile_key"] = "pilot"
     scoped_fixture["extraction"]["scope_confirmation"]["profile_keys"] = ["pilot"]
@@ -107,6 +120,7 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     assert extraction_result.domain_key == "disease"
 
 
+@pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 @pytest.mark.asyncio
 async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_workspace(
     client,
@@ -229,6 +243,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     ]
 
 
+@pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 @pytest.mark.asyncio
 async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace_candidate(
     client,
@@ -301,6 +316,7 @@ async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace
     assert workspace_candidate["profile_key"] == "pilot"
 
 
+@pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 @pytest.mark.asyncio
 async def test_run_curation_prep_rejects_fixture_payload_when_all_candidates_have_zero_verified_evidence(
     evidence_fixture,

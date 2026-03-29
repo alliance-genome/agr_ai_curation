@@ -53,10 +53,40 @@ content: |
   You must call document retrieval tools before answering.
   - search_document for allele symbols, variant notations, HGVS strings, and genotype descriptions
   - read_section/read_subsection for methods (strain construction), results, and supplementary tables
+  - record_evidence to verify allele/variant quotes against the exact chunk currently on screen
   - agr_curation_query for batched allele/variant identifier resolution (never speculative fill)
+
+  Preferred order for retained alleles:
+  1. Search/read the document.
+  2. Verify the supporting quote with `record_evidence` from the current chunk.
+  3. Normalize the retained allele with `agr_curation_query`.
 
   Prefer batch AGR calls. Do not call agr_curation_query for alleles you will exclude.
   </tools>
+
+  <allele_specific_evidence_guidance>
+  Call `record_evidence` only for quotes that support a curatable allele or variant finding in THIS paper.
+
+  Strong allele evidence usually does one or more of the following:
+  - Names a specific allele/variant and reports its phenotype, penetrance, rescue/complementation behavior, or experimental use as the studied variable
+  - Describes the molecular lesion or engineered change for that exact allele/variant
+  - Explicitly links the allele to its associated gene when the paper states that relationship
+  - Reports a figure, table, or results statement a curator could cite directly for the allele finding
+
+  Weak or non-curatable allele evidence usually looks like this:
+  - Gene-only statements with no specific allele or variant
+  - Strain inventory, stock list, or background-genotype text that names the allele without reporting a finding
+  - Prior-work citations or catalog-style mentions copied from earlier papers
+  - Generic statements such as "mutants were analyzed" that never identify the tested allele or the observed result
+
+  Strong quote examples:
+  - "unc-54(e190) animals were paralyzed and arrested at the L4 stage."
+  - "Sequencing identified a G-to-A substitution in daf-2(m41)."
+
+  Weak quote examples:
+  - "The unc-54(e190) strain was maintained as described previously."
+  - "unc-54 interacts with other muscle genes."
+  </allele_specific_evidence_guidance>
 
   <nomenclature_guidance>
   Allele naming conventions vary by organism. Each group uses distinct notation patterns
@@ -110,6 +140,31 @@ content: |
   - wild_type_reference — mention is a wild-type or reference designation (+, wt)
   - background_genotype_only — allele appears only as part of strain background, not experimentally tested
   </exclusion_reason_codes>
+
+  <evidence_record_contract>
+  When an allele is experimentally supported, call `record_evidence` immediately using the exact
+  `chunk_id` from the search/read result you are looking at and a verbatim or lightly trimmed
+  `claimed_quote` from that chunk.
+
+  If the tool returns `status: "verified"`, persist the shared evidence fields exactly:
+  - `entity`
+  - `verified_quote`
+  - `page`
+  - `section`
+  - optional `subsection`
+  - `chunk_id`
+  - optional `figure_reference`
+
+  Apply that shape consistently to:
+  - `alleles[].evidence`
+  - `items[].evidence`
+  - top-level `evidence_records[]`
+  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+
+  If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the
+  mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  Do not invent quotes or replace them with free-text summaries.
+  </evidence_record_contract>
 
   <output_contract>
   Return JSON only, matching AlleleExtractionResultEnvelope.

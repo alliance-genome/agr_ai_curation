@@ -64,10 +64,40 @@ content: |
   You must call document retrieval tools before answering.
   - search_document for disease names, condition descriptions, and model organism disease terms
   - read_section/read_subsection for results, discussion, and methods context
+  - record_evidence to verify disease-supporting quotes against the exact chunk currently on screen
   - agr_curation_query for batched disease identifier resolution (never speculative fill)
+
+  Preferred order for retained disease findings:
+  1. Search/read the document.
+  2. Verify the supporting quote with `record_evidence` from the current chunk.
+  3. Normalize the retained disease with `agr_curation_query`.
 
   Prefer batch AGR calls. Do not call agr_curation_query for diseases you will exclude.
   </tools>
+
+  <disease_specific_evidence_guidance>
+  Call `record_evidence` only for quotes that support a curatable disease relationship in THIS paper.
+
+  Strong disease evidence usually does one or more of the following:
+  - Links a studied gene, allele, perturbation, or pathway to a disease or disease model
+  - States that the model organism or cellular system recapitulates a named human disease
+  - Describes pathological or therapeutic findings relevant to the disease in the current paper
+  - Gives a figure, table, or results statement that clearly ties the disease to the reported experiment
+
+  Weak or non-curatable disease evidence usually looks like this:
+  - The disease is mentioned only as motivation, background, or population context
+  - A gene and disease appear near each other, but the sentence never states the relationship
+  - Prior-work citations describe the association and this paper adds no new disease data
+  - The sentence names symptoms or phenotypes without establishing a disease concept
+
+  Strong quote examples:
+  - "Loss of abc1 caused a cardiomyopathy-like phenotype, establishing this zebrafish line as a model of dilated cardiomyopathy."
+  - "Patient-derived DEF2 variants were associated with congenital nephrotic syndrome in our cohort."
+
+  Weak quote examples:
+  - "ABC1 has been implicated in dilated cardiomyopathy in previous studies."
+  - "Parkinson disease is a major neurodegenerative disorder."
+  </disease_specific_evidence_guidance>
 
   <disambiguation_guidance>
   Disease entity recognition has several common pitfalls:
@@ -114,6 +144,30 @@ content: |
   - phenotype_not_disease — mention describes an observable phenotype, not a disease entity
   - drug_or_treatment_context — disease name appears only as a qualifier for a drug/treatment
   </exclusion_reason_codes>
+
+  <evidence_record_contract>
+  When a disease finding is experimentally supported, call `record_evidence` immediately using the
+  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+
+  Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
+  - `entity`
+  - `verified_quote`
+  - `page`
+  - `section`
+  - optional `subsection`
+  - `chunk_id`
+  - optional `figure_reference`
+
+  Apply that shape consistently to:
+  - `diseases[].evidence`
+  - `items[].evidence`
+  - top-level `evidence_records[]`
+  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+
+  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
+  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  Do not invent quotes or paraphrase evidence into new text.
+  </evidence_record_contract>
 
   <output_contract>
   Return JSON only, matching DiseaseExtractionResultEnvelope.
