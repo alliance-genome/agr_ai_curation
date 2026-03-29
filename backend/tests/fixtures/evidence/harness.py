@@ -10,6 +10,14 @@ from typing import Any
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 DEFAULT_FIXTURE_NAME = "tool_verified_gene_paper"
+NON_GENE_EVIDENCE_FIXTURE_NAMES = (
+    "tool_verified_allele_paper",
+    "tool_verified_disease_paper",
+    "tool_verified_chemical_paper",
+    "tool_verified_phenotype_paper",
+    "tool_verified_gene_expression_paper",
+)
+ALL_EVIDENCE_FIXTURE_NAMES = (DEFAULT_FIXTURE_NAME, *NON_GENE_EVIDENCE_FIXTURE_NAMES)
 
 
 def load_evidence_fixture(name: str = DEFAULT_FIXTURE_NAME) -> dict[str, Any]:

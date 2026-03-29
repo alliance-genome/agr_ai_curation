@@ -1,0 +1,170 @@
+{
+  "fixture_id": "tool_verified_disease_paper",
+  "paper": {
+    "title": "Andersen-Tawil disease evidence fixture paper",
+    "filename": "test_tool_verified_disease_paper.pdf",
+    "conversation_summary": "Extract evidence-backed disease findings from a known paper fixture."
+  },
+  "chunks": [
+    {
+      "id": "chunk-disease-model",
+      "text": "Figure 4A. loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.",
+      "page_number": 4,
+      "parent_section": "Results",
+      "subsection": "Disease model",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-disease-cohort",
+      "text": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.",
+      "page_number": 5,
+      "parent_section": "Results",
+      "subsection": "Clinical correlation",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-disease-background",
+      "text": "Andersen-Tawil syndrome has been linked to KCNJ2 in previous studies.",
+      "page_number": 2,
+      "parent_section": "Introduction",
+      "subsection": "Background",
+      "metadata": {}
+    }
+  ],
+  "tool_cases": [
+    {
+      "case_id": "verified_exact",
+      "tool_input": {
+        "entity": "Andersen-Tawil syndrome",
+        "chunk_id": "chunk-disease-model",
+        "claimed_quote": "loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Disease model",
+        "figure_reference": "Figure 4A"
+      }
+    },
+    {
+      "case_id": "verified_supporting",
+      "tool_input": {
+        "entity": "Andersen-Tawil syndrome",
+        "chunk_id": "chunk-disease-cohort",
+        "claimed_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.",
+        "page": 5,
+        "section": "Results",
+        "subsection": "Clinical correlation"
+      }
+    },
+    {
+      "case_id": "not_found_absent_quote",
+      "tool_input": {
+        "entity": "Andersen-Tawil syndrome",
+        "chunk_id": "chunk-disease-background",
+        "claimed_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "page": 2,
+        "section": "Introduction",
+        "subsection": "Background",
+        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
+        "chunk_content_preview": "Andersen-Tawil syndrome has been linked to KCNJ2 in previous studies."
+      }
+    },
+    {
+      "case_id": "not_found_wrong_chunk_id",
+      "tool_input": {
+        "entity": "Andersen-Tawil syndrome",
+        "chunk_id": "chunk-disease-missing",
+        "claimed_quote": "loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "chunk_content_preview": "",
+        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+      }
+    }
+  ],
+  "extraction": {
+    "tool_name": "ask_disease_extractor_specialist",
+    "agent_key": "disease_extractor",
+    "profile_key": null,
+    "scope_confirmation": {
+      "confirmed": true,
+      "adapter_keys": [],
+      "profile_keys": [],
+      "domain_keys": [
+        "disease"
+      ],
+      "notes": [
+        "Confirmed tool-verified disease fixture scope."
+      ]
+    },
+    "items": [
+      {
+        "label": "Andersen-Tawil syndrome",
+        "entity_type": "disease",
+        "normalized_id": "MONDO:0007739",
+        "source_mentions": [
+          "Andersen-Tawil syndrome"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_supporting"
+        ]
+      },
+      {
+        "label": "Parkinson disease",
+        "entity_type": "disease",
+        "normalized_id": "MONDO:0005180",
+        "source_mentions": [
+          "Parkinson disease"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
+    "top_level_evidence_case_ids": [
+      "verified_exact",
+      "verified_supporting"
+    ],
+    "run_summary": {
+      "candidate_count": 2
+    }
+  },
+  "expected_candidates": [
+    {
+      "adapter_key": "disease",
+      "profile_key": null,
+      "payload": {
+        "label": "Andersen-Tawil syndrome",
+        "entity_type": "disease",
+        "normalized_id": "MONDO:0007739",
+        "source_mentions": [
+          "Andersen-Tawil syndrome"
+        ]
+      },
+      "field_paths": [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0"
+      ],
+      "evidence_case_ids": [
+        "verified_exact",
+        "verified_supporting"
+      ]
+    }
+  ],
+  "expected_gating": {
+    "warning": "Skipped 1 candidate without verified evidence.",
+    "all_zero_error": "No evidence-verified candidates were available to prepare for curation review."
+  }
+}

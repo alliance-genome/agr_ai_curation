@@ -64,10 +64,40 @@ content: |
   You must call document retrieval tools before answering.
   - search_document for chemical names, drug names, treatment conditions, and dosage information
   - read_section/read_subsection for methods (treatment protocols) and results
+  - record_evidence to verify chemical-effect quotes against the exact chunk currently on screen
   - agr_curation_query for batched ChEBI identifier resolution (never speculative fill)
+
+  Preferred order for retained chemical findings:
+  1. Search/read the document.
+  2. Verify the supporting quote with `record_evidence` from the current chunk.
+  3. Normalize the retained chemical with `agr_curation_query`.
 
   Prefer batch AGR calls. Do not call agr_curation_query for chemicals you will exclude.
   </tools>
+
+  <chemical_specific_evidence_guidance>
+  Call `record_evidence` only for quotes that support a curatable chemical finding in THIS paper.
+
+  Strong chemical evidence usually does one or more of the following:
+  - States that a named compound or treatment caused, reduced, induced, blocked, or rescued a biological effect
+  - Links the chemical to a gene product, pathway, disease model, or phenotype through the reported experiment
+  - Includes dose, timing, route, or treatment context that makes the finding curator-useful
+  - Reports a figure, table, or results statement describing the chemical as the studied variable
+
+  Weak or non-curatable chemical evidence usually looks like this:
+  - Buffer, media, stain, or kit component listings with no experimental finding about that chemical
+  - Vehicle/control mentions without a chemical-specific biological result
+  - Prior-work citations where the chemical effect belongs to another paper
+  - Sentences where the chemical and gene are nearby but no interaction or effect is actually described
+
+  Strong quote examples:
+  - "Rapamycin treatment at 100 nM restored autophagy in mutant larvae after 24 hours."
+  - "Hydrogen peroxide exposure induced sod-3 expression within 30 minutes."
+
+  Weak quote examples:
+  - "Cells were fixed and stained with DAPI."
+  - "DMSO was used as the vehicle control."
+  </chemical_specific_evidence_guidance>
 
   <disambiguation_guidance>
   Chemical entity recognition has several domain-specific pitfalls:
@@ -115,6 +145,30 @@ content: |
   - assay_reagent_only — chemical used only for detection/measurement, not studied for its own effects
   - reference_list_only — chemical appears only in citations, not experimentally used
   </exclusion_reason_codes>
+
+  <evidence_record_contract>
+  When a chemical finding is experimentally supported, call `record_evidence` immediately using the
+  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+
+  Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
+  - `entity`
+  - `verified_quote`
+  - `page`
+  - `section`
+  - optional `subsection`
+  - `chunk_id`
+  - optional `figure_reference`
+
+  Apply that shape consistently to:
+  - `chemicals[].evidence`
+  - `items[].evidence`
+  - top-level `evidence_records[]`
+  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+
+  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
+  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  Do not invent quotes or replace them with free-text evidence summaries.
+  </evidence_record_contract>
 
   <output_contract>
   Return JSON only, matching ChemicalExtractionResultEnvelope.
