@@ -8,7 +8,21 @@ REPORT_PATH="${AGENT_PR_GATE_REPORT:-file_outputs/ci/agent_pr_gate_report.json}"
 mkdir -p "$(dirname "${REPORT_PATH}")"
 
 BASE_REF="${GITHUB_BASE_REF:-main}"
-PYTHON_BIN="${AGENT_GATE_PYTHON_BIN:-python3}"
+TOOLS_VENV_HELPER="${ROOT_DIR}/scripts/utilities/ensure_python_tools_venv.sh"
+DEFAULT_TOOLS_PYTHON="${ROOT_DIR}/.venv/bin/python"
+if [[ -n "${AGENT_GATE_PYTHON_BIN:-}" ]]; then
+  PYTHON_BIN="${AGENT_GATE_PYTHON_BIN}"
+else
+  if [[ ! -x "${DEFAULT_TOOLS_PYTHON}" && -x "${TOOLS_VENV_HELPER}" ]]; then
+    bash "${TOOLS_VENV_HELPER}" --repo-root "${ROOT_DIR}" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -x "${DEFAULT_TOOLS_PYTHON}" ]]; then
+    PYTHON_BIN="${DEFAULT_TOOLS_PYTHON}"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 git fetch --no-tags --depth=200 origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1 || true
 if git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
   DIFF_RANGE="origin/${BASE_REF}...HEAD"

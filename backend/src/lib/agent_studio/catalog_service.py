@@ -509,7 +509,6 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "required": True,
                     "description": "One contiguous quote to verify against the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
-                    "description": "One contiguous quote to verify against the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
                 },
             ],
         },

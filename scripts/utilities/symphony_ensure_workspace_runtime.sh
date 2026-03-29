@@ -160,6 +160,8 @@ ensure_one() {
 ensure_one "${hooks_source}/pre-commit" "${workspace_hooks_dir}/pre-commit" "0755" "required"
 ensure_one "${hooks_source}/pre-push" "${workspace_hooks_dir}/pre-push" "0755" "required"
 ensure_one "${local_source_root}/.symphony/WORKFLOW.md" ".symphony/WORKFLOW.md" "0644" "required"
+ensure_one "${local_source_root}/scripts/requirements/python-tools.txt" "scripts/requirements/python-tools.txt" "0644" "required"
+ensure_one "${local_source_root}/scripts/utilities/ensure_python_tools_venv.sh" "scripts/utilities/ensure_python_tools_venv.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_pre_merge_cleanup.sh" "scripts/utilities/symphony_pre_merge_cleanup.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_prepare_docker_config.sh" "scripts/utilities/symphony_prepare_docker_config.sh" "0755" "required"
 ensure_one "${local_source_root}/scripts/utilities/symphony_guard_workspace_repo.sh" "scripts/utilities/symphony_guard_workspace_repo.sh" "0755" "required"

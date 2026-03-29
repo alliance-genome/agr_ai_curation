@@ -13,7 +13,6 @@ When a live queue is set via `set_live_event_queue()`, events are pushed
 immediately, allowing real-time visibility into specialist agent activity.
 """
 
-import asyncio
 import copy
 import json
 import logging
@@ -25,7 +24,6 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 from agents import Agent, Runner, RunConfig
-from agents.models.openai_provider import OpenAIProvider
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns
@@ -801,7 +799,6 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
             section = data.get("section")
             if section:
                 section_title = section.get("section_title")
-                page_numbers = section.get("page_numbers", [])
 
                 # Get doc_items with bounding boxes from all chunks in the section
                 doc_items = section.get("doc_items") or []
