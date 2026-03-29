@@ -11,6 +11,7 @@ from sqlalchemy import select
 from tests.fixtures.evidence.harness import (
     build_expected_candidates,
     build_extraction_payload,
+    build_extraction_scope,
 )
 from tests.integration.evidence_test_support import (
     client,
@@ -47,21 +48,6 @@ def _record_to_schema(record):
     )
 
 
-def _first_scope_key(extraction: dict[str, object], key: str) -> str | None:
-    scope_confirmation = extraction.get("scope_confirmation") or {}
-    if not isinstance(scope_confirmation, dict):
-        return None
-
-    values = scope_confirmation.get(key) or []
-    if not isinstance(values, list):
-        return None
-
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
-
-
 def _fixture_extraction_result(
     evidence_fixture: dict[str, object],
     *,
@@ -75,15 +61,15 @@ def _fixture_extraction_result(
     )
 
     extraction = evidence_fixture["extraction"]
+    scope = build_extraction_scope(extraction)
 
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "fixture-extract-1",
             "document_id": document_id,
-            "adapter_key": _first_scope_key(extraction, "adapter_keys"),
-            "profile_key": extraction["profile_key"]
-            or _first_scope_key(extraction, "profile_keys"),
-            "domain_key": _first_scope_key(extraction, "domain_keys"),
+            "adapter_key": scope["adapter_key"],
+            "profile_key": scope["profile_key"],
+            "domain_key": scope["domain_key"],
             "agent_key": extraction["agent_key"],
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": origin_session_id,
@@ -99,19 +85,26 @@ def _fixture_extraction_result(
     )
 
 
-def test_fixture_extraction_result_uses_scope_confirmation_domain_key(
+def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     evidence_fixture,
 ):
-    disease_fixture = copy.deepcopy(evidence_fixture)
-    disease_fixture["extraction"]["scope_confirmation"]["domain_keys"] = ["disease"]
+    scoped_fixture = copy.deepcopy(evidence_fixture)
+    scoped_fixture["extraction"]["profile_key"] = "pilot"
+    scoped_fixture["extraction"]["scope_confirmation"]["profile_keys"] = ["pilot"]
+    scoped_fixture["extraction"]["scope_confirmation"]["domain_keys"] = ["disease"]
 
     extraction_result = _fixture_extraction_result(
-        disease_fixture,
+        scoped_fixture,
         document_id="document-fixture",
         user_id="user-fixture",
         origin_session_id="session-fixture",
     )
+    payload = build_extraction_payload(scoped_fixture)
 
+    assert payload["profile_key"] == "pilot"
+    assert payload["scope_confirmation"]["profile_keys"] == ["pilot"]
+    assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
+    assert extraction_result.profile_key == "pilot"
     assert extraction_result.domain_key == "disease"
 
 
@@ -140,6 +133,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         filename=evidence_integration_context["paper"]["filename"],
         tool_agent_map={extraction["tool_name"]: extraction["agent_key"]},
         run_agent_streamed=make_fixture_runner(evidence_fixture),
+        evidence_fixture=evidence_fixture,
     )
 
     with client.stream(
@@ -235,6 +229,69 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         evidence["section"]
         for evidence in expected_candidate["evidence"]
     ]
+
+
+@pytest.mark.asyncio
+async def test_fixture_chat_extraction_preserves_profile_scope_for_chat_persistence(
+    client,
+    evidence_fixture,
+    evidence_integration_context,
+    monkeypatch,
+    test_db,
+):
+    from src.lib.curation_workspace.curation_prep_service import run_curation_prep
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionResultModel
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
+
+    scoped_fixture = copy.deepcopy(evidence_fixture)
+    scoped_fixture["extraction"]["profile_key"] = "pilot"
+    scoped_fixture["extraction"]["scope_confirmation"]["profile_keys"] = ["pilot"]
+    extraction = scoped_fixture["extraction"]
+    session_id = "session-evidence-profile-scope"
+
+    configure_chat_stream_mocks(
+        monkeypatch,
+        document_id=evidence_integration_context["document_id"],
+        filename=evidence_integration_context["paper"]["filename"],
+        tool_agent_map={extraction["tool_name"]: extraction["agent_key"]},
+        run_agent_streamed=make_fixture_runner(scoped_fixture),
+        evidence_fixture=scoped_fixture,
+    )
+
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={
+            "message": evidence_integration_context["paper"]["conversation_summary"],
+            "session_id": session_id,
+        },
+    ) as stream_response:
+        collect_sse_events(stream_response)
+        assert stream_response.status_code == 200
+
+    extraction_record = test_db.scalars(
+        select(ExtractionResultModel).where(
+            ExtractionResultModel.origin_session_id == session_id,
+            ExtractionResultModel.agent_key == extraction["agent_key"],
+        )
+    ).one()
+    persisted_extraction = _record_to_schema(extraction_record)
+
+    assert persisted_extraction.profile_key == "pilot"
+    assert persisted_extraction.payload_json["profile_key"] == "pilot"
+    assert persisted_extraction.payload_json["scope_confirmation"]["profile_keys"] == [
+        "pilot"
+    ]
+
+    prep_output = await run_curation_prep(
+        [persisted_extraction],
+        scope_confirmation=CurationPrepScopeConfirmation.model_validate(
+            extraction["scope_confirmation"]
+        ),
+    )
+
+    assert len(prep_output.candidates) == 1
+    assert prep_output.candidates[0].profile_key == "pilot"
 
 
 @pytest.mark.asyncio

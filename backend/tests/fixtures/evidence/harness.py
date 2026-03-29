@@ -59,6 +59,48 @@ def build_verified_evidence_record(tool_case: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def _normalized_optional_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _first_non_empty_scope_value(values: Any) -> str | None:
+    if not isinstance(values, list):
+        return None
+
+    for value in values:
+        normalized = _normalized_optional_string(value)
+        if normalized is not None:
+            return normalized
+
+    return None
+
+
+def build_extraction_scope(source: dict[str, Any]) -> dict[str, str | None]:
+    extraction = source.get("extraction") if isinstance(source.get("extraction"), dict) else source
+    if not isinstance(extraction, dict):
+        return {
+            "adapter_key": None,
+            "profile_key": None,
+            "domain_key": None,
+        }
+
+    scope_confirmation = extraction.get("scope_confirmation") or {}
+    if not isinstance(scope_confirmation, dict):
+        scope_confirmation = {}
+
+    return {
+        "adapter_key": _normalized_optional_string(extraction.get("adapter_key"))
+        or _first_non_empty_scope_value(scope_confirmation.get("adapter_keys")),
+        "profile_key": _normalized_optional_string(extraction.get("profile_key"))
+        or _first_non_empty_scope_value(scope_confirmation.get("profile_keys")),
+        "domain_key": _normalized_optional_string(extraction.get("domain_key"))
+        or _first_non_empty_scope_value(scope_confirmation.get("domain_keys")),
+    }
+
+
 def build_extraction_payload(fixture: dict[str, Any]) -> dict[str, Any]:
     extraction = copy.deepcopy(fixture.get("extraction") or {})
     case_lookup = tool_case_map(fixture)
@@ -74,14 +116,17 @@ def build_extraction_payload(fixture: dict[str, Any]) -> dict[str, Any]:
         items.append(item)
 
     top_level_case_ids = list(extraction.get("top_level_evidence_case_ids", []))
-    return {
-        "items": items,
-        "evidence_records": [
-            build_verified_evidence_record(case_lookup[case_id])
-            for case_id in top_level_case_ids
-        ],
-        "run_summary": dict(extraction.get("run_summary") or {}),
-    }
+    extraction.pop("tool_name", None)
+    extraction.pop("agent_key", None)
+    extraction.pop("top_level_evidence_case_ids", None)
+
+    extraction["items"] = items
+    extraction["evidence_records"] = [
+        build_verified_evidence_record(case_lookup[case_id])
+        for case_id in top_level_case_ids
+    ]
+    extraction["run_summary"] = dict(extraction.get("run_summary") or {})
+    return extraction
 
 
 def build_expected_candidates(fixture: dict[str, Any]) -> list[dict[str, Any]]:

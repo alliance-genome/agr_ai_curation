@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 import sys
@@ -18,6 +19,7 @@ from conftest import MOCK_USERS
 from tests.fixtures.evidence.harness import (
     build_expected_sse_records,
     build_extraction_payload,
+    build_extraction_scope,
     load_evidence_fixture,
 )
 
@@ -208,6 +210,7 @@ def configure_chat_stream_mocks(
     filename: str,
     tool_agent_map: dict[str, str],
     run_agent_streamed,
+    evidence_fixture: dict[str, object] | None = None,
 ):
     from src.api import chat
 
@@ -229,6 +232,39 @@ def configure_chat_stream_mocks(
         SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None),
     )
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
+
+    if evidence_fixture is not None:
+        scope = build_extraction_scope(evidence_fixture)
+        original_build_candidate = chat._build_extraction_candidate_from_tool_event
+
+        def _build_candidate_with_fixture_scope(
+            event,
+            *,
+            tool_agent_map,
+            conversation_summary,
+            metadata=None,
+        ):
+            candidate = original_build_candidate(
+                event,
+                tool_agent_map=tool_agent_map,
+                conversation_summary=conversation_summary,
+                metadata=metadata,
+            )
+            if candidate is None:
+                return None
+
+            return replace(
+                candidate,
+                adapter_key=scope["adapter_key"] or candidate.adapter_key,
+                profile_key=scope["profile_key"] or candidate.profile_key,
+                domain_key=scope["domain_key"] or candidate.domain_key,
+            )
+
+        monkeypatch.setattr(
+            chat,
+            "_build_extraction_candidate_from_tool_event",
+            _build_candidate_with_fixture_scope,
+        )
 
     async def _register_active_stream(
         session_id: str,
