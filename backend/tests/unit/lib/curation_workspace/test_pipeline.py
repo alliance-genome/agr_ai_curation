@@ -368,7 +368,8 @@ def test_passthrough_candidate_normalizer_builds_payload_and_draft_fields():
     candidate: CurationPrepCandidate = prep_output.candidates[0]
 
     normalized = module.PassthroughCandidateNormalizer().normalize(
-        candidate,
+        candidate.payload,
+        prep_candidate=candidate,
         context=module.CandidateNormalizationContext(
             document_id=str(uuid4()),
             adapter_key="disease",

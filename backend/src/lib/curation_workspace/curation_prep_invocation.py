@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
-    CURATION_PREP_UNAVAILABLE_MESSAGE,
 )
 from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
@@ -31,9 +30,6 @@ from src.schemas.curation_workspace import (
 )
 
 
-_DEFAULT_REFERENCE_ADAPTER_KEYS = frozenset({"reference", "reference_adapter"})
-
-
 @dataclass(frozen=True)
 class _ChatPrepContext:
     extraction_results: list[CurationExtractionResultRecord]
@@ -53,10 +49,9 @@ def build_chat_curation_prep_preview(
 
     context = _load_chat_prep_context(session_id=session_id, user_id=user_id, db=db)
     blocking_reasons = _build_blocking_reasons(context)
-    preview_blocking_reasons = blocking_reasons or [CURATION_PREP_UNAVAILABLE_MESSAGE]
 
     return CurationPrepChatPreviewResponse(
-        ready=not preview_blocking_reasons,
+        ready=not blocking_reasons,
         summary_text=_build_summary_text(context, blocking_reasons),
         candidate_count=context.candidate_count,
         extraction_result_count=len(context.extraction_results),
@@ -64,7 +59,7 @@ def build_chat_curation_prep_preview(
         adapter_keys=context.adapter_keys,
         profile_keys=context.profile_keys,
         domain_keys=context.domain_keys,
-        blocking_reasons=preview_blocking_reasons,
+        blocking_reasons=blocking_reasons,
     )
 
 
@@ -107,21 +102,16 @@ async def run_chat_curation_prep(
         ],
     )
 
-    try:
-        prep_output = await run_curation_prep(
-            context.extraction_results,
-            scope_confirmation=scope_confirmation,
-            db=db,
-            persistence_context=CurationPrepPersistenceContext(
-                origin_session_id=request.session_id,
-                user_id=user_id,
-                source_kind=CurationExtractionSourceKind.CHAT,
-            ),
-        )
-    except RuntimeError as exc:
-        if str(exc) == CURATION_PREP_UNAVAILABLE_MESSAGE:
-            raise ValueError(str(exc)) from exc
-        raise
+    prep_output = await run_curation_prep(
+        context.extraction_results,
+        scope_confirmation=scope_confirmation,
+        db=db,
+        persistence_context=CurationPrepPersistenceContext(
+            origin_session_id=request.session_id,
+            user_id=user_id,
+            source_kind=CurationExtractionSourceKind.CHAT,
+        ),
+    )
 
     return CurationPrepChatRunResponse(
         summary_text=(
@@ -197,9 +187,8 @@ def _build_summary_text(context: _ChatPrepContext, blocking_reasons: Sequence[st
         return blocking_reasons[0]
 
     scope_labels = []
-    visible_adapter_keys = _visible_adapter_keys(context.adapter_keys)
-    if visible_adapter_keys:
-        scope_labels.append(_format_scope_fragment("adapter", visible_adapter_keys))
+    if context.adapter_keys:
+        scope_labels.append(_format_scope_fragment("adapter", context.adapter_keys))
     if context.domain_keys:
         scope_labels.append(_format_scope_fragment("domain", context.domain_keys))
 
@@ -237,8 +226,14 @@ def _resolve_scope_values(
 
 
 def _format_scope_fragment(label: str, values: Sequence[str]) -> str:
-    plural_suffix = "s" if len(values) != 1 else ""
-    return f"{_humanize_list(_display_scope_values(label, values))} {label}{plural_suffix}"
+    display_values = _display_scope_values(values)
+    if not display_values:
+        return ""
+    if _display_values_already_include_label(display_values, label):
+        return _humanize_list(display_values)
+
+    plural_suffix = "s" if len(display_values) != 1 else ""
+    return f"{_humanize_list(display_values)} {label}{plural_suffix}"
 
 
 def _humanize_list(values: Sequence[str]) -> str:
@@ -252,28 +247,31 @@ def _humanize_list(values: Sequence[str]) -> str:
     return f"{', '.join(normalized_values[:-1])}, and {normalized_values[-1]}"
 
 
-def _display_scope_values(label: str, values: Sequence[str]) -> list[str]:
+def _display_scope_values(values: Sequence[str]) -> list[str]:
     return [
-        _display_scope_value(label, value)
+        _display_scope_value(value)
         for value in values
         if str(value or "").strip()
     ]
 
 
-def _display_scope_value(label: str, value: str) -> str:
+def _display_scope_value(value: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         return ""
-    if label == "adapter" and normalized in _DEFAULT_REFERENCE_ADAPTER_KEYS:
-        return "reference curation"
     return normalized.replace("_", " ").replace("-", " ")
 
 
-def _visible_adapter_keys(adapter_keys: Sequence[str]) -> list[str]:
-    normalized = _unique_non_empty(adapter_keys)
-    if len(normalized) == 1 and normalized[0] in _DEFAULT_REFERENCE_ADAPTER_KEYS:
-        return []
-    return normalized
+def _display_values_already_include_label(values: Sequence[str], label: str) -> bool:
+    normalized_label = str(label or "").strip().lower()
+    if not normalized_label:
+        return False
+
+    return all(
+        value.strip().lower() == normalized_label
+        or value.strip().lower().endswith(f" {normalized_label}")
+        for value in values
+    )
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:
