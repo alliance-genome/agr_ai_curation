@@ -1,0 +1,173 @@
+{
+  "fixture_id": "tool_verified_gene_paper",
+  "paper": {
+    "title": "Crb polarity evidence fixture paper",
+    "filename": "test_tool_verified_gene_paper.pdf",
+    "conversation_summary": "Extract evidence-backed findings from a known paper fixture."
+  },
+  "chunks": [
+    {
+      "id": "chunk-crumb-exact",
+      "text": "Figure 2A. Crumb is essential for maintaining epithelial polarity in the embryo.",
+      "page_number": 4,
+      "parent_section": "Results",
+      "subsection": "Apical polarity",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-crumb-fuzzy",
+      "text": "Crb is required for epithelial polarity during early embryogenesis and localizes to the apical membrane.",
+      "page_number": 5,
+      "parent_section": "Results",
+      "subsection": "Embryonic localization",
+      "metadata": {}
+    },
+    {
+      "id": "chunk-shotgun-mention",
+      "text": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote.",
+      "page_number": 6,
+      "parent_section": "Discussion",
+      "subsection": "Comparative notes",
+      "metadata": {}
+    }
+  ],
+  "tool_cases": [
+    {
+      "case_id": "verified_exact",
+      "tool_input": {
+        "entity": "crumb",
+        "chunk_id": "chunk-crumb-exact",
+        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Apical polarity",
+        "figure_reference": "Figure 2A"
+      }
+    },
+    {
+      "case_id": "verified_fuzzy",
+      "tool_input": {
+        "entity": "crumb",
+        "chunk_id": "chunk-crumb-fuzzy",
+        "claimed_quote": "Crb is required for epithelial polarity during embryogenesis."
+      },
+      "expected_tool_result": {
+        "status": "verified",
+        "verified_quote": "Crb is required for epithelial polarity during early embryogenesis",
+        "page": 5,
+        "section": "Results",
+        "subsection": "Embryonic localization"
+      }
+    },
+    {
+      "case_id": "not_found_absent_quote",
+      "tool_input": {
+        "entity": "crumb",
+        "chunk_id": "chunk-shotgun-mention",
+        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "page": 6,
+        "section": "Discussion",
+        "subsection": "Comparative notes",
+        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
+        "chunk_content_preview": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote."
+      }
+    },
+    {
+      "case_id": "not_found_wrong_chunk_id",
+      "tool_input": {
+        "entity": "crumb",
+        "chunk_id": "chunk-missing",
+        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+      },
+      "expected_tool_result": {
+        "status": "not_found",
+        "chunk_content_preview": "",
+        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+      }
+    }
+  ],
+  "extraction": {
+    "tool_name": "ask_gene_specialist",
+    "agent_key": "gene_extractor",
+    "profile_key": null,
+    "scope_confirmation": {
+      "confirmed": true,
+      "adapter_keys": [],
+      "profile_keys": [],
+      "domain_keys": [
+        "gene"
+      ],
+      "notes": [
+        "Confirmed tool-verified fixture scope."
+      ]
+    },
+    "items": [
+      {
+        "label": "crumb",
+        "entity_type": "gene",
+        "normalized_id": "FB:FBgn0000500",
+        "source_mentions": [
+          "crumb",
+          "Crb"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_fuzzy"
+        ]
+      },
+      {
+        "label": "shotgun",
+        "entity_type": "gene",
+        "normalized_id": "FB:FBgn0003396",
+        "source_mentions": [
+          "shotgun"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
+    "top_level_evidence_case_ids": [
+      "verified_exact",
+      "verified_fuzzy"
+    ],
+    "run_summary": {
+      "candidate_count": 2
+    }
+  },
+  "expected_candidates": [
+    {
+      "adapter_key": "gene",
+      "profile_key": null,
+      "payload": {
+        "label": "crumb",
+        "entity_type": "gene",
+        "normalized_id": "FB:FBgn0000500",
+        "source_mentions": [
+          "crumb",
+          "Crb"
+        ]
+      },
+      "field_paths": [
+        "label",
+        "entity_type",
+        "normalized_id",
+        "source_mentions.0",
+        "source_mentions.1"
+      ],
+      "evidence_case_ids": [
+        "verified_exact",
+        "verified_fuzzy"
+      ]
+    }
+  ],
+  "expected_gating": {
+    "warning": "Skipped 1 candidate without verified evidence.",
+    "all_zero_error": "No evidence-verified candidates were available to prepare for curation review."
+  }
+}
