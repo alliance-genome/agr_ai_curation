@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import Security
@@ -24,8 +24,9 @@ from tests.fixtures.evidence.harness import (
 )
 
 
-def _hash(char: str) -> str:
-    return char * 64
+def _hash(document_id: UUID) -> str:
+    hex_value = document_id.hex
+    return f"{hex_value}{hex_value}"
 
 
 @pytest.fixture
@@ -103,6 +104,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
 
     current_user_auth_sub = client.current_user_auth_sub
     document_id = uuid4()
+    file_hash = _hash(document_id)
     paper = evidence_fixture["paper"]
 
     test_db.add(
@@ -119,7 +121,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
             filename=str(paper["filename"]),
             title=str(paper["title"]),
             file_path=f"{document_id}/{paper['filename']}",
-            file_hash=_hash("f"),
+            file_hash=file_hash,
             file_size=4096,
             page_count=6,
             upload_timestamp=datetime.now(timezone.utc),
@@ -213,9 +215,6 @@ def configure_chat_stream_mocks(
     evidence_fixture: dict[str, object] | None = None,
 ):
     from src.api import chat
-
-    chat._LOCAL_CANCEL_EVENTS.clear()
-    chat._LOCAL_SESSION_OWNERS.clear()
 
     monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)

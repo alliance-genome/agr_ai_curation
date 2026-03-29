@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from tests.fixtures.evidence.harness import build_expected_sse_records
 from tests.integration.evidence_test_support import (
-    client,
     collect_sse_events,
     configure_chat_stream_mocks,
-    evidence_fixture,
-    evidence_integration_context,
     make_fixture_runner,
 )
+
+pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
 def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(

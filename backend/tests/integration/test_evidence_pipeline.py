@@ -14,13 +14,12 @@ from tests.fixtures.evidence.harness import (
     build_extraction_scope,
 )
 from tests.integration.evidence_test_support import (
-    client,
     collect_sse_events,
     configure_chat_stream_mocks,
-    evidence_fixture,
-    evidence_integration_context,
     make_fixture_runner,
 )
+
+pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
 def _record_to_schema(record):
@@ -79,7 +78,7 @@ def _fixture_extraction_result(
             "candidate_count": extraction["run_summary"]["candidate_count"],
             "conversation_summary": evidence_fixture["paper"]["conversation_summary"],
             "payload_json": build_extraction_payload(evidence_fixture),
-            "created_at": datetime(2026, 3, 29, tzinfo=timezone.utc),
+            "created_at": datetime.now(timezone.utc),
             "metadata": {"fixture_id": evidence_fixture["fixture_id"]},
         }
     )
