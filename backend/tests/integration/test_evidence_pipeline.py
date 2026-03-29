@@ -89,6 +89,17 @@ def _fixture_extraction_result(
 def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     evidence_fixture,
 ):
+    native_scope = build_extraction_scope(evidence_fixture)
+
+    native_extraction_result = _fixture_extraction_result(
+        evidence_fixture,
+        document_id="document-fixture",
+        user_id="user-fixture",
+        origin_session_id="session-fixture",
+    )
+    assert native_scope["domain_key"] is not None
+    assert native_extraction_result.domain_key == native_scope["domain_key"]
+
     scoped_fixture = copy.deepcopy(evidence_fixture)
     scoped_fixture["extraction"]["profile_key"] = "pilot"
     scoped_fixture["extraction"]["scope_confirmation"]["profile_keys"] = ["pilot"]
