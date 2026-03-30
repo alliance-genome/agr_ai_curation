@@ -50,11 +50,12 @@ jobs:
             Then examine the changed lines using: git diff origin/{0}...HEAD
 
             Focus your review on:
-            1. Code quality and best practices
-            2. Security concerns (no secrets, proper validation)
-            3. Test coverage for changes
-            4. Docker and dependency changes
-            5. Breaking changes or backward compatibility issues
+            1. NO FALLBACKS — flag any fallback mechanisms, defensive fallbacks, backwards-compatibility shims, or graceful degradation patterns as BLOCKING
+            2. LEGACY CODE REMOVAL — flag any code that becomes unreferenced after this PR''s changes but was not removed as BLOCKING
+            3. Code quality and best practices
+            4. Security concerns (no secrets, proper validation)
+            5. Test coverage for changes
+            6. Docker and dependency changes
 
             If the repo contains a CLAUDE.md file, read it first for project context.
             If the repo contains a REVIEW.md file, follow its review guidelines.
@@ -109,29 +110,55 @@ jobs:
             - `docker-compose*.yml` - Docker orchestration files
             - `.github/workflows/` - CI/CD workflows
 
-            ## Review Checklist
+            ## CRITICAL Review Rules (BLOCKING Issues)
 
-            ### 1. Code Quality
+            ### Rule 1: NO FALLBACKS
+            This project has an absolute rule against fallback mechanisms. Flag as BLOCKING any instance of:
+            - Fallback values or defaults that mask missing data (e.g. `value ?? fallbackValue`, `value || defaultValue` where the intent is graceful degradation)
+            - Backwards-compatibility shims or legacy support code
+            - Defensive coding patterns that silently handle unexpected states instead of failing clearly
+            - Try/catch blocks that swallow errors and return default values
+            - Feature flags or conditional paths that preserve old behavior alongside new behavior
+            - Comments like 'fallback', 'graceful degradation', 'backwards compatible', 'legacy support'
+
+            Note: Nullish coalescing (`??`) and optional chaining (`?.`) for genuinely optional fields are fine. The rule targets patterns where missing/broken data is silently papered over instead of surfaced as an error.
+
+            ### Rule 2: REMOVE LEGACY CODE
+            When a PR changes or removes functionality, ALL code that becomes unreferenced MUST be removed in the same PR. Flag as BLOCKING any instance of:
+            - Imports that are no longer used after the PR's changes
+            - Functions, components, hooks, or types that are no longer called/referenced after the PR's changes
+            - Files that are no longer imported by anything after the PR's changes
+            - Dead code paths that can no longer be reached
+            - Commented-out code that was replaced
+            - Variables assigned but never read
+            - Test files testing components/functions that were removed in this PR
+
+            Use grep/glob to verify whether flagged code is actually still referenced. Do not flag code as dead unless you have confirmed it is unreferenced.
+
+            ## Standard Review Checklist
+
+            ### 3. Code Quality
             - Python code follows PEP 8 and project conventions
             - TypeScript code follows project ESLint rules
             - No hardcoded secrets or credentials
             - Proper error handling and logging
+            - No emojis in code, UI text, or comments
 
-            ### 2. Security
+            ### 4. Security
             - No API keys, tokens, or secrets in code
             - Input validation on API endpoints
             - Proper authentication checks where needed
 
-            ### 3. Testing
+            ### 5. Testing
             - Changes include appropriate unit tests
             - Existing tests are not broken
             - Test coverage is maintained
 
-            ### 4. Docker
+            ### 6. Docker
             - Dockerfile changes maintain build efficiency
-            - docker-compose changes are backward compatible
+            - No removal of pids_limit from Docker configurations (has caused production crashes)
 
-            ### 5. Dependencies
+            ### 7. Dependencies
             - New dependencies are necessary and from trusted sources
             - requirements.txt and package.json changes are intentional
 
@@ -139,9 +166,11 @@ jobs:
 
             Provide your review as a structured comment with:
             - A summary of what the PR does
-            - Any issues found (categorized by severity: critical, warning, suggestion)
-            - Positive observations
+            - BLOCKING issues first (fallbacks found, legacy code not removed) with exact file:line references
+            - Other issues (categorized by severity: critical, warning, suggestion)
             - Overall assessment
+
+            For BLOCKING issues, provide the exact file and line number, explain what the issue is, and suggest the fix.
 
             IMPORTANT: Always end your review with:
 
