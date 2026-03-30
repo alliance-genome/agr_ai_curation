@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Box, Collapse } from '@mui/material'
 
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -23,6 +23,7 @@ export default function EvidenceQuoteList({
   onReviewAndCurateClick,
 }: EvidenceQuoteListProps) {
   const scrollAnchorRefs = useRef(new Map<string, HTMLDivElement>())
+  const pendingScrollTimeoutRef = useRef<number | null>(null)
 
   const scrollExpandedEvidenceIntoView = useCallback((entity: string) => {
     const target = scrollAnchorRefs.current.get(entity)
@@ -36,8 +37,6 @@ export default function EvidenceQuoteList({
   }, [])
 
   const setScrollAnchorRef = useCallback(
-    // This intentionally returns a per-entity callback ref so the map tracks
-    // whichever evidence group is currently mounted after Collapse transitions.
     (entity: string) => (node: HTMLDivElement | null) => {
       if (node) {
         scrollAnchorRefs.current.set(entity, node)
@@ -48,6 +47,24 @@ export default function EvidenceQuoteList({
     },
     [],
   )
+
+  useEffect(() => {
+    if (!activeEntity) {
+      return undefined
+    }
+
+    pendingScrollTimeoutRef.current = window.setTimeout(() => {
+      scrollExpandedEvidenceIntoView(activeEntity)
+      pendingScrollTimeoutRef.current = null
+    }, 0)
+
+    return () => {
+      if (pendingScrollTimeoutRef.current !== null) {
+        window.clearTimeout(pendingScrollTimeoutRef.current)
+        pendingScrollTimeoutRef.current = null
+      }
+    }
+  }, [activeEntity, scrollExpandedEvidenceIntoView])
 
   return (
     <>
