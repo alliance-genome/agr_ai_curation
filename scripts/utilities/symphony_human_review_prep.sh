@@ -277,6 +277,20 @@ ensure_workspace_storage_env() {
   export FILE_OUTPUT_STORAGE_PATH="/app/file_outputs"
 }
 
+ensure_workspace_storage_permissions() {
+  local storage_dir=""
+
+  # The dev compose backend bind-mounts mutable state from the workspace. With
+  # capabilities dropped, container root can no longer bypass host mode bits, so
+  # these directories must stay world-writable like the standalone installer.
+  for storage_dir in \
+    "${WORKSPACE_DIR}/pdf_storage" \
+    "${WORKSPACE_DIR}/file_outputs"; do
+    mkdir -p "${storage_dir}"
+    chmod 0777 "${storage_dir}"
+  done
+}
+
 prepare_docker_config() {
   local helper_path="${1:-}"
   if [[ -n "${helper_path}" ]]; then
@@ -467,6 +481,7 @@ load_exported_env_file "${PRIVATE_ENV_FILE}"
 restore_review_port_env
 ensure_langfuse_nextauth_url
 ensure_workspace_storage_env
+ensure_workspace_storage_permissions
 check_required_vars
 export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-true}"
 export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"
