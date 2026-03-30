@@ -191,6 +191,34 @@ filter_runtime_git_status() {
   done
 }
 
+is_runtime_mode_only_drift() {
+  local repo_path="$1"
+  local file_path="$2"
+  local summary
+
+  case "${file_path}" in
+    scripts/utilities/ensure_python_tools_venv.sh)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  summary="$(git -C "${repo_path}" diff --summary -- "${file_path}" 2>/dev/null | sed '/^[[:space:]]*$/d')"
+  if git -C "${repo_path}" diff --unified=0 -- "${file_path}" 2>/dev/null | grep -q '^@@'; then
+    return 1
+  fi
+
+  case "${summary}" in
+    " mode change 100644 => 100755 ${file_path}"|" mode change 100755 => 100644 ${file_path}")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 port_available() {
   python3 - "$1" <<'PY'
 import socket
@@ -230,13 +258,13 @@ ensure_review_ports() {
     return 0
   fi
 
-  if [[ "${mode}" == "repair" ]]; then
+  if [[ ("${mode}" == "repair" || "${mode}" == "prepare") && -f "${STATE_FILE}" ]]; then
     if [[ -f "${STATE_FILE}" ]] && command -v jq >/dev/null 2>&1; then
       FRONTEND_HOST_PORT="$(jq -r '.sandbox_frontend_port // empty' "${STATE_FILE}")"
       BACKEND_HOST_PORT="$(jq -r '.sandbox_backend_port // empty' "${STATE_FILE}")"
     fi
 
-    if [[ -z "${FRONTEND_HOST_PORT}" || -z "${BACKEND_HOST_PORT}" ]]; then
+    if [[ "${mode}" == "repair" && ( -z "${FRONTEND_HOST_PORT}" || -z "${BACKEND_HOST_PORT}" ) ]]; then
       if [[ "${DRY_RUN}" == "1" ]]; then
         FRONTEND_HOST_PORT="${FRONTEND_PORT_RANGE_START}"
         BACKEND_HOST_PORT="$((FRONTEND_PORT_RANGE_START + BACKEND_PORT_OFFSET))"
@@ -833,7 +861,26 @@ repair_workspace_permissions() {
 }
 
 worktree_dirty() {
-  git -C "${SANDBOX_DIR}" status --porcelain=v1 --untracked-files=normal 2>/dev/null | filter_runtime_git_status
+  local line
+  local status
+  local path
+
+  git -C "${SANDBOX_DIR}" status --porcelain=v1 --untracked-files=normal 2>/dev/null | while IFS= read -r line; do
+    case "${line}" in
+      "?? .symphony/"*|"?? .symphony-docker-config"*|"?? scripts/local_db_tunnel_env.sh"|"?? scripts/utilities/symphony_main_sandbox.sh")
+        continue
+        ;;
+    esac
+
+    status="${line:0:2}"
+    path="${line:3}"
+
+    if [[ "${status}" == " M" ]] && is_runtime_mode_only_drift "${SANDBOX_DIR}" "${path}"; then
+      continue
+    fi
+
+    printf '%s\n' "${line}"
+  done
 }
 
 prepare_sandbox() {

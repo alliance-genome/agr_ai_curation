@@ -62,6 +62,22 @@ EOF
   assert_output_contains "sandbox_status=dry_run" "${output}"
 }
 
+test_prepare_dry_run_reuses_persisted_ports() {
+  local temp_dir output
+  temp_dir="$(mktemp -d)"
+  mkdir -p "${temp_dir}"
+  cat > "${temp_dir}/.symphony-main-sandbox-state.json" <<'EOF'
+{"sandbox_frontend_port":"3900","sandbox_backend_port":"8900","sandbox_db_tunnel_local_port":"6330","sandbox_db_tunnel_docker_port":"6331","trace_review_frontend_port":"3901","trace_review_backend_port":"8901"}
+EOF
+
+  output="$(run_sandbox_helper "${temp_dir}" prepare --dry-run)"
+
+  assert_output_contains "sandbox_action=prepare" "${output}"
+  assert_output_contains "sandbox_frontend_port=3900" "${output}"
+  assert_output_contains "sandbox_backend_port=8900" "${output}"
+  assert_output_contains "sandbox_status=dry_run" "${output}"
+}
+
 test_env_overrides_replace_default_tunnel_ports() {
   local temp_dir output
   temp_dir="$(mktemp -d)"
@@ -126,6 +142,7 @@ test_trace_review_compose_accepts_dev_and_langfuse_env() {
 
 test_prepare_dry_run_uses_stable_ports
 test_repair_dry_run_reuses_persisted_ports
+test_prepare_dry_run_reuses_persisted_ports
 test_env_overrides_replace_default_tunnel_ports
 test_prepare_dry_run_rejects_overlapping_trace_review_ports
 test_trace_review_compose_accepts_dev_and_langfuse_env
