@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from src.api import chat
 from src.lib.conversation_manager import SessionAccessError
+from src.lib.curation_workspace import extraction_results as extraction_results_module
 
 
 @pytest.mark.asyncio
@@ -190,6 +191,11 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
         chat,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
+    )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
 
     async def _stream(**_kwargs):
