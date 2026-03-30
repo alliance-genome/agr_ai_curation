@@ -20,6 +20,7 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 - Repository knowledge index: `docs/README.md`
 - Developer docs index: `docs/developer/README.md`
 - Curator docs index: `docs/curator/README.md`
+- Development doctrine: `docs/developer/guides/DEVELOPMENT_DOCTRINE.md`
 - Config system of record: `config/README.md`
 - Test strategy and known scope: `docs/developer/TEST_STRATEGY.md`
 - Symphony workflow contract: `.symphony/WORKFLOW.md`
@@ -130,7 +131,7 @@ curl -i -sS -m 5 http://127.0.0.1:4000/ | head -n 5
 
 1. Sync branch and inspect changed scope.
 2. Reproduce or define the expected behavior first.
-3. Make minimal, scoped code/config edits.
+3. Make minimal, scoped code/config edits. Default to forward-only changes: remove fallbacks, compatibility paths, and legacy branches instead of extending them; use explicit migrations when persistence changes are needed.
 4. Run targeted validation + tests.
 5. Update docs if behavior or process changed.
 6. For Symphony/Linear execution, keep a single workpad-style progress trail and clear acceptance criteria.
