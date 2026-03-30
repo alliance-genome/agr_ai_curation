@@ -29,7 +29,7 @@ langfuse>=4.0.0,<5.0.0  # Observability for LLM applications (v4 API: start_as_c
 sqlalchemy>=2.0
 psycopg2-binary
 alembic
-git+https://github.com/alliance-genome/agr_curation_api_client.git@feature/ontology-search-methods  # Modified version with all 45 ontology types tested and bug fix
+agr-curation-api-client  # Use the published client release; keep lockfile current when updating
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies

@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -18,6 +19,9 @@ HOST_RUNTIME_ROOT_DIR = HOST_RUNTIME_SRC_DIR.parent
 
 
 def main() -> int:
+    # Package tool calls already run in an isolated subprocess, so downstream
+    # helpers can safely skip extra worker-thread offloading.
+    os.environ["AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS"] = "1"
     protocol = _load_runner_protocol()
     try:
         request = protocol["decode_request"](sys.stdin.read())

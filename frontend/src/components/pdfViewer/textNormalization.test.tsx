@@ -4,6 +4,7 @@ import {
   buildNormalizedTextSourceMap,
   extractSentenceCandidate,
   normalizeTextForEvidenceMatch,
+  sanitizeEvidenceSearchText,
   splitNormalizedWords,
 } from './textNormalization'
 
@@ -35,5 +36,15 @@ describe('textNormalization', () => {
 
     expect(extractSentenceCandidate(input)).toBe('First sentence stays intact after normalization.')
     expect(splitNormalizedWords('Alpha\u00a0beta\n gamma')).toEqual(['Alpha', 'beta', 'gamma'])
+  })
+
+  it('strips lightweight markdown wrappers and ellipsis from evidence search text', () => {
+    expect(
+      sanitizeEvidenceSearchText(
+        'all proteins changed in the allele lacking the *crb_C* isoform … in the connection of the `Crumbs` function',
+      ),
+    ).toBe(
+      'all proteins changed in the allele lacking the crb_C isoform   in the connection of the Crumbs function',
+    )
   })
 })

@@ -185,6 +185,7 @@ docs/plans/*
 !docs/plans/2026-03-20-all-94-pdfx-markdown-to-pdf-text-layer-spike.md
 !docs/plans/2026-03-20-localization-policy.md
 docs/research/
+docs/evidence-review.md
 external_review_prompt.md
 /AGENT_REWORK_EXTRACTOR_PLAN.md
 /TESTING_TODO.md

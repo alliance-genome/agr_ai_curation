@@ -219,6 +219,8 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.adapter_key is None
     assert persisted_request.domain_key == "gene_expression"
     assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
+    assert persisted_request.metadata["envelope_destination"] == "gene_expression"
+    assert persisted_request.metadata["inferred_domain_key"] == "gene_expression"
 
 
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):

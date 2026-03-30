@@ -155,11 +155,15 @@ export default function EvidenceCard({
         <Box
           aria-hidden="true"
           component="svg"
+          data-testid="evidence-card-header-icon"
           fill="none"
-          sx={{ flexShrink: 0 }}
+          sx={{
+            flexShrink: 0,
+            width: '14px',
+            height: '14px',
+            display: 'block',
+          }}
           viewBox="0 0 24 24"
-          width="14"
-          height="14"
         >
           <path
             d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"

@@ -460,8 +460,17 @@ def agr_curation_query(
         AgrQueryResult with status='ok', 'error', or 'validation_warning'
     """
     try:
-        db = get_curation_resolver().get_db_client()
+        resolver = get_curation_resolver()
+        db = resolver.get_db_client()
         if db is None:
+            if resolver.get_connection_url():
+                return AgrQueryResult(
+                    status='error',
+                    message=(
+                        'AGR Curation Database client is unavailable in this runtime. '
+                        'The database is configured, but the dependency is missing or failed to initialize.'
+                    )
+                )
             return AgrQueryResult(
                 status='error',
                 message='AGR Curation Database is not configured. This tool is unavailable.'

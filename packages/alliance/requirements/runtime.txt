@@ -9,3 +9,6 @@ psycopg2-binary
 # Public runtime Weaviate helpers import the official client directly.
 weaviate-client>=4.0
 grpcio>=1.72.0
+# Keep this aligned with the backend dependency so isolated package tools and
+# the main backend normalize against the same published client surface.
+agr-curation-api-client

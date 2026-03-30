@@ -1,5 +1,6 @@
 """Unit tests for catalog_service tool binding resolution."""
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -476,3 +477,74 @@ async def test_resolve_package_tool_raises_for_runner_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="search_document failed"):
         await resolved.on_invoke_tool(None, '{"query":"genes"}')
+
+
+@pytest.mark.asyncio
+async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailable(monkeypatch):
+    calls = []
+
+    class _Tracker:
+        def record_call(self, tool_name):
+            calls.append(("track", tool_name))
+
+    fake_tool = _FakeFunctionTool(
+        name="record_evidence",
+        on_invoke_tool=None,
+    )
+    binding = SimpleNamespace(
+        tool_id="record_evidence",
+        required_context=("document_id", "user_id"),
+    )
+
+    runner_calls = []
+
+    def _execute_tool(tool_id, **kwargs):
+        runner_calls.append((tool_id, kwargs))
+        return SimpleNamespace(
+            ok=True,
+            result={"status": "verified", "tool_id": tool_id},
+            error=None,
+        )
+
+    async def _explode_to_thread(*args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda _binding, execution_context=None: fake_tool,
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_package_tool_runner",
+        lambda: SimpleNamespace(execute_tool=_execute_tool),
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _explode_to_thread)
+
+    resolved = catalog_service._resolve_package_tool(
+        "record_evidence",
+        catalog_service.ToolExecutionContext(
+            document_id="doc-1",
+            user_id="user-1",
+            tool_tracker=_Tracker(),
+        ),
+    )
+
+    result = await resolved.on_invoke_tool(None, '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}')
+
+    assert result == {"status": "verified", "tool_id": "record_evidence"}
+    assert calls == [("track", "record_evidence")]
+    assert runner_calls == [
+        (
+            "record_evidence",
+            {
+                "kwargs": {
+                    "entity": "crb",
+                    "chunk_id": "chunk-1",
+                    "claimed_quote": "quoted text",
+                },
+                "context": {"document_id": "doc-1", "user_id": "user-1"},
+            },
+        )
+    ]

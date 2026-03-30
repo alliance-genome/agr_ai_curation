@@ -13,9 +13,9 @@ agent_id: pdf_extraction
 name: "General PDF Extraction Agent"
 
 description: >
-  Provides broad document extraction and citation-grounded answers for uploaded
-  PDFs using semantic search and section-based retrieval. Use for general
-  document analysis when specialized extraction is not required.
+  Provides broad document extraction for uploaded PDFs with verified evidence,
+  explicit retention/exclusion decisions, and a concise answer summary for
+  general paper questions when a more specific extractor is not required.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -38,12 +38,12 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-# No structured output schema - returns text/mentions
-output_schema: null
+output_schema: PdfExtractionResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

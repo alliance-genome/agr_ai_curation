@@ -164,6 +164,61 @@ function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
   return value.filter(isEvidenceRecord)
 }
 
+const DUPLICATE_EVIDENCE_LABEL_RE = /^(?:[-*]\s+)?\*{0,2}(evidence|citations|sources)\*{0,2}:/i
+
+function stripDuplicateEvidenceSections(content: string): string {
+  if (!content) {
+    return content
+  }
+
+  const lines = content.split('\n')
+  const keptLines: string[] = []
+  let skippingBlock = false
+  let skipIndent = 0
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const indent = line.length - line.trimStart().length
+
+    if (DUPLICATE_EVIDENCE_LABEL_RE.test(trimmed)) {
+      skippingBlock = true
+      skipIndent = indent
+      continue
+    }
+
+    if (skippingBlock) {
+      if (!trimmed) {
+        continue
+      }
+
+      const isContinuation = indent > skipIndent || /^[>*-]/.test(trimmed)
+      if (isContinuation) {
+        continue
+      }
+
+      skippingBlock = false
+    }
+
+    keptLines.push(line)
+  }
+
+  return keptLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function sanitizeStoredMessage(message: SerializedMessage): Message {
+  const hasEvidenceRecords = (message.evidenceRecords?.length ?? 0) > 0
+
+  return {
+    ...message,
+    content: hasEvidenceRecords
+      ? stripDuplicateEvidenceSections(message.content)
+      : message.content,
+    timestamp: new Date(message.timestamp),
+  }
+}
 function withEvidenceReviewAndCurateTarget(
   message: Message,
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
@@ -192,6 +247,7 @@ function withEvidenceRecords(
     const nextMessages = [...messages]
     nextMessages[index] = withEvidenceReviewAndCurateTarget({
       ...message,
+      content: stripDuplicateEvidenceSections(message.content),
       evidenceRecords,
     }, reviewAndCurateTarget)
     return nextMessages
@@ -257,10 +313,7 @@ function loadMessagesFromStorage(sessionId?: string | null): Message[] {
         // Only restore messages if they belong to the current session
         if (data.session_id === currentSessionId) {
           debug.log('[Chat] Session match - restoring messages')
-          return data.messages.map(msg => ({
-            ...msg,
-            timestamp: new Date(msg.timestamp)
-          }))
+          return data.messages.map(sanitizeStoredMessage)
         } else {
           // Session mismatch can happen transiently during route/session initialization.
           // Do not delete stored chat here; keep it available if session state catches up.
@@ -272,10 +325,7 @@ function loadMessagesFromStorage(sessionId?: string | null): Message[] {
       // Handle legacy format (array of messages without session_id)
       if (Array.isArray(data)) {
         debug.log('[Chat] Found legacy format (no session_id), restoring', data.length, 'messages')
-        return data.map(msg => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        }))
+        return data.map(sanitizeStoredMessage)
       }
     }
   } catch (error) {

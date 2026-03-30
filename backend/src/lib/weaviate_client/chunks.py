@@ -1,18 +1,41 @@
 """Chunk operations library for Weaviate."""
 
+import asyncio
+import errno
+import json
 import logging
 import os
 import time
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
-import asyncio
-import json
 
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+
+def _run_sync_in_package_tool_subprocess() -> bool:
+    """Package tool workers can execute blocking Weaviate calls inline."""
+    return os.getenv("AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS") == "1"
+
+
+def _should_fallback_to_sync(exc: BaseException) -> bool:
+    """Recognize async-runtime failures where synchronous Weaviate calls are safer."""
+
+    if isinstance(exc, OSError) and exc.errno == errno.EAGAIN:
+        return True
+
+    if not isinstance(exc, RuntimeError):
+        return False
+
+    message = str(exc).lower()
+    return (
+        "no running event loop" in message
+        or "can't start new thread" in message
+        or "cannot start new thread" in message
+    )
 
 
 def store_chunks(document_id: str, chunks: List[Dict[str, Any]], user_id: str) -> Dict[str, Any]:
@@ -310,10 +333,18 @@ async def get_chunk_by_id(
                 "doc_items": doc_items,
             }
 
+    if _run_sync_in_package_tool_subprocess():
+        return _fetch()
+
     try:
         return await asyncio.to_thread(_fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
+            logger.warning(
+                "Falling back to synchronous chunk fetch for %s: %s",
+                chunk_id,
+                e,
+            )
             return _fetch()
         raise
 
@@ -762,8 +793,8 @@ async def get_chunks_by_section(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -867,8 +898,8 @@ async def search_chunks_by_keyword(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _search)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _search()
         raise
 
@@ -969,8 +1000,8 @@ async def get_chunks_from_index(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -1051,8 +1082,8 @@ async def get_document_sections(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -1107,8 +1138,8 @@ async def get_document_hierarchy(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -1212,8 +1243,8 @@ async def get_chunks_by_parent_section(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -1325,8 +1356,8 @@ async def get_chunks_by_subsection(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 
@@ -1485,8 +1516,8 @@ async def get_document_sections_hierarchical(
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _fetch)
-    except RuntimeError as e:
-        if "no running event loop" in str(e):
+    except (RuntimeError, OSError) as e:
+        if _should_fallback_to_sync(e):
             return _fetch()
         raise
 

@@ -418,7 +418,7 @@ describe('CurationInventoryPage', () => {
     await user.click(screen.getByText('Flow run flow-1'))
 
     expect(await screen.findByText('Grouped alpha paper')).toBeInTheDocument()
-  })
+  }, 15000) // Flow-run regrouping triggers multiple async inventory refetch/render passes that can exceed 5s in CI.
 
   it('shows stats skeletons while a filtered stats refetch is pending', async () => {
     const user = userEvent.setup()

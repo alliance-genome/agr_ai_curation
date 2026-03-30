@@ -848,6 +848,8 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                             flat_event["evidence_records"] = event_evidence_records
                         elif "evidence_records" in event:
                             flat_event["evidence_records"] = event["evidence_records"]
+                        elif "evidence_records" in (event.get("details") or {}):
+                            flat_event["evidence_records"] = event["details"]["evidence_records"]
                     yield f"data: {json.dumps(flat_event, default=str)}\n\n"
                     continue
 

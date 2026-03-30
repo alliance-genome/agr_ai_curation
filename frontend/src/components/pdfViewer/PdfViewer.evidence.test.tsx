@@ -5,10 +5,12 @@ import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import PdfViewer, {
   buildEvidenceSpikeQuoteCandidates,
   buildEvidenceSpikeSectionCandidates,
+  findExpandedEvidenceQueryFromPageText,
   normalizeEvidenceSpikePageHints,
   type PdfEvidenceSpikeInput,
 } from './PdfViewer'
 import {
+  dispatchPDFViewerNavigateEvidence,
   dispatchPDFDocumentChanged,
   onPDFViewerEvidenceAnchorSelected,
 } from './pdfEvents'
@@ -18,6 +20,12 @@ interface MockFindResponse {
   total: number
   current: number
   pageIdx: number | null
+  viewerPageNumber?: number | null
+  delayedSelection?: {
+    pageIdx?: number | null
+    viewerPageNumber?: number | null
+    delayMs?: number
+  }
   lateCount?: {
     total: number
     current: number
@@ -73,10 +81,28 @@ class MockPdfEventBus {
     const response = this.onFind(payload.query)
     this.findQueries.push(payload.query)
 
-    this.findController.selected.pageIdx = response.pageIdx ?? -1
-    this.findController.selected.matchIdx = response.pageIdx !== null ? Math.max(response.current - 1, 0) : -1
-    if (response.pageIdx !== null) {
-      this.setCurrentPage(response.pageIdx + 1)
+    const applySelection = (selection: {
+      pageIdx?: number | null
+      viewerPageNumber?: number | null
+    }) => {
+      const pageIdx = selection.pageIdx ?? null
+      this.findController.selected.pageIdx = pageIdx ?? -1
+      this.findController.selected.matchIdx = pageIdx !== null ? Math.max(response.current - 1, 0) : -1
+      if (pageIdx !== null) {
+        this.setCurrentPage(pageIdx + 1)
+      } else if (typeof selection.viewerPageNumber === 'number' && selection.viewerPageNumber >= 1) {
+        this.setCurrentPage(selection.viewerPageNumber)
+      }
+    }
+    applySelection({
+      pageIdx: response.pageIdx,
+      viewerPageNumber: response.viewerPageNumber,
+    })
+
+    if (response.delayedSelection) {
+      window.setTimeout(() => {
+        applySelection(response.delayedSelection ?? {})
+      }, response.delayedSelection.delayMs ?? 25)
     }
 
     const emitCount = (current: number, total: number) => {
@@ -351,6 +377,7 @@ describe('PdfViewer evidence navigation', () => {
       'exact-quote',
       'normalized-quote',
       'first-sentence-fragment',
+      'window-fragment',
       'leading-fragment',
       'trailing-fragment',
     ]))
@@ -360,6 +387,44 @@ describe('PdfViewer evidence navigation', () => {
     ).toEqual(['Results', 'Quantification'])
 
     expect(normalizeEvidenceSpikePageHints({ pageNumbers: [4, 4, 0, 9], pageNumber: 2 })).toEqual([4, 9, 2])
+  })
+
+  it('prefers a sanitized quote candidate before raw markdown-formatted evidence text', () => {
+    const query = 'all proteins changed in the allele lacking the *crb_C* isoform constitute interesting candidates.'
+    const candidates = buildEvidenceSpikeQuoteCandidates(query)
+
+    expect(candidates[0]).toEqual({
+      query: 'all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.',
+      reason: 'sanitized-quote',
+    })
+    expect(candidates).toContainEqual({
+      query,
+      reason: 'exact-quote',
+    })
+  })
+
+  it('expands a matched fragment back to the longest contiguous quote available on the page', () => {
+    const pageText = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton.',
+    ].join(' ')
+    const desiredQuote = [
+      'In summary, all proteins changed in the allele lacking the *crb_C* isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton and should be prioritized for follow-up experiments.',
+    ].join(' ')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(desiredQuote)
+      .find((candidate) => candidate.reason === 'window-fragment' && pageText.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+    expect(
+      findExpandedEvidenceQueryFromPageText(pageText, desiredQuote, fragmentCandidate ?? ''),
+    ).toEqual(expect.objectContaining({
+      query: 'all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates in the connection of the Crumbs function in organizing the cytoskeleton',
+      startWordIndex: 2,
+    }))
   })
 
   it('uses the dev harness to localize a normalized quote and render text-layer highlights', async () => {
@@ -483,6 +548,235 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('select')
     expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('solid')
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
+  })
+
+  it('accepts chat-dispatched evidence navigation without rendering custom overlay boxes', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-chat', '/fixtures/sample.pdf', 'chat-evidence.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('chat-evidence.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query === 'Exact quote from PDFX markdown' ? 0 : 1,
+        total: query === 'Exact quote from PDFX markdown' ? 1 : 0,
+        current: query === 'Exact quote from PDFX markdown' ? 1 : 0,
+        pageIdx: query === 'Exact quote from PDFX markdown' ? 2 : null,
+      }),
+      pages: buildDefaultPages(),
+    })
+
+    fireEvent.load(iframe)
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({ anchorId: 'chat-anchor-1' }),
+    )
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual(['Exact quote from PDFX markdown'])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'exact_quote',
+      degraded: false,
+      matchedPage: 3,
+    }))
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(eventBus.findbarCloseCount).toBe(1)
+  })
+
+  it('keeps quote-triggered chat navigation on the matched page instead of falling through to section search', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-chat-page-context', '/fixtures/sample.pdf', 'chat-page-context.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('chat-page-context.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => {
+        if (query === 'Exact quote from PDFX markdown') {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 2,
+          }
+        }
+
+        if (query === 'Results') {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 3,
+          }
+        }
+
+        return {
+          state: 1,
+          total: 0,
+          current: 0,
+          pageIdx: null,
+        }
+      },
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: ['Completely different visible text'] },
+        { pageNumber: 4, textSegments: ['Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({ anchorId: 'chat-anchor-page-context' }),
+    )
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    }, { timeout: 3000 })
+
+    expect(eventBus.findQueries).toEqual([
+      'Exact quote from PDFX markdown',
+    ])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'page-fallback',
+      locatorQuality: 'page_only',
+      degraded: true,
+      matchedQuery: 'Exact quote from PDFX markdown',
+      matchedPage: 3,
+    }))
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(
+      screen.getAllByText(
+        'Evidence on this page. Quote text was not matched reliably enough to highlight.',
+      ),
+    ).toHaveLength(2)
+  })
+
+  it('waits for a late-selected native PDF.js quote match during chat navigation', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const query = 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-chat-native', '/fixtures/sample.pdf', 'chat-native.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('chat-native.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 1 : 1,
+        total: candidate === query ? 1 : 0,
+        current: candidate === query ? 1 : 0,
+        pageIdx: null,
+        delayedSelection: candidate === query
+          ? {
+              pageIdx: 5,
+              viewerPageNumber: 6,
+              delayMs: 300,
+            }
+          : undefined,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: ['Completely different visible text', 'Results'] },
+        { pageNumber: 4, textSegments: ['More text'] },
+        { pageNumber: 5, textSegments: ['Discussion'] },
+        { pageNumber: 6, textSegments: ['Completely different visible text on the eventual matched page'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+    window.setTimeout(() => {
+      const iframeDocument = iframe.contentWindow?.document
+      const textLayer = iframeDocument?.querySelector<HTMLElement>(
+        '.page[data-page-number="6"] .textLayer',
+      )
+      if (!iframeDocument || !textLayer) {
+        return
+      }
+
+      const nativeHighlight = iframeDocument.createElement('span')
+      nativeHighlight.className = 'highlight selected'
+      nativeHighlight.textContent = query
+      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (5 * 900) + 72, 190, 20)
+      textLayer.appendChild(nativeHighlight)
+    }, 350)
+
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({
+        anchorId: 'chat-anchor-native',
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          supports_decision: 'supports',
+          snippet_text: query,
+          normalized_text: query,
+          viewer_search_text: query,
+          page_number: 1,
+          section_title: 'Results and Discussion',
+          subsection_title: query,
+          chunk_ids: ['chunk-chat-native'],
+        },
+        searchText: query,
+        pageNumber: 1,
+        sectionTitle: 'Results and Discussion',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    }, { timeout: 1200 })
+
+    expect(eventBus.findQueries).toEqual([query])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'exact_quote',
+      degraded: false,
+      matchedPage: 6,
+      matchedQuery: query,
+    }))
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(eventBus.findbarCloseCount).toBe(1)
+    expect(
+      screen.queryByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Page 6')).toBeInTheDocument()
   })
 
   it('dispatches the selected anchor id when a highlight rect is clicked', async () => {
@@ -635,6 +929,267 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
+  })
+
+  it('reuses native PDF.js match rects when raw text reconstruction cannot localize the quote', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const query = 'crumbs ( crb ) mutant eyes'
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 3,
+        section_title: 'Results',
+        subsection_title: null,
+        chunk_ids: ['chunk-native-match'],
+      },
+      searchText: query,
+      pageNumber: 3,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-native-match', '/fixtures/sample.pdf', 'native-match.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('native-match.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 1 : 0,
+        current: candidate === query ? 1 : 0,
+        pageIdx: candidate === query ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: ['Completely different visible text'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    window.setTimeout(() => {
+      const iframeDocument = iframe.contentWindow?.document
+      const textLayer = iframeDocument?.querySelector<HTMLElement>(
+        '.page[data-page-number="3"] .textLayer',
+      )
+      if (!iframeDocument || !textLayer) {
+        return
+      }
+
+      const nativeHighlight = iframeDocument.createElement('span')
+      nativeHighlight.className = 'highlight selected'
+      nativeHighlight.textContent = query
+      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (2 * 900) + 72, 190, 20)
+      textLayer.appendChild(nativeHighlight)
+    }, 150)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual([query])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'exact_quote',
+      degraded: false,
+      matchedPage: 3,
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+    expect(getEvidenceHighlightRects(iframe)[0].style.left).toBe('48px')
+    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe('72px')
+  })
+
+  it('matches a contiguous quote fragment before degrading to page context', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const query = [
+      'Nevertheless, all proteins changed in the allele lacking',
+      'the crb_C isoform constitute interesting candidates in the con-',
+      'nection of the Crumbs function in organizing the cytoskeleton.',
+    ].join('\n')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason === 'window-fragment')
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 3,
+        section_title: 'Results',
+        subsection_title: null,
+        chunk_ids: ['chunk-window-fragment'],
+      },
+      searchText: query,
+      pageNumber: 3,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-window-fragment', '/fixtures/sample.pdf', 'window-fragment.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('window-fragment.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate ? 0 : 1,
+        total: candidate === fragmentCandidate ? 1 : 0,
+        current: candidate === fragmentCandidate ? 1 : 0,
+        pageIdx: candidate === fragmentCandidate ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: [fragmentCandidate ?? '', 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: 'window-fragment',
+      locatorQuality: 'normalized_quote',
+      degraded: false,
+      matchedPage: 3,
+      matchedQuery: fragmentCandidate,
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+    expect(screen.getByText('Approximate quote')).toBeInTheDocument()
+  })
+
+  it('recovers a longer quote span after a fragment match on the resolved page', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const pageText = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton.',
+    ].join(' ')
+    const query = [
+      'In summary, all proteins changed in the allele lacking the *crb_C* isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton and should be prioritized for follow-up experiments.',
+    ].join(' ')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason === 'window-fragment' && pageText.includes(candidate.query))
+      ?.query
+    const expandedQuery = findExpandedEvidenceQueryFromPageText(pageText, query, fragmentCandidate ?? '')?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+    expect(expandedQuery).toBe(
+      'all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates in the connection of the Crumbs function in organizing the cytoskeleton',
+    )
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 1,
+        section_title: 'Results and Discussion',
+        subsection_title: null,
+        chunk_ids: ['chunk-expanded-fragment'],
+      },
+      searchText: query,
+      pageNumber: 1,
+      sectionTitle: 'Results and Discussion',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-expanded-fragment', '/fixtures/sample.pdf', 'expanded-fragment.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('expanded-fragment.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate || candidate === expandedQuery ? 0 : 1,
+        total: candidate === fragmentCandidate || candidate === expandedQuery ? 1 : 0,
+        current: candidate === fragmentCandidate || candidate === expandedQuery ? 1 : 0,
+        pageIdx: candidate === fragmentCandidate || candidate === expandedQuery ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Already normalized quote text'] },
+        { pageNumber: 3, textSegments: [pageText, 'Results and Discussion'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toContain(expandedQuery)
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: 'window-fragment',
+      locatorQuality: 'normalized_quote',
+      degraded: false,
+      matchedPage: 3,
+      matchedQuery: expandedQuery,
+      note: 'Recovered a longer contiguous quote around the matched fragment on the PDF text layer.',
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
   })
 
   it('renders hover previews differently from selected evidence highlights', async () => {
@@ -865,7 +1420,7 @@ describe('PdfViewer evidence navigation', () => {
 
     await waitFor(() => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
-    }, { timeout: 2500 })
+    }, { timeout: 4000 })
 
     expect(onNavigationStateChange).toHaveBeenCalledWith(expect.objectContaining({
       status: 'page-fallback',
@@ -882,6 +1437,152 @@ describe('PdfViewer evidence navigation', () => {
     expect(
       screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
     ).toHaveLength(2)
+  })
+
+  it('preserves the viewer page when PDF.js jumps to a match without populating selected.pageIdx', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        normalized_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        viewer_search_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        page_number: 1,
+        section_title: 'Results and Discussion',
+        subsection_title: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        chunk_ids: ['chunk-live-repro'],
+      },
+      searchText: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+      pageNumber: 1,
+      sectionTitle: 'Results and Discussion',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-live-repro', '/fixtures/sample.pdf', 'live-repro.pdf', 10)
+    await waitFor(() => {
+      expect(screen.getByText('live-repro.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 1,
+        total: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 0,
+        current: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 0,
+        pageIdx: null,
+        viewerPageNumber: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 6 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: ['Methods'] },
+        { pageNumber: 4, textSegments: ['Figure legends'] },
+        { pageNumber: 5, textSegments: ['Discussion'] },
+        { pageNumber: 6, textSegments: ['Nearby text that does not include the requested quote contiguously'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    }, { timeout: 3000 })
+
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'page-fallback',
+      locatorQuality: 'page_only',
+      degraded: true,
+      matchedPage: 6,
+    }))
+    expect(screen.getByText('Page 6')).toBeInTheDocument()
+    expect(
+      screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
+    ).toHaveLength(2)
+  })
+
+  it('retries quote localization on a late-selected PDF.js match page before degrading', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        normalized_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        viewer_search_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        page_number: 1,
+        section_title: 'Results and Discussion',
+        subsection_title: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        chunk_ids: ['chunk-late-selected-page'],
+      },
+      searchText: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+      pageNumber: 1,
+      sectionTitle: 'Results and Discussion',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-late-selected-page', '/fixtures/sample.pdf', 'late-selected-page.pdf', 10)
+    await waitFor(() => {
+      expect(screen.getByText('late-selected-page.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: () => ({
+        state: 1,
+        total: 1,
+        current: 1,
+        pageIdx: null,
+        delayedSelection: {
+          pageIdx: 5,
+          viewerPageNumber: 6,
+          delayMs: 300,
+        },
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: ['Methods'] },
+        { pageNumber: 4, textSegments: ['Figure legends'] },
+        { pageNumber: 5, textSegments: ['Discussion'] },
+        { pageNumber: 6, textSegments: ['2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    }, { timeout: 4000 })
+
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      locatorQuality: 'exact_quote',
+      degraded: false,
+      matchedPage: 6,
+      matchedQuery: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+    }))
+    expect(screen.getByText('Page 6')).toBeInTheDocument()
   })
 
   it('shows an unresolved marker when no reliable quote, section, or page target exists', async () => {

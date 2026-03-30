@@ -843,7 +843,7 @@ describe('CurationWorkspacePage', () => {
         advance_queue: true,
       })
     })
-  })
+  }, 15000) // Dialog typing plus decision-toolbar transitions can exceed the default timeout under full-suite CI load.
 
   it('requires reset confirmation before submitting the reset action', async () => {
     const user = userEvent.setup()
@@ -921,11 +921,13 @@ describe('CurationWorkspacePage', () => {
     await user.hover(evidenceCard)
     fireEvent.focus(evidenceCard)
 
-    expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
-      mode: 'hover',
-      pageNumber: 3,
-      sectionTitle: 'Results',
-      searchText: 'APOE evidence sentence',
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+        mode: 'hover',
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'APOE evidence sentence',
+      })
     })
 
     await user.click(evidenceCard)
@@ -947,7 +949,7 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
     })
-  })
+  }, 15000) // Queue-card navigation plus evidence-panel hover/select updates can exceed the default timeout under full-suite CI load.
 
   it('forwards chip hover and click events to PDF navigation', async () => {
     const user = userEvent.setup()
@@ -1003,16 +1005,20 @@ describe('CurationWorkspacePage', () => {
 
     await user.hover(chip)
 
-    expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
-      mode: 'hover',
-      pageNumber: 3,
-      sectionTitle: 'Results',
-      searchText: 'APOE evidence sentence',
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toMatchObject({
+        mode: 'hover',
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'APOE evidence sentence',
+      })
     })
 
     await user.unhover(chip)
 
-    expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+    await waitFor(() => {
+      expect(getLatestPdfViewerProps().pendingNavigation).toBeNull()
+    })
 
     await user.click(chip)
 

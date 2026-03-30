@@ -18,11 +18,12 @@ assert_contains() {
 
 make_source_root() {
   local source_root="$1"
+  git init -q "${source_root}" >/dev/null 2>&1
   mkdir -p \
-    "${source_root}/.git/hooks" \
     "${source_root}/.symphony" \
     "${source_root}/docs/plans/screenshots" \
     "${source_root}/scripts/lib" \
+    "${source_root}/scripts/requirements" \
     "${source_root}/scripts/utilities"
 
   cat > "${source_root}/.git/hooks/pre-commit" <<'EOF'
@@ -59,12 +60,18 @@ EOF
   cat > "${source_root}/scripts/lib/symphony_linear_common.sh" <<'EOF'
 symphony-linear-common-v1
 EOF
+  cat > "${source_root}/scripts/requirements/python-tools.txt" <<'EOF'
+ruff
+pyyaml
+EOF
 
   for helper in \
+    ensure_python_tools_venv.sh \
     symphony_pre_merge_cleanup.sh \
     symphony_prepare_docker_config.sh \
     symphony_guard_workspace_repo.sh \
     symphony_human_review_prep.sh \
+    symphony_main_sandbox.sh \
     symphony_ready_for_pr.sh \
     symphony_claude_review_loop.sh \
     symphony_in_review.sh \
@@ -120,7 +127,7 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=30" "${output}"
+  assert_contains "SYNC_ENV_COPIED=33" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
@@ -137,6 +144,14 @@ EOF
   }
   [[ "$(cat "${workspace}/docs/plans/screenshots/curation-workspace-mockup.png")" == "workspace-mockup-v1" ]] || {
     echo "Expected default mode to seed the workspace mockup screenshot" >&2
+    exit 1
+  }
+  [[ -x "${workspace}/scripts/utilities/ensure_python_tools_venv.sh" ]] || {
+    echo "Expected default mode to seed the Python tools venv helper" >&2
+    exit 1
+  }
+  [[ "$(cat "${workspace}/scripts/requirements/python-tools.txt")" == $'ruff\npyyaml' ]] || {
+    echo "Expected default mode to seed the Python tools requirements file" >&2
     exit 1
   }
 }
@@ -169,7 +184,7 @@ EOF
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
-  assert_contains "SYNC_ENV_COPIED=28" "${output}"
+  assert_contains "SYNC_ENV_COPIED=31" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
     echo "Expected refresh mode to overwrite docker-compose.yml" >&2
     exit 1
@@ -188,7 +203,33 @@ EOF
   }
 }
 
+test_invalid_hooks_source_falls_back_to_local_source_git_dir() {
+  local temp_root workspace source_root output
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/workspace"
+  source_root="${temp_root}/source"
+  mkdir -p "${workspace}"
+  make_source_root "${source_root}"
+
+  output="$(
+    SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+    SYMPHONY_HOOKS_SOURCE="${temp_root}/missing-hooks" \
+    bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
+  )"
+
+  assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  [[ -x "${workspace}/.git/hooks/pre-commit" ]] || {
+    echo "Expected fallback hook sync to seed pre-commit" >&2
+    exit 1
+  }
+  [[ -x "${workspace}/.git/hooks/pre-push" ]] || {
+    echo "Expected fallback hook sync to seed pre-push" >&2
+    exit 1
+  }
+}
+
 test_default_mode_preserves_existing_files
 test_refresh_managed_overwrites_existing_files
+test_invalid_hooks_source_falls_back_to_local_source_git_dir
 
 echo "symphony_ensure_workspace_runtime tests passed"

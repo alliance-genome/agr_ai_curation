@@ -59,6 +59,10 @@ from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
 from .evidence_summary import (
     build_record_evidence_summary_record,
+    canonicalize_structured_result_payload,
+    extract_evidence_records_from_structured_result,
+    normalize_evidence_records,
+    structured_result_requires_evidence,
 )
 from .streaming_tools import (
     get_collected_events,
@@ -184,6 +188,32 @@ set_default_openai_client(_default_client)
 def _now_iso() -> str:
     """Return current UTC time in ISO format for audit events."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _merge_evidence_records(
+    existing: List[Dict[str, Any]],
+    incoming: Any,
+) -> List[Dict[str, Any]]:
+    """Merge normalized evidence records while preserving first-seen order."""
+    merged: List[Dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    for record in [*existing, *normalize_evidence_records(incoming)]:
+        key = (
+            record.get("entity"),
+            record.get("verified_quote"),
+            record.get("page"),
+            record.get("section"),
+            record.get("chunk_id"),
+            record.get("subsection"),
+            record.get("figure_reference"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(record)
+
+    return merged
 
 
 def _close_langfuse_context(
@@ -601,6 +631,12 @@ async def _run_agent_with_tracing(
         async for event_source, event in interleaved_events():
             # Handle live events (specialist internal tools)
             if event_source == "live":
+                if event.get("type") == "evidence_summary":
+                    evidence_records = _merge_evidence_records(
+                        evidence_records,
+                        event.get("evidence_records"),
+                    )
+                    continue
                 yield event
                 continue
 
@@ -775,6 +811,12 @@ async def _run_agent_with_tracing(
                                 extra={"trace_id": trace_id, "user_id": user_id},
                             )
                             for specialist_event in specialist_events:
+                                if specialist_event.get("type") == "evidence_summary":
+                                    evidence_records = _merge_evidence_records(
+                                        evidence_records,
+                                        specialist_event.get("evidence_records"),
+                                    )
+                                    continue
                                 yield specialist_event
                             clear_collected_events()
 
@@ -941,9 +983,9 @@ async def _run_agent_with_tracing(
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
-                structured_result = final_output.model_dump()
+                structured_result = canonicalize_structured_result_payload(final_output.model_dump())
             elif isinstance(final_output, dict):
-                structured_result = final_output
+                structured_result = canonicalize_structured_result_payload(final_output)
             if not full_response:
                 full_response = str(final_output)
 
@@ -963,6 +1005,34 @@ async def _run_agent_with_tracing(
 
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
+        structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
+        if structured_result_requires_evidence(structured_result) and not structured_evidence_records:
+            logger.error(
+                "Structured extraction result is missing required evidence records",
+                extra={
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "structured_result_keys": sorted(structured_result.keys())
+                    if isinstance(structured_result, dict)
+                    else None,
+                },
+            )
+            yield {
+                "type": "RUN_ERROR",
+                "data": {
+                    "message": (
+                        "Extraction completed without the required evidence records. "
+                        "Please report this run so we can investigate."
+                    ),
+                    "error_type": "MissingEvidenceRecords",
+                    "trace_id": trace_id,
+                },
+            }
+            return
+
+        if structured_evidence_records:
+            evidence_records = structured_evidence_records
+
         try:
             parsed_answer = Answer.model_validate(structured_result)
             guardrail_message = enforce_uncited_negative_guardrail(parsed_answer, tools_called)

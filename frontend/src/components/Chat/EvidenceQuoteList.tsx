@@ -1,3 +1,4 @@
+import { useCallback, useRef } from 'react'
 import { Box, Collapse } from '@mui/material'
 
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -21,13 +22,48 @@ export default function EvidenceQuoteList({
   activeEntity,
   onReviewAndCurateClick,
 }: EvidenceQuoteListProps) {
+  const scrollAnchorRefs = useRef(new Map<string, HTMLDivElement>())
+
+  const scrollExpandedEvidenceIntoView = useCallback((entity: string) => {
+    const target = scrollAnchorRefs.current.get(entity)
+    if (typeof target?.scrollIntoView === 'function') {
+      target.scrollIntoView({
+        behavior: 'smooth',
+        block: 'end',
+        inline: 'nearest',
+      })
+    }
+  }, [])
+
+  const setScrollAnchorRef = useCallback(
+    // This intentionally returns a per-entity callback ref so the map tracks
+    // whichever evidence group is currently mounted after Collapse transitions.
+    (entity: string) => (node: HTMLDivElement | null) => {
+      if (node) {
+        scrollAnchorRefs.current.set(entity, node)
+        return
+      }
+
+      scrollAnchorRefs.current.delete(entity)
+    },
+    [],
+  )
+
   return (
     <>
       {groups.map((group) => {
         const isActive = activeEntity === group.entity
 
         return (
-          <Collapse in={isActive} key={group.entity} timeout="auto" unmountOnExit>
+          <Collapse
+            in={isActive}
+            key={group.entity}
+            onEntered={() => {
+              scrollExpandedEvidenceIntoView(group.entity)
+            }}
+            timeout="auto"
+            unmountOnExit
+          >
             <Box
               sx={{
                 display: 'flex',
@@ -82,6 +118,12 @@ export default function EvidenceQuoteList({
                   </Box>
                 ) : null}
               </Box>
+
+              <Box
+                aria-hidden="true"
+                ref={setScrollAnchorRef(group.entity)}
+                sx={{ height: 1, scrollMarginBottom: '20px' }}
+              />
             </Box>
           </Collapse>
         )

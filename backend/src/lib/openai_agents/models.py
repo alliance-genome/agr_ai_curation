@@ -67,6 +67,206 @@ class Answer(BaseModel):
 
 
 # ============================================================================
+# Generic PDF Extraction Structured Output Models
+# ============================================================================
+
+class PdfEvidenceRecord(BaseModel):
+    """Verified evidence record for generic document extraction."""
+
+    entity: str = Field(
+        ...,
+        description="Display label for the extracted claim or entity this quote supports"
+    )
+    verified_quote: str = Field(
+        ...,
+        description="Quote verified by record_evidence"
+    )
+    page: int = Field(
+        ...,
+        ge=1,
+        description="1-based page number containing the verified quote"
+    )
+    section: str = Field(
+        ...,
+        description="Top-level document section containing the quote"
+    )
+    chunk_id: str = Field(
+        ...,
+        description="Document chunk identifier used to verify the quote"
+    )
+    subsection: Optional[str] = Field(
+        None,
+        description="Subsection heading containing the quote, if available"
+    )
+    figure_reference: Optional[str] = Field(
+        None,
+        description="Figure or table reference associated with the quote, if available"
+    )
+
+
+class PdfMentionCandidate(BaseModel):
+    """Raw mention harvested from the document before retention/exclusion."""
+
+    mention: str = Field(
+        ...,
+        description="Mention text exactly as written in the paper"
+    )
+    entity_type: Optional[str] = Field(
+        None,
+        description="Best-effort entity or claim type such as strain, method, finding, or reagent"
+    )
+    evidence: List[PdfEvidenceRecord] = Field(
+        default_factory=list,
+        description="Verified evidence supporting why this mention was considered"
+    )
+
+
+class PdfExtractionItem(BaseModel):
+    """Retained generic extraction item for document-grounded answers."""
+
+    label: str = Field(
+        ...,
+        description="Canonical display label for the retained item or claim"
+    )
+    entity_type: Optional[str] = Field(
+        None,
+        description="Generic type such as strain, method, construct, result, or conclusion"
+    )
+    normalized_id: Optional[str] = Field(
+        None,
+        description="Stable identifier only when explicitly supported by the document or downstream tooling"
+    )
+    source_mentions: List[str] = Field(
+        default_factory=list,
+        description="Mention strings that support this retained item"
+    )
+    evidence: List[PdfEvidenceRecord] = Field(
+        default_factory=list,
+        description="Verified evidence supporting the retained item"
+    )
+
+
+class PdfExclusionRecord(BaseModel):
+    """Candidate rejected during generic PDF extraction."""
+
+    mention: str = Field(
+        ...,
+        description="Mention or candidate label that was excluded"
+    )
+    entity_type: Optional[str] = Field(
+        None,
+        description="Best-effort type for the excluded candidate"
+    )
+    reason_code: str = Field(
+        ...,
+        description="Short machine-friendly reason code explaining the exclusion"
+    )
+    evidence: List[PdfEvidenceRecord] = Field(
+        default_factory=list,
+        description="Verified evidence supporting the exclusion decision"
+    )
+    details: Optional[str] = Field(
+        None,
+        description="Optional curator-facing explanation of the exclusion"
+    )
+
+
+class PdfAmbiguityRecord(BaseModel):
+    """Ambiguous candidate requiring curator follow-up."""
+
+    mention: str = Field(
+        ...,
+        description="Ambiguous mention or candidate label"
+    )
+    entity_type: Optional[str] = Field(
+        None,
+        description="Best-effort type for the ambiguous mention"
+    )
+    why_ambiguous: str = Field(
+        ...,
+        description="Why the mention could not be resolved confidently"
+    )
+    recommended_followup: Optional[str] = Field(
+        None,
+        description="Suggested curator follow-up to resolve the ambiguity"
+    )
+    evidence: List[PdfEvidenceRecord] = Field(
+        default_factory=list,
+        description="Verified evidence associated with the ambiguity"
+    )
+
+
+class PdfExtractionRunSummary(BaseModel):
+    """Run-level counts and warnings for generic PDF extraction."""
+
+    candidate_count: int = Field(
+        0,
+        ge=0,
+        description="Number of candidate mentions or claims considered"
+    )
+    kept_count: int = Field(
+        0,
+        ge=0,
+        description="Number of retained items in the final answer"
+    )
+    excluded_count: int = Field(
+        0,
+        ge=0,
+        description="Number of excluded candidates"
+    )
+    ambiguous_count: int = Field(
+        0,
+        ge=0,
+        description="Number of ambiguous candidates requiring follow-up"
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Run-level warnings and caveats"
+    )
+
+
+class PdfExtractionResultEnvelope(BaseModel):
+    """Structured output for evidence-backed generic PDF extraction."""
+
+    answer: str = Field(
+        ...,
+        description="Concise plain-language answer for the supervisor to present to the user"
+    )
+    summary: Optional[str] = Field(
+        None,
+        description="Brief run summary or caveat summary for audit views"
+    )
+    items: List[PdfExtractionItem] = Field(
+        default_factory=list,
+        description="Retained items or claim labels supported by verified evidence"
+    )
+    raw_mentions: List[PdfMentionCandidate] = Field(
+        default_factory=list,
+        description="Raw candidates considered during extraction"
+    )
+    evidence_records: List[PdfEvidenceRecord] = Field(
+        default_factory=list,
+        description="All verified evidence records that support retained or excluded decisions"
+    )
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="Normalization or interpretation notes for curator review"
+    )
+    exclusions: List[PdfExclusionRecord] = Field(
+        default_factory=list,
+        description="Candidates excluded from the final answer with explicit reasons"
+    )
+    ambiguities: List[PdfAmbiguityRecord] = Field(
+        default_factory=list,
+        description="Ambiguous candidates requiring curator follow-up"
+    )
+    run_summary: PdfExtractionRunSummary = Field(
+        default_factory=PdfExtractionRunSummary,
+        description="Run-level extraction counts and warnings"
+    )
+
+
+# ============================================================================
 # Gene Expression Structured Output Models
 # ============================================================================
 

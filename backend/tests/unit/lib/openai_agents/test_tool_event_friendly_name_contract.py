@@ -18,6 +18,40 @@ class _FakeRunResult:
             yield event
 
 
+class _FakeStructuredOutput:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def model_dump(self):
+        return self._payload
+
+
+class _FakeRunResultWithLiveEvidence(_FakeRunResult):
+    def __init__(self, events, live_event_list_ref, final_output="ok"):
+        super().__init__(events, final_output=final_output)
+        self._live_event_list_ref = live_event_list_ref
+
+    async def stream_events(self):
+        live_event_list = self._live_event_list_ref.get("value")
+        if live_event_list is not None:
+            live_event_list.append(
+                {
+                    "type": "evidence_summary",
+                    "evidence_records": [
+                        {
+                            "entity": "crumb",
+                            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                            "page": 4,
+                            "section": "Results",
+                            "chunk_id": "chunk-live-1",
+                        }
+                    ],
+                }
+            )
+        async for event in super().stream_events():
+            yield event
+
+
 def _tool_call_stream_event(name: str, arguments: str = '{"query":"test"}'):
     return SimpleNamespace(
         type="run_item_stream_event",
@@ -193,6 +227,377 @@ async def test_runner_emits_evidence_summary_for_record_evidence_tool_calls(monk
             "chunk_id": "chunk-1",
             "subsection": "Gene Expression Analysis",
             "figure_reference": "Figure 2A",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_emits_evidence_summary_from_structured_extraction_result(monkeypatch):
+    fake_events = []
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            fake_events,
+            final_output={
+                "summary": "Extracted focal genes with duplicate retained aliases.",
+                "genes": [
+                    {
+                        "mention": "crumbs",
+                        "normalized_symbol": "crb",
+                        "normalized_id": "FB:FBgn0000368",
+                        "species": "Drosophila melanogaster",
+                        "confidence": "high",
+                        "evidence": [
+                            {
+                                "entity": "crumbs",
+                                "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                                "page": 1,
+                                "section": "Results and Discussion",
+                                "chunk_id": "chunk-crumbs-1",
+                                "subsection": "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+                                "figure_reference": "Figure 5E",
+                            }
+                        ],
+                    },
+                    {
+                        "mention": "crb",
+                        "normalized_symbol": "crb",
+                        "normalized_id": "FB:FBgn0000368",
+                        "species": "Drosophila melanogaster",
+                        "confidence": "high",
+                        "evidence": [
+                            {
+                                "entity": "crb",
+                                "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                                "page": 1,
+                                "section": "Results and Discussion",
+                                "chunk_id": "chunk-crb-1",
+                                "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+                            }
+                        ],
+                    },
+                ],
+                "items": [
+                    {
+                        "label": "crumbs",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000368",
+                        "source_mentions": ["crumbs"],
+                        "evidence": [
+                            {
+                                "entity": "crumbs",
+                                "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                                "page": 1,
+                                "section": "Results and Discussion",
+                                "chunk_id": "chunk-crumbs-1",
+                                "subsection": "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+                                "figure_reference": "Figure 5E",
+                            },
+                            {
+                                "entity": "crb",
+                                "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                                "page": 1,
+                                "section": "Results and Discussion",
+                                "chunk_id": "chunk-crb-1",
+                                "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+                            },
+                        ],
+                    },
+                    {
+                        "label": "crb",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000368",
+                        "source_mentions": ["crb"],
+                        "evidence": [
+                            {
+                                "entity": "crb",
+                                "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                                "page": 1,
+                                "section": "Results and Discussion",
+                                "chunk_id": "chunk-crb-1",
+                                "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+                            },
+                        ],
+                    },
+                ],
+                "evidence_records": [
+                    {
+                        "entity": "crumbs",
+                        "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                        "page": 1,
+                        "section": "Results and Discussion",
+                        "chunk_id": "chunk-crumbs-1",
+                        "subsection": "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+                        "figure_reference": "Figure 5E",
+                    },
+                    {
+                        "entity": "crb",
+                        "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                        "page": 1,
+                        "section": "Results and Discussion",
+                        "chunk_id": "chunk-crb-1",
+                        "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+                    },
+                ],
+                "run_summary": {"kept_count": 1},
+            },
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-evidence",
+        )
+    ]
+
+    event_types = [event.get("type") for event in emitted_events]
+
+    assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
+    assert "STRUCTURED_RESULT" in event_types
+    assert "SUPERVISOR_COMPLETE" in event_types
+    assert emitted_events[event_types.index("STRUCTURED_RESULT")]["data"]["result"]["items"] == [
+        {
+            "label": "crb",
+            "entity_type": "gene",
+            "normalized_id": "FB:FBgn0000368",
+            "source_mentions": ["crumbs", "crb"],
+            "evidence": [
+                {
+                    "entity": "crb",
+                    "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                    "page": 1,
+                    "section": "Results and Discussion",
+                    "chunk_id": "chunk-crumbs-1",
+                    "subsection": "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+                    "figure_reference": "Figure 5E",
+                },
+                {
+                    "entity": "crb",
+                    "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                    "page": 1,
+                    "section": "Results and Discussion",
+                    "chunk_id": "chunk-crb-1",
+                    "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+                },
+            ],
+        }
+    ]
+    assert emitted_events[event_types.index("evidence_summary")]["evidence_records"] == [
+        {
+            "entity": "crb",
+            "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+            "page": 1,
+            "section": "Results and Discussion",
+            "chunk_id": "chunk-crumbs-1",
+            "subsection": "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+            "figure_reference": "Figure 5E",
+        },
+        {
+            "entity": "crb",
+            "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+            "page": 1,
+            "section": "Results and Discussion",
+            "chunk_id": "chunk-crb-1",
+            "subsection": "Quantitative Changes of Proteins in crb Mutant Alleles",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_fast_when_structured_extraction_result_is_missing_evidence(monkeypatch):
+    fake_events = []
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            fake_events,
+            final_output={
+                "summary": "Extracted focal genes but evidence was lost.",
+                "items": [
+                    {
+                        "label": "crumb",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000001",
+                        "source_mentions": ["crumb"],
+                    }
+                ],
+                "evidence_records": [],
+                "run_summary": {"kept_count": 1},
+            },
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-missing-evidence",
+        )
+    ]
+
+    assert emitted_events == [
+        {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": (
+                    "Extraction completed without the required evidence records. "
+                    "Please report this run so we can investigate."
+                ),
+                "error_type": "MissingEvidenceRecords",
+                "trace_id": "trace-missing-evidence",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_buffers_live_specialist_evidence_until_completion(monkeypatch):
+    fake_events = []
+    live_event_list_ref = {"value": None}
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda events: live_event_list_ref.__setitem__("value", events))
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResultWithLiveEvidence(
+            fake_events,
+            live_event_list_ref,
+            final_output="done",
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-live-evidence",
+        )
+    ]
+
+    event_types = [event.get("type") for event in emitted_events]
+    assert event_types.count("evidence_summary") == 1
+    assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_fast_without_structured_evidence_even_when_live_mention_evidence_exists(monkeypatch):
+    fake_events = []
+    live_event_list_ref = {"value": None}
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda events: live_event_list_ref.__setitem__("value", events))
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResultWithLiveEvidence(
+            fake_events,
+            live_event_list_ref,
+            final_output={
+                "summary": "Extractor kept a gene but lost canonical evidence.",
+                "items": [
+                    {
+                        "label": "crb",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000368",
+                        "source_mentions": ["crumbs", "crb"],
+                        "evidence": [],
+                    }
+                ],
+                "evidence_records": [],
+                "run_summary": {"kept_count": 1},
+            },
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-no-fallback",
+        )
+    ]
+
+    assert emitted_events == [
+        {
+            "type": "RUN_ERROR",
+            "data": {
+                "message": (
+                    "Extraction completed without the required evidence records. "
+                    "Please report this run so we can investigate."
+                ),
+                "error_type": "MissingEvidenceRecords",
+                "trace_id": "trace-no-fallback",
+            },
         }
     ]
 
@@ -393,6 +798,339 @@ async def test_specialist_required_tool_enforcement_raises_when_search_not_calle
         )
 
     assert any(e.get("type") == "SPECIALIST_ERROR" for e in captured_events)
+
+
+@pytest.mark.asyncio
+async def test_specialist_emits_evidence_summary_for_structured_extraction_output(monkeypatch):
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Extracted focal genes with duplicate retained aliases.",
+                    "genes": [
+                        {
+                            "mention": "crumbs",
+                            "normalized_symbol": "crb",
+                            "normalized_id": "FB:FBgn0000368",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence": [
+                                {
+                                    "entity": "crumbs",
+                                    "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                                    "page": 1,
+                                    "section": "Results and Discussion",
+                                    "chunk_id": "chunk-crumbs-1",
+                                    "figure_reference": "Figure 5E",
+                                }
+                            ],
+                        },
+                        {
+                            "mention": "crb",
+                            "normalized_symbol": "crb",
+                            "normalized_id": "FB:FBgn0000368",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence": [
+                                {
+                                    "entity": "crb",
+                                    "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                                    "page": 1,
+                                    "section": "Results and Discussion",
+                                    "chunk_id": "chunk-crb-1",
+                                }
+                            ],
+                        },
+                    ],
+                    "items": [
+                        {
+                            "label": "crumbs",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000368",
+                            "source_mentions": ["crumbs"],
+                            "evidence": [
+                                {
+                                    "entity": "crumbs",
+                                    "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                                    "page": 1,
+                                    "section": "Results and Discussion",
+                                    "chunk_id": "chunk-crumbs-1",
+                                    "figure_reference": "Figure 5E",
+                                },
+                            ],
+                        },
+                        {
+                            "label": "crb",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000368",
+                            "source_mentions": ["crb"],
+                            "evidence": [
+                                {
+                                    "entity": "crb",
+                                    "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                                    "page": 1,
+                                    "section": "Results and Discussion",
+                                    "chunk_id": "chunk-crb-1",
+                                },
+                            ],
+                        }
+                    ],
+                    "evidence_records": [
+                        {
+                            "entity": "crumbs",
+                            "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                            "page": 1,
+                            "section": "Results and Discussion",
+                            "chunk_id": "chunk-crumbs-1",
+                        }
+                    ],
+                    "run_summary": {"kept_count": 1},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Validation Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract findings",
+        specialist_name="Gene Validation Agent",
+        max_turns=3,
+        tool_name="ask_gene_specialist",
+    )
+
+    assert json.loads(result)["run_summary"]["kept_count"] == 1
+    assert json.loads(result)["items"] == [
+        {
+            "label": "crb",
+            "entity_type": "gene",
+            "normalized_id": "FB:FBgn0000368",
+            "source_mentions": ["crumbs", "crb"],
+            "evidence": [
+                {
+                    "entity": "crb",
+                    "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+                    "page": 1,
+                    "section": "Results and Discussion",
+                    "chunk_id": "chunk-crumbs-1",
+                    "figure_reference": "Figure 5E",
+                },
+                {
+                    "entity": "crb",
+                    "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+                    "page": 1,
+                    "section": "Results and Discussion",
+                    "chunk_id": "chunk-crb-1",
+                },
+            ],
+        }
+    ]
+    assert len(json.loads(result)["genes"]) == 1
+    evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
+    assert len(evidence_events) == 1
+    assert evidence_events[0]["evidence_records"] == [
+        {
+            "entity": "crb",
+            "verified_quote": "Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+            "page": 1,
+            "section": "Results and Discussion",
+            "chunk_id": "chunk-crumbs-1",
+            "figure_reference": "Figure 5E",
+        },
+        {
+            "entity": "crb",
+            "verified_quote": "all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.",
+            "page": 1,
+            "section": "Results and Discussion",
+            "chunk_id": "chunk-crb-1",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pdf_specialist_returns_plain_answer_from_structured_output_and_emits_evidence(monkeypatch):
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [],
+            final_output=_FakeStructuredOutput(
+                {
+                    "answer": (
+                        "The transgenic fly strains used in the study include Oregon R, "
+                        "white-eyed controls, and the crb mutant alleles crb11A22, crb8F105, "
+                        "and crbp13A."
+                    ),
+                    "summary": "Retained 3 strain-related findings with verified evidence.",
+                    "items": [
+                        {
+                            "label": "Oregon R",
+                            "entity_type": "strain",
+                            "source_mentions": ["Oregon R"],
+                            "evidence": [
+                                {
+                                    "entity": "Oregon R",
+                                    "verified_quote": "Oregon R flies were used as the wild-type strain.",
+                                    "page": 3,
+                                    "section": "Methods",
+                                    "chunk_id": "chunk-strain-1",
+                                }
+                            ],
+                        },
+                        {
+                            "label": "crb mutant alleles",
+                            "entity_type": "strain",
+                            "source_mentions": ["crb11A22", "crb8F105", "crbp13A"],
+                            "evidence": [
+                                {
+                                    "entity": "crb mutant alleles",
+                                    "verified_quote": "The strains used were crb11A22, crb8F105, and crbp13A.",
+                                    "page": 3,
+                                    "section": "Methods",
+                                    "chunk_id": "chunk-strain-2",
+                                }
+                            ],
+                        },
+                    ],
+                    "raw_mentions": [
+                        {"mention": "Oregon R", "entity_type": "strain", "evidence": []},
+                        {"mention": "crb11A22", "entity_type": "strain", "evidence": []},
+                    ],
+                    "evidence_records": [
+                        {
+                            "entity": "Oregon R",
+                            "verified_quote": "Oregon R flies were used as the wild-type strain.",
+                            "page": 3,
+                            "section": "Methods",
+                            "chunk_id": "chunk-strain-1",
+                        },
+                        {
+                            "entity": "crb mutant alleles",
+                            "verified_quote": "The strains used were crb11A22, crb8F105, and crbp13A.",
+                            "page": 3,
+                            "section": "Methods",
+                            "chunk_id": "chunk-strain-2",
+                        },
+                    ],
+                    "normalization_notes": [],
+                    "exclusions": [],
+                    "ambiguities": [],
+                    "run_summary": {"candidate_count": 2, "kept_count": 2},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="General PDF Extraction Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="PdfExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="identify the transgenic fly strains",
+        specialist_name="General PDF Extraction Agent",
+        max_turns=3,
+        tool_name="ask_pdf_extraction_specialist",
+    )
+
+    assert result == (
+        "The transgenic fly strains used in the study include Oregon R, white-eyed controls, "
+        "and the crb mutant alleles crb11A22, crb8F105, and crbp13A."
+    )
+    evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
+    assert len(evidence_events) == 1
+    assert evidence_events[0]["evidence_records"] == [
+        {
+            "entity": "Oregon R",
+            "verified_quote": "Oregon R flies were used as the wild-type strain.",
+            "page": 3,
+            "section": "Methods",
+            "chunk_id": "chunk-strain-1",
+        },
+        {
+            "entity": "crb mutant alleles",
+            "verified_quote": "The strains used were crb11A22, crb8F105, and crbp13A.",
+            "page": 3,
+            "section": "Methods",
+            "chunk_id": "chunk-strain-2",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_specialist_fails_fast_when_structured_extraction_output_is_missing_evidence(monkeypatch):
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Extracted focal genes but evidence was lost.",
+                    "items": [
+                        {
+                            "label": "crumb",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000001",
+                            "source_mentions": ["crumb"],
+                        }
+                    ],
+                    "evidence_records": [],
+                    "run_summary": {"kept_count": 1},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Validation Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract findings",
+            specialist_name="Gene Validation Agent",
+            max_turns=3,
+            tool_name="ask_gene_specialist",
+        )
+
+    specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
+    assert len(specialist_errors) == 1
+    assert specialist_errors[0]["details"]["reason"] == "missing_evidence_records"
 
 
 @pytest.mark.asyncio

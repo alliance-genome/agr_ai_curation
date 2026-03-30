@@ -1,3 +1,5 @@
+import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+
 export interface PDFViewerDocumentChangedDetail {
   documentId: string
   viewerUrl: string
@@ -39,6 +41,13 @@ export interface PDFViewerEvidenceAnchorSelectedDetail {
 
 export type PDFViewerEvidenceAnchorSelectedEvent =
   CustomEvent<PDFViewerEvidenceAnchorSelectedDetail>
+
+export interface PDFViewerNavigateEvidenceDetail {
+  command: EvidenceNavigationCommand
+}
+
+export type PDFViewerNavigateEvidenceEvent =
+  CustomEvent<PDFViewerNavigateEvidenceDetail>
 
 export function dispatchPDFDocumentChanged(
   documentId: string,
@@ -139,4 +148,22 @@ export function onPDFViewerEvidenceAnchorSelected(
   const listener = (event: Event) => handler(event as PDFViewerEvidenceAnchorSelectedEvent)
   window.addEventListener('pdf-viewer-evidence-anchor-selected', listener)
   return () => window.removeEventListener('pdf-viewer-evidence-anchor-selected', listener)
+}
+
+export function dispatchPDFViewerNavigateEvidence(
+  command: EvidenceNavigationCommand,
+): void {
+  window.dispatchEvent(
+    new CustomEvent<PDFViewerNavigateEvidenceDetail>('pdf-viewer-navigate-evidence', {
+      detail: { command },
+    }),
+  )
+}
+
+export function onPDFViewerNavigateEvidence(
+  handler: (event: PDFViewerNavigateEvidenceEvent) => void,
+): () => void {
+  const listener = (event: Event) => handler(event as PDFViewerNavigateEvidenceEvent)
+  window.addEventListener('pdf-viewer-navigate-evidence', listener)
+  return () => window.removeEventListener('pdf-viewer-navigate-evidence', listener)
 }

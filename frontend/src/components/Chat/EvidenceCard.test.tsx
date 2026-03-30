@@ -1,8 +1,9 @@
 import userEvent from '@testing-library/user-event'
 import { render, screen, waitFor } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
+import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import theme from '@/theme'
 import type { EvidenceRecord } from '@/features/curation/types'
 
@@ -54,10 +55,55 @@ function renderEvidenceCard() {
 }
 
 describe('EvidenceCard', () => {
+  let scrollIntoViewMock: MockInstance
+  let restorePrototypeScrollIntoView: (() => void) | null = null
+
+  beforeEach(() => {
+    const hadPrototypeScrollIntoView = Object.prototype.hasOwnProperty.call(
+      HTMLElement.prototype,
+      'scrollIntoView',
+    )
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+
+    if (typeof originalScrollIntoView !== 'function') {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: () => {},
+      })
+
+      restorePrototypeScrollIntoView = () => {
+        if (hadPrototypeScrollIntoView) {
+          Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+            configurable: true,
+            writable: true,
+            value: originalScrollIntoView,
+          })
+          return
+        }
+
+        delete HTMLElement.prototype.scrollIntoView
+      }
+    }
+
+    scrollIntoViewMock = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    scrollIntoViewMock.mockRestore()
+    restorePrototypeScrollIntoView?.()
+    restorePrototypeScrollIntoView = null
+    vi.useRealTimers()
+  })
   it('renders collapsed by default with the header and entity chips', () => {
     renderEvidenceCard()
 
     expect(screen.getByText('3 evidence quotes')).toBeInTheDocument()
+    expect(screen.getByTestId('evidence-card-header-icon')).toHaveStyle({
+      width: '14px',
+      height: '14px',
+      display: 'block',
+    })
     expect(screen.getByRole('button', { name: 'crumb 2' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('button', { name: 'notch 1' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.queryByText(/Full evidence review with PDF highlighting/i)).not.toBeInTheDocument()
@@ -79,6 +125,40 @@ describe('EvidenceCard', () => {
     expect(onReviewAndCurateClick).toHaveBeenCalledTimes(1)
   })
 
+  it('dispatches PDF evidence navigation when a quote is clicked', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEvidenceCard()
+    await user.click(screen.getByRole('button', { name: 'crumb 2' }))
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+      }),
+    )
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    expect(onNavigateEvidence.mock.calls[0][0].detail.command).toEqual(
+      expect.objectContaining({
+        anchorId: expect.stringContaining('chat-evidence:chunk-1:p4:crumb:'),
+        searchText: 'Crumb is essential for maintaining epithelial polarity.',
+        pageNumber: 4,
+        sectionTitle: 'Results',
+        mode: 'select',
+        anchor: expect.objectContaining({
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          snippet_text: 'Crumb is essential for maintaining epithelial polarity.',
+          section_title: 'Results',
+          subsection_title: 'Gene Expression Analysis',
+          chunk_ids: ['chunk-1'],
+        }),
+      }),
+    )
+
+    unsubscribe()
+  })
   it('collapses the active entity when the same chip is clicked again', async () => {
     const user = userEvent.setup()
     renderEvidenceCard()
@@ -118,6 +198,25 @@ describe('EvidenceCard', () => {
       expect(
         screen.queryByText('"Crumb is essential for maintaining epithelial polarity."')
       ).not.toBeInTheDocument()
+    })
+  })
+
+  it('scrolls the expanded evidence quotes into view when an entity chip is opened', async () => {
+    const user = userEvent.setup()
+    renderEvidenceCard()
+
+    await user.click(screen.getByRole('button', { name: 'crumb 2' }))
+
+    expect(
+      await screen.findByText('"Crumb is essential for maintaining epithelial polarity."')
+    ).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'end',
+        inline: 'nearest',
+      })
     })
   })
 })

@@ -15,6 +15,7 @@ Runtime instantiation resolves directly from unified DB-backed agent records.
 """
 
 import asyncio
+import errno
 import importlib
 import json
 import logging
@@ -48,11 +49,24 @@ _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "EVIDENCE VERIFICATION RULES:\n"
-    "- Call `record_evidence` once for each evidence quote you intend to keep.\n"
+    "- Call `record_evidence` once for each distinct evidence quote you intend to keep.\n"
+    "- Use multiple evidence records when one quote alone does not fully support the retained item or claim.\n"
+    "- Prefer complementary quotes when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
+    "- Each claimed quote should be a single contiguous excerpt. A short multi-sentence passage is fine when that is the tightest support, but do not stitch together disconnected text.\n"
     "- Pass the entity label, the exact `chunk_id` from prior document search/read results, and the quote you believe appears in that chunk.\n"
     "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
+
+
+def _is_thread_exhaustion_error(exc: BaseException) -> bool:
+    """Recognize thread-creation failures across Python/runtime variants."""
+
+    if isinstance(exc, OSError) and exc.errno == errno.EAGAIN:
+        return True
+
+    message = str(exc).lower()
+    return "can't start new thread" in message or "cannot start new thread" in message
 
 
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
@@ -483,11 +497,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "record_evidence": {
         "name": "Record Evidence",
-        "description": "Verify a claimed quote against a specific PDF chunk before persisting evidence.",
+        "description": "Verify one contiguous claimed quote against a specific PDF chunk before persisting evidence.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
         "documentation": {
-            "summary": "Checks whether a claimed quote appears in a known chunk and returns a verified verbatim quote plus locator metadata when it does.",
+            "summary": "Checks whether a claimed quote appears in a known chunk and returns a verified verbatim quote plus locator metadata when it does. Use separate calls for multiple complementary quotes when one quote is not enough.",
             "parameters": [
                 {
                     "name": "entity",
@@ -505,7 +519,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "name": "claimed_quote",
                     "type": "string",
                     "required": True,
-                    "description": "Quote text to verify against the target chunk.",
+                    "description": "One contiguous quote to verify against the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
                 },
             ],
         },
@@ -1081,12 +1095,30 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         if tracker:
             tracker.record_call(tool_id)
 
-        result = await asyncio.to_thread(
-            runner.execute_tool,
-            tool_id,
-            kwargs=_decode_tool_input(tool_id, input_str),
-            context=context_payload,
-        )
+        decoded_kwargs = _decode_tool_input(tool_id, input_str)
+        execute_kwargs = {
+            "kwargs": decoded_kwargs,
+            "context": context_payload,
+        }
+
+        try:
+            result = await asyncio.to_thread(
+                runner.execute_tool,
+                tool_id,
+                **execute_kwargs,
+            )
+        except (RuntimeError, OSError) as exc:
+            if not _is_thread_exhaustion_error(exc):
+                raise
+            logger.warning(
+                "Falling back to inline package tool execution for %s after thread exhaustion: %s",
+                tool_id,
+                exc,
+            )
+            result = runner.execute_tool(
+                tool_id,
+                **execute_kwargs,
+            )
         if not result.ok:
             error_message = result.error.message if result.error else "Unknown package tool error"
             raise RuntimeError(

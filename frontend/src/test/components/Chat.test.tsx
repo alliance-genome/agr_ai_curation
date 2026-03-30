@@ -316,6 +316,48 @@ describe('Chat persistence', () => {
     ).toBeInTheDocument()
   })
 
+  it('removes duplicate inline evidence sections once evidence records are attached', async () => {
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: [
+            'The genes that are the focus of this publication are:',
+            '',
+            '1. **crumbs (crb)**',
+            '   - Normalized ID: FB:FBgn0000368',
+            '   - Evidence: Changes in molecular organization following abnormal PRC development in crumbs mutants.',
+            '',
+            '**Citations:**',
+            '- Section: Results and Discussion, Page: 1',
+            '',
+            '**Sources:**',
+            '- Gene Extraction Analysis',
+          ].join('\n'),
+        },
+        {
+          type: 'evidence_summary',
+          evidence_records: [
+            {
+              entity: 'crumbs',
+              verified_quote: 'Changes in molecular organization following abnormal PRC development in crumbs mutants.',
+              page: 1,
+              section: 'Results and Discussion',
+              chunk_id: 'chunk-1',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(
+      await screen.findByText(/The genes that are the focus of this publication are:/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Evidence:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Citations:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Sources:/)).not.toBeInTheDocument()
+    expect(await screen.findByText('1 evidence quotes')).toBeInTheDocument()
+  })
   it('shows the evidence footer action for streamed assistant messages with an active document', async () => {
     openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-evidence')
     mockChatFetch({
