@@ -38,6 +38,20 @@ function buildCandidate(overrides: Partial<CurationCandidate> = {}): CurationCan
           },
           metadata: {},
         },
+        {
+          field_key: 'entity_type',
+          label: 'Entity type',
+          value: 'ATP:0000005',
+          seed_value: 'ATP:0000005',
+          order: 1,
+          required: true,
+          read_only: false,
+          dirty: false,
+          stale_validation: false,
+          evidence_anchor_ids: [],
+          validation_result: null,
+          metadata: {},
+        },
       ],
       created_at: '2026-03-30T10:00:00Z',
       updated_at: '2026-03-30T10:00:00Z',
@@ -144,6 +158,7 @@ describe('workspaceEntityTags', () => {
     )
 
     expect(manualDraft.fields[0]?.value).toBe('TP53')
+    expect(manualDraft.fields[1]?.value).toBe('ATP:0000005')
     expect(manualDraft.fields[0]?.validation_result).toBeNull()
     expect(manualDraft.fields[0]?.dirty).toBe(false)
   })

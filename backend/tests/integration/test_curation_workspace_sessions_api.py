@@ -444,6 +444,30 @@ def seeded_review_sessions(client: TestClient, test_db):
                     "dirty": False,
                     "stale_validation": False,
                     "evidence_anchor_ids": [],
+                    "validation_result": {
+                        "status": "validated",
+                        "resolver": "agr_db",
+                        "candidate_matches": [
+                            {
+                                "label": "BETA1",
+                                "identifier": "HGNC:beta1",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "metadata": {},
+                },
+                {
+                    "field_key": "entity_type",
+                    "label": "Entity type",
+                    "value": "ATP:0000005",
+                    "seed_value": "ATP:0000005",
+                    "order": 1,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
                     "metadata": {},
                 }
             ],
@@ -451,7 +475,13 @@ def seeded_review_sessions(client: TestClient, test_db):
             created_at=datetime(2026, 3, 5, 12, 6, tzinfo=timezone.utc),
             updated_at=datetime(2026, 3, 5, 14, 6, tzinfo=timezone.utc),
             last_saved_at=datetime(2026, 3, 5, 14, 10, tzinfo=timezone.utc),
-            draft_metadata={"source": "fixture"},
+            draft_metadata={
+                "source": "fixture",
+                "entity_tag": {
+                    "entity_field_key": "gene_symbol",
+                    "entity_type_field_key": "entity_type",
+                },
+            },
         ),
         CurationDraft(
             candidate_id=candidate_gamma_id,
@@ -507,6 +537,11 @@ def seeded_review_sessions(client: TestClient, test_db):
                 "anchor_kind": "sentence",
                 "locator_quality": "normalized_quote",
                 "supports_decision": "supports",
+                "sentence_text": "BETA1 was highlighted in the reported assay.",
+                "snippet_text": "BETA1 was highlighted in the reported assay.",
+                "page_number": 2,
+                "section_title": "Results",
+                "chunk_ids": ["beta-chunk-1"],
             },
             warnings=[],
         ),

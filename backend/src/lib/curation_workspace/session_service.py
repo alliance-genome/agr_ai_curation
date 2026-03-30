@@ -15,6 +15,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import String, asc, case, delete, desc, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_adapters.entity_tag_bridge import (
+    ENTITY_FIELD_KEYS,
+    ENTITY_TYPE_FIELD_KEYS,
+    SPECIES_FIELD_KEYS,
+    TOPIC_FIELD_KEYS,
+    default_entity_type_for_field_key,
+)
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
 from src.lib.curation_workspace.submission_adapters import (
@@ -152,11 +159,6 @@ CANDIDATE_DETAIL_LOAD_OPTIONS = (
 )
 
 logger = logging.getLogger(__name__)
-
-ENTITY_FIELD_KEYS = ("entity_name", "gene_symbol")
-ENTITY_TYPE_FIELD_KEYS = ("entity_type", "entity_type_code", "entity_type_atp_code")
-SPECIES_FIELD_KEYS = ("species", "taxon", "taxon_id")
-TOPIC_FIELD_KEYS = ("topic", "topic_name", "topic_term", "topic_curie")
 
 
 @lru_cache(maxsize=1)
@@ -1209,19 +1211,23 @@ def _entity_type_code(
                 ),
             )
 
-        try:
-            return CurationEntityTypeCode(type_field.value.strip())
-        except ValueError as exc:
+        normalized_type = type_field.value.strip()
+        if not normalized_type:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
-                    f"Curation candidate {candidate.candidate_id} has unsupported entity type "
-                    f"code {type_field.value!r} in the entity-tag payload"
+                    f"Curation candidate {candidate.candidate_id} has a blank entity type "
+                    "identifier in the entity-tag payload"
                 ),
-            ) from exc
+            )
 
-    if _normalize_entity_field_key(entity_field.field_key) == "gene_symbol":
-        return CurationEntityTypeCode.GENE
+        return normalized_type
+
+    fallback_entity_type = default_entity_type_for_field_key(
+        _normalize_entity_field_key(entity_field.field_key)
+    )
+    if fallback_entity_type is not None:
+        return fallback_entity_type
 
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

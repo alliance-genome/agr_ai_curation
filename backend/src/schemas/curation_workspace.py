@@ -294,19 +294,10 @@ class CurationCandidateSource(str, Enum):
     IMPORTED = "imported"
 
 
-class CurationEntityTypeCode(str, Enum):
-    """ATP entity-type codes shared with the literature UI entity table."""
-
-    GENE = "ATP:0000005"
-    ALLELE = "ATP:0000006"
-    TRANSGENE = "ATP:0000007"
-    STRAIN = "ATP:0000008"
-    GENOTYPE = "ATP:0000009"
-    DISEASE = "ATP:0000010"
-    GO_TERM = "ATP:0000011"
-    MOLECULAR_FUNCTION = "ATP:0000012"
-    BIOLOGICAL_PROCESS = "ATP:0000013"
-    CELLULAR_COMPONENT = "ATP:0000014"
+# Shared substrate keeps entity-type identifiers opaque. Current UI integrations
+# may use literature-controlled ATP codes, but adapters own those values and the
+# shared workspace contract must not enumerate them here.
+CurationEntityTypeCode = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class CurationEntityTagSource(str, Enum):
@@ -880,11 +871,13 @@ class CurationEntityTagEvidence(CurationWorkspaceBaseModel):
 
 
 class CurationEntityTag(CurationWorkspaceBaseModel):
-    """Literature-UI-aligned entity tag record rendered in the workspace table."""
+    """UI-facing entity tag record rendered in the workspace table."""
 
     tag_id: str = Field(description="Stable entity-tag identifier")
     entity_name: str = Field(description="Primary display value for the extracted entity")
-    entity_type: CurationEntityTypeCode = Field(description="ATP entity-type code")
+    entity_type: CurationEntityTypeCode = Field(
+        description="Adapter-owned entity-type identifier shown in the table",
+    )
     species: str = Field(description="Species column value, empty when not populated")
     topic: str = Field(description="Topic column value, empty when not populated")
     db_status: CurationEntityTagDbValidationStatus = Field(

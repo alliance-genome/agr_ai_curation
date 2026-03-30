@@ -732,12 +732,31 @@ def test_get_session_workspace_includes_backend_entity_tags(db_session):
                         "warnings": [],
                     },
                     "metadata": {},
+                },
+                {
+                    "field_key": "entity_type",
+                    "label": "Entity type",
+                    "value": "ATP:0000005",
+                    "seed_value": "ATP:0000005",
+                    "order": 1,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "validation_result": None,
+                    "metadata": {},
                 }
             ],
             notes="Gene note",
             created_at=now,
             updated_at=now,
-            draft_metadata={},
+            draft_metadata={
+                "entity_tag": {
+                    "entity_field_key": "gene_symbol",
+                    "entity_type_field_key": "entity_type",
+                },
+            },
         )
     )
     db_session.add(

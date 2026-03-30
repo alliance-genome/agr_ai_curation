@@ -7,7 +7,6 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     CurationEntityTagDbValidationStatus,
     CurationEntityTagSource,
-    CurationEntityTypeCode,
     CurationSessionListRequest,
     CurationSessionSortField,
     CurationSessionStatus,
@@ -171,7 +170,7 @@ def make_workspace_response_payload() -> dict:
                 {
                     "tag_id": "candidate-1",
                     "entity_name": "APOE",
-                    "entity_type": CurationEntityTypeCode.GENE,
+                    "entity_type": "ATP:0000005",
                     "species": "",
                     "topic": "",
                     "db_status": CurationEntityTagDbValidationStatus.VALIDATED,
