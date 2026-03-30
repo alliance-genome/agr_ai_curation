@@ -130,16 +130,6 @@ def build_extraction_envelope_candidate(
         else None,
         metadata=envelope_metadata,
     )
-
-
-def enrich_extraction_result_scope(
-    record: CurationExtractionResultRecord,
-) -> CurationExtractionResultRecord:
-    """Preserve stored scope without inference or compatibility backfill."""
-
-    return record
-
-
 def persist_extraction_result(
     request: CurationExtractionPersistenceRequest,
     *,

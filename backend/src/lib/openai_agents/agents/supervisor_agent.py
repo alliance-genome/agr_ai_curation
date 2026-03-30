@@ -48,7 +48,6 @@ from src.lib.curation_workspace import (
 )
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import (
-    enrich_extraction_result_scope,
     list_extraction_results,
 )
 from src.lib.prompts.cache import get_prompt
@@ -265,10 +264,6 @@ async def _dispatch_curation_prep_from_chat_context(
         document_id=active_document_id,
         exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
     )
-    extraction_results = [
-        enrich_extraction_result_scope(record)
-        for record in extraction_results
-    ]
     if not extraction_results:
         return _tool_response(
             "no_extraction_context",

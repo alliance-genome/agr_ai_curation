@@ -145,16 +145,6 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         "_get_agent_curation_metadata",
         lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
-    monkeypatch.setattr(
-        extraction_results_module,
-        "_get_agent_curation_metadata",
-        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
-    )
-    monkeypatch.setattr(
-        extraction_results_module,
-        "_get_agent_curation_metadata",
-        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
-    )
 
     async def _register_active_stream(
         session_id: str,

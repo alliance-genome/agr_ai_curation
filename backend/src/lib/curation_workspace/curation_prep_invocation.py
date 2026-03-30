@@ -15,7 +15,6 @@ from src.lib.curation_workspace.curation_prep_service import (
     run_curation_prep,
 )
 from src.lib.curation_workspace.extraction_results import (
-    enrich_extraction_result_scope,
     list_extraction_results,
 )
 from src.schemas.curation_prep import (
@@ -140,11 +139,6 @@ def _load_chat_prep_context(
         source_kind=CurationExtractionSourceKind.CHAT,
         exclude_agent_keys=[CURATION_PREP_AGENT_ID],
     )
-    extraction_results = [
-        enrich_extraction_result_scope(record)
-        for record in extraction_results
-    ]
-
     document_ids = _unique_non_empty(record.document_id for record in extraction_results)
     if len(document_ids) > 1:
         raise ValueError(
