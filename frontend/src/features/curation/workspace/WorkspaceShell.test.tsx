@@ -6,35 +6,24 @@ import theme from '@/theme'
 import WorkspaceShell from './WorkspaceShell'
 
 describe('WorkspaceShell', () => {
-  it('renders the desktop workspace regions and resize handles', () => {
+  it('renders the two-panel desktop layout with PDF and entity table', () => {
     render(
       <ThemeProvider theme={theme}>
         <WorkspaceShell
-          editorSlot={<div>Editor slot</div>}
-          evidenceSlot={<div>Evidence slot</div>}
           headerSlot={<div>Header slot</div>}
           pdfSlot={<div>PDF slot</div>}
-          queueSlot={<div>Queue slot</div>}
-          toolbarSlot={<div>Toolbar slot</div>}
+          entityTableSlot={<div>Entity table slot</div>}
         />
       </ThemeProvider>,
     )
 
     expect(screen.getByText('Header slot')).toBeInTheDocument()
     expect(screen.getByText('PDF slot')).toBeInTheDocument()
-    expect(screen.getByText('Queue slot')).toBeInTheDocument()
-    expect(screen.getByText('Toolbar slot')).toBeInTheDocument()
-    expect(screen.getByText('Editor slot')).toBeInTheDocument()
-    expect(screen.getByText('Evidence slot')).toBeInTheDocument()
+    expect(screen.getByText('Entity table slot')).toBeInTheDocument()
 
     expect(screen.getByTestId('workspace-shell-pdf-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-queue-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-toolbar-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-editor-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-evidence-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-shell-entity-table-panel')).toBeInTheDocument()
 
-    expect(screen.getByTestId('workspace-shell-handle-pdf-queue')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-handle-queue-editor')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-handle-editor-evidence')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-shell-handle-pdf-table')).toBeInTheDocument()
   })
 })

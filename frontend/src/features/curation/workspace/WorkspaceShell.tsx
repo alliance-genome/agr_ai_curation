@@ -7,16 +7,11 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 export interface WorkspaceShellProps {
   headerSlot?: ReactNode
   pdfSlot: ReactNode
-  queueSlot?: ReactNode
-  toolbarSlot?: ReactNode
-  editorSlot?: ReactNode
-  evidenceSlot?: ReactNode
+  entityTableSlot: ReactNode
   outerAutoSaveId?: string
-  rightColumnAutoSaveId?: string
 }
 
 const DEFAULT_OUTER_AUTO_SAVE_ID = 'curation-workspace-shell-panels'
-const DEFAULT_RIGHT_COLUMN_AUTO_SAVE_ID = 'curation-workspace-shell-right-column-panels'
 
 const ShellRoot = styled(Box)(() => ({
   flex: 1,
@@ -167,12 +162,8 @@ function WorkspacePane({
 export default function WorkspaceShell({
   headerSlot,
   pdfSlot,
-  queueSlot,
-  toolbarSlot,
-  editorSlot,
-  evidenceSlot,
+  entityTableSlot,
   outerAutoSaveId = DEFAULT_OUTER_AUTO_SAVE_ID,
-  rightColumnAutoSaveId = DEFAULT_RIGHT_COLUMN_AUTO_SAVE_ID,
 }: WorkspaceShellProps) {
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
@@ -188,27 +179,14 @@ export default function WorkspaceShell({
           <WorkspacePane label="PDF panel" testId="workspace-shell-pdf-panel">
             {pdfSlot}
           </WorkspacePane>
-          <WorkspacePane label="Candidate queue panel" testId="workspace-shell-queue-panel">
-            {queueSlot}
-          </WorkspacePane>
-          <ToolbarSurface
-            aria-label="Decision toolbar panel"
-            data-testid="workspace-shell-toolbar-panel"
-            role="region"
-          >
-            <SlotFrame>{toolbarSlot}</SlotFrame>
-          </ToolbarSurface>
-          <WorkspacePane label="Annotation editor panel" testId="workspace-shell-editor-panel">
-            {editorSlot}
-          </WorkspacePane>
-          <WorkspacePane label="Evidence panel" testId="workspace-shell-evidence-panel">
-            {evidenceSlot}
+          <WorkspacePane label="Entity table panel" testId="workspace-shell-entity-table-panel">
+            {entityTableSlot}
           </WorkspacePane>
         </MobilePanels>
       ) : (
         <DesktopPanels>
           <PanelGroup autoSaveId={outerAutoSaveId} direction="horizontal">
-            <Panel defaultSize={42} minSize={28} order={1}>
+            <Panel defaultSize={45} minSize={28} order={1}>
               <PanelSection>
                 <WorkspacePane label="PDF panel" testId="workspace-shell-pdf-panel">
                   {pdfSlot}
@@ -218,65 +196,18 @@ export default function WorkspaceShell({
 
             <WorkspaceResizeHandle
               groupDirection="horizontal"
-              label="Resize PDF and queue panels"
-              testId="workspace-shell-handle-pdf-queue"
+              label="Resize PDF and entity table panels"
+              testId="workspace-shell-handle-pdf-table"
             />
 
-            <Panel defaultSize={16} maxSize={24} minSize={12} order={2}>
+            <Panel defaultSize={55} minSize={30} order={2}>
               <PanelSection>
-                <WorkspacePane label="Candidate queue panel" testId="workspace-shell-queue-panel">
-                  {queueSlot}
-                </WorkspacePane>
-              </PanelSection>
-            </Panel>
-
-            <WorkspaceResizeHandle
-              groupDirection="horizontal"
-              label="Resize queue and editor panels"
-              testId="workspace-shell-handle-queue-editor"
-            />
-
-            <Panel defaultSize={42} minSize={28} order={3}>
-              <PanelSection sx={{ gap: 1.5 }}>
-                <ToolbarSurface
-                  aria-label="Decision toolbar panel"
-                  data-testid="workspace-shell-toolbar-panel"
-                  role="region"
+                <WorkspacePane
+                  label="Entity table panel"
+                  testId="workspace-shell-entity-table-panel"
                 >
-                  <SlotFrame>{toolbarSlot}</SlotFrame>
-                </ToolbarSurface>
-
-                <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                  <PanelGroup autoSaveId={rightColumnAutoSaveId} direction="vertical">
-                    <Panel defaultSize={68} minSize={36} order={1}>
-                      <PanelSection>
-                        <WorkspacePane
-                          label="Annotation editor panel"
-                          testId="workspace-shell-editor-panel"
-                        >
-                          {editorSlot}
-                        </WorkspacePane>
-                      </PanelSection>
-                    </Panel>
-
-                    <WorkspaceResizeHandle
-                      groupDirection="vertical"
-                      label="Resize editor and evidence panels"
-                      testId="workspace-shell-handle-editor-evidence"
-                    />
-
-                    <Panel defaultSize={32} minSize={18} order={2}>
-                      <PanelSection>
-                        <WorkspacePane
-                          label="Evidence panel"
-                          testId="workspace-shell-evidence-panel"
-                        >
-                          {evidenceSlot}
-                        </WorkspacePane>
-                      </PanelSection>
-                    </Panel>
-                  </PanelGroup>
-                </Box>
+                  {entityTableSlot}
+                </WorkspacePane>
               </PanelSection>
             </Panel>
           </PanelGroup>
