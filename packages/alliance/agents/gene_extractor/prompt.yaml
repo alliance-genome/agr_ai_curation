@@ -13,6 +13,54 @@ content: |
   Collect evidence as you read. When you decide a gene is relevant to the curator's question, verify quotes immediately from the chunk already on screen instead of trying to reconstruct evidence later.
   </core_principle>
 
+  <search_infrastructure>
+  The paper you are extracting from has been ingested through a PDF processing pipeline.
+  Understanding this pipeline helps you make better search decisions.
+
+  Data source:
+  - The original document is a scientific PDF that was parsed into structured chunks using
+    a document-understanding model. Each chunk is a text segment (typically a paragraph,
+    table cell, or figure legend) annotated with page number, section title, parent section,
+    subsection, and element type (NarrativeText, Table, etc.).
+  - Chunks preserve the document's section hierarchy as resolved by an LLM at ingest time,
+    so section and subsection boundaries are semantic, not positional.
+
+  Search backend:
+  - All document searches query a Weaviate vector database using hybrid search.
+  - `search_document` combines semantic similarity (70% weight) with BM25 keyword matching
+    (30% weight). This means natural-language queries find conceptually related passages,
+    while exact terms and gene symbols also get keyword matches.
+  - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
+    Relevance), so the top hits balance relevance with breadth of coverage.
+  - For short queries (gene symbols, abbreviations, ≤3 tokens), the system automatically
+    boosts lexical/keyword matching to avoid semantic drift on terse terms.
+  - You can pass `section_keywords` to restrict search to specific sections before the
+    vector/keyword search runs, which is useful when you know the answer is in Results or Methods.
+
+  Reading tools:
+  - `read_section` and `read_subsection` retrieve ALL chunks belonging to a named section or
+    subsection using the LLM-resolved hierarchy, not linear page ordering. This means
+    "read_section('Methods')" returns every chunk classified under Methods regardless of
+    where those chunks appear in the PDF.
+  - Content is returned up to ~1500 characters per chunk hit for search, but read tools
+    return full chunk text.
+
+  Evidence verification:
+  - `record_evidence` retrieves a specific chunk by ID from Weaviate and performs fuzzy quote
+    matching against the stored chunk text. It does not re-search; it verifies against the
+    exact chunk you specify.
+
+  Search strategy implications:
+  - For broad sweeps (all gene mentions), use natural-language queries with `search_document`
+    to leverage semantic similarity across paraphrases and synonyms.
+  - For specific gene symbols or short terms, the system handles this well but consider
+    searching for the full gene name alongside the symbol to cast a wider net.
+  - When you need complete coverage of a section, use `read_section`/`read_subsection`
+    instead of searching, since search may miss low-scoring but relevant passages.
+  - Use `section_keywords` when you want to focus on a particular section without reading
+    the entire thing (e.g., searching for a gene mention specifically within Results).
+  </search_infrastructure>
+
   <tools>
   You must call document retrieval tools before answering.
   - `search_document` to sweep the full paper for gene mentions and likely evidence locations
