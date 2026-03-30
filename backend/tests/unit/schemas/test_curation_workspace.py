@@ -5,6 +5,8 @@ from pydantic import ValidationError
 
 from src.schemas.curation_workspace import (
     CurationCandidateStatus,
+    CurationEntityTagDbValidationStatus,
+    CurationEntityTagSource,
     CurationSessionListRequest,
     CurationSessionSortField,
     CurationSessionStatus,
@@ -164,6 +166,26 @@ def make_workspace_response_payload() -> dict:
                     "warnings": [],
                 },
             },
+            "entity_tags": [
+                {
+                    "tag_id": "candidate-1",
+                    "entity_name": "APOE",
+                    "entity_type": "ATP:0000005",
+                    "species": "",
+                    "topic": "",
+                    "db_status": CurationEntityTagDbValidationStatus.VALIDATED,
+                    "db_entity_id": "HGNC:613",
+                    "source": CurationEntityTagSource.AI,
+                    "decision": CurationCandidateStatus.ACCEPTED,
+                    "evidence": {
+                        "sentence_text": "APOE was linked to the phenotype.",
+                        "page_number": 3,
+                        "section_title": "Results",
+                        "chunk_ids": ["chunk-1"],
+                    },
+                    "notes": None,
+                }
+            ],
             "candidates": [
                 {
                     "candidate_id": "candidate-1",
@@ -468,6 +490,11 @@ def test_workspace_response_accepts_representative_workspace_contract():
     assert (
         workspace.workspace.session.latest_submission.status
         is CurationSubmissionStatus.PREVIEW_READY
+    )
+    assert workspace.workspace.entity_tags[0].entity_name == "APOE"
+    assert (
+        workspace.workspace.entity_tags[0].db_status
+        is CurationEntityTagDbValidationStatus.VALIDATED
     )
     assert workspace.workspace.candidates[0].draft.fields[0].field_key == "gene_symbol"
     assert (

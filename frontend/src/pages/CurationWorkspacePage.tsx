@@ -12,23 +12,22 @@ import {
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
-import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
+import { EntityTagTable, type EntityTag } from '@/features/curation/entityTable'
 import {
-  AnnotationEditor,
-  CuratorDecisionToolbar,
-  RevertButton,
-  ValidationBadge,
-} from '@/features/curation/editor'
-import {
-  EvidenceChipGroup,
-  EvidencePanel,
-  useEvidenceNavigation,
-} from '@/features/curation/evidence'
+  buildEntityTagFieldChanges,
+  buildManualCandidateDraft,
+} from '@/features/curation/entityTable/workspaceEntityTags'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
 import { SubmissionPreviewDialog } from '@/features/curation/submission'
-import { fetchCurationWorkspace } from '@/features/curation/services/curationWorkspaceService'
+import {
+  autosaveCurationCandidateDraft,
+  createManualCurationCandidate,
+  fetchCurationWorkspace,
+  submitCurationCandidateDecision,
+  validateCurationCandidate,
+} from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
   CurationWorkspace,
@@ -40,11 +39,12 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
-import CandidateQueue from '@/features/curation/workspace/CandidateQueue'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
-import { usePdfToFormLinking } from '@/features/curation/workspace/usePdfToFormLinking'
+import {
+  updateWorkspaceActiveCandidate,
+} from '@/features/curation/workspace/workspaceState'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
@@ -59,41 +59,35 @@ function findCandidate(
   return candidates.find((candidate) => candidate.candidate_id === candidateId) ?? null
 }
 
+function selectEntityTemplateCandidate(
+  candidates: CurationCandidate[],
+  activeCandidateId: string | null,
+): CurationCandidate | null {
+  if (activeCandidateId) {
+    const activeCandidate = candidates.find((candidate) => candidate.candidate_id === activeCandidateId)
+    if (activeCandidate) {
+      return activeCandidate
+    }
+  }
+
+  return candidates[0] ?? null
+}
+
 function CurationWorkspacePageContent({
   queueNavigationState,
 }: {
   queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
 }) {
   const {
-    activeCandidate,
     activeCandidateId,
     candidates,
     setActiveCandidate,
+    setWorkspace,
     workspace,
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const hydration = useCurationWorkspaceHydration()
   const runtimeWarning = autosave.warning ?? hydration.warning
-  const workspaceEvidence = useMemo(
-    () => candidates.flatMap((candidate) => candidate.evidence_anchors ?? []),
-    [candidates],
-  )
-  const evidenceNavigation = useEvidenceNavigation({
-    evidence: activeCandidate?.evidence_anchors ?? [],
-    allEvidence: workspaceEvidence,
-  })
-  usePdfToFormLinking({
-    activeCandidateId,
-    candidates,
-    evidenceByAnchorId: evidenceNavigation.evidenceByAnchorId,
-    setActiveCandidate,
-  })
-  const editorPack = useMemo(
-    () => getCurationAdapterEditorPack(
-      activeCandidate?.adapter_key ?? workspace.session.adapter.adapter_key,
-    ),
-    [activeCandidate?.adapter_key, workspace.session.adapter.adapter_key],
-  )
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
   const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
@@ -101,6 +95,8 @@ function CurationWorkspacePageContent({
   const workspaceDocumentTitle = workspaceDocument.title
   const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
+  const [tableError, setTableError] = useState<string | null>(null)
+  const entityTags = workspace.entity_tags
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
@@ -131,61 +127,197 @@ function CurationWorkspacePageContent({
     workspaceDocumentViewerUrl,
   ])
 
-  const queueSlot = <CandidateQueue />
+  const refreshWorkspace = useCallback(async (preferredActiveCandidateId: string | null) => {
+    const nextWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
+    setWorkspace(
+      updateWorkspaceActiveCandidate(
+        nextWorkspace,
+        preferredActiveCandidateId
+          ?? nextWorkspace.active_candidate_id
+          ?? nextWorkspace.session.current_candidate_id
+          ?? null,
+      ),
+    )
+  }, [setWorkspace, workspace.session.session_id])
 
-  const toolbarSlot = <CuratorDecisionToolbar />
+  const handleSelectTag = useCallback((tagId: string) => {
+    setTableError(null)
+    setActiveCandidate(tagId)
+  }, [setActiveCandidate])
 
-  const editorSlot = (
-    <Box
-      sx={{
-        flex: 1,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <AnnotationEditor
-        onFieldChange={autosave.queueFieldChange}
-        renderEvidence={(field) => (
-          <EvidenceChipGroup
-            evidenceAnchorIds={field.evidence_anchor_ids}
-            evidenceByAnchorId={evidenceNavigation.evidenceByAnchorId}
-            hoverEvidence={evidenceNavigation.hoverEvidence}
-            hoveredEvidence={evidenceNavigation.hoveredEvidence}
-            selectEvidence={evidenceNavigation.selectEvidence}
-            selectedEvidence={evidenceNavigation.selectedEvidence}
-          />
-        )}
-        renderFieldInput={editorPack?.renderFieldInput}
-        renderRevert={(_field, { canRevert, revert }) => (
-          <RevertButton canRevert={canRevert} onRevert={revert} />
-        )}
-        renderValidation={(field) => (
-          <ValidationBadge field={field} />
-        )}
-      />
+  const handleAcceptTag = useCallback(async (tagId: string) => {
+    setTableError(null)
 
-      {workspace.session.warnings.length > 0 ? (
-        <Box sx={{ px: 2, pb: 1.5 }}>
-          <Typography color="text.secondary" variant="body2">
-            {workspace.session.warnings.length} session warning
-            {workspace.session.warnings.length === 1 ? '' : 's'} available for review.
-          </Typography>
-        </Box>
-      ) : null}
-    </Box>
-  )
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before updating this entity.')
+      }
 
-  const evidenceSlot = (
-    <EvidencePanel
-      candidateEvidence={evidenceNavigation.candidateEvidence}
-      evidenceByGroup={evidenceNavigation.evidenceByGroup}
-      hoverEvidence={evidenceNavigation.hoverEvidence}
-      hoveredEvidence={evidenceNavigation.hoveredEvidence}
-      selectEvidence={evidenceNavigation.selectEvidence}
-      selectedEvidence={evidenceNavigation.selectedEvidence}
-    />
-  )
+      await submitCurationCandidateDecision({
+        session_id: workspace.session.session_id,
+        candidate_id: tagId,
+        action: 'accept',
+        advance_queue: false,
+      })
+      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to accept this entity.'
+      setTableError(message)
+      throw error
+    }
+  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+
+  const handleRejectTag = useCallback(async (tagId: string) => {
+    setTableError(null)
+
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before updating this entity.')
+      }
+
+      await submitCurationCandidateDecision({
+        session_id: workspace.session.session_id,
+        candidate_id: tagId,
+        action: 'reject',
+        advance_queue: false,
+      })
+      await refreshWorkspace(activeCandidateId === tagId ? tagId : activeCandidateId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to reject this entity.'
+      setTableError(message)
+      throw error
+    }
+  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+
+  const handleAcceptAllValidated = useCallback(async (tagIds: string[]) => {
+    setTableError(null)
+
+    if (tagIds.length === 0) {
+      return
+    }
+
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before updating these entities.')
+      }
+
+      const decisionResults = await Promise.allSettled(tagIds.map((tagId) =>
+        submitCurationCandidateDecision({
+          session_id: workspace.session.session_id,
+          candidate_id: tagId,
+          action: 'accept',
+          advance_queue: false,
+        })))
+
+      const rejectedResults = decisionResults.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      const fulfilledCount = decisionResults.length - rejectedResults.length
+
+      if (fulfilledCount > 0) {
+        await refreshWorkspace(activeCandidateId)
+      }
+
+      if (rejectedResults.length > 0) {
+        const firstError = rejectedResults[0].reason
+        const firstErrorMessage = firstError instanceof Error
+          ? firstError.message
+          : 'Unknown workspace mutation error.'
+
+        throw new Error(
+          `Accepted ${fulfilledCount} of ${tagIds.length} validated entities. First error: ${firstErrorMessage}`,
+        )
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to accept all validated entities.'
+      setTableError(message)
+      throw error
+    }
+  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+
+  const handleSaveTag = useCallback(async (tagId: string, updates: Partial<EntityTag>) => {
+    setTableError(null)
+
+    const candidate = candidates.find((currentCandidate) => currentCandidate.candidate_id === tagId)
+    if (!candidate) {
+      const missingCandidateError = new Error(`Unable to find candidate ${tagId} in the workspace.`)
+      setTableError(missingCandidateError.message)
+      throw missingCandidateError
+    }
+
+    try {
+      const fieldChanges = buildEntityTagFieldChanges(candidate, updates)
+      if (fieldChanges.length === 0) {
+        return
+      }
+
+      await autosaveCurationCandidateDraft({
+        session_id: workspace.session.session_id,
+        candidate_id: candidate.candidate_id,
+        draft_id: candidate.draft.draft_id,
+        expected_version: candidate.draft.version,
+        field_changes: fieldChanges,
+      })
+
+      await validateCurationCandidate({
+        session_id: workspace.session.session_id,
+        candidate_id: candidate.candidate_id,
+        field_keys: fieldChanges.map((fieldChange) => fieldChange.field_key),
+      })
+      await refreshWorkspace(tagId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save this entity row.'
+      setTableError(message)
+      throw error
+    }
+  }, [candidates, refreshWorkspace, workspace.session.session_id])
+
+  const handleCreateManualTag = useCallback(async (tag: EntityTag) => {
+    setTableError(null)
+
+    const templateCandidate = selectEntityTemplateCandidate(candidates, activeCandidateId)
+    if (!templateCandidate) {
+      const missingTemplateError = new Error(
+        'Unable to add an entity because this workspace has no candidate template to clone.',
+      )
+      setTableError(missingTemplateError.message)
+      throw missingTemplateError
+    }
+
+    try {
+      const timestamp = new Date().toISOString()
+      const draft = buildManualCandidateDraft(
+        templateCandidate,
+        {
+          entity_name: tag.entity_name,
+          entity_type: tag.entity_type,
+          species: tag.species,
+          topic: tag.topic,
+        },
+        timestamp,
+      )
+
+      const response = await createManualCurationCandidate({
+        session_id: workspace.session.session_id,
+        adapter_key: templateCandidate.adapter_key,
+        profile_key: templateCandidate.profile_key ?? null,
+        source: 'manual',
+        display_label: tag.entity_name.trim(),
+        draft,
+        evidence_anchors: [],
+      })
+      setActiveCandidate(response.candidate.candidate_id)
+      await refreshWorkspace(response.candidate.candidate_id)
+      return response.candidate.candidate_id
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to create this manual entity.'
+      setTableError(message)
+      throw error
+    }
+  }, [activeCandidateId, candidates, refreshWorkspace, setActiveCandidate, workspace.session.session_id])
 
   return (
     <Box
@@ -205,9 +337,13 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      {tableError ? (
+        <Alert severity="error">
+          {tableError}
+        </Alert>
+      ) : null}
+
       <WorkspaceShell
-        editorSlot={editorSlot}
-        evidenceSlot={evidenceSlot}
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
@@ -230,14 +366,19 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        pdfSlot={
-          <PdfViewer
-            onNavigationComplete={evidenceNavigation.acknowledgeNavigation}
-            pendingNavigation={evidenceNavigation.pendingNavigation}
+        pdfSlot={<PdfViewer />}
+        entityTableSlot={(
+          <EntityTagTable
+            tags={entityTags}
+            selectedTagId={activeCandidateId}
+            onSelectTag={handleSelectTag}
+            onAcceptTag={handleAcceptTag}
+            onRejectTag={handleRejectTag}
+            onAcceptAllValidated={handleAcceptAllValidated}
+            onSaveTag={handleSaveTag}
+            onCreateManualTag={handleCreateManualTag}
           />
-        }
-        queueSlot={queueSlot}
-        toolbarSlot={toolbarSlot}
+        )}
       />
 
       <SubmissionPreviewDialog

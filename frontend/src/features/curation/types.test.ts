@@ -167,6 +167,26 @@ describe('curation workspace substrate types', () => {
             warnings: [],
           },
         },
+        entity_tags: [
+          {
+            tag_id: 'candidate-1',
+            entity_name: 'APOE',
+            entity_type: 'ATP:0000005',
+            species: '',
+            topic: '',
+            db_status: 'validated',
+            db_entity_id: 'HGNC:613',
+            source: 'ai',
+            decision: 'accepted',
+            evidence: {
+              sentence_text: 'APOE is associated with the phenotype.',
+              page_number: 2,
+              section_title: 'Results',
+              chunk_ids: ['chunk-1'],
+            },
+            notes: null,
+          },
+        ],
         candidates: [
           {
             candidate_id: 'candidate-1',

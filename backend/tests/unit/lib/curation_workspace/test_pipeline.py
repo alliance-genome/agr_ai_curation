@@ -563,6 +563,7 @@ def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists
     workspace = session_service.get_session_workspace(db_session, result.session_id)
     assert workspace.workspace.session.adapter.adapter_key == REFERENCE_ADAPTER_KEY
     assert workspace.workspace.session.adapter.display_label == "Reference"
+    assert workspace.workspace.entity_tags == []
 
 
 def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_session):

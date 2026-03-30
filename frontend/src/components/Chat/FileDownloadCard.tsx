@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Card,
   CardContent,
@@ -75,6 +75,15 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const resetDownloadCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetDownloadCompleteTimerRef.current !== null) {
+        clearTimeout(resetDownloadCompleteTimerRef.current)
+      }
+    }
+  }, [])
 
   const handleDownload = async () => {
     setIsDownloading(true)
@@ -108,7 +117,13 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
 
       // Show success state briefly
       setDownloadComplete(true)
-      setTimeout(() => setDownloadComplete(false), 2000)
+      if (resetDownloadCompleteTimerRef.current !== null) {
+        clearTimeout(resetDownloadCompleteTimerRef.current)
+      }
+      resetDownloadCompleteTimerRef.current = setTimeout(() => {
+        setDownloadComplete(false)
+        resetDownloadCompleteTimerRef.current = null
+      }, 2000)
     } catch (err) {
       console.error('[FileDownloadCard] Download error:', err)
       setError(err instanceof Error ? err.message : 'Download failed')

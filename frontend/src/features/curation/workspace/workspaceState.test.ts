@@ -35,6 +35,7 @@ function buildWorkspace(): CurationWorkspace {
       session_version: 1,
       extraction_results: [],
     },
+    entity_tags: [],
     candidates: [
       {
         candidate_id: 'candidate-1',
