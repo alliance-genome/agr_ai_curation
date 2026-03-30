@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event'
 import { render, screen, waitFor } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import theme from '@/theme'
@@ -55,44 +55,16 @@ function renderEvidenceCard() {
 }
 
 describe('EvidenceCard', () => {
-  let scrollIntoViewMock: MockInstance
-  let restorePrototypeScrollIntoView: (() => void) | null = null
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+  let scrollIntoViewMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    const hadPrototypeScrollIntoView = Object.prototype.hasOwnProperty.call(
-      HTMLElement.prototype,
-      'scrollIntoView',
-    )
-    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
-
-    if (typeof originalScrollIntoView !== 'function') {
-      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-        configurable: true,
-        writable: true,
-        value: () => {},
-      })
-
-      restorePrototypeScrollIntoView = () => {
-        if (hadPrototypeScrollIntoView) {
-          Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-            configurable: true,
-            writable: true,
-            value: originalScrollIntoView,
-          })
-          return
-        }
-
-        delete HTMLElement.prototype.scrollIntoView
-      }
-    }
-
-    scrollIntoViewMock = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+    scrollIntoViewMock = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
   })
 
   afterEach(() => {
-    scrollIntoViewMock.mockRestore()
-    restorePrototypeScrollIntoView?.()
-    restorePrototypeScrollIntoView = null
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView
     vi.useRealTimers()
   })
   it('renders collapsed by default with the header and entity chips', () => {
