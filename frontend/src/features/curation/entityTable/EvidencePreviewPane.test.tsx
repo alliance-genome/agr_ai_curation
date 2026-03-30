@@ -26,7 +26,12 @@ describe('EvidencePreviewPane', () => {
 
   it('shows the sentence quote for a selected tag', () => {
     render(<EvidencePreviewPane tag={makeTag()} onShowInPdf={vi.fn()} />, { wrapper })
-    expect(screen.getByText(/daf-2 receptor regulates lifespan/)).toBeInTheDocument()
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName.toLowerCase() === 'p'
+        && (element.textContent?.includes('The daf-2 receptor regulates lifespan.') ?? false),
+      ),
+    ).toBeInTheDocument()
   })
 
   it('shows page and section metadata', () => {

@@ -294,6 +294,36 @@ class CurationCandidateSource(str, Enum):
     IMPORTED = "imported"
 
 
+class CurationEntityTypeCode(str, Enum):
+    """ATP entity-type codes shared with the literature UI entity table."""
+
+    GENE = "ATP:0000005"
+    ALLELE = "ATP:0000006"
+    TRANSGENE = "ATP:0000007"
+    STRAIN = "ATP:0000008"
+    GENOTYPE = "ATP:0000009"
+    DISEASE = "ATP:0000010"
+    GO_TERM = "ATP:0000011"
+    MOLECULAR_FUNCTION = "ATP:0000012"
+    BIOLOGICAL_PROCESS = "ATP:0000013"
+    CELLULAR_COMPONENT = "ATP:0000014"
+
+
+class CurationEntityTagSource(str, Enum):
+    """Origin label used by the entity-tag review table."""
+
+    AI = "ai"
+    MANUAL = "manual"
+
+
+class CurationEntityTagDbValidationStatus(str, Enum):
+    """Database validation state displayed in the entity-tag table."""
+
+    VALIDATED = "validated"
+    AMBIGUOUS = "ambiguous"
+    NOT_FOUND = "not_found"
+
+
 class CurationCandidateAction(str, Enum):
     """Mutation actions supported by the candidate-review API surface."""
 
@@ -830,6 +860,52 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     )
 
 
+class CurationEntityTagEvidence(CurationWorkspaceBaseModel):
+    """Sentence-level evidence preview payload for the entity-tag table."""
+
+    sentence_text: str = Field(description="Sentence quote shown in the evidence preview pane")
+    page_number: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="1-based PDF page number for the quote when available",
+    )
+    section_title: Optional[str] = Field(
+        default=None,
+        description="Section label associated with the quote when available",
+    )
+    chunk_ids: list[str] = Field(
+        default_factory=list,
+        description="Resolved chunk identifiers supporting the evidence quote",
+    )
+
+
+class CurationEntityTag(CurationWorkspaceBaseModel):
+    """Literature-UI-aligned entity tag record rendered in the workspace table."""
+
+    tag_id: str = Field(description="Stable entity-tag identifier")
+    entity_name: str = Field(description="Primary display value for the extracted entity")
+    entity_type: CurationEntityTypeCode = Field(description="ATP entity-type code")
+    species: str = Field(description="Species column value, empty when not populated")
+    topic: str = Field(description="Topic column value, empty when not populated")
+    db_status: CurationEntityTagDbValidationStatus = Field(
+        description="Database validation state shown in the table",
+    )
+    db_entity_id: Optional[str] = Field(
+        default=None,
+        description="Resolved Alliance database identifier when validation matched a record",
+    )
+    source: CurationEntityTagSource = Field(description="Whether the row came from AI extraction or manual entry")
+    decision: CurationCandidateStatus = Field(description="Current curator decision for the row")
+    evidence: Optional[CurationEntityTagEvidence] = Field(
+        default=None,
+        description="Sentence-level evidence preview payload when available",
+    )
+    notes: Optional[str] = Field(
+        default=None,
+        description="Draft notes associated with the underlying candidate",
+    )
+
+
 class CurationExportPayloadContext(CurationWorkspaceBaseModel):
     """Deterministic adapter input for export bundles built from approved candidates."""
 
@@ -1246,6 +1322,10 @@ class CurationWorkspace(CurationWorkspaceBaseModel):
     """Hydrated workspace payload consumed by page shells and detail endpoints."""
 
     session: CurationReviewSession = Field(description="Detailed review session payload")
+    entity_tags: list[CurationEntityTag] = Field(
+        default_factory=list,
+        description="Ordered entity-tag rows rendered in the workspace review table",
+    )
     candidates: list[CurationCandidate] = Field(
         default_factory=list,
         description="Ordered candidate queue for the session",
@@ -1962,6 +2042,11 @@ __all__ = [
     "CurationDraft",
     "CurationDraftField",
     "CurationDraftFieldChange",
+    "CurationEntityTag",
+    "CurationEntityTagDbValidationStatus",
+    "CurationEntityTagEvidence",
+    "CurationEntityTagSource",
+    "CurationEntityTypeCode",
     "CurationEvidenceQualityCounts",
     "CurationEvidenceRecord",
     "CurationEvidenceRecomputeRequest",

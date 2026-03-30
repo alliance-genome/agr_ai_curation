@@ -7,52 +7,44 @@ function generateManualTagId(): string {
   return `manual-${Date.now()}-${nextManualId++}`
 }
 
-export function useEntityTagState(initialTags: EntityTag[]) {
-  const [tags, setTags] = useState<EntityTag[]>(initialTags)
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null)
+export function useEntityTagState(
+  tags: EntityTag[],
+  externalSelectedTagId: string | null,
+) {
   const [editingTagId, setEditingTagId] = useState<string | null>(null)
+  const [manualTag, setManualTag] = useState<EntityTag | null>(null)
+  const [manualSelectedTagId, setManualSelectedTagId] = useState<string | null>(null)
 
-  const selectedTag = useMemo(
-    () => tags.find((t) => t.tag_id === selectedTagId) ?? null,
-    [tags, selectedTagId],
+  const displayTags = useMemo(
+    () => (manualTag ? [...tags, manualTag] : tags),
+    [manualTag, tags],
   )
+
+  const selectedTagId = manualSelectedTagId ?? externalSelectedTagId
+
+  const selectedTag = useMemo(() => {
+    if (!selectedTagId) {
+      return null
+    }
+
+    return displayTags.find((tag) => tag.tag_id === selectedTagId) ?? null
+  }, [displayTags, selectedTagId])
 
   const pendingCount = useMemo(
-    () => tags.filter((t) => t.decision === 'pending').length,
-    [tags],
+    () => displayTags.filter((tag) => tag.decision === 'pending').length,
+    [displayTags],
   )
 
-  const selectTag = useCallback((tagId: string) => {
-    setSelectedTagId(tagId)
-  }, [])
-
-  const updateTagDecision = useCallback(
-    (tagId: string, decision: EntityTag['decision']) => {
-      setTags((prev) =>
-        prev.map((t) => (t.tag_id === tagId ? { ...t, decision } : t)),
-      )
-    },
-    [],
+  const validatedPendingCount = useMemo(
+    () =>
+      displayTags.filter(
+        (tag) => tag.decision === 'pending' && tag.db_status === 'validated',
+      ).length,
+    [displayTags],
   )
 
-  const acceptTag = useCallback(
-    (tagId: string) => updateTagDecision(tagId, 'accepted'),
-    [updateTagDecision],
-  )
-
-  const rejectTag = useCallback(
-    (tagId: string) => updateTagDecision(tagId, 'rejected'),
-    [updateTagDecision],
-  )
-
-  const acceptAllValidated = useCallback(() => {
-    setTags((prev) =>
-      prev.map((t) =>
-        t.decision === 'pending' && t.db_status === 'validated'
-          ? { ...t, decision: 'accepted' }
-          : t,
-      ),
-    )
+  const selectTag = useCallback(() => {
+    setManualSelectedTagId(null)
   }, [])
 
   const startEditing = useCallback((tagId: string) => {
@@ -60,24 +52,19 @@ export function useEntityTagState(initialTags: EntityTag[]) {
   }, [])
 
   const cancelEditing = useCallback(() => {
-    setEditingTagId(null)
-  }, [])
+    if (manualTag && editingTagId === manualTag.tag_id) {
+      setManualTag(null)
+      setManualSelectedTagId(null)
+    }
 
-  const saveEdit = useCallback(
-    (tagId: string, updates: Partial<EntityTag>) => {
-      setTags((prev) =>
-        prev.map((t) => (t.tag_id === tagId ? { ...t, ...updates } : t)),
-      )
-      setEditingTagId(null)
-    },
-    [],
-  )
+    setEditingTagId(null)
+  }, [editingTagId, manualTag])
 
   const addManualTag = useCallback(() => {
     const newTag: EntityTag = {
       tag_id: generateManualTagId(),
       entity_name: '',
-      entity_type: 'ATP:0000005',
+      entity_type: '',
       species: '',
       topic: '',
       db_status: 'not_found',
@@ -87,23 +74,23 @@ export function useEntityTagState(initialTags: EntityTag[]) {
       evidence: null,
       notes: null,
     }
-    setTags((prev) => [...prev, newTag])
+
+    setManualTag(newTag)
+    setManualSelectedTagId(newTag.tag_id)
     setEditingTagId(newTag.tag_id)
   }, [])
 
   return {
-    tags,
+    tags: displayTags,
     selectedTagId,
     selectedTag,
     editingTagId,
     pendingCount,
+    validatedPendingCount,
+    manualTag,
     selectTag,
-    acceptTag,
-    rejectTag,
-    acceptAllValidated,
     startEditing,
     cancelEditing,
-    saveEdit,
     addManualTag,
   }
 }

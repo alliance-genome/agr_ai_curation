@@ -28,6 +28,7 @@ import type {
   SubmissionPayloadContract,
   SubmissionTargetKey,
 } from './contracts'
+import type { EntityTag } from '@/features/curation/entityTable/types'
 
 export const CURATION_SESSION_STATUSES = [
   'new',
@@ -491,6 +492,7 @@ export interface CurationReviewSession extends CurationSessionSummary {
 
 export interface CurationWorkspace {
   session: CurationReviewSession
+  entity_tags: EntityTag[]
   candidates: CurationCandidate[]
   active_candidate_id?: string | null
   queue_context?: CurationQueueContext | null

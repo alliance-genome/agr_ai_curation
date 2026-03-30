@@ -63,6 +63,11 @@ from src.schemas.curation_workspace import (
     CurationDraft as CurationDraftPayload,
     CurationDraftField as CurationDraftFieldSchema,
     CurationDocumentRef,
+    CurationEntityTag as CurationEntityTagPayload,
+    CurationEntityTagDbValidationStatus,
+    CurationEntityTagEvidence as CurationEntityTagEvidencePayload,
+    CurationEntityTagSource,
+    CurationEntityTypeCode,
     CurationEvidenceRecord as CurationEvidenceRecordPayload,
     CurationEvidenceSource,
     CurationEvidenceSummary,
@@ -112,6 +117,7 @@ from src.schemas.curation_workspace import (
     CurationWorkspace as CurationWorkspacePayload,
     CurationWorkspaceResponse,
     EvidenceAnchor,
+    FieldValidationStatus,
     FieldValidationResult,
     SubmissionDomainAdapter,
     SubmissionMode,
@@ -146,6 +152,11 @@ CANDIDATE_DETAIL_LOAD_OPTIONS = (
 )
 
 logger = logging.getLogger(__name__)
+
+ENTITY_FIELD_KEYS = ("entity_name", "gene_symbol")
+ENTITY_TYPE_FIELD_KEYS = ("entity_type", "entity_type_code", "entity_type_atp_code")
+SPECIES_FIELD_KEYS = ("species", "taxon", "taxon_id")
+TOPIC_FIELD_KEYS = ("topic", "topic_name", "topic_term", "topic_curie")
 
 
 @lru_cache(maxsize=1)
@@ -1107,6 +1118,241 @@ def _candidate_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceR
     )
 
 
+def _normalize_entity_field_key(value: str) -> str:
+    return value.strip().lower()
+
+
+def _matches_entity_field(
+    field: CurationDraftFieldSchema,
+    accepted_keys: Sequence[str],
+) -> bool:
+    field_key = _normalize_entity_field_key(field.field_key)
+    field_label = _normalize_entity_field_key(field.label)
+    return any(
+        field_key == _normalize_entity_field_key(accepted_key)
+        or field_label == _normalize_entity_field_key(accepted_key)
+        for accepted_key in accepted_keys
+    )
+
+
+def _find_entity_field(
+    fields: Sequence[CurationDraftFieldSchema],
+    accepted_keys: Sequence[str],
+) -> CurationDraftFieldSchema | None:
+    for field in fields:
+        if _matches_entity_field(field, accepted_keys):
+            return field
+    return None
+
+
+def _read_required_entity_string(
+    field: CurationDraftFieldSchema,
+    candidate_id: str,
+) -> str:
+    if not isinstance(field.value, str) or not field.value.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate_id} is missing a required string value "
+                f"for {field.field_key} in the entity-tag payload"
+            ),
+        )
+
+    return field.value.strip()
+
+
+def _read_optional_entity_string(
+    field: CurationDraftFieldSchema | None,
+    candidate_id: str,
+) -> str:
+    if field is None or field.value is None:
+        return ""
+
+    if not isinstance(field.value, str):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate_id} has a non-string value "
+                f"for {field.field_key} in the entity-tag payload"
+            ),
+        )
+
+    return field.value.strip()
+
+
+def _resolve_entity_name_field(candidate: CurationCandidatePayload) -> CurationDraftFieldSchema:
+    entity_field = _find_entity_field(candidate.draft.fields, ENTITY_FIELD_KEYS)
+    if entity_field is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate.candidate_id} is missing an entity-name field "
+                "required for the entity-tag payload"
+            ),
+        )
+
+    return entity_field
+
+
+def _entity_type_code(
+    candidate: CurationCandidatePayload,
+    entity_field: CurationDraftFieldSchema,
+) -> CurationEntityTypeCode:
+    type_field = _find_entity_field(candidate.draft.fields, ENTITY_TYPE_FIELD_KEYS)
+    if type_field is not None and type_field.value is not None:
+        if not isinstance(type_field.value, str):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Curation candidate {candidate.candidate_id} has a non-string entity type "
+                    "value in the entity-tag payload"
+                ),
+            )
+
+        try:
+            return CurationEntityTypeCode(type_field.value.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Curation candidate {candidate.candidate_id} has unsupported entity type "
+                    f"code {type_field.value!r} in the entity-tag payload"
+                ),
+            ) from exc
+
+    if _normalize_entity_field_key(entity_field.field_key) == "gene_symbol":
+        return CurationEntityTypeCode.GENE
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=(
+            f"Curation candidate {candidate.candidate_id} is missing an entity type "
+            "required for the entity-tag payload"
+        ),
+    )
+
+
+def _entity_db_status(
+    candidate: CurationCandidatePayload,
+    entity_field: CurationDraftFieldSchema,
+) -> CurationEntityTagDbValidationStatus:
+    field_status = entity_field.validation_result.status if entity_field.validation_result else None
+    if field_status is FieldValidationStatus.VALIDATED:
+        return CurationEntityTagDbValidationStatus.VALIDATED
+    if field_status is FieldValidationStatus.AMBIGUOUS:
+        return CurationEntityTagDbValidationStatus.AMBIGUOUS
+    if field_status is FieldValidationStatus.NOT_FOUND:
+        return CurationEntityTagDbValidationStatus.NOT_FOUND
+    if field_status is not None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate.candidate_id} has unsupported validation status "
+                f"{field_status.value!r} for the entity-tag payload"
+            ),
+        )
+
+    summary = candidate.validation
+    if summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate.candidate_id} is missing validation data "
+                "required for the entity-tag payload"
+            ),
+        )
+
+    if summary.counts.not_found > 0 or summary.counts.invalid_format > 0:
+        return CurationEntityTagDbValidationStatus.NOT_FOUND
+    if summary.counts.ambiguous > 0 or summary.counts.conflict > 0:
+        return CurationEntityTagDbValidationStatus.AMBIGUOUS
+    if summary.counts.validated > 0:
+        return CurationEntityTagDbValidationStatus.VALIDATED
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=(
+            f"Curation candidate {candidate.candidate_id} does not have a usable validation "
+            "status for the entity-tag payload"
+        ),
+    )
+
+
+def _entity_db_identifier(entity_field: CurationDraftFieldSchema) -> str | None:
+    validation_result = entity_field.validation_result
+    if validation_result is None or not validation_result.candidate_matches:
+        return None
+
+    identifier = validation_result.candidate_matches[0].identifier
+    if not isinstance(identifier, str) or not identifier.strip():
+        return None
+
+    return identifier.strip()
+
+
+def _entity_evidence(
+    candidate: CurationCandidatePayload,
+) -> CurationEntityTagEvidencePayload | None:
+    primary_evidence = next(
+        (anchor for anchor in candidate.evidence_anchors if anchor.is_primary),
+        None,
+    )
+    evidence_record = primary_evidence or (candidate.evidence_anchors[0] if candidate.evidence_anchors else None)
+    if evidence_record is None:
+        return None
+
+    anchor = evidence_record.anchor
+    sentence_text = None
+    if isinstance(anchor.sentence_text, str) and anchor.sentence_text.strip():
+        sentence_text = anchor.sentence_text.strip()
+    elif isinstance(anchor.snippet_text, str) and anchor.snippet_text.strip():
+        sentence_text = anchor.snippet_text.strip()
+
+    if sentence_text is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Curation candidate {candidate.candidate_id} has evidence without sentence or "
+                "snippet text required for the entity-tag payload"
+            ),
+        )
+
+    return CurationEntityTagEvidencePayload(
+        sentence_text=sentence_text,
+        page_number=anchor.page_number,
+        section_title=anchor.section_title,
+        chunk_ids=list(anchor.chunk_ids or []),
+    )
+
+
+def _entity_tag_payload(candidate: CurationCandidatePayload) -> CurationEntityTagPayload:
+    entity_field = _resolve_entity_name_field(candidate)
+
+    return CurationEntityTagPayload(
+        tag_id=candidate.candidate_id,
+        entity_name=_read_required_entity_string(entity_field, candidate.candidate_id),
+        entity_type=_entity_type_code(candidate, entity_field),
+        species=_read_optional_entity_string(
+            _find_entity_field(candidate.draft.fields, SPECIES_FIELD_KEYS),
+            candidate.candidate_id,
+        ),
+        topic=_read_optional_entity_string(
+            _find_entity_field(candidate.draft.fields, TOPIC_FIELD_KEYS),
+            candidate.candidate_id,
+        ),
+        db_status=_entity_db_status(candidate, entity_field),
+        db_entity_id=_entity_db_identifier(entity_field),
+        source=(
+            CurationEntityTagSource.MANUAL
+            if candidate.source is CurationCandidateSource.MANUAL
+            else CurationEntityTagSource.AI
+        ),
+        decision=candidate.status,
+        evidence=_entity_evidence(candidate),
+        notes=candidate.draft.notes,
+    )
+
+
 def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload:
     evidence_records = [
         _candidate_evidence_record(record)
@@ -1367,9 +1613,11 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
 
     session = sessions[0]
     document_map, user_map = _session_context_maps(db, [session])
+    candidate_payloads = [_candidate_payload(candidate) for candidate in session.candidates]
     workspace = CurationWorkspacePayload(
         session=_session_detail(db, session, document_map, user_map),
-        candidates=[_candidate_payload(candidate) for candidate in session.candidates],
+        entity_tags=[_entity_tag_payload(candidate) for candidate in candidate_payloads],
+        candidates=candidate_payloads,
         active_candidate_id=(
             str(session.current_candidate_id)
             if session.current_candidate_id is not None

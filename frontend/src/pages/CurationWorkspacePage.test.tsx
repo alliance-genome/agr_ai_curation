@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +17,7 @@ const serviceMocks = vi.hoisted(() => ({
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
+  validateCurationCandidate: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
@@ -26,6 +27,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
+  validateCurationCandidate: serviceMocks.validateCurationCandidate,
 }))
 
 vi.mock('@/components/pdfViewer/pdfEvents', async () => {
@@ -80,6 +82,39 @@ function buildWorkspace(): CurationWorkspace {
       session_version: 1,
       extraction_results: [],
     },
+    entity_tags: [
+      {
+        tag_id: 'candidate-accepted',
+        entity_name: 'BRCA1',
+        entity_type: 'ATP:0000005',
+        species: '',
+        topic: '',
+        db_status: 'validated',
+        db_entity_id: 'HGNC:1100',
+        source: 'ai',
+        decision: 'accepted',
+        evidence: null,
+        notes: null,
+      },
+      {
+        tag_id: 'candidate-pending',
+        entity_name: 'APOE',
+        entity_type: 'ATP:0000005',
+        species: '',
+        topic: '',
+        db_status: 'ambiguous',
+        db_entity_id: 'HGNC:613',
+        source: 'manual',
+        decision: 'pending',
+        evidence: {
+          sentence_text: 'APOE evidence sentence',
+          page_number: 3,
+          section_title: 'Results',
+          chunk_ids: ['chunk-1'],
+        },
+        notes: null,
+      },
+    ],
     candidates: [
       {
         candidate_id: 'candidate-accepted',
@@ -110,12 +145,37 @@ function buildWorkspace(): CurationWorkspace {
               dirty: false,
               stale_validation: false,
               evidence_anchor_ids: [],
+              validation_result: {
+                status: 'validated',
+                resolver: 'agr_db',
+                candidate_matches: [
+                  {
+                    label: 'BRCA1',
+                    identifier: 'HGNC:1100',
+                  },
+                ],
+                warnings: [],
+              },
               metadata: {},
             },
           ],
           created_at: '2026-03-20T12:01:00Z',
           updated_at: '2026-03-20T12:02:00Z',
           metadata: {},
+        },
+        validation: {
+          state: 'completed',
+          counts: {
+            validated: 1,
+            ambiguous: 0,
+            not_found: 0,
+            invalid_format: 0,
+            conflict: 0,
+            skipped: 0,
+            overridden: 0,
+          },
+          stale_field_keys: [],
+          warnings: [],
         },
         evidence_anchors: [],
         created_at: '2026-03-20T12:01:00Z',
@@ -139,8 +199,8 @@ function buildWorkspace(): CurationWorkspace {
           title: 'Pending candidate draft',
           fields: [
             {
-              field_key: 'field_a',
-              label: 'Primary term',
+              field_key: 'gene_symbol',
+              label: 'Gene symbol',
               value: 'APOE',
               seed_value: 'APOE',
               field_type: 'string',
@@ -152,6 +212,17 @@ function buildWorkspace(): CurationWorkspace {
               dirty: false,
               stale_validation: false,
               evidence_anchor_ids: ['anchor-1'],
+              validation_result: {
+                status: 'ambiguous',
+                resolver: 'agr_db',
+                candidate_matches: [
+                  {
+                    label: 'APOE',
+                    identifier: 'HGNC:613',
+                  },
+                ],
+                warnings: ['Multiple matches'],
+              },
               metadata: {},
             },
           ],
@@ -159,12 +230,26 @@ function buildWorkspace(): CurationWorkspace {
           updated_at: '2026-03-20T12:04:00Z',
           metadata: {},
         },
+        validation: {
+          state: 'completed',
+          counts: {
+            validated: 0,
+            ambiguous: 1,
+            not_found: 0,
+            invalid_format: 0,
+            conflict: 0,
+            skipped: 0,
+            overridden: 0,
+          },
+          stale_field_keys: [],
+          warnings: [],
+        },
         evidence_anchors: [
           {
             anchor_id: 'anchor-1',
             candidate_id: 'candidate-pending',
             source: 'manual',
-            field_keys: ['field_a'],
+            field_keys: ['gene_symbol'],
             field_group_keys: ['primary'],
             is_primary: true,
             anchor: {
@@ -255,6 +340,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
+    serviceMocks.validateCurationCandidate.mockReset()
   })
 
   afterEach(() => {
@@ -262,7 +348,7 @@ describe('CurationWorkspacePage', () => {
     vi.clearAllMocks()
   })
 
-  it('renders the entity tag table with workspace candidates', async () => {
+  it('renders backend-provided entity tag rows from the workspace payload', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -280,8 +366,10 @@ describe('CurationWorkspacePage', () => {
     ).toBeInTheDocument()
     expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
 
-    expect(screen.getByText('Accepted candidate')).toBeInTheDocument()
-    expect(screen.getByText('Pending candidate')).toBeInTheDocument()
+    expect(screen.getAllByText('BRCA1').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
+    expect(screen.getByText('validated')).toBeInTheDocument()
+    expect(screen.getByText('ambiguous')).toBeInTheDocument()
   })
 
   it('renders the workspace header with document info', async () => {
@@ -312,6 +400,98 @@ describe('CurationWorkspacePage', () => {
         5,
         undefined,
       )
+    })
+  })
+
+  it('restores the route-selected entity row into the evidence pane', async () => {
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(
+        screen.getByText((_, element) =>
+          element?.tagName.toLowerCase() === 'p' &&
+          (element.textContent?.includes('APOE evidence sentence') ?? false),
+        ),
+      ).toBeInTheDocument()
+    })
+
+    expect(screen.getByText(/Evidence for/i)).toBeInTheDocument()
+    expect(screen.getByText('Show in PDF')).toBeInTheDocument()
+  })
+
+  it('submits inline accept actions through the workspace decision service', async () => {
+    const workspace = buildWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: workspace.candidates.map((candidate) =>
+        candidate.candidate_id === 'candidate-pending'
+          ? {
+              ...candidate,
+              status: 'accepted',
+            }
+          : candidate,
+      ),
+      entity_tags: workspace.entity_tags.map((tag) =>
+        tag.tag_id === 'candidate-pending'
+          ? {
+              ...tag,
+              decision: 'accepted',
+            }
+          : tag,
+      ),
+    }
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
+      candidate: {
+        ...workspace.candidates[1],
+        status: 'accepted',
+      },
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      next_candidate_id: null,
+      action_log_entry: {
+        action_id: 'action-1',
+        session_id: workspace.session.session_id,
+        candidate_id: 'candidate-pending',
+        action_type: 'candidate_accepted',
+        actor_type: 'user',
+        occurred_at: '2026-03-30T12:00:00Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByText('APOE')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+        action: 'accept',
+        advance_queue: false,
+      })
+      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     })
   })
 

@@ -826,6 +826,10 @@ def test_get_review_session_include_workspace_returns_hydrated_workspace_payload
     assert payload["workspace"]["saved_view_context"] is None
     assert payload["workspace"]["action_log"] == []
     assert payload["workspace"]["submission_history"][0]["status"] == "preview_ready"
+    assert payload["workspace"]["entity_tags"][0]["tag_id"] == payload["workspace"]["active_candidate_id"]
+    assert payload["workspace"]["entity_tags"][0]["entity_name"] == "BETA1"
+    assert payload["workspace"]["entity_tags"][0]["entity_type"] == "ATP:0000005"
+    assert payload["workspace"]["entity_tags"][0]["source"] == "ai"
 
     candidate = payload["workspace"]["candidates"][0]
     assert candidate["candidate_id"] == payload["workspace"]["active_candidate_id"]

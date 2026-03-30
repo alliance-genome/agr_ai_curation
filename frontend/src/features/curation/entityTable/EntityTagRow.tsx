@@ -2,7 +2,11 @@ import { Button, Chip, IconButton, TableCell, TableRow, Typography } from '@mui/
 import EditIcon from '@mui/icons-material/Edit'
 import { alpha, useTheme } from '@mui/material/styles'
 import type { EntityTag } from './types'
-import { ENTITY_TYPE_LABELS, type EntityTypeCode } from './types'
+import {
+  ENTITY_TYPE_LABELS,
+  type DbValidationStatus,
+  type EntityTypeCode,
+} from './types'
 
 interface EntityTagRowProps {
   tag: EntityTag
@@ -13,10 +17,24 @@ interface EntityTagRowProps {
   onEdit: (tagId: string) => void
 }
 
-const DB_STATUS_COLOR: Record<string, 'success' | 'warning' | 'error'> = {
+const DB_STATUS_COLOR: Record<DbValidationStatus, 'success' | 'warning' | 'error'> = {
   validated: 'success',
   ambiguous: 'warning',
   not_found: 'error',
+}
+
+const DB_STATUS_LABELS: Record<DbValidationStatus, string> = {
+  validated: 'validated',
+  ambiguous: 'ambiguous',
+  not_found: 'not found',
+}
+
+function getEntityTypeLabel(entityType: string): string {
+  if (!(entityType in ENTITY_TYPE_LABELS)) {
+    throw new Error(`Unknown entity type code ${entityType}.`)
+  }
+
+  return ENTITY_TYPE_LABELS[entityType as EntityTypeCode]
 }
 
 export default function EntityTagRow({
@@ -44,19 +62,19 @@ export default function EntityTagRow({
 
   const cellSx = { py: 0.75, px: 1, fontSize: '0.75rem' }
 
-  const typeLabel = ENTITY_TYPE_LABELS[tag.entity_type as EntityTypeCode] ?? tag.entity_type
+  const typeLabel = getEntityTypeLabel(tag.entity_type)
 
   return (
-    <TableRow hover onClick={() => onSelect(tag.tag_id)} selected={isSelected} sx={rowSx}>
+    <TableRow onClick={() => onSelect(tag.tag_id)} selected={isSelected} sx={rowSx}>
       <TableCell sx={{ ...cellSx, fontWeight: 600 }}>{tag.entity_name}</TableCell>
       <TableCell sx={cellSx}>{typeLabel}</TableCell>
       <TableCell sx={{ ...cellSx, fontStyle: 'italic' }}>{tag.species}</TableCell>
       <TableCell sx={cellSx}>{tag.topic}</TableCell>
       <TableCell sx={cellSx}>
         <Chip
-          label={tag.db_status}
+          label={DB_STATUS_LABELS[tag.db_status]}
           size="small"
-          color={DB_STATUS_COLOR[tag.db_status] ?? 'default'}
+          color={DB_STATUS_COLOR[tag.db_status]}
           variant="outlined"
           sx={{ fontSize: '0.65rem', height: 20 }}
         />

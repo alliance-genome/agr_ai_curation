@@ -3,6 +3,7 @@ import { Box, Button, Chip, Typography } from '@mui/material'
 interface EntityTagToolbarProps {
   totalCount: number
   pendingCount: number
+  validatedPendingCount: number
   onAcceptAllValidated: () => void
   onAddEntity: () => void
 }
@@ -10,6 +11,7 @@ interface EntityTagToolbarProps {
 export default function EntityTagToolbar({
   totalCount,
   pendingCount,
+  validatedPendingCount,
   onAcceptAllValidated,
   onAddEntity,
 }: EntityTagToolbarProps) {
@@ -42,7 +44,7 @@ export default function EntityTagToolbar({
           size="small"
           variant="outlined"
           color="success"
-          disabled={pendingCount === 0}
+          disabled={validatedPendingCount === 0}
           onClick={onAcceptAllValidated}
           sx={{ fontSize: '0.65rem', textTransform: 'none' }}
         >

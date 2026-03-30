@@ -11,7 +11,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 describe('EntityTagToolbar', () => {
   it('shows total and pending counts', () => {
     render(
-      <EntityTagToolbar totalCount={5} pendingCount={2} onAcceptAllValidated={vi.fn()} onAddEntity={vi.fn()} />,
+      <EntityTagToolbar totalCount={5} pendingCount={2} validatedPendingCount={1} onAcceptAllValidated={vi.fn()} onAddEntity={vi.fn()} />,
       { wrapper },
     )
     expect(screen.getByText(/5 entities/)).toBeInTheDocument()
@@ -21,7 +21,7 @@ describe('EntityTagToolbar', () => {
   it('calls onAcceptAllValidated when button is clicked', () => {
     const onAcceptAllValidated = vi.fn()
     render(
-      <EntityTagToolbar totalCount={5} pendingCount={2} onAcceptAllValidated={onAcceptAllValidated} onAddEntity={vi.fn()} />,
+      <EntityTagToolbar totalCount={5} pendingCount={2} validatedPendingCount={1} onAcceptAllValidated={onAcceptAllValidated} onAddEntity={vi.fn()} />,
       { wrapper },
     )
     fireEvent.click(screen.getByRole('button', { name: /Accept All Validated/ }))
@@ -31,7 +31,7 @@ describe('EntityTagToolbar', () => {
   it('calls onAddEntity when button is clicked', () => {
     const onAddEntity = vi.fn()
     render(
-      <EntityTagToolbar totalCount={5} pendingCount={2} onAcceptAllValidated={vi.fn()} onAddEntity={onAddEntity} />,
+      <EntityTagToolbar totalCount={5} pendingCount={2} validatedPendingCount={1} onAcceptAllValidated={vi.fn()} onAddEntity={onAddEntity} />,
       { wrapper },
     )
     fireEvent.click(screen.getByRole('button', { name: /Add Entity/ }))
@@ -40,7 +40,7 @@ describe('EntityTagToolbar', () => {
 
   it('disables accept all when no pending tags', () => {
     render(
-      <EntityTagToolbar totalCount={3} pendingCount={0} onAcceptAllValidated={vi.fn()} onAddEntity={vi.fn()} />,
+      <EntityTagToolbar totalCount={3} pendingCount={1} validatedPendingCount={0} onAcceptAllValidated={vi.fn()} onAddEntity={vi.fn()} />,
       { wrapper },
     )
     expect(screen.getByRole('button', { name: /Accept All Validated/ })).toBeDisabled()

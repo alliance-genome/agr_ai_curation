@@ -7,6 +7,32 @@ interface EvidencePreviewPaneProps {
   onShowInPdf: (tag: EntityTag) => void
 }
 
+function renderQuotedSentence(tag: EntityTag) {
+  if (!tag.evidence) {
+    throw new Error(`Tag ${tag.tag_id} is missing evidence for quote rendering.`)
+  }
+
+  const sentence = tag.evidence.sentence_text
+  if (tag.entity_name.trim().length === 0) {
+    return sentence
+  }
+
+  const matchIndex = sentence.toLowerCase().indexOf(tag.entity_name.toLowerCase())
+  if (matchIndex < 0) {
+    return sentence
+  }
+
+  const matchEnd = matchIndex + tag.entity_name.length
+
+  return (
+    <>
+      {sentence.slice(0, matchIndex)}
+      <strong>{sentence.slice(matchIndex, matchEnd)}</strong>
+      {sentence.slice(matchEnd)}
+    </>
+  )
+}
+
 export default function EvidencePreviewPane({ tag, onShowInPdf }: EvidencePreviewPaneProps) {
   const theme = useTheme()
 
@@ -27,7 +53,9 @@ export default function EvidencePreviewPane({ tag, onShowInPdf }: EvidencePrevie
           Evidence for <strong>{tag.entity_name}</strong>
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          No AI evidence — manually added.
+          {tag.source === 'manual'
+            ? 'No AI evidence — manually added.'
+            : 'No evidence is available for this entity.'}
         </Typography>
       </Box>
     )
@@ -59,7 +87,7 @@ export default function EvidencePreviewPane({ tag, onShowInPdf }: EvidencePrevie
         }}
       >
         <Typography variant="body2" sx={{ lineHeight: 1.6, fontSize: '0.8rem' }}>
-          &ldquo;{tag.evidence.sentence_text}&rdquo;
+          &ldquo;{renderQuotedSentence(tag)}&rdquo;
         </Typography>
       </Box>
 

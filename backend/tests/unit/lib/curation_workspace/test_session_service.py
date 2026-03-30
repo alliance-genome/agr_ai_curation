@@ -660,6 +660,124 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
     assert exc.value.detail == "Manual candidate creation only supports source=manual"
 
 
+def test_get_session_workspace_includes_backend_entity_tags(db_session):
+    document = _create_document(db_session)
+    now = _now()
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=CurationSessionStatus.IN_PROGRESS,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        document_id=document.id,
+        session_version=1,
+        total_candidates=1,
+        reviewed_candidates=0,
+        pending_candidates=1,
+        accepted_candidates=0,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(session_row)
+    db_session.flush()
+
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        display_label="Gene candidate",
+        candidate_metadata={},
+        normalized_payload={},
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(candidate)
+    db_session.flush()
+
+    db_session.add(
+        DraftModel(
+            id=uuid4(),
+            candidate_id=candidate.id,
+            adapter_key="reference_adapter",
+            version=1,
+            title="Gene draft",
+            fields=[
+                {
+                    "field_key": "gene_symbol",
+                    "label": "Gene symbol",
+                    "value": "APOE",
+                    "seed_value": "APOE",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "validation_result": {
+                        "status": "validated",
+                        "resolver": "agr_db",
+                        "candidate_matches": [
+                            {
+                                "label": "APOE",
+                                "identifier": "HGNC:613",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "metadata": {},
+                }
+            ],
+            notes="Gene note",
+            created_at=now,
+            updated_at=now,
+            draft_metadata={},
+        )
+    )
+    db_session.add(
+        EvidenceRecordModel(
+            id=uuid4(),
+            candidate_id=candidate.id,
+            source=CurationEvidenceSource.EXTRACTED,
+            field_keys=["gene_symbol"],
+            field_group_keys=["primary"],
+            is_primary=True,
+            anchor={
+                "anchor_kind": "snippet",
+                "locator_quality": "exact_quote",
+                "supports_decision": "supports",
+                "sentence_text": "APOE evidence sentence",
+                "snippet_text": "APOE evidence sentence",
+                "page_number": 3,
+                "section_title": "Results",
+                "chunk_ids": ["chunk-1"],
+            },
+            warnings=[],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    session_row.current_candidate_id = candidate.id
+    db_session.commit()
+
+    response = module.get_session_workspace(db_session, str(session_row.id))
+
+    assert response.workspace.entity_tags[0].tag_id == str(candidate.id)
+    assert response.workspace.entity_tags[0].entity_name == "APOE"
+    assert response.workspace.entity_tags[0].entity_type == "ATP:0000005"
+    assert response.workspace.entity_tags[0].db_status == "validated"
+    assert response.workspace.entity_tags[0].db_entity_id == "HGNC:613"
+    assert response.workspace.entity_tags[0].source == "ai"
+    assert response.workspace.entity_tags[0].evidence is not None
+    assert response.workspace.entity_tags[0].evidence.sentence_text == "APOE evidence sentence"
+
+
 def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_sessions(db_session):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(
