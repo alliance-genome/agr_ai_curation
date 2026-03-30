@@ -13,8 +13,6 @@ def _make_extraction_result(
     *,
     candidate_count: int = 2,
     adapter_key: str | None = "reference_adapter",
-    profile_key: str | None = "pilot",
-    domain_key: str | None = "observation",
     agent_key: str = "observation_extractor",
     payload_json: dict | None = None,
     metadata: dict | None = None,
@@ -24,8 +22,6 @@ def _make_extraction_result(
             "extraction_result_id": "extract-1",
             "document_id": "document-1",
             "adapter_key": adapter_key,
-            "profile_key": profile_key,
-            "domain_key": domain_key,
             "agent_key": agent_key,
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": "session-1",
@@ -78,7 +74,6 @@ def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
             "candidates": [
                 {
                     "adapter_key": "observation",
-                    "profile_key": "pilot",
                     "payload": {
                         "label": f"Candidate {index + 1}",
                         "entity_type": "observation",
@@ -155,11 +150,9 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.extraction_result_count == 1
     assert preview.conversation_message_count == 0
     assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.domain_keys == ["observation"]
     assert preview.blocking_reasons == []
     assert "You discussed 2 candidate annotations" in preview.summary_text
     assert "reference adapter" in preview.summary_text
-    assert "observation domain" in preview.summary_text
 
 
 def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch):
@@ -189,8 +182,6 @@ def test_build_chat_curation_prep_preview_blocks_when_adapter_scope_is_missing(m
             _make_extraction_result(
                 candidate_count=4,
                 adapter_key=None,
-                profile_key=None,
-                domain_key=None,
                 payload_json={
                     "items": [
                         {
@@ -215,11 +206,38 @@ def test_build_chat_curation_prep_preview_blocks_when_adapter_scope_is_missing(m
 
     assert preview.ready is False
     assert preview.adapter_keys == []
-    assert preview.domain_keys == ["observation"]
     assert preview.blocking_reasons == [
         "The current chat extraction results do not include adapter scope, so prep cannot determine what to prepare."
     ]
     assert preview.summary_text == preview.blocking_reasons[0]
+
+
+def test_build_chat_curation_prep_preview_blocks_when_multiple_adapters_are_present(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _make_extraction_result(adapter_key="gene"),
+            _make_extraction_result(
+                adapter_key="disease",
+                agent_key="disease_extractor",
+            ),
+        ],
+    )
+
+    preview = module.build_chat_curation_prep_preview(
+        session_id="session-1",
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert preview.ready is False
+    assert preview.adapter_keys == ["gene", "disease"]
+    assert preview.blocking_reasons == [
+        "This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review."
+    ]
 
 
 @pytest.mark.asyncio
@@ -256,12 +274,8 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
     assert result.document_id == "document-1"
     assert result.candidate_count == 2
     assert result.adapter_keys == ["reference_adapter"]
-    assert result.profile_keys == ["pilot"]
-    assert result.domain_keys == ["observation"]
     assert len(captured["extraction_results"]) == 1
     assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
-    assert captured["scope_confirmation"].profile_keys == ["pilot"]
-    assert captured["scope_confirmation"].domain_keys == ["observation"]
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
 
@@ -275,8 +289,6 @@ async def test_run_chat_curation_prep_blocks_when_adapter_scope_is_missing(monke
             _make_extraction_result(
                 candidate_count=4,
                 adapter_key=None,
-                profile_key=None,
-                domain_key=None,
                 payload_json={
                     "items": [
                         {
@@ -304,3 +316,42 @@ async def test_run_chat_curation_prep_blocks_when_adapter_scope_is_missing(monke
             user_id="user-1",
             db=object(),
         )
+
+
+@pytest.mark.asyncio
+async def test_run_chat_curation_prep_allows_explicit_adapter_narrowing(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        module,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _make_extraction_result(adapter_key="gene"),
+            _make_extraction_result(
+                adapter_key="disease",
+                agent_key="disease_extractor",
+            ),
+        ],
+    )
+
+    async def _fake_run_curation_prep(
+        extraction_results,
+        *,
+        scope_confirmation,
+        db=None,
+        persistence_context=None,
+    ):
+        captured["extraction_results"] = extraction_results
+        captured["scope_confirmation"] = scope_confirmation
+        return _make_prep_output(candidate_count=1)
+
+    monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
+
+    result = await module.run_chat_curation_prep(
+        CurationPrepChatRunRequest(session_id="session-1", adapter_keys=["gene"]),
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert result.adapter_keys == ["gene"]
+    assert captured["scope_confirmation"].adapter_keys == ["gene"]

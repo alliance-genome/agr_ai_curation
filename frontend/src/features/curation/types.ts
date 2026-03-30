@@ -180,9 +180,7 @@ export interface CurationActorRef {
 
 export interface CurationAdapterRef {
   adapter_key: string
-  profile_key?: string | null
   display_label?: string | null
-  profile_label?: string | null
   color_token?: string | null
   metadata: Record<string, unknown>
 }
@@ -333,7 +331,6 @@ export interface CurationCandidate {
   status: CurationCandidateStatus
   order: number
   adapter_key: string
-  profile_key?: string | null
   display_label?: string | null
   secondary_label?: string | null
   conversation_summary?: string | null
@@ -371,8 +368,6 @@ export interface CurationActionLogEntry {
 export interface CurationSessionFilters {
   statuses?: CurationSessionStatus[]
   adapter_keys?: string[]
-  profile_keys?: string[]
-  domain_keys?: string[]
   curator_ids?: string[]
   tags?: string[]
   flow_run_id?: string | null
@@ -447,8 +442,6 @@ export interface CurationExtractionResultRecord {
   extraction_result_id: string
   document_id: string
   adapter_key?: string | null
-  profile_key?: string | null
-  domain_key?: string | null
   agent_key: string
   source_kind: CurationExtractionSourceKind
   origin_session_id?: string | null
@@ -503,7 +496,7 @@ export interface CurationWorkspace {
 
 export interface CurationSessionStats {
   total_sessions: number
-  domain_count: number
+  adapter_count: number
   new_sessions: number
   in_progress_sessions: number
   ready_for_submission_sessions: number
@@ -612,7 +605,6 @@ export interface CurationWorkspaceResponse {
 export interface CurationSessionCreateRequest {
   document_id: string
   adapter_key: string
-  profile_key?: string | null
   curator_id?: string | null
   seed_extraction_result_ids?: string[]
   notes?: string | null
@@ -625,8 +617,6 @@ export interface CurationSessionCreateResponse {
 
 export interface CurationDocumentBootstrapRequest {
   adapter_key?: string | null
-  profile_key?: string | null
-  domain_key?: string | null
   flow_run_id?: string | null
   origin_session_id?: string | null
   curator_id?: string | null
@@ -695,7 +685,6 @@ export interface CurationCandidateDecisionResponse {
 export interface CurationManualCandidateCreateRequest {
   session_id: string
   adapter_key: string
-  profile_key?: string | null
   source?: CurationCandidateSource
   display_label?: string | null
   draft: CurationDraft
@@ -816,9 +805,7 @@ export interface CurationExtractionPersistenceRequest {
   document_id: string
   agent_key: string
   source_kind: CurationExtractionSourceKind
-  adapter_key?: string | null
-  profile_key?: string | null
-  domain_key?: string | null
+  adapter_key: string
   origin_session_id?: string | null
   trace_id?: string | null
   flow_run_id?: string | null

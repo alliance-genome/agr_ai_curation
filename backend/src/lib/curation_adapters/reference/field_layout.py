@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
-REFERENCE_ADAPTER_KEY = "reference"
+REFERENCE_ADAPTER_KEY = "reference_adapter"
 
 REFERENCE_TYPE_OPTIONS = (
     {"label": "Journal article", "value": "journal_article"},
@@ -172,4 +172,3 @@ REFERENCE_FIELD_DEFINITIONS = (
 REFERENCE_FIELD_DEFINITIONS_BY_KEY = {
     field.field_key: field for field in REFERENCE_FIELD_DEFINITIONS
 }
-

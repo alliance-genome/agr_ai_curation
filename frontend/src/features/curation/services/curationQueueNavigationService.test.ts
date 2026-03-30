@@ -17,8 +17,6 @@ describe('curationQueueNavigationService', () => {
       filters: {
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
-        profile_keys: ['alpha'],
-        domain_keys: [],
         curator_ids: ['curator-1'],
         tags: ['priority'],
         flow_run_id: 'flow-1',
@@ -42,7 +40,6 @@ describe('curationQueueNavigationService', () => {
     expect(params.get('direction')).toBe('previous')
     expect(params.getAll('status')).toEqual(['in_progress'])
     expect(params.getAll('adapter_key')).toEqual(['gene'])
-    expect(params.getAll('profile_key')).toEqual(['alpha'])
     expect(params.getAll('curator_id')).toEqual(['curator-1'])
     expect(params.getAll('tag')).toEqual(['priority'])
     expect(params.get('flow_run_id')).toBe('flow-1')

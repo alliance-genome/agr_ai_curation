@@ -2227,6 +2227,13 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     Raises:
         ValueError: If agent_id is not found in the unified agents table
     """
+    from src.lib.config.agent_loader import get_agent_definition
+
+    agent_definition = get_agent_definition(agent_id)
+    curation_metadata = {
+        "adapter_key": agent_definition.curation.adapter_key,
+        "launchable": agent_definition.curation.launchable,
+    } if agent_definition is not None else None
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
     if db_agent is not None:
         tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
@@ -2242,6 +2249,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "description": db_agent.description,
             "requires_document": requires_document,
             "required_params": required_params,
+            "curation": curation_metadata,
         }
 
     if agent_id == "task_input":
@@ -2251,6 +2259,17 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "description": "Define the curator's task that starts the flow",
             "requires_document": False,
             "required_params": [],
+            "curation": None,
+        }
+
+    if agent_definition is not None:
+        return {
+            "agent_id": agent_id,
+            "display_name": agent_definition.name,
+            "description": agent_definition.description,
+            "requires_document": agent_definition.requires_document,
+            "required_params": list(agent_definition.required_params),
+            "curation": curation_metadata,
         }
 
     raise ValueError(

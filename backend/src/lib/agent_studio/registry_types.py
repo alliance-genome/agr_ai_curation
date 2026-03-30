@@ -92,6 +92,14 @@ class SupervisorMetadata:
 
 
 @dataclass
+class CurationMetadata:
+    """Optional curation-routing metadata declared by an agent package."""
+
+    adapter_key: Optional[str] = None
+    launchable: bool = False
+
+
+@dataclass
 class AgentRegistryEntry:
     """Complete configuration for an agent in the registry.
 
@@ -129,6 +137,7 @@ class AgentRegistryEntry:
     batching: Optional[BatchingConfig] = None
     supervisor: Optional[SupervisorMetadata] = None
     frontend: Optional[FrontendMetadata] = None
+    curation: Optional[CurationMetadata] = None
     documentation: Optional[Dict[str, Any]] = None
 
     def is_executable(self) -> bool:
@@ -168,6 +177,11 @@ class AgentRegistryEntry:
                 "icon": self.frontend.icon,
                 "color": self.frontend.color,
                 "show_in_palette": self.frontend.show_in_palette,
+            }
+        if self.curation:
+            result["curation"] = {
+                "adapter_key": self.curation.adapter_key,
+                "launchable": self.curation.launchable,
             }
         if self.documentation:
             result["documentation"] = self.documentation
@@ -263,6 +277,14 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
             tool_description=supervisor_data.get("tool_description"),
         )
 
+    curation = None
+    if "curation" in data:
+        curation_data = data["curation"]
+        curation = CurationMetadata(
+            adapter_key=curation_data.get("adapter_key"),
+            launchable=curation_data.get("launchable", False),
+        )
+
     return AgentRegistryEntry(
         name=data.get("name", agent_id),
         description=data.get("description", ""),
@@ -278,6 +300,7 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
         batching=batching,
         supervisor=supervisor,
         frontend=frontend,
+        curation=curation,
         documentation=data.get("documentation"),
     )
 

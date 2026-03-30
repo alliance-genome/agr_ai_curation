@@ -635,8 +635,6 @@ def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scop
         [matching_record, unscoped_record],
         {
             "adapter_keys": ["reference_adapter"],
-            "profile_keys": [],
-            "domain_keys": ["disease"],
         },
     )
 
@@ -644,7 +642,7 @@ def test_filter_extraction_results_for_scope_excludes_unscoped_records_when_scop
     assert notes == []
 
 
-def test_filter_extraction_results_for_scope_keeps_all_records_when_all_are_unscoped():
+def test_filter_extraction_results_for_scope_does_not_fall_back_to_unscoped_records():
     scoped_results, notes = supervisor_agent._filter_extraction_results_for_scope(
         [
             _PrepExtractionRecord(
@@ -662,15 +660,11 @@ def test_filter_extraction_results_for_scope_keeps_all_records_when_all_are_unsc
         ],
         {
             "adapter_keys": ["reference_adapter"],
-            "profile_keys": [],
-            "domain_keys": ["disease"],
         },
     )
 
-    assert [record.extraction_result_id for record in scoped_results] == ["extract-1", "extract-2"]
-    assert notes == [
-        "Persisted extraction results did not include scope keys; using current session extraction context with curator-confirmed scope.",
-    ]
+    assert scoped_results == []
+    assert notes == []
 
 
 @pytest.mark.asyncio
@@ -760,18 +754,17 @@ async def test_dispatch_curation_prep_runs_deterministic_prep_with_confirmed_sco
     response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
         user_confirmation="Yes, prepare the confirmed disease findings.",
         scope_summary="Disease findings for APOE.",
+        adapter_keys=["reference_adapter"],
     )
 
     payload = json.loads(response)
     assert payload["status"] == "prepared"
     assert payload["candidate_count"] == 1
     assert payload["document_id"] == "document-1"
-    assert payload["domain_keys"] == ["disease"]
     assert payload["processing_notes"] == ["Prepared from confirmed chat extraction context."]
     assert len(captured["extraction_results"]) == 1
     assert captured["scope_confirmation"].confirmed is True
     assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
-    assert captured["scope_confirmation"].domain_keys == ["disease"]
     assert any(
         "Disease findings for APOE." in note
         for note in captured["scope_confirmation"].notes
@@ -814,7 +807,7 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
             _PrepExtractionRecord(adapter_key="reference_adapter", domain_key="disease"),
             _PrepExtractionRecord(
                 extraction_result_id="extract-2",
-                adapter_key="reference_adapter",
+                adapter_key="gene_expression",
                 domain_key="gene_expression",
                 payload_json={"run_summary": {"candidate_count": 1}},
             ),
@@ -827,7 +820,7 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
 
     payload = json.loads(response)
     assert payload["status"] == "scope_confirmation_required"
-    assert payload["available_scope"]["domain_keys"] == ["disease", "gene_expression"]
+    assert payload["available_scope"]["adapter_keys"] == ["reference_adapter", "gene_expression"]
 
 
 @pytest.mark.asyncio
@@ -891,12 +884,13 @@ async def test_dispatch_curation_prep_still_filters_loaded_document_before_runni
 
     response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
         user_confirmation="Yes, prepare the disease findings in the loaded document.",
+        adapter_keys=["disease"],
     )
 
     payload = json.loads(response)
     assert payload["status"] == "prepared"
     assert captured["query_kwargs"]["document_id"] == "document-2"
-    assert captured["run_scope_confirmation"].domain_keys == ["disease"]
+    assert captured["run_scope_confirmation"].adapter_keys == ["disease"]
     assert captured["run_persistence_context"].document_id == "document-2"
     assert captured["run_persistence_context"].trace_id == "trace-2"
 
@@ -947,6 +941,7 @@ async def test_dispatch_curation_prep_does_not_fall_back_to_top_level_evidence_r
 
     response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
         user_confirmation="Yes, prepare them.",
+        adapter_keys=["reference_adapter"],
     )
 
     payload = json.loads(response)

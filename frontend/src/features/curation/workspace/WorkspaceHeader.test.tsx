@@ -16,9 +16,7 @@ function buildSession(): CurationReviewSession {
     status: 'in_progress',
     adapter: {
       adapter_key: 'gene',
-      profile_key: 'human',
       display_label: 'Gene',
-      profile_label: 'Human',
       color_token: 'green',
       metadata: {},
     },
@@ -66,7 +64,7 @@ describe('WorkspaceHeader', () => {
     ).toHaveAttribute('href', '/curation')
     expect(screen.getByText('Annotation-ready paper')).toBeInTheDocument()
     expect(screen.getByText('PMID 123456 • DOI 10.1000/example')).toBeInTheDocument()
-    expect(screen.getByText('Gene / Human')).toBeInTheDocument()
+    expect(screen.getByText('Gene')).toBeInTheDocument()
     expect(screen.getByText('3/5')).toBeInTheDocument()
     expect(screen.getByText('In Progress')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /previous session/i })).toBeDisabled()

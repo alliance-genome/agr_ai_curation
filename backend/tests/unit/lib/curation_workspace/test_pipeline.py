@@ -17,6 +17,9 @@ from src.lib.curation_adapters.reference import (
     REFERENCE_ADAPTER_KEY,
     REFERENCE_VALIDATION_PLAN_KEY,
 )
+from src.lib.curation_adapters.structured_payload import (
+    StructuredPayloadCandidateNormalizer,
+)
 from src.lib.curation_workspace import pipeline as module
 from src.lib.curation_workspace import session_service
 from src.lib.curation_workspace.models import (
@@ -132,7 +135,6 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
         candidates.append(
             {
                 "adapter_key": "disease",
-                "profile_key": "primary",
                 "payload": {
                     "gene": {"symbol": gene_symbol},
                     "condition": {"label": disease_label},
@@ -192,16 +194,12 @@ def _persist_matching_prep_result(
     document_id: str,
     prep_output: CurationPrepAgentOutput,
     adapter_key: str = "disease",
-    profile_key: str | None = "primary",
-    domain_key: str = "disease",
 ):
     now = _now()
     record = ExtractionResultModel(
         id=uuid4(),
         document_id=UUID(str(document_id)),
         adapter_key=adapter_key,
-        profile_key=profile_key,
-        domain_key=domain_key,
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id="chat-session-1",
@@ -239,7 +237,6 @@ def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, rev
         document_id=document_id,
         source_kind=CurationExtractionSourceKind.CHAT,
         adapter_key="disease",
-        profile_key="primary",
         flow_run_id="flow-1",
         origin_session_id="chat-session-1",
         trace_id="trace-1",
@@ -257,7 +254,6 @@ def _make_reference_prep_output() -> CurationPrepAgentOutput:
             "candidates": [
                 {
                     "adapter_key": REFERENCE_ADAPTER_KEY,
-                    "profile_key": None,
                     "payload": {
                         "citation": {
                             "title": "  Adapter-owned reference scaffold in practice  ",
@@ -346,7 +342,6 @@ def _make_reference_request(prep_output: CurationPrepAgentOutput, *, document_id
         document_id=document_id,
         source_kind=CurationExtractionSourceKind.CHAT,
         adapter_key=REFERENCE_ADAPTER_KEY,
-        profile_key=None,
         flow_run_id="flow-1",
         origin_session_id="chat-session-1",
         trace_id="trace-1",
@@ -363,17 +358,16 @@ def _passthrough_dependencies() -> module.PostCurationPipelineDependencies:
     )
 
 
-def test_passthrough_candidate_normalizer_builds_payload_and_draft_fields():
+def test_structured_payload_candidate_normalizer_builds_payload_and_draft_fields():
     prep_output = _make_prep_output()
     candidate: CurationPrepCandidate = prep_output.candidates[0]
 
-    normalized = module.PassthroughCandidateNormalizer().normalize(
+    normalized = StructuredPayloadCandidateNormalizer().normalize(
         candidate.payload,
         prep_candidate=candidate,
         context=module.CandidateNormalizationContext(
             document_id=str(uuid4()),
             adapter_key="disease",
-            profile_key="primary",
             prep_extraction_result_id="prep-result-1",
             candidate_index=0,
         ),
@@ -504,8 +498,6 @@ def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists
         document_id=str(document.id),
         prep_output=prep_output,
         adapter_key=REFERENCE_ADAPTER_KEY,
-        profile_key=None,
-        domain_key=REFERENCE_ADAPTER_KEY,
     )
 
     result = module.execute_post_curation_pipeline(
@@ -562,7 +554,7 @@ def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists
 
     workspace = session_service.get_session_workspace(db_session, result.session_id)
     assert workspace.workspace.session.adapter.adapter_key == REFERENCE_ADAPTER_KEY
-    assert workspace.workspace.session.adapter.display_label == "Reference"
+    assert workspace.workspace.session.adapter.display_label == "Reference Adapter"
     assert workspace.workspace.entity_tags == []
 
 
@@ -784,7 +776,6 @@ async def test_run_post_curation_pipeline_runs_sync_for_small_sets(monkeypatch):
             document_id=str(uuid4()),
             source_kind=CurationExtractionSourceKind.CHAT,
             adapter_key="disease",
-            profile_key="primary",
             async_candidate_threshold=5,
         )
     )
@@ -813,7 +804,6 @@ async def test_run_post_curation_pipeline_schedules_async_for_large_sets():
             document_id=str(uuid4()),
             source_kind=CurationExtractionSourceKind.CHAT,
             adapter_key="disease",
-            profile_key="primary",
             async_candidate_threshold=1,
         ),
         dependencies=dependencies,

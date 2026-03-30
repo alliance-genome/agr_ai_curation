@@ -66,7 +66,6 @@ function buildWorkspace(): CurationWorkspace {
       adapter: {
         adapter_key: 'entity_adapter',
         display_label: 'Entity',
-        profile_label: 'Default',
         color_token: 'green',
         metadata: {},
       },

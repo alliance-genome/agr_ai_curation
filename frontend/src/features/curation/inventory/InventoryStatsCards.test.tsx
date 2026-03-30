@@ -11,7 +11,7 @@ const theme = createTheme()
 
 const stats: CurationSessionStats = {
   total_sessions: 124,
-  domain_count: 7,
+  adapter_count: 7,
   new_sessions: 28,
   in_progress_sessions: 41,
   ready_for_submission_sessions: 18,
@@ -42,7 +42,7 @@ describe('InventoryStatsCards', () => {
 
     expect(screen.getByText('Total Sessions')).toBeInTheDocument()
     expect(screen.getByText('124')).toBeInTheDocument()
-    expect(screen.getByText('across 7 domains')).toBeInTheDocument()
+    expect(screen.getByText('across 7 adapters')).toBeInTheDocument()
 
     expect(screen.getByText('New / Unreviewed')).toBeInTheDocument()
     expect(screen.getByText('28')).toBeInTheDocument()

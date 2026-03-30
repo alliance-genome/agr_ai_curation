@@ -28,7 +28,6 @@ def _export_payload_context() -> dict[str, object]:
 
     return {
         "session_id": "session-1",
-        "profile_key": "primary",
         "document": {
             "document_id": "document-1",
             "title": "Export bundle paper",
@@ -73,7 +72,6 @@ def _export_payload_context() -> dict[str, object]:
                 "status": "accepted",
                 "order": 0,
                 "adapter_key": REFERENCE_ADAPTER_KEY,
-                "profile_key": "primary",
                 "display_label": "APOE association",
                 "secondary_label": "Late onset phenotype",
                 "conversation_summary": "Curator approved the extracted association.",
@@ -224,7 +222,7 @@ def test_json_bundle_export_adapter_builds_payload_from_candidates_and_evidence(
     assert payload.adapter_key == REFERENCE_ADAPTER_KEY
     assert payload.candidate_ids == ["candidate-1"]
     assert payload.content_type == "application/json"
-    assert payload.filename == "reference-session-1-export-bundle.json"
+    assert payload.filename == "reference_adapter-session-1-export-bundle.json"
     assert payload.warnings == ["Bundle prepared from curator-approved candidates only."]
     assert payload.payload_json is not None
     assert payload.payload_text is not None

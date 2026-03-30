@@ -56,9 +56,7 @@ def make_workspace_response_payload() -> dict:
                 "status": CurationSessionStatus.IN_PROGRESS,
                 "adapter": {
                     "adapter_key": "disease",
-                    "profile_key": "primary",
                     "display_label": "Disease",
-                    "profile_label": "Primary",
                     "color_token": "teal",
                     "metadata": {},
                 },
@@ -129,7 +127,6 @@ def make_workspace_response_payload() -> dict:
                         "extraction_result_id": "extract-1",
                         "document_id": "document-1",
                         "adapter_key": "disease",
-                        "profile_key": "primary",
                         "agent_key": "curation_prep",
                         "source_kind": "chat",
                         "candidate_count": 2,

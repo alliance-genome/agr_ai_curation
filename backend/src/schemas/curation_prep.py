@@ -210,14 +210,6 @@ class CurationPrepScopeConfirmation(CurationPrepBaseModel):
         default_factory=list,
         description="Adapters in scope for this prep run",
     )
-    profile_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Optional adapter profiles or subdomains in scope",
-    )
-    domain_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Domain identifiers or categories confirmed for this run",
-    )
     notes: list[str] = Field(
         default_factory=list,
         description="Additional scope confirmation notes",
@@ -227,8 +219,8 @@ class CurationPrepScopeConfirmation(CurationPrepBaseModel):
     def validate_confirmed_scope(self) -> "CurationPrepScopeConfirmation":
         """Require at least one scoped target when confirmation is true."""
 
-        if self.confirmed and not (self.adapter_keys or self.profile_keys or self.domain_keys):
-            raise ValueError("Confirmed scope must include at least one adapter, profile, or domain")
+        if self.confirmed and not self.adapter_keys:
+            raise ValueError("Confirmed scope must include at least one adapter")
 
         return self
 
@@ -237,10 +229,6 @@ class CurationPrepCandidate(CurationPrepBaseModel):
     """Structured candidate prepared for deterministic normalization."""
 
     adapter_key: NonEmptyString = Field(description="Adapter key this candidate targets")
-    profile_key: NonEmptyString | None = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
     payload: dict[str, Any] = Field(
         description="Adapter-owned candidate payload carried directly as JSON",
     )
@@ -350,14 +338,6 @@ class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
         default_factory=list,
         description="Adapters discovered from persisted extraction results",
     )
-    profile_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Profiles discovered from persisted extraction results",
-    )
-    domain_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Domains discovered from persisted extraction results",
-    )
     blocking_reasons: list[str] = Field(
         default_factory=list,
         description="Reasons the prep run cannot start yet",
@@ -371,14 +351,6 @@ class CurationPrepChatRunRequest(CurationPrepBaseModel):
     adapter_keys: list[NonEmptyString] = Field(
         default_factory=list,
         description="Confirmed adapters to include in the prep run",
-    )
-    profile_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Confirmed profiles to include in the prep run",
-    )
-    domain_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Confirmed domains to include in the prep run",
     )
 
 
@@ -405,14 +377,6 @@ class CurationPrepChatRunResponse(CurationPrepBaseModel):
     adapter_keys: list[NonEmptyString] = Field(
         default_factory=list,
         description="Adapters that were in scope for the confirmed prep run",
-    )
-    profile_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Profiles that were in scope for the confirmed prep run",
-    )
-    domain_keys: list[NonEmptyString] = Field(
-        default_factory=list,
-        description="Domains that were in scope for the confirmed prep run",
     )
 
 

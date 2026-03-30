@@ -52,10 +52,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         ".pipeline",
         "DeterministicStructuralValidationService",
     ),
-    "PassthroughCandidateNormalizer": (
-        ".pipeline",
-        "PassthroughCandidateNormalizer",
-    ),
     "PassthroughEvidenceAnchorResolver": (
         ".pipeline",
         "PassthroughEvidenceAnchorResolver",
@@ -105,7 +101,6 @@ __all__ = [
     "CurationSubmissionRecord",
     "CurationValidationSnapshot",
     "DeterministicStructuralValidationService",
-    "PassthroughCandidateNormalizer",
     "PassthroughEvidenceAnchorResolver",
     "PipelineExecutionMode",
     "PipelineRunStatus",

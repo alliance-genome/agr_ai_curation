@@ -124,8 +124,6 @@ def _date_range(from_at: datetime | None, to_at: datetime | None) -> CurationDat
 def _session_filters_from_query(
     statuses: Annotated[list[CurationSessionStatus] | None, Query(alias="status")] = None,
     adapter_keys: Annotated[list[str] | None, Query(alias="adapter_key")] = None,
-    profile_keys: Annotated[list[str] | None, Query(alias="profile_key")] = None,
-    domain_keys: Annotated[list[str] | None, Query(alias="domain_key")] = None,
     curator_ids: Annotated[list[str] | None, Query(alias="curator_id")] = None,
     tags: Annotated[list[str] | None, Query(alias="tag")] = None,
     flow_run_id: str | None = Query(default=None),
@@ -141,8 +139,6 @@ def _session_filters_from_query(
     return CurationSessionFilters(
         statuses=statuses or [],
         adapter_keys=adapter_keys or [],
-        profile_keys=profile_keys or [],
-        domain_keys=domain_keys or [],
         curator_ids=curator_ids or [],
         tags=tags or [],
         flow_run_id=flow_run_id,
@@ -201,15 +197,11 @@ def _build_flow_run_sessions_request(
 
 def _bootstrap_request_from_query(
     adapter_key: str | None = Query(default=None),
-    profile_key: str | None = Query(default=None),
-    domain_key: str | None = Query(default=None),
     flow_run_id: str | None = Query(default=None),
     origin_session_id: str | None = Query(default=None),
 ) -> CurationDocumentBootstrapRequest:
     return CurationDocumentBootstrapRequest(
         adapter_key=adapter_key,
-        profile_key=profile_key,
-        domain_key=domain_key,
         flow_run_id=flow_run_id,
         origin_session_id=origin_session_id,
     )
@@ -455,10 +447,11 @@ async def get_document_bootstrap_status(
     db: Session = Depends(get_db),
 ) -> CurationDocumentBootstrapAvailabilityResponse:
     set_global_user_from_cognito(db, user)
-    _require_current_user_id(user)
+    user_id = _require_current_user_id(user)
     return get_document_bootstrap_availability(
         document_id,
         request,
+        current_user_id=user_id,
         db=db,
     )
 

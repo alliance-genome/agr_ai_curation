@@ -15,8 +15,6 @@ const queueRequest: CurationQueueNavigationRequest = {
   filters: {
     statuses: ['in_progress'],
     adapter_keys: ['gene'],
-    profile_keys: [],
-    domain_keys: [],
     curator_ids: [],
     tags: [],
     flow_run_id: null,
@@ -36,9 +34,7 @@ function buildSessionSummary(sessionId: string): CurationSessionSummary {
     status: 'in_progress',
     adapter: {
       adapter_key: 'gene',
-      profile_key: 'alpha',
       display_label: 'Gene Adapter',
-      profile_label: 'Alpha Profile',
       color_token: 'teal',
       metadata: {},
     },

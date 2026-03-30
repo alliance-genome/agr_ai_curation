@@ -11,6 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.curation_workspace.curation_prep_invocation import (
+    run_chat_curation_prep,
+    validate_chat_curation_prep_request,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -26,7 +30,7 @@ from src.lib.curation_workspace.session_service import (
     upsert_prepared_session,
 )
 from src.models.sql.pdf_document import PDFDocument
-from src.schemas.curation_prep import CurationPrepAgentOutput
+from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepChatRunRequest
 from src.schemas.curation_workspace import (
     CurationActorType,
     CurationDocumentBootstrapAvailabilityResponse,
@@ -55,7 +59,6 @@ def create_manual_session(
         PreparedSessionUpsertRequest(
             document_id=request.document_id,
             adapter_key=request.adapter_key,
-            profile_key=request.profile_key,
             created_by_id=current_user_id,
             assigned_curator_id=request.curator_id,
             notes=request.notes,
@@ -85,19 +88,18 @@ async def bootstrap_document_session(
     """Replay the newest matching persisted prep result into a review session."""
 
     _require_document(db, document_id)
-    extraction_result = _select_bootstrap_extraction_result(
+    extraction_result = await _ensure_bootstrap_extraction_result(
         db,
         document_id=document_id,
         request=request,
+        current_user_id=current_user_id,
     )
     prep_output = _replayable_prep_output(extraction_result)
-    adapter_key = _resolved_adapter_key(extraction_result, prep_output)
-    profile_key = _resolved_profile_key(extraction_result, prep_output)
+    adapter_key = _resolved_adapter_key(extraction_result)
     reusable_session = find_reusable_prepared_session(
         db,
         document_id=document_id,
         adapter_key=adapter_key,
-        profile_key=profile_key,
         flow_run_id=extraction_result.flow_run_id,
         prep_extraction_result_id=str(extraction_result.id),
     )
@@ -110,7 +112,6 @@ async def bootstrap_document_session(
                 document_id=document_id,
                 source_kind=extraction_result.source_kind,
                 adapter_key=adapter_key,
-                profile_key=profile_key,
                 flow_run_id=extraction_result.flow_run_id,
                 origin_session_id=extraction_result.origin_session_id,
                 trace_id=extraction_result.trace_id,
@@ -155,6 +156,7 @@ def get_document_bootstrap_availability(
     document_id: str,
     request: CurationDocumentBootstrapRequest,
     *,
+    current_user_id: str,
     db: Session,
 ) -> CurationDocumentBootstrapAvailabilityResponse:
     """Return whether the current bootstrap selectors can resolve a prep result."""
@@ -169,7 +171,32 @@ def get_document_bootstrap_availability(
         )
     except HTTPException as exc:
         if exc.status_code == status.HTTP_404_NOT_FOUND:
-            return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
+            origin_session_id = _normalized_optional_str(request.origin_session_id)
+            if origin_session_id is None:
+                return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
+
+            try:
+                context, _ = validate_chat_curation_prep_request(
+                    session_id=origin_session_id,
+                    user_id=current_user_id,
+                    db=db,
+                    requested_adapter_keys=(
+                        [request.adapter_key]
+                        if _normalized_optional_str(request.adapter_key) is not None
+                        else []
+                    ),
+                )
+            except ValueError:
+                return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
+
+            if not _chat_prep_matches_bootstrap_request(
+                document_id=document_id,
+                request=request,
+                context=context,
+            ):
+                return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
+
+            return CurationDocumentBootstrapAvailabilityResponse(eligible=True)
         raise
 
     return CurationDocumentBootstrapAvailabilityResponse(eligible=True)
@@ -200,17 +227,11 @@ def _select_bootstrap_extraction_result(
     )
 
     adapter_key = _normalized_optional_str(request.adapter_key)
-    profile_key = _normalized_optional_str(request.profile_key)
-    domain_key = _normalized_optional_str(request.domain_key)
     flow_run_id = _normalized_optional_str(request.flow_run_id)
     origin_session_id = _normalized_optional_str(request.origin_session_id)
 
     if adapter_key is not None:
         statement = statement.where(ExtractionResultModel.adapter_key == adapter_key)
-    if profile_key is not None:
-        statement = statement.where(ExtractionResultModel.profile_key == profile_key)
-    if domain_key is not None:
-        statement = statement.where(ExtractionResultModel.domain_key == domain_key)
     if flow_run_id is not None:
         statement = statement.where(ExtractionResultModel.flow_run_id == flow_run_id)
     if origin_session_id is not None:
@@ -227,6 +248,106 @@ def _select_bootstrap_extraction_result(
         )
 
     return extraction_result
+
+
+def _chat_prep_matches_bootstrap_request(
+    *,
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    context: Any,
+) -> bool:
+    extraction_results = getattr(context, "extraction_results", None) or []
+    if not extraction_results:
+        return False
+
+    primary_extraction_result = extraction_results[0]
+    if _normalized_optional_str(getattr(primary_extraction_result, "document_id", None)) != str(document_id).strip():
+        return False
+
+    requested_flow_run_id = _normalized_optional_str(request.flow_run_id)
+    if requested_flow_run_id is None:
+        return True
+
+    return _normalized_optional_str(getattr(primary_extraction_result, "flow_run_id", None)) == requested_flow_run_id
+
+
+async def _ensure_bootstrap_extraction_result(
+    db: Session,
+    *,
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    current_user_id: str,
+) -> ExtractionResultModel:
+    try:
+        return _select_bootstrap_extraction_result(
+            db,
+            document_id=document_id,
+            request=request,
+        )
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+
+    origin_session_id = _normalized_optional_str(request.origin_session_id)
+    if origin_session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No persisted curation prep extraction results were found for "
+                f"document {document_id}"
+            ),
+        )
+
+    try:
+        context, _ = validate_chat_curation_prep_request(
+            session_id=origin_session_id,
+            user_id=current_user_id,
+            db=db,
+            requested_adapter_keys=(
+                [request.adapter_key]
+                if _normalized_optional_str(request.adapter_key) is not None
+                else []
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if not _chat_prep_matches_bootstrap_request(
+        document_id=document_id,
+        request=request,
+        context=context,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No persisted curation prep extraction results were found for "
+                f"document {document_id}"
+            ),
+        )
+
+    try:
+        await run_chat_curation_prep(
+            CurationPrepChatRunRequest(
+                session_id=origin_session_id,
+                adapter_keys=[request.adapter_key] if _normalized_optional_str(request.adapter_key) else [],
+            ),
+            user_id=current_user_id,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return _select_bootstrap_extraction_result(
+        db,
+        document_id=document_id,
+        request=request,
+    )
 
 
 def _replayable_prep_output(extraction_result: ExtractionResultModel) -> CurationPrepAgentOutput:
@@ -253,45 +374,15 @@ def _replayable_prep_output(extraction_result: ExtractionResultModel) -> Curatio
         ) from exc
 
 
-def _resolved_adapter_key(
-    extraction_result: ExtractionResultModel,
-    prep_output: CurationPrepAgentOutput,
-) -> str:
+def _resolved_adapter_key(extraction_result: ExtractionResultModel) -> str:
     adapter_key = _normalized_optional_str(extraction_result.adapter_key)
     if adapter_key is not None:
         return adapter_key
 
-    adapter_keys = sorted({candidate.adapter_key for candidate in prep_output.candidates})
-    if len(adapter_keys) == 1:
-        return adapter_keys[0]
-
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail="Bootstrap requires prep candidates for exactly one adapter",
+        detail="Bootstrap requires a persisted prep result with adapter ownership",
     )
-
-
-def _resolved_profile_key(
-    extraction_result: ExtractionResultModel,
-    prep_output: CurationPrepAgentOutput,
-) -> str | None:
-    profile_key = _normalized_optional_str(extraction_result.profile_key)
-    if profile_key is not None:
-        return profile_key
-
-    profile_keys = {
-        _normalized_optional_str(candidate.profile_key)
-        for candidate in prep_output.candidates
-    }
-    profile_keys.discard(None)
-    if len(profile_keys) <= 1:
-        return next(iter(profile_keys), None)
-
-    raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail="Bootstrap requires prep candidates for at most one profile",
-    )
-
 
 def _actor_payload(actor_claims: dict[str, str | None]) -> dict[str, str]:
     actor_id = str(actor_claims.get("sub") or actor_claims.get("uid") or "").strip()

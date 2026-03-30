@@ -108,8 +108,6 @@ def _create_extraction_result(
         id=uuid4(),
         document_id=document_id,
         adapter_key="reference_adapter",
-        profile_key="primary",
-        domain_key="entity",
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=origin_session_id,
@@ -204,6 +202,7 @@ def test_get_document_bootstrap_availability_returns_true_when_matching_result_e
     availability = module.get_document_bootstrap_availability(
         str(document.id),
         CurationDocumentBootstrapRequest(flow_run_id="flow-1"),
+        current_user_id="user-1",
         db=db_session,
     )
 
@@ -223,7 +222,131 @@ def test_get_document_bootstrap_availability_returns_false_when_no_matching_resu
     availability = module.get_document_bootstrap_availability(
         str(document.id),
         CurationDocumentBootstrapRequest(flow_run_id="flow-missing"),
+        current_user_id="user-1",
         db=db_session,
+    )
+
+    assert availability.eligible is False
+
+
+def test_get_document_bootstrap_availability_returns_true_when_chat_prep_can_run(monkeypatch):
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+        raise module.HTTPException(status_code=404, detail="missing")
+
+    captured: dict[str, object] = {}
+
+    def _fake_validate_chat_curation_prep_request(*, session_id, user_id, db, requested_adapter_keys):
+        captured["session_id"] = session_id
+        captured["user_id"] = user_id
+        captured["db"] = db
+        captured["requested_adapter_keys"] = list(requested_adapter_keys)
+        return (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="document-1", flow_run_id="flow-1"),
+                ]
+            ),
+            ["gene"],
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        _fake_select_bootstrap_extraction_result,
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        _fake_validate_chat_curation_prep_request,
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            adapter_key="gene",
+        ),
+        current_user_id="user-1",
+        db=object(),
+    )
+
+    assert availability.eligible is True
+    assert captured == {
+        "session_id": "chat-session-1",
+        "user_id": "user-1",
+        "db": captured["db"],
+        "requested_adapter_keys": ["gene"],
+    }
+
+
+def test_get_document_bootstrap_availability_returns_false_when_chat_prep_document_mismatches(monkeypatch):
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="different-document", flow_run_id="flow-1"),
+                ]
+            ),
+            ["gene"],
+        ),
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            adapter_key="gene",
+        ),
+        current_user_id="user-1",
+        db=object(),
+    )
+
+    assert availability.eligible is False
+
+
+def test_get_document_bootstrap_availability_returns_false_when_chat_prep_flow_run_mismatches(monkeypatch):
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="document-1", flow_run_id="flow-1"),
+                ]
+            ),
+            ["gene"],
+        ),
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            adapter_key="gene",
+            flow_run_id="flow-missing",
+        ),
+        current_user_id="user-1",
+        db=object(),
     )
 
     assert availability.eligible is False
@@ -242,7 +365,6 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
         "candidates": [
             {
                 "adapter_key": "reference_adapter",
-                "profile_key": "primary",
                 "payload": {"title": "APOE"},
                 "evidence_records": [
                     {
@@ -348,8 +470,7 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
         lambda db, *, document_id, request: extraction_result,
     )
     monkeypatch.setattr(module, "_replayable_prep_output", lambda extraction_result: object())
-    monkeypatch.setattr(module, "_resolved_adapter_key", lambda extraction_result, prep_output: "reference_adapter")
-    monkeypatch.setattr(module, "_resolved_profile_key", lambda extraction_result, prep_output: None)
+    monkeypatch.setattr(module, "_resolved_adapter_key", lambda extraction_result: "reference_adapter")
     monkeypatch.setattr(module, "find_reusable_prepared_session", lambda *args, **kwargs: reusable_session)
 
     async def _run_post_curation_pipeline(request, *, db):
@@ -386,3 +507,101 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
     assert detail_request == {"db": fake_db, "session_id": "session-123"}
     assert fake_db.commit_calls == 1
     assert fake_db.rollback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_extraction_result_runs_chat_prep_when_missing(monkeypatch):
+    selection_calls = {"count": 0}
+    prepared_record = SimpleNamespace(id=uuid4(), adapter_key="gene")
+    captured: dict[str, object] = {}
+
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+        selection_calls["count"] += 1
+        if selection_calls["count"] == 1:
+            raise module.HTTPException(status_code=404, detail="missing")
+        return prepared_record
+
+    async def _fake_run_chat_curation_prep(request, *, user_id, db):
+        captured["request"] = request
+        captured["user_id"] = user_id
+        captured["db"] = db
+        return SimpleNamespace(document_id="document-1")
+
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        _fake_select_bootstrap_extraction_result,
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="document-1", flow_run_id=None),
+                ]
+            ),
+            ["gene"],
+        ),
+    )
+    monkeypatch.setattr(module, "run_chat_curation_prep", _fake_run_chat_curation_prep)
+
+    result = await module._ensure_bootstrap_extraction_result(
+        object(),
+        document_id="document-1",
+        request=CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            adapter_key="gene",
+        ),
+        current_user_id="user-1",
+    )
+
+    assert result is prepared_record
+    assert selection_calls["count"] == 2
+    assert captured["request"].session_id == "chat-session-1"
+    assert captured["request"].adapter_keys == ["gene"]
+    assert captured["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_extraction_result_does_not_run_chat_prep_when_selectors_mismatch(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="document-1", flow_run_id="flow-1"),
+                ]
+            ),
+            ["gene"],
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_chat_curation_prep",
+        lambda *args, **kwargs: pytest.fail("chat prep should not run for mismatched selectors"),
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module._ensure_bootstrap_extraction_result(
+            object(),
+            document_id="document-1",
+            request=CurationDocumentBootstrapRequest(
+                origin_session_id="chat-session-1",
+                adapter_key="gene",
+                flow_run_id="flow-missing",
+            ),
+            current_user_id="user-1",
+        )
+
+    assert exc.value.status_code == 404

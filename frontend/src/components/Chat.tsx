@@ -1215,8 +1215,6 @@ function Chat({
       const result = await runCurationPrep({
         session_id: propSessionId,
         adapter_keys: prepPreview.adapter_keys,
-        profile_keys: prepPreview.profile_keys,
-        domain_keys: prepPreview.domain_keys,
       })
 
       const warningText = result.warnings.length > 0
@@ -1229,8 +1227,6 @@ function Chat({
             documentId: targetDocumentId,
             originSessionId: propSessionId,
             adapterKeys: result.adapter_keys,
-            profileKeys: result.profile_keys,
-            domainKeys: result.domain_keys,
           }
         : null
       const prepMessageId = `prep-${Date.now()}`

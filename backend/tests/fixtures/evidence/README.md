@@ -43,12 +43,10 @@ The extraction section describes the persisted structured output without duplica
 {
   "tool_name": "ask_domain_specialist",
   "agent_key": "domain_extractor",
-  "profile_key": "pilot",
+  "adapter_key": "domain_adapter",
   "scope_confirmation": {
     "confirmed": true,
-    "adapter_keys": [],
-    "profile_keys": ["pilot"],
-    "domain_keys": ["domain"],
+    "adapter_keys": ["domain_adapter"],
     "notes": ["Confirmed fixture scope."]
   },
   "items": [
@@ -66,6 +64,10 @@ The extraction section describes the persisted structured output without duplica
   }
 }
 ```
+
+Some integration tests still inject legacy raw payload fields such as `profile_key` or
+`scope_confirmation.profile_keys` on purpose to verify that shared prep/workspace transport drops
+them. Those legacy fields are not part of the normal fixture contract anymore.
 
 ## `expected_candidates`
 

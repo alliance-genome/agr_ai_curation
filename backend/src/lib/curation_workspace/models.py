@@ -226,8 +226,6 @@ class CurationExtractionResultRecord(Base):
         nullable=False,
     )
     adapter_key: Mapped[str | None] = mapped_column(String(), nullable=True)
-    profile_key: Mapped[str | None] = mapped_column(String(), nullable=True)
-    domain_key: Mapped[str | None] = mapped_column(String(), nullable=True)
     agent_key: Mapped[str] = mapped_column(String(), nullable=False)
     source_kind: Mapped[CurationExtractionSourceKind] = mapped_column(
         _enum_type(CurationExtractionSourceKind),

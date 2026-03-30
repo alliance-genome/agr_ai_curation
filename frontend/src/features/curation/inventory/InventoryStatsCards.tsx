@@ -30,7 +30,7 @@ const CARD_DEFINITIONS: StatCardDefinition[] = [
     id: 'total',
     label: 'Total Sessions',
     value: (stats) => stats.total_sessions,
-    subtitle: (stats) => `across ${formatNumber(stats.domain_count)} ${pluralize(stats.domain_count, 'domain')}`,
+    subtitle: (stats) => `across ${formatNumber(stats.adapter_count)} ${pluralize(stats.adapter_count, 'adapter')}`,
     accent: '#f8fafc',
   },
   {

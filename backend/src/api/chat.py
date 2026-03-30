@@ -215,8 +215,6 @@ def _persist_extraction_candidates(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
                 adapter_key=candidate.adapter_key,
-                profile_key=candidate.profile_key,
-                domain_key=candidate.domain_key,
                 agent_key=candidate.agent_key,
                 source_kind=source_kind,
                 origin_session_id=session_id,

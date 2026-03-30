@@ -157,8 +157,6 @@ def _build_flow_prep_extraction_results(
                     ),
                     "document_id": document_id,
                     "adapter_key": candidate.adapter_key,
-                    "profile_key": candidate.profile_key,
-                    "domain_key": candidate.domain_key,
                     "agent_key": candidate.agent_key,
                     "source_kind": CurationExtractionSourceKind.FLOW,
                     "origin_session_id": session_id,
@@ -187,18 +185,10 @@ def _build_flow_scope_confirmation(
     adapter_keys = _unique_non_empty_scope_values(
         [record.adapter_key for record in extraction_results]
     )
-    profile_keys = _unique_non_empty_scope_values(
-        [record.profile_key for record in extraction_results]
-    )
-    domain_keys = _unique_non_empty_scope_values(
-        [record.domain_key for record in extraction_results]
-    )
 
     return CurationPrepScopeConfirmation(
         confirmed=True,
         adapter_keys=adapter_keys,
-        profile_keys=profile_keys,
-        domain_keys=domain_keys,
         notes=[f"Confirmed from flow '{flow_name}' execution context."],
     )
 
@@ -222,6 +212,7 @@ def _resolve_flow_agent_entry(
         "description": metadata.get("description") or "",
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
+        "curation": metadata.get("curation"),
     }
 
 
@@ -487,6 +478,7 @@ def get_all_agent_tools(
         agent_id: str,
         agent_name: str,
         step_number: int,
+        curation_adapter_key: str | None,
     ):
         """Enforce strict flow step ordering at runtime."""
 
@@ -529,6 +521,7 @@ def get_all_agent_tools(
                 result_text,
                 agent_key=agent_id,
                 conversation_summary=flow_conversation_summary,
+                adapter_key=curation_adapter_key,
                 metadata={
                     "tool_name": tool_name,
                     "flow_id": str(flow.id),
@@ -703,6 +696,11 @@ def get_all_agent_tools(
             agent_id=agent_id,
             agent_name=entry.get("name", agent_id),
             step_number=step_num,
+            curation_adapter_key=(
+                str(entry.get("curation", {}).get("adapter_key") or "").strip() or None
+                if isinstance(entry.get("curation"), dict)
+                else None
+            ),
         )
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
@@ -744,6 +742,7 @@ def _build_flow_tool_metadata(
         if available_tools is not None and tool_name not in available_tools:
             continue
 
+        resolved_entry = None
         agent_name = data.get("agent_display_name")
         if not agent_name:
             resolved_entry = _resolve_flow_agent_entry(agent_id)
@@ -753,6 +752,11 @@ def _build_flow_tool_metadata(
             "agent_id": agent_id,
             "agent_name": agent_name or agent_id,
             "step": step_num,
+            "curation": (
+                resolved_entry.get("curation")
+                if resolved_entry is not None
+                else None
+            ),
         }
 
     return tool_metadata
@@ -1059,8 +1063,6 @@ def _persist_flow_extraction_candidates(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
                 adapter_key=_resolve_flow_candidate_adapter_key(candidate),
-                profile_key=candidate.profile_key,
-                domain_key=candidate.domain_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,
                 origin_session_id=session_id,
@@ -1270,11 +1272,19 @@ async def execute_flow(
             internal_payload = event.get("internal", {}) or {}
             tool_name = str(details.get("toolName") or "").strip()
             tool_meta = flow_tool_metadata.get(tool_name, {})
+            curation = tool_meta.get("curation")
+            if not isinstance(curation, dict):
+                resolved_entry = _resolve_flow_agent_entry(str(tool_meta.get("agent_id") or ""))
+                curation = resolved_entry.get("curation") if resolved_entry is not None else None
+            adapter_key = None
+            if isinstance(curation, dict):
+                adapter_key = str(curation.get("adapter_key") or "").strip() or None
             if isinstance(internal_payload, dict):
                 candidate = build_extraction_envelope_candidate(
                     internal_payload.get("tool_output"),
                     agent_key=tool_meta.get("agent_id"),
                     conversation_summary=conversation_summary,
+                    adapter_key=adapter_key,
                     metadata={
                         "tool_name": tool_name,
                         "flow_id": str(flow.id),

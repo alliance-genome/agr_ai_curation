@@ -8,7 +8,7 @@ import type {
   CurationSessionSummary,
   CurationSortDirection,
 } from '../types'
-import { getAdapterLabel, type InventoryFilterOption } from './inventoryPresentation'
+import { type InventoryFilterOption } from './inventoryPresentation'
 import {
   useCurationSessionList,
   useCurationSessionStats,
@@ -20,8 +20,6 @@ const DEFAULT_PAGE_SIZE = 25
 const EMPTY_FILTERS: CurationSessionFilters = {
   statuses: [],
   adapter_keys: [],
-  profile_keys: [],
-  domain_keys: [],
   curator_ids: [],
   tags: [],
   flow_run_id: null,
@@ -51,8 +49,6 @@ function normalizeFilters(filters?: CurationSessionFilters): CurationSessionFilt
   return {
     statuses: [...(filters?.statuses ?? [])],
     adapter_keys: [...(filters?.adapter_keys ?? [])],
-    profile_keys: [...(filters?.profile_keys ?? [])],
-    domain_keys: [...(filters?.domain_keys ?? [])],
     curator_ids: [...(filters?.curator_ids ?? [])],
     tags: [...(filters?.tags ?? [])],
     flow_run_id: filters?.flow_run_id ?? null,
@@ -83,26 +79,6 @@ function buildAdapterOptions(sessions: CurationSessionSummary[]): InventoryFilte
       optionsByKey.set(session.adapter.adapter_key, {
         key: session.adapter.adapter_key,
         label: session.adapter.display_label || session.adapter.adapter_key,
-        colorToken: session.adapter.color_token,
-      })
-    }
-  })
-
-  return Array.from(optionsByKey.values())
-}
-
-function buildProfileOptions(sessions: CurationSessionSummary[]): InventoryFilterOption[] {
-  const optionsByKey = new Map<string, InventoryFilterOption>()
-
-  sessions.forEach((session) => {
-    if (!session.adapter.profile_key) {
-      return
-    }
-
-    if (!optionsByKey.has(session.adapter.profile_key)) {
-      optionsByKey.set(session.adapter.profile_key, {
-        key: session.adapter.profile_key,
-        label: session.adapter.profile_label || getAdapterLabel(session.adapter),
         colorToken: session.adapter.color_token,
       })
     }
@@ -147,8 +123,6 @@ function hasActiveFilters(filters: CurationSessionFilters, searchInput: string):
   return (
     (filters.statuses?.length ?? 0) > 0 ||
     (filters.adapter_keys?.length ?? 0) > 0 ||
-    (filters.profile_keys?.length ?? 0) > 0 ||
-    (filters.domain_keys?.length ?? 0) > 0 ||
     (filters.curator_ids?.length ?? 0) > 0 ||
     (filters.tags?.length ?? 0) > 0 ||
     Boolean(filters.flow_run_id) ||
@@ -170,7 +144,6 @@ export function useCurationInventory() {
   const [sortBy, setSortBy] = useState<CurationSessionSortField>(DEFAULT_SORT_BY)
   const [sortDirection, setSortDirection] = useState<CurationSortDirection>(DEFAULT_SORT_DIRECTION)
   const [knownAdapterOptions, setKnownAdapterOptions] = useState<InventoryFilterOption[]>([])
-  const [knownProfileOptions, setKnownProfileOptions] = useState<InventoryFilterOption[]>([])
 
   const search = deferredSearchInput.trim()
   const filters: CurationSessionFilters = {
@@ -202,14 +175,11 @@ export function useCurationInventory() {
     }
 
     setKnownAdapterOptions((currentOptions) => mergeOptions(currentOptions, buildAdapterOptions(sessions)))
-    setKnownProfileOptions((currentOptions) => mergeOptions(currentOptions, buildProfileOptions(sessions)))
   }, [listQuery.data?.sessions])
 
   const statuses = baseFilters.statuses ?? []
   const adapterKeys = baseFilters.adapter_keys ?? []
-  const profileKeys = baseFilters.profile_keys ?? []
   const adapterOptions = ensureSelectedOptions(knownAdapterOptions, adapterKeys)
-  const profileOptions = ensureSelectedOptions(knownProfileOptions, profileKeys)
   const pageInfo = listQuery.data?.page_info
 
   function applyManualFilterChange(
@@ -245,20 +215,6 @@ export function useCurationInventory() {
     applyManualFilterChange((currentFilters) => ({
       ...currentFilters,
       adapter_keys: [],
-    }))
-  }
-
-  function toggleProfileKey(profileKey: string) {
-    applyManualFilterChange((currentFilters) => ({
-      ...currentFilters,
-      profile_keys: toggleValue(currentFilters.profile_keys ?? [], profileKey),
-    }))
-  }
-
-  function clearProfileKeys() {
-    applyManualFilterChange((currentFilters) => ({
-      ...currentFilters,
-      profile_keys: [],
     }))
   }
 
@@ -318,7 +274,6 @@ export function useCurationInventory() {
   return {
     statuses,
     adapterKeys,
-    profileKeys,
     searchInput,
     page,
     pageSize,
@@ -326,7 +281,6 @@ export function useCurationInventory() {
     sortDirection,
     pageInfo,
     adapterOptions,
-    profileOptions,
     filters,
     savedViewId,
     listQuery,
@@ -336,8 +290,6 @@ export function useCurationInventory() {
     clearStatuses,
     toggleAdapterKey,
     clearAdapterKeys,
-    toggleProfileKey,
-    clearProfileKeys,
     clearAllFilters,
     clearSavedViewSelection,
     applySavedView,

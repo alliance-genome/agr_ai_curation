@@ -75,9 +75,7 @@ function buildWorkspace(): CurationWorkspace {
       status: 'in_progress',
       adapter: {
         adapter_key: 'test_adapter',
-        profile_key: 'profile_a',
         display_label: 'Test adapter',
-        profile_label: 'Profile A',
         metadata: {},
       },
       document: {
@@ -108,7 +106,6 @@ function buildWorkspace(): CurationWorkspace {
         status: 'pending',
         order: 0,
         adapter_key: 'test_adapter',
-        profile_key: 'profile_a',
         display_label: 'Candidate one',
         draft: {
           draft_id: 'draft-1',
@@ -256,9 +253,9 @@ describe('ManualAnnotationDialog', () => {
 
     expect(within(dialog).getByText('Add Manual Annotation')).toBeInTheDocument()
     expect(
-      within(dialog).getByRole('combobox', { name: 'Adapter / profile' }),
+      within(dialog).getByRole('combobox', { name: 'Adapter template' }),
     ).toHaveTextContent(
-      'Test adapter / Profile A',
+      'Test adapter',
     )
     expect(within(dialog).getByLabelText('Annotation label')).toHaveValue('')
     expect(within(dialog).getByText('GROUP ONE')).toBeInTheDocument()
@@ -316,7 +313,6 @@ describe('ManualAnnotationDialog', () => {
       expect.objectContaining({
         session_id: 'session-1',
         adapter_key: 'test_adapter',
-        profile_key: 'profile_a',
         source: 'manual',
         display_label: expect.any(String),
         draft: expect.objectContaining({
@@ -350,7 +346,6 @@ describe('ManualAnnotationDialog', () => {
         status: 'pending',
         order: 1,
         adapter_key: 'test_adapter',
-        profile_key: 'profile_a',
         display_label: 'Manual candidate',
         draft: {
           draft_id: 'draft-manual-1',
@@ -497,7 +492,7 @@ describe('ManualAnnotationDialog', () => {
     const dialog = await screen.findByRole('dialog')
 
     expect(
-      within(dialog).getByText('No shared draft-field template is available for this adapter/profile yet.'),
+      within(dialog).getByText('No shared draft-field template is available for this adapter yet.'),
     ).toBeInTheDocument()
     expect(within(dialog).queryByLabelText('Field A')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('Field B')).not.toBeInTheDocument()

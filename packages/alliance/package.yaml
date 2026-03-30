@@ -11,6 +11,10 @@ exports:
     name: default
     path: tools/bindings.yaml
     description: Default AGR Alliance specialist tool bindings
+  - kind: curation_adapter
+    name: default
+    path: python/src/agr_ai_curation_alliance/curation_adapters.py
+    description: Package-owned curation adapter registrations
 agent_bundles:
   - name: allele
     has_schema: true

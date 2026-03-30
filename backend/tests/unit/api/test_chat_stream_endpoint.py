@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 import pytest
 
 from src.api import chat
+from src.lib.curation_workspace import extraction_results as extraction_results_module
 
 
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
@@ -139,6 +140,21 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
     )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
+    )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
+    )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
+    )
 
     async def _register_active_stream(
         session_id: str,
@@ -216,11 +232,9 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.trace_id == "trace-123"
     assert persisted_request.user_id == "auth-sub"
     assert persisted_request.candidate_count == 1
-    assert persisted_request.adapter_key is None
-    assert persisted_request.domain_key == "gene_expression"
+    assert persisted_request.adapter_key == "gene_expression"
     assert persisted_request.metadata["tool_name"] == "ask_gene_expression_specialist"
     assert persisted_request.metadata["envelope_destination"] == "gene_expression"
-    assert persisted_request.metadata["inferred_domain_key"] == "gene_expression"
 
 
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
@@ -564,6 +578,11 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_extractor_specialist": "gene_extractor"},
     )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene", "launchable": True},
+    )
 
     async def _register_active_stream(
         session_id: str,
@@ -632,10 +651,7 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     assert len(persisted_requests) == 1
     persisted_request = persisted_requests[0]
     assert persisted_request.agent_key == "gene_extractor"
-    assert persisted_request.adapter_key is None
-    assert persisted_request.domain_key == "gene"
-    assert "inferred_adapter_key" not in persisted_request.metadata
-    assert persisted_request.metadata["inferred_domain_key"] == "gene"
+    assert persisted_request.adapter_key == "gene"
 
 
 def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(monkeypatch):
@@ -662,6 +678,11 @@ def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(
         chat,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
+    )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
 
     async def _register_active_stream(

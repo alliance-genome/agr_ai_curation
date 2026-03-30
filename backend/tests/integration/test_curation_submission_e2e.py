@@ -172,7 +172,6 @@ def _reference_prep_output_payload() -> dict[str, object]:
         "candidates": [
             {
                 "adapter_key": "reference_adapter",
-                "profile_key": None,
                 "payload": {
                     "citation": {
                         "title": "Adapter-owned reference scaffold in practice",
@@ -278,10 +277,8 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
         {
             "extraction_result_id": "extract-observation-1",
             "document_id": submission_e2e_context["document_id"],
-            "adapter_key": "reference_adapter",
-            "profile_key": "pilot",
-            "domain_key": "observation",
-            "agent_key": "observation_extractor",
+            "adapter_key": "gene",
+            "agent_key": "gene_extractor",
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": "chat-session-1",
             "trace_id": "trace-observation-1",
@@ -292,16 +289,14 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
             "payload_json": {
                 "items": [
                     {
-                        "label": "Candidate Alpha",
-                        "entity_type": "observation",
-                        "normalized_id": "OBS:0001",
+                        "gene_symbol": "alpha-1",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000008",
                         "source_mentions": ["Alpha mention"],
                         "evidence": [
                             {
-                                "entity": "Candidate Alpha",
-                                "verified_quote": (
-                                    "Candidate Alpha was supported by a verified observation."
-                                ),
+                                "entity": "alpha-1",
+                                "verified_quote": "alpha-1 was supported by a verified observation.",
                                 "page": 6,
                                 "section": "Results",
                                 "subsection": "Observation set",
@@ -313,10 +308,8 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
                 ],
                 "evidence_records": [
                     {
-                        "entity": "Candidate Alpha",
-                        "verified_quote": (
-                            "Candidate Alpha was supported by a verified observation."
-                        ),
+                        "entity": "alpha-1",
+                        "verified_quote": "alpha-1 was supported by a verified observation.",
                         "page": 6,
                         "section": "Results",
                         "subsection": "Observation set",
@@ -335,9 +328,7 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
         [extraction_result],
         scope_confirmation=CurationPrepScopeConfirmation(
             confirmed=True,
-            adapter_keys=["reference_adapter"],
-            profile_keys=["pilot"],
-            domain_keys=["observation"],
+            adapter_keys=["gene"],
             notes=["Confirmed from chat session bootstrap test."],
         ),
         db=test_db,
@@ -358,24 +349,24 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
     )
 
     assert bootstrap_response.created is True
-    assert bootstrap_response.session.adapter.adapter_key == "observation"
+    assert bootstrap_response.session.adapter.adapter_key == "gene"
     assert bootstrap_response.session.progress.total_candidates == 1
 
     workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
     candidate = workspace.workspace.candidates[0]
-    assert candidate.adapter_key == "observation"
+    assert candidate.adapter_key == "gene"
     label_field = next(
-        field for field in candidate.draft.fields if field.field_key == "label"
+        field for field in candidate.draft.fields if field.field_key == "gene_symbol"
     )
-    assert label_field.value == "Candidate Alpha"
+    assert label_field.value == "alpha-1"
     assert candidate.evidence_anchors[0].field_keys == [
-        "label",
+        "gene_symbol",
         "entity_type",
         "normalized_id",
         "source_mentions.0",
     ]
     assert candidate.evidence_anchors[0].anchor.snippet_text == (
-        "Candidate Alpha was supported by a verified observation."
+        "alpha-1 was supported by a verified observation."
     )
     assert candidate.evidence_anchors[0].anchor.page_number == 6
     assert candidate.evidence_anchors[0].anchor.section_title == "Results"
@@ -409,8 +400,6 @@ def test_submission_workflow_e2e_with_retry_and_history(
         CurationExtractionPersistenceRequest(
             document_id=submission_e2e_context["document_id"],
             adapter_key="reference_adapter",
-            profile_key=None,
-            domain_key="reference",
             agent_key="curation_prep",
             source_kind=CurationExtractionSourceKind.CHAT,
             origin_session_id="chat-session-submission-e2e",

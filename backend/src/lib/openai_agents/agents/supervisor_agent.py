@@ -137,17 +137,11 @@ def _is_explicit_curation_prep_confirmation(user_confirmation: str) -> bool:
 def _available_scope_from_extraction_results(
     extraction_results: Sequence[Any],
 ) -> dict[str, list[str]]:
-    """Summarize the scope keys currently available in persisted extraction results."""
+    """Summarize the adapter scope currently available in persisted extraction results."""
 
     return {
         "adapter_keys": _unique_scope_values(
             [getattr(record, "adapter_key", None) for record in extraction_results]
-        ),
-        "profile_keys": _unique_scope_values(
-            [getattr(record, "profile_key", None) for record in extraction_results]
-        ),
-        "domain_keys": _unique_scope_values(
-            [getattr(record, "domain_key", None) for record in extraction_results]
         ),
     }
 
@@ -173,60 +167,16 @@ def _resolve_confirmed_scope(
     extraction_results: Sequence[Any],
     *,
     adapter_keys: Sequence[str] | None,
-    profile_keys: Sequence[str] | None,
-    domain_keys: Sequence[str] | None,
 ) -> tuple[dict[str, list[str]] | None, dict[str, list[str]]]:
-    """Resolve confirmed scope, refusing ambiguous multi-scope auto-selection."""
+    """Resolve confirmed adapter scope without legacy profile/domain narrowing."""
 
     available_scope = _available_scope_from_extraction_results(extraction_results)
     confirmed_scope = {
         "adapter_keys": _normalize_scope_values(adapter_keys),
-        "profile_keys": _normalize_scope_values(profile_keys),
-        "domain_keys": _normalize_scope_values(domain_keys),
     }
 
-    if len(available_scope["adapter_keys"]) > 1 and not confirmed_scope["adapter_keys"]:
+    if not confirmed_scope["adapter_keys"]:
         return None, available_scope
-    if not confirmed_scope["adapter_keys"] and len(available_scope["adapter_keys"]) == 1:
-        confirmed_scope["adapter_keys"] = list(available_scope["adapter_keys"])
-
-    scoped_without_domain = [
-        record
-        for record in extraction_results
-        if _record_matches_scope(
-            record,
-            {
-                "adapter_keys": confirmed_scope["adapter_keys"],
-                "profile_keys": confirmed_scope["profile_keys"],
-                "domain_keys": [],
-            },
-        )
-    ]
-    narrowed_scope = _available_scope_from_extraction_results(scoped_without_domain)
-
-    if len(narrowed_scope["profile_keys"]) > 1 and not confirmed_scope["profile_keys"]:
-        return None, narrowed_scope
-    if not confirmed_scope["profile_keys"] and len(narrowed_scope["profile_keys"]) == 1:
-        confirmed_scope["profile_keys"] = list(narrowed_scope["profile_keys"])
-
-    scoped_with_adapter_profile = [
-        record
-        for record in extraction_results
-        if _record_matches_scope(
-            record,
-            {
-                "adapter_keys": confirmed_scope["adapter_keys"],
-                "profile_keys": confirmed_scope["profile_keys"],
-                "domain_keys": [],
-            },
-        )
-    ]
-    fully_narrowed_scope = _available_scope_from_extraction_results(scoped_with_adapter_profile)
-
-    if len(fully_narrowed_scope["domain_keys"]) > 1 and not confirmed_scope["domain_keys"]:
-        return None, fully_narrowed_scope
-    if not confirmed_scope["domain_keys"] and len(fully_narrowed_scope["domain_keys"]) == 1:
-        confirmed_scope["domain_keys"] = list(fully_narrowed_scope["domain_keys"])
 
     if not any(confirmed_scope.values()):
         return None, available_scope
@@ -235,20 +185,12 @@ def _resolve_confirmed_scope(
 
 
 def _record_matches_scope(record: Any, confirmed_scope: dict[str, list[str]]) -> bool:
-    """Return whether one persisted extraction record falls within confirmed scope."""
+    """Return whether one persisted extraction record falls within confirmed adapter scope."""
 
     adapter_key = str(getattr(record, "adapter_key", None) or "").strip()
-    profile_key = str(getattr(record, "profile_key", None) or "").strip()
-    domain_key = str(getattr(record, "domain_key", None) or "").strip()
 
     if confirmed_scope["adapter_keys"]:
         if not adapter_key or adapter_key not in confirmed_scope["adapter_keys"]:
-            return False
-    if confirmed_scope["profile_keys"]:
-        if not profile_key or profile_key not in confirmed_scope["profile_keys"]:
-            return False
-    if confirmed_scope["domain_keys"]:
-        if not domain_key or domain_key not in confirmed_scope["domain_keys"]:
             return False
 
     return True
@@ -258,23 +200,13 @@ def _filter_extraction_results_for_scope(
     extraction_results: Sequence[Any],
     confirmed_scope: dict[str, list[str]],
 ) -> tuple[list[Any], list[str]]:
-    """Filter persisted extraction results to confirmed scope with a safe unscoped fallback."""
+    """Filter persisted extraction results to the explicitly confirmed scope."""
 
     scoped_results = [
         record for record in extraction_results if _record_matches_scope(record, confirmed_scope)
     ]
     if scoped_results:
         return scoped_results, []
-
-    if extraction_results and all(
-        not str(getattr(record, "adapter_key", None) or "").strip()
-        and not str(getattr(record, "profile_key", None) or "").strip()
-        and not str(getattr(record, "domain_key", None) or "").strip()
-        for record in extraction_results
-    ):
-        return list(extraction_results), [
-            "Persisted extraction results did not include scope keys; using current session extraction context with curator-confirmed scope.",
-        ]
 
     return [], []
 
@@ -297,8 +229,6 @@ async def _dispatch_curation_prep_from_chat_context(
     *,
     user_confirmation: str,
     adapter_keys: Sequence[str] | None = None,
-    profile_keys: Sequence[str] | None = None,
-    domain_keys: Sequence[str] | None = None,
     scope_summary: str | None = None,
 ) -> str:
     """Run curation prep from the current chat session when confirmation is valid."""
@@ -365,8 +295,6 @@ async def _dispatch_curation_prep_from_chat_context(
     confirmed_scope, available_scope = _resolve_confirmed_scope(
         extraction_results,
         adapter_keys=adapter_keys,
-        profile_keys=profile_keys,
-        domain_keys=domain_keys,
     )
     if confirmed_scope is None:
         return _tool_response(
@@ -397,22 +325,10 @@ async def _dispatch_curation_prep_from_chat_context(
             "The persisted extraction context is missing adapter ownership, so curation prep cannot safely run yet.",
             available_scope=available_scope,
         )
-    resolved_profile_keys = _resolved_scope_values(
-        confirmed_scope["profile_keys"],
-        scoped_extraction_results,
-        "profile_key",
-    )
-    resolved_domain_keys = _resolved_scope_values(
-        confirmed_scope["domain_keys"],
-        scoped_extraction_results,
-        "domain_key",
-    )
 
     scope_confirmation = CurationPrepScopeConfirmation(
         confirmed=True,
         adapter_keys=resolved_adapter_keys,
-        profile_keys=resolved_profile_keys,
-        domain_keys=resolved_domain_keys,
         notes=_unique_scope_values(
             [
                 *scope_resolution_notes,
@@ -452,8 +368,6 @@ async def _dispatch_curation_prep_from_chat_context(
         candidate_count=candidate_count,
         document_id=scoped_extraction_results[0].document_id,
         adapter_keys=resolved_adapter_keys,
-        profile_keys=resolved_profile_keys,
-        domain_keys=resolved_domain_keys,
         warnings=list(prep_output.run_metadata.warnings),
         processing_notes=list(prep_output.run_metadata.processing_notes),
     )
@@ -973,15 +887,13 @@ def create_supervisor_agent(
             "Prepare the confirmed chat extraction context for curation workspace follow-up. "
             f'Use only after you already asked "{CURATION_PREP_CONFIRMATION_QUESTION}" and the curator '
             "explicitly confirmed in a later turn. Pass the curator's confirmation text verbatim in "
-            "`user_confirmation`. Include confirmed adapter_keys, profile_keys, and domain_keys when "
-            "they are clear from the conversation. Do not call this tool to ask for confirmation."
+            "`user_confirmation`. Include confirmed adapter_keys when they are clear from the "
+            "conversation. Do not call this tool to ask for confirmation."
         ),
     )
     async def prepare_for_curation_tool(
         user_confirmation: str,
         adapter_keys: List[str] | None = None,
-        profile_keys: List[str] | None = None,
-        domain_keys: List[str] | None = None,
         scope_summary: str = "",
     ) -> str:
         """Invoke the curation prep agent after explicit curator confirmation."""
@@ -989,8 +901,6 @@ def create_supervisor_agent(
         return await _dispatch_curation_prep_from_chat_context(
             user_confirmation=user_confirmation,
             adapter_keys=adapter_keys,
-            profile_keys=profile_keys,
-            domain_keys=domain_keys,
             scope_summary=scope_summary,
         )
 

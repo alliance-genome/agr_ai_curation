@@ -94,6 +94,7 @@ class ExportKind(str, Enum):
     TOOL_POLICY_DEFAULTS = "tool_policy_defaults"
     CONNECTION = "connection"
     IDENTIFIER_PREFIXES = "identifier_prefixes"
+    CURATION_ADAPTER = "curation_adapter"
 
 
 class ToolBindingType(str, Enum):

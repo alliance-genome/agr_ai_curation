@@ -136,8 +136,6 @@ function MessageActions({
           flowRunId={reviewAndCurateTarget.flowRunId}
           originSessionId={reviewAndCurateTarget.originSessionId}
           adapterKeys={reviewAndCurateTarget.adapterKeys}
-          profileKeys={reviewAndCurateTarget.profileKeys}
-          domainKeys={reviewAndCurateTarget.domainKeys}
           iconOnly={true}
           size="small"
           sx={actionButtonSx}

@@ -450,7 +450,7 @@ describe('DocumentList', () => {
     expect(emitGlobalToastMock).toHaveBeenCalledWith({
       message: 'Your PDFs are processing in the background. You can safely navigate away.',
       severity: 'info',
-      autoHideDurationMs: 8000,
+      autoHideDurationMs: 6000,
       anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
     });
 

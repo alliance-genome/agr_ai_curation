@@ -87,6 +87,17 @@ class TestAgentLoader:
         assert pdf.output_schema == "PdfExtractionResultEnvelope"
         assert "record_evidence" in pdf.tools
 
+    def test_gene_extractor_exposes_curation_routing_metadata(self):
+        """Launchable curation extractors should declare package-owned adapter routing."""
+        from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
+
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        gene_extractor = get_agent_definition("gene_extractor")
+
+        assert gene_extractor is not None
+        assert gene_extractor.curation.adapter_key == "gene"
+        assert gene_extractor.curation.launchable is True
+
     def test_get_supervisor_tools(self):
         """Test generating supervisor tool list."""
         from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools

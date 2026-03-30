@@ -70,6 +70,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
 
     expected_exports = {
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
+        (
+            ExportKind.CURATION_ADAPTER,
+            "default",
+            "python/src/agr_ai_curation_alliance/curation_adapters.py",
+        ),
     }
     for bundle in _raw_manifest_agent_bundles():
         agent_name = str(bundle["name"])

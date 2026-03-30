@@ -7,16 +7,12 @@ export interface CurationPrepPreview {
   extraction_result_count: number
   conversation_message_count: number
   adapter_keys: string[]
-  profile_keys: string[]
-  domain_keys: string[]
   blocking_reasons: string[]
 }
 
 export interface CurationPrepRunRequest {
   session_id: string
   adapter_keys: string[]
-  profile_keys: string[]
-  domain_keys: string[]
 }
 
 export interface CurationPrepRunResponse {
@@ -26,8 +22,6 @@ export interface CurationPrepRunResponse {
   warnings: string[]
   processing_notes: string[]
   adapter_keys: string[]
-  profile_keys: string[]
-  domain_keys: string[]
 }
 
 export async function fetchCurationPrepPreview(sessionId: string): Promise<CurationPrepPreview> {
@@ -55,8 +49,6 @@ export async function runCurationPrep(request: CurationPrepRunRequest): Promise<
     body: JSON.stringify({
       session_id: request.session_id,
       adapter_keys: request.adapter_keys,
-      profile_keys: request.profile_keys,
-      domain_keys: request.domain_keys,
     }),
   })
 

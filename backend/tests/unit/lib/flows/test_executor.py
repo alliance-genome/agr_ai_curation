@@ -133,12 +133,30 @@ MOCK_REGISTRY = {
         "description": "Curate genes",
         "factory": lambda: None,
         "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
     },
     "disease": {
         "name": "Disease Specialist",
         "description": "Curate diseases",
         "factory": lambda: None,
         "requires_document": False,
+        "curation": {
+            "adapter_key": "disease",
+            "launchable": True,
+        },
+    },
+    "gene-expression": {
+        "name": "Gene Expression Specialist",
+        "description": "Curate gene expression findings",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene_expression",
+            "launchable": True,
+        },
     },
     "curation_prep": {
         "name": "Curation Prep Agent",
@@ -164,6 +182,7 @@ def _metadata_from_registry(
         "description": entry.get("description", ""),
         "requires_document": requires_document,
         "required_params": ["document_id", "user_id"] if requires_document else [],
+        "curation": entry.get("curation"),
     }
 
 
@@ -637,7 +656,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["extraction_results"][0].source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert captured["scope_confirmation"].confirmed is True
-        assert captured["scope_confirmation"].domain_keys == ["gene"]
+        assert captured["scope_confirmation"].adapter_keys == ["gene"]
         assert captured["persistence_context"].document_id == "doc-123"
         assert captured["persistence_context"].origin_session_id == "session-123"
         assert captured["persistence_context"].flow_run_id == "flow-run-123"
@@ -1399,8 +1418,7 @@ class TestExecuteFlowTermination:
         assert len(persisted_requests) == 1
         persisted_request = persisted_requests[0]
         assert persisted_request.document_id == "doc-1"
-        assert persisted_request.adapter_key is None
-        assert persisted_request.domain_key == "gene_expression"
+        assert persisted_request.adapter_key == "gene_expression"
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert persisted_request.origin_session_id == "flow-session-1"

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.base import DeterministicExportAdapter
-from src.lib.curation_workspace.export_adapters.json_bundle import JsonBundleExportAdapter
 
 
 class ExportAdapterRegistry:
@@ -52,10 +51,8 @@ class ExportAdapterRegistry:
 
 
 def build_default_export_adapter_registry() -> ExportAdapterRegistry:
-    """Build the default export registry for workspace-backed adapters."""
+    """Build the package-driven export registry for workspace-backed adapters."""
 
     return ExportAdapterRegistry(
-        adapters=(
-            JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY),
-        )
+        adapters=load_curation_adapter_registry().export_adapters()
     )

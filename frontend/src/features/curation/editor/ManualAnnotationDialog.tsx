@@ -67,7 +67,6 @@ interface FieldSection {
 interface ManualTemplateOption {
   key: string
   adapterKey: string
-  profileKey: string | null
   label: string
   description: string
   source: 'candidate' | 'empty'
@@ -164,26 +163,17 @@ function parseTemplateFieldMetadata(value: unknown): Record<string, unknown> {
   return { ...(value as Record<string, unknown>) }
 }
 
-function createTemplateOptionKey(
-  adapterKey: string,
-  profileKey: string | null,
-): string {
-  return `${adapterKey}::${profileKey ?? ''}`
+function createTemplateOptionKey(adapterKey: string): string {
+  return adapterKey
 }
 
 function buildTemplateLabel(
   session: CurationReviewSession,
   adapterKey: string,
-  profileKey: string | null,
 ): string {
-  const adapterLabel = adapterKey === session.adapter.adapter_key
+  return adapterKey === session.adapter.adapter_key
     ? (session.adapter.display_label?.trim() || humanizeKey(adapterKey))
     : humanizeKey(adapterKey)
-  const profileLabel = profileKey === session.adapter.profile_key
-    ? (session.adapter.profile_label?.trim() || humanizeKey(profileKey))
-    : humanizeKey(profileKey)
-
-  return profileLabel ? `${adapterLabel} / ${profileLabel}` : adapterLabel
 }
 
 function buildTemplateOptions(
@@ -195,7 +185,7 @@ function buildTemplateOptions(
   )
 
   for (const candidate of sortedCandidates) {
-    const key = createTemplateOptionKey(candidate.adapter_key, candidate.profile_key ?? null)
+    const key = createTemplateOptionKey(candidate.adapter_key)
     if (options.has(key)) {
       continue
     }
@@ -204,11 +194,9 @@ function buildTemplateOptions(
     options.set(key, {
       key,
       adapterKey: candidate.adapter_key,
-      profileKey: candidate.profile_key ?? null,
       label: buildTemplateLabel(
         workspace.session,
         candidate.adapter_key,
-        candidate.profile_key ?? null,
       ),
       description:
         `${fields.length} field${fields.length === 1 ? '' : 's'} from the shared editor template`,
@@ -217,21 +205,16 @@ function buildTemplateOptions(
     })
   }
 
-  const sessionKey = createTemplateOptionKey(
-    workspace.session.adapter.adapter_key,
-    workspace.session.adapter.profile_key ?? null,
-  )
+  const sessionKey = createTemplateOptionKey(workspace.session.adapter.adapter_key)
   if (!options.has(sessionKey)) {
     options.set(sessionKey, {
       key: sessionKey,
       adapterKey: workspace.session.adapter.adapter_key,
-      profileKey: workspace.session.adapter.profile_key ?? null,
       label: buildTemplateLabel(
         workspace.session,
         workspace.session.adapter.adapter_key,
-        workspace.session.adapter.profile_key ?? null,
       ),
-      description: 'No shared draft-field template is available yet for this adapter/profile.',
+      description: 'No shared draft-field template is available yet for this adapter.',
       source: 'empty',
       fields: EMPTY_FIELDS,
     })
@@ -415,7 +398,6 @@ function buildOptimisticCandidate(args: {
   candidateId: string
   draftId: string
   adapterKey: string
-  profileKey: string | null
   displayLabel: string
   fields: CurationDraftField[]
   evidenceRecords: CurationEvidenceRecord[]
@@ -444,7 +426,6 @@ function buildOptimisticCandidate(args: {
     status: 'pending',
     order: args.order,
     adapter_key: args.adapterKey,
-    profile_key: args.profileKey,
     display_label: args.displayLabel,
     secondary_label: null,
     conversation_summary: null,
@@ -607,7 +588,6 @@ export default function ManualAnnotationDialog({
       candidateId: optimisticCandidateId,
       draftId: optimisticDraftId,
       adapterKey: selectedTemplate.adapterKey,
-      profileKey: selectedTemplate.profileKey,
       displayLabel: resolvedDisplayLabel,
       fields: draftFields,
       evidenceRecords,
@@ -639,7 +619,6 @@ export default function ManualAnnotationDialog({
       const response = await createManualCurationCandidate({
         session_id: session.session_id,
         adapter_key: selectedTemplate.adapterKey,
-        profile_key: selectedTemplate.profileKey,
         source: 'manual',
         display_label: resolvedDisplayLabel,
         draft: optimisticCandidate.draft,
@@ -715,7 +694,7 @@ export default function ManualAnnotationDialog({
             <TextField
               data-testid="manual-annotation-template-select"
               fullWidth
-              label="Adapter / profile"
+              label="Adapter template"
               onChange={(event) => {
                 setSelectedTemplateKey(event.target.value)
                 setDisplayLabel('')
@@ -752,7 +731,7 @@ export default function ManualAnnotationDialog({
 
           {!hasTemplateFields ? (
             <Alert severity="warning">
-              No shared draft-field template is available for this adapter/profile yet.
+              No shared draft-field template is available for this adapter yet.
             </Alert>
           ) : (
             <Stack spacing={2.25}>
