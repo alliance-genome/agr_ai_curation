@@ -84,4 +84,16 @@ describe('EntityTagRow', () => {
     render(<EntityTagRow {...defaultProps} />, { wrapper })
     expect(screen.getByText('AI')).toBeInTheDocument()
   })
+
+  it('renders unknown entity type identifiers without crashing', () => {
+    render(
+      <EntityTagRow
+        {...defaultProps}
+        tag={makeTag({ entity_type: 'CUSTOM:entity_type' })}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.getByText('CUSTOM:entity_type')).toBeInTheDocument()
+  })
 })

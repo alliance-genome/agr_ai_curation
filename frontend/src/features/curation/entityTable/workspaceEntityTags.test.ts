@@ -170,4 +170,35 @@ describe('workspaceEntityTags', () => {
       }),
     ).toThrow(/not a supported ATP code/i)
   })
+
+  it('allows unchanged unknown entity type identifiers to pass through existing rows', () => {
+    expect(() =>
+      buildEntityTagFieldChanges(buildCandidate({
+        draft: {
+          ...buildCandidate().draft,
+          fields: [
+            {
+              ...buildCandidate().draft.fields[0]!,
+            },
+            {
+              field_key: 'entity_type',
+              label: 'Entity type',
+              value: 'CUSTOM:entity_type',
+              seed_value: 'CUSTOM:entity_type',
+              order: 1,
+              required: true,
+              read_only: false,
+              dirty: false,
+              stale_validation: false,
+              evidence_anchor_ids: [],
+              validation_result: null,
+              metadata: {},
+            },
+          ],
+        },
+      }), {
+        entity_type: 'CUSTOM:entity_type',
+      }),
+    ).not.toThrow()
+  })
 })

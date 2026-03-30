@@ -198,34 +198,40 @@ function CurationWorkspacePageContent({
       return
     }
 
-    let updatedAnyTag = false
     try {
       const draftSaved = await autosave.flush()
       if (!draftSaved) {
         throw new Error('Unable to save the current draft before updating these entities.')
       }
 
-      for (const tagId of tagIds) {
-        await submitCurationCandidateDecision({
+      const decisionResults = await Promise.allSettled(tagIds.map((tagId) =>
+        submitCurationCandidateDecision({
           session_id: workspace.session.session_id,
           candidate_id: tagId,
           action: 'accept',
           advance_queue: false,
-        })
-        updatedAnyTag = true
-      }
+        })))
 
-      if (updatedAnyTag) {
+      const rejectedResults = decisionResults.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      const fulfilledCount = decisionResults.length - rejectedResults.length
+
+      if (fulfilledCount > 0) {
         await refreshWorkspace(activeCandidateId)
       }
-    } catch (error) {
-      if (updatedAnyTag) {
-        try {
-          await refreshWorkspace(activeCandidateId)
-        } catch {
-          // Preserve the original mutation error when the recovery refresh also fails.
-        }
+
+      if (rejectedResults.length > 0) {
+        const firstError = rejectedResults[0].reason
+        const firstErrorMessage = firstError instanceof Error
+          ? firstError.message
+          : 'Unknown workspace mutation error.'
+
+        throw new Error(
+          `Accepted ${fulfilledCount} of ${tagIds.length} validated entities. First error: ${firstErrorMessage}`,
+        )
       }
+    } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to accept all validated entities.'
       setTableError(message)
       throw error

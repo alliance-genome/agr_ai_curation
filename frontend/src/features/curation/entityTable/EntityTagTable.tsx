@@ -33,17 +33,19 @@ export default function EntityTagTable({
   onCreateManualTag,
 }: EntityTagTableProps) {
   const state = useEntityTagState(tags, selectedTagId)
+  const selectedTag = state.selectedTag
+  const selectedTagIdValue = state.selectedTagId
 
   useEffect(() => {
-    if (!state.selectedTag) {
+    if (!selectedTagIdValue || !selectedTag) {
       return
     }
 
-    const command = buildEntityTagNavigationCommand(state.selectedTag)
+    const command = buildEntityTagNavigationCommand(selectedTag)
     if (command) {
       dispatchPDFViewerNavigateEvidence(command)
     }
-  }, [state.selectedTag])
+  }, [selectedTagIdValue])
 
   const handleSelect = useCallback((tagId: string) => {
     state.selectTag()
@@ -61,7 +63,8 @@ export default function EntityTagTable({
   const handleAccept = useCallback(async (tagId: string) => {
     try {
       await onAcceptTag(tagId)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to accept entity tag ${tagId}.`, error)
       // Keep the current row state in place when the workspace mutation fails.
     }
   }, [onAcceptTag])
@@ -69,7 +72,8 @@ export default function EntityTagTable({
   const handleReject = useCallback(async (tagId: string) => {
     try {
       await onRejectTag(tagId)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to reject entity tag ${tagId}.`, error)
       // Keep the current row state in place when the workspace mutation fails.
     }
   }, [onRejectTag])
@@ -81,7 +85,8 @@ export default function EntityTagTable({
 
     try {
       await onAcceptAllValidated(validatedPendingTagIds)
-    } catch {
+    } catch (error) {
+      console.error('Failed to accept all validated entity tags.', error)
       // Leave the current table state intact and let the page surface the error.
     }
   }, [onAcceptAllValidated, state.tags])
@@ -100,7 +105,8 @@ export default function EntityTagTable({
 
       await onSaveTag(tagId, updates)
       state.cancelEditing()
-    } catch {
+    } catch (error) {
+      console.error(`Failed to save entity tag ${tagId}.`, error)
       // Keep edit mode open when the save fails.
     }
   }, [onCreateManualTag, onSaveTag, onSelectTag, state])

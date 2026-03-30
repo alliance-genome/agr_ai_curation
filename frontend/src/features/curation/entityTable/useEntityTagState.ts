@@ -1,10 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { EntityTag } from './types'
 
-let nextManualId = 1
-
-function generateManualTagId(): string {
-  return `manual-${Date.now()}-${nextManualId++}`
+function generateManualTagId(nextManualId: number): string {
+  return `manual-${Date.now()}-${nextManualId}`
 }
 
 export function useEntityTagState(
@@ -14,6 +12,7 @@ export function useEntityTagState(
   const [editingTagId, setEditingTagId] = useState<string | null>(null)
   const [manualTag, setManualTag] = useState<EntityTag | null>(null)
   const [manualSelectedTagId, setManualSelectedTagId] = useState<string | null>(null)
+  const nextManualIdRef = useRef(0)
 
   const displayTags = useMemo(
     () => (manualTag ? [...tags, manualTag] : tags),
@@ -61,8 +60,9 @@ export function useEntityTagState(
   }, [editingTagId, manualTag])
 
   const addManualTag = useCallback(() => {
+    nextManualIdRef.current += 1
     const newTag: EntityTag = {
-      tag_id: generateManualTagId(),
+      tag_id: generateManualTagId(nextManualIdRef.current),
       entity_name: '',
       entity_type: '',
       species: '',

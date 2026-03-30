@@ -29,3 +29,15 @@ export const ENTITY_TYPE_LABELS: Record<EntityTypeCode, string> = {
   'ATP:0000285': 'classical allele',
   'ATP:0000093': 'sequence targeting reagent',
 }
+
+export function isEntityTypeCode(value: string): value is EntityTypeCode {
+  return ENTITY_TYPE_CODES.includes(value as EntityTypeCode)
+}
+
+export function getEntityTypeLabel(entityType: string): string {
+  if (isEntityTypeCode(entityType)) {
+    return ENTITY_TYPE_LABELS[entityType]
+  }
+
+  return entityType
+}

@@ -47,6 +47,17 @@ vi.mock('@/components/pdfViewer/PdfViewer', () => ({
   },
 }))
 
+function createDeferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+
+  return { promise, resolve, reject }
+}
+
 function buildWorkspace(): CurationWorkspace {
   return {
     session: {
@@ -491,6 +502,90 @@ describe('CurationWorkspacePage', () => {
         action: 'accept',
         advance_queue: false,
       })
+      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('submits accept-all-validated decisions without waiting for each prior request to resolve', async () => {
+    const workspace = buildWorkspace()
+    const workspaceWithValidatedPending: CurationWorkspace = {
+      ...workspace,
+      entity_tags: workspace.entity_tags.map((tag) => ({
+        ...tag,
+        decision: 'pending',
+        db_status: 'validated',
+      })),
+      candidates: workspace.candidates.map((candidate) => ({
+        ...candidate,
+        status: 'pending',
+        validation: {
+          state: 'completed',
+          counts: {
+            validated: 1,
+            ambiguous: 0,
+            not_found: 0,
+            invalid_format: 0,
+            conflict: 0,
+            skipped: 0,
+            overridden: 0,
+          },
+          stale_field_keys: [],
+          warnings: [],
+        },
+      })),
+    }
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspaceWithValidatedPending,
+      entity_tags: workspaceWithValidatedPending.entity_tags.map((tag) => ({
+        ...tag,
+        decision: 'accepted',
+      })),
+      candidates: workspaceWithValidatedPending.candidates.map((candidate) => ({
+        ...candidate,
+        status: 'accepted',
+      })),
+    }
+    const firstDecision = createDeferredPromise<unknown>()
+    const secondDecision = createDeferredPromise<unknown>()
+
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspaceWithValidatedPending)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.submitCurationCandidateDecision.mockImplementation(({ candidate_id }) => {
+      if (candidate_id === 'candidate-accepted') {
+        return firstDecision.promise
+      }
+
+      return secondDecision.promise
+    })
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Accept All Validated' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept All Validated' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledTimes(2)
+    })
+
+    firstDecision.resolve({
+      candidate: refreshedWorkspace.candidates[0],
+      session: refreshedWorkspace.session,
+      next_candidate_id: null,
+      action_log_entry: null,
+    })
+    secondDecision.resolve({
+      candidate: refreshedWorkspace.candidates[1],
+      session: refreshedWorkspace.session,
+      next_candidate_id: null,
+      action_log_entry: null,
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
       expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     })
   })

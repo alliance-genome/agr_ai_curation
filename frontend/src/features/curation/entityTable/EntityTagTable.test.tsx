@@ -141,6 +141,49 @@ describe('EntityTagTable', () => {
     window.removeEventListener('pdf-viewer-navigate-evidence', listener)
   })
 
+  it('does not redispatch PDF navigation when the selected tag object is refreshed with the same id', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-navigate-evidence', listener)
+
+    const initialTags = makeTags()
+    const { rerender } = render(
+      <EntityTagTable
+        tags={initialTags}
+        selectedTagId="tag-1"
+        onSelectTag={vi.fn()}
+        onAcceptTag={vi.fn()}
+        onRejectTag={vi.fn()}
+        onAcceptAllValidated={vi.fn()}
+        onSaveTag={vi.fn()}
+        onCreateManualTag={vi.fn(async () => 'manual-1')}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    rerender(
+      <EntityTagTable
+        tags={initialTags.map((tag) => ({ ...tag }))}
+        selectedTagId="tag-1"
+        onSelectTag={vi.fn()}
+        onAcceptTag={vi.fn()}
+        onRejectTag={vi.fn()}
+        onAcceptAllValidated={vi.fn()}
+        onSaveTag={vi.fn()}
+        onCreateManualTag={vi.fn(async () => 'manual-1')}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    window.removeEventListener('pdf-viewer-navigate-evidence', listener)
+  })
+
   it('calls the accept callback and reflects the updated row state', async () => {
     const onAcceptTag = vi.fn()
     render(<ControlledTable onAcceptTag={onAcceptTag} />, { wrapper })

@@ -3,9 +3,8 @@ import EditIcon from '@mui/icons-material/Edit'
 import { alpha, useTheme } from '@mui/material/styles'
 import type { EntityTag } from './types'
 import {
-  ENTITY_TYPE_LABELS,
+  getEntityTypeLabel,
   type DbValidationStatus,
-  type EntityTypeCode,
 } from './types'
 
 interface EntityTagRowProps {
@@ -27,14 +26,6 @@ const DB_STATUS_LABELS: Record<DbValidationStatus, string> = {
   validated: 'validated',
   ambiguous: 'ambiguous',
   not_found: 'not found',
-}
-
-function getEntityTypeLabel(entityType: string): string {
-  if (!(entityType in ENTITY_TYPE_LABELS)) {
-    throw new Error(`Unknown entity type code ${entityType}.`)
-  }
-
-  return ENTITY_TYPE_LABELS[entityType as EntityTypeCode]
 }
 
 export default function EntityTagRow({

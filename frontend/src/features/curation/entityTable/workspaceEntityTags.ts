@@ -5,7 +5,7 @@ import type {
   CurationDraftFieldChange,
 } from '@/features/curation/types'
 import type { EntityTag } from './types'
-import { ENTITY_TYPE_CODES } from './types'
+import { isEntityTypeCode } from './types'
 
 const ENTITY_FIELD_KEYS = ['entity_name', 'gene_symbol']
 const ENTITY_TYPE_FIELD_KEYS = ['entity_type', 'entity_type_code', 'entity_type_atp_code']
@@ -48,10 +48,6 @@ function resolveEntityField(candidate: CurationCandidate): CurationDraftField {
   return entityField
 }
 
-function isEntityTypeCode(value: string): boolean {
-  return ENTITY_TYPE_CODES.includes(value as (typeof ENTITY_TYPE_CODES)[number])
-}
-
 function inferEntityType(candidate: CurationCandidate, entityField: CurationDraftField): string {
   const typeField = findField(candidate.draft.fields, ENTITY_TYPE_FIELD_KEYS)
   if (typeField !== null && typeField.value !== null && typeField.value !== undefined) {
@@ -59,11 +55,12 @@ function inferEntityType(candidate: CurationCandidate, entityField: CurationDraf
       throw new Error(`Candidate ${candidate.candidate_id} has a non-string entity type value.`)
     }
 
-    if (!isEntityTypeCode(typeField.value)) {
-      throw new Error(`Candidate ${candidate.candidate_id} has an unknown entity type code ${typeField.value}.`)
+    const entityType = typeField.value.trim()
+    if (entityType.length === 0) {
+      throw new Error(`Candidate ${candidate.candidate_id} has a blank entity type value.`)
     }
 
-    return typeField.value
+    return entityType
   }
 
   if (normalizeKey(entityField.field_key) === 'gene_symbol') {
@@ -145,9 +142,6 @@ export function buildEntityTagFieldChanges(
 
   if (updates.entity_type !== undefined) {
     const entityType = normalizeTextUpdate(updates.entity_type)
-    if (!isEntityTypeCode(entityType)) {
-      throw new Error(`Entity type ${entityType} is not a supported ATP code.`)
-    }
 
     if (entityTypeField !== null) {
       const entityTypeChange = buildFieldChange(
@@ -156,8 +150,14 @@ export function buildEntityTagFieldChanges(
         entityType,
         'entity type',
       )
+      if (entityTypeChange !== null && !isEntityTypeCode(entityType)) {
+        throw new Error(`Entity type ${entityType} is not a supported ATP code.`)
+      }
       fieldChanges.push(entityTypeChange)
     } else if (entityType !== inferEntityType(candidate, entityField)) {
+      if (!isEntityTypeCode(entityType)) {
+        throw new Error(`Entity type ${entityType} is not a supported ATP code.`)
+      }
       throw new Error(
         `Candidate ${candidate.candidate_id} cannot store entity type ${entityType} because no backing draft field exists.`,
       )

@@ -12,6 +12,8 @@ export type DbValidationStatus = (typeof DB_VALIDATION_STATUSES)[number]
 export {
   ENTITY_TYPE_CODES,
   ENTITY_TYPE_LABELS,
+  getEntityTypeLabel,
+  isEntityTypeCode,
   type EntityTypeCode,
 } from './literatureEntityTypeCatalog'
 

@@ -8,7 +8,7 @@ import {
   TextField,
 } from '@mui/material'
 import type { EntityTag } from './types'
-import { ENTITY_TYPE_CODES, ENTITY_TYPE_LABELS, type EntityTypeCode } from './types'
+import { ENTITY_TYPE_CODES, ENTITY_TYPE_LABELS, getEntityTypeLabel } from './types'
 
 interface InlineEditRowProps {
   tag: EntityTag
@@ -60,7 +60,7 @@ export default function InlineEditRow({ tag, onSave, onCancel }: InlineEditRowPr
               return 'Select type'
             }
 
-            return ENTITY_TYPE_LABELS[value as EntityTypeCode]
+            return getEntityTypeLabel(value)
           }}
         >
           <MenuItem value="" disabled sx={{ fontSize: '0.75rem' }}>
