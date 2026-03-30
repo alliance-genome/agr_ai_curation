@@ -1,13 +1,14 @@
 # Auto-generated lockfile — DO NOT EDIT MANUALLY
-# Generated: 2026-03-24 from known-clean all141-backend image (litellm 1.82.4)
-# Source: pip freeze inside confirmed-clean Docker image (post-incident verification)
+# Generated: 2026-03-30 from the existing backend lockfile with a minimal
+# published AGR client refresh (agr-curation-api-client 0.8.2)
 #
 # To update: rebuild from requirements.txt in a clean environment, verify no
 # malicious .pth files, then re-freeze.
 #
 # To use: pip install -r requirements.lock.txt
 #
-agr-curation-api-client @ git+https://github.com/alliance-genome/agr_curation_api_client.git@eda8b8525c61dc382413662b237120a94c4798f9
+agr-cognito-py==0.1.0
+agr-curation-api-client==0.8.2
 aiofile==3.9.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
