@@ -209,6 +209,16 @@ sys.exit(0)
 PY
 }
 
+state_json_value() {
+  local key="$1"
+
+  if [[ ! -f "${STATE_FILE}" ]] || ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+
+  jq -r --arg key "${key}" '.[$key] // empty' "${STATE_FILE}" 2>/dev/null || true
+}
+
 ensure_review_ports() {
   local mode="${1:-prepare}"
 
@@ -727,6 +737,65 @@ stop_trace_review_runtime() {
   fi
 }
 
+docker_project_force_down() {
+  local project="$1"
+  local container_ids
+  local network_ids
+  local volume_ids
+
+  if [[ -z "${project}" ]] || ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=${project}")"
+  if [[ -n "${container_ids}" ]]; then
+    # This fallback is only used when the sandbox checkout is already gone,
+    # so compose files are unavailable and we target the labeled resources directly.
+    docker rm -f -v ${container_ids} >/dev/null 2>&1 || true
+  fi
+
+  network_ids="$(docker network ls -q --filter "label=com.docker.compose.project=${project}")"
+  if [[ -n "${network_ids}" ]]; then
+    docker network rm ${network_ids} >/dev/null 2>&1 || true
+  fi
+
+  volume_ids="$(docker volume ls -q --filter "label=com.docker.compose.project=${project}")"
+  if [[ -n "${volume_ids}" ]]; then
+    docker volume rm ${volume_ids} >/dev/null 2>&1 || true
+  fi
+}
+
+stop_existing_runtime_from_state() {
+  local state_sandbox_dir
+  local state_main_compose_project
+  local state_trace_review_compose_project
+  local state_tunnel_state_file
+  local state_tunnel_state_dir
+
+  if [[ ! -f "${STATE_FILE}" ]] || ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+
+  state_sandbox_dir="$(state_json_value "sandbox_dir")"
+  if [[ -n "${state_sandbox_dir}" ]] && [[ -d "${state_sandbox_dir}" ]]; then
+    return 0
+  fi
+
+  state_main_compose_project="$(state_json_value "sandbox_compose_project")"
+  state_trace_review_compose_project="$(state_json_value "trace_review_compose_project")"
+  state_tunnel_state_file="$(state_json_value "state_file")"
+
+  docker_project_force_down "${state_main_compose_project:-${COMPOSE_PROJECT}}"
+  docker_project_force_down "${state_trace_review_compose_project:-${TRACE_REVIEW_COMPOSE_PROJECT}}"
+
+  if [[ -n "${state_tunnel_state_file}" ]] && [[ -f "${state_tunnel_state_file}" ]]; then
+    state_tunnel_state_dir="$(dirname "${state_tunnel_state_file}")"
+    LOCAL_DB_TUNNEL_STATE_DIR="${state_tunnel_state_dir}" \
+      "${REPO_ROOT}/scripts/utilities/symphony_local_db_tunnel_stop.sh" \
+      --workspace-dir "${state_sandbox_dir:-${SANDBOX_DIR}}" >/dev/null 2>&1 || true
+  fi
+}
+
 stop_existing_runtime() {
   if [[ ! -d "${SANDBOX_DIR}" ]]; then
     return 0
@@ -831,6 +900,7 @@ prepare_sandbox() {
     ensure_prepare_ports_available
     git -C "${REPO_ROOT}" worktree remove --force "${SANDBOX_DIR}" >/dev/null 2>&1 || true
   else
+    stop_existing_runtime_from_state
     ensure_prepare_ports_available
   fi
 
