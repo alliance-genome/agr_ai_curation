@@ -12,18 +12,7 @@ import {
 
 import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
-import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
-import {
-  AnnotationEditor,
-  CuratorDecisionToolbar,
-  RevertButton,
-  ValidationBadge,
-} from '@/features/curation/editor'
-import {
-  EvidenceChipGroup,
-  EvidencePanel,
-  useEvidenceNavigation,
-} from '@/features/curation/evidence'
+import { EntityTagTable, type EntityTag } from '@/features/curation/entityTable'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
@@ -40,11 +29,9 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
-import CandidateQueue from '@/features/curation/workspace/CandidateQueue'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
-import { usePdfToFormLinking } from '@/features/curation/workspace/usePdfToFormLinking'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
@@ -59,41 +46,47 @@ function findCandidate(
   return candidates.find((candidate) => candidate.candidate_id === candidateId) ?? null
 }
 
+function candidatesToEntityTags(candidates: CurationCandidate[]): EntityTag[] {
+  return candidates.map((c) => ({
+    tag_id: c.candidate_id,
+    entity_name:
+      c.display_label
+        ?? (c.draft?.fields?.find((f) => f.field_key === 'entity_name')?.value as string)
+        ?? '',
+    entity_type: 'ATP:0000005',
+    species: '',
+    topic: '',
+    db_status: 'not_found' as const,
+    db_entity_id: null,
+    source: c.source === 'extracted' ? ('ai' as const) : ('manual' as const),
+    decision: c.status as EntityTag['decision'],
+    evidence: c.evidence_anchors?.[0]
+      ? {
+          sentence_text:
+            c.evidence_anchors[0].anchor.sentence_text
+              ?? c.evidence_anchors[0].anchor.snippet_text
+              ?? '',
+          page_number: c.evidence_anchors[0].anchor.page_number ?? null,
+          section_title: c.evidence_anchors[0].anchor.section_title ?? null,
+          chunk_ids: c.evidence_anchors[0].anchor.chunk_ids ?? [],
+        }
+      : null,
+    notes: null,
+  }))
+}
+
 function CurationWorkspacePageContent({
   queueNavigationState,
 }: {
   queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
 }) {
   const {
-    activeCandidate,
-    activeCandidateId,
     candidates,
-    setActiveCandidate,
     workspace,
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const hydration = useCurationWorkspaceHydration()
   const runtimeWarning = autosave.warning ?? hydration.warning
-  const workspaceEvidence = useMemo(
-    () => candidates.flatMap((candidate) => candidate.evidence_anchors ?? []),
-    [candidates],
-  )
-  const evidenceNavigation = useEvidenceNavigation({
-    evidence: activeCandidate?.evidence_anchors ?? [],
-    allEvidence: workspaceEvidence,
-  })
-  usePdfToFormLinking({
-    activeCandidateId,
-    candidates,
-    evidenceByAnchorId: evidenceNavigation.evidenceByAnchorId,
-    setActiveCandidate,
-  })
-  const editorPack = useMemo(
-    () => getCurationAdapterEditorPack(
-      activeCandidate?.adapter_key ?? workspace.session.adapter.adapter_key,
-    ),
-    [activeCandidate?.adapter_key, workspace.session.adapter.adapter_key],
-  )
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
   const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
@@ -101,6 +94,8 @@ function CurationWorkspacePageContent({
   const workspaceDocumentTitle = workspaceDocument.title
   const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
+
+  const entityTags = useMemo(() => candidatesToEntityTags(candidates), [candidates])
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
@@ -131,62 +126,6 @@ function CurationWorkspacePageContent({
     workspaceDocumentViewerUrl,
   ])
 
-  const queueSlot = <CandidateQueue />
-
-  const toolbarSlot = <CuratorDecisionToolbar />
-
-  const editorSlot = (
-    <Box
-      sx={{
-        flex: 1,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <AnnotationEditor
-        onFieldChange={autosave.queueFieldChange}
-        renderEvidence={(field) => (
-          <EvidenceChipGroup
-            evidenceAnchorIds={field.evidence_anchor_ids}
-            evidenceByAnchorId={evidenceNavigation.evidenceByAnchorId}
-            hoverEvidence={evidenceNavigation.hoverEvidence}
-            hoveredEvidence={evidenceNavigation.hoveredEvidence}
-            selectEvidence={evidenceNavigation.selectEvidence}
-            selectedEvidence={evidenceNavigation.selectedEvidence}
-          />
-        )}
-        renderFieldInput={editorPack?.renderFieldInput}
-        renderRevert={(_field, { canRevert, revert }) => (
-          <RevertButton canRevert={canRevert} onRevert={revert} />
-        )}
-        renderValidation={(field) => (
-          <ValidationBadge field={field} />
-        )}
-      />
-
-      {workspace.session.warnings.length > 0 ? (
-        <Box sx={{ px: 2, pb: 1.5 }}>
-          <Typography color="text.secondary" variant="body2">
-            {workspace.session.warnings.length} session warning
-            {workspace.session.warnings.length === 1 ? '' : 's'} available for review.
-          </Typography>
-        </Box>
-      ) : null}
-    </Box>
-  )
-
-  const evidenceSlot = (
-    <EvidencePanel
-      candidateEvidence={evidenceNavigation.candidateEvidence}
-      evidenceByGroup={evidenceNavigation.evidenceByGroup}
-      hoverEvidence={evidenceNavigation.hoverEvidence}
-      hoveredEvidence={evidenceNavigation.hoveredEvidence}
-      selectEvidence={evidenceNavigation.selectEvidence}
-      selectedEvidence={evidenceNavigation.selectedEvidence}
-    />
-  )
-
   return (
     <Box
       sx={{
@@ -206,8 +145,6 @@ function CurationWorkspacePageContent({
       ) : null}
 
       <WorkspaceShell
-        editorSlot={editorSlot}
-        evidenceSlot={evidenceSlot}
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
@@ -230,14 +167,8 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        pdfSlot={
-          <PdfViewer
-            onNavigationComplete={evidenceNavigation.acknowledgeNavigation}
-            pendingNavigation={evidenceNavigation.pendingNavigation}
-          />
-        }
-        queueSlot={queueSlot}
-        toolbarSlot={toolbarSlot}
+        pdfSlot={<PdfViewer />}
+        entityTableSlot={<EntityTagTable tags={entityTags} />}
       />
 
       <SubmissionPreviewDialog
