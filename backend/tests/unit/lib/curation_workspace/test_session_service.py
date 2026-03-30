@@ -797,6 +797,96 @@ def test_get_session_workspace_includes_backend_entity_tags(db_session):
     assert response.workspace.entity_tags[0].evidence.sentence_text == "APOE evidence sentence"
 
 
+def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type(db_session):
+    document = _create_document(db_session)
+    now = _now()
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=CurationSessionStatus.IN_PROGRESS,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        document_id=document.id,
+        session_version=1,
+        total_candidates=1,
+        reviewed_candidates=0,
+        pending_candidates=1,
+        accepted_candidates=0,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(session_row)
+    db_session.flush()
+
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="reference_adapter",
+        profile_key="primary",
+        display_label="Gene candidate",
+        candidate_metadata={},
+        normalized_payload={},
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(candidate)
+    db_session.flush()
+
+    db_session.add(
+        DraftModel(
+            id=uuid4(),
+            candidate_id=candidate.id,
+            adapter_key="reference_adapter",
+            version=1,
+            title="Gene draft",
+            fields=[
+                {
+                    "field_key": "gene_symbol",
+                    "label": "Gene symbol",
+                    "value": "APOE",
+                    "seed_value": "APOE",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "validation_result": {
+                        "status": "validated",
+                        "resolver": "agr_db",
+                        "candidate_matches": [
+                            {
+                                "label": "APOE",
+                                "identifier": "HGNC:613",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "metadata": {},
+                }
+            ],
+            notes="Gene note",
+            created_at=now,
+            updated_at=now,
+            draft_metadata={},
+        )
+    )
+    session_row.current_candidate_id = candidate.id
+    db_session.commit()
+
+    with pytest.raises(module.HTTPException) as exc:
+        module.get_session_workspace(db_session, str(session_row.id))
+
+    assert exc.value.status_code == 500
+    assert "missing an entity type" in exc.value.detail
+
+
 def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_sessions(db_session):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(

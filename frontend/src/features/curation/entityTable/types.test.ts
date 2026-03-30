@@ -4,6 +4,7 @@ import {
   ENTITY_TAG_SOURCES,
   DB_VALIDATION_STATUSES,
   ENTITY_TYPE_CODES,
+  getEntityTypeLabel,
   type EntityTag,
 } from './types'
 
@@ -47,5 +48,9 @@ describe('EntityTag type constants', () => {
     }
     expect(tag.tag_id).toBe('tag-1')
     expect(tag.evidence?.sentence_text).toContain('daf-2')
+  })
+
+  it('fails loudly when an unknown entity type code is rendered', () => {
+    expect(() => getEntityTypeLabel('CUSTOM:entity_type')).toThrow(/Unknown entity type code/i)
   })
 })

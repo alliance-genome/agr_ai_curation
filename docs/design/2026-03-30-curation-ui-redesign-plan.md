@@ -1676,31 +1676,10 @@ import { EntityTagTable } from '@/features/curation/entityTable'
 />
 ```
 
-Where `entityTags` comes from the workspace context/API. For the initial integration, use the existing candidates transformed to `EntityTag[]`, or use mock data if the backend isn't ready:
+Where `entityTags` comes from the workspace context/API.
 
-```tsx
-// Temporary: convert candidates to entity tags for the transition
-const entityTags: EntityTag[] = workspace.candidates.map((c) => ({
-  tag_id: c.candidate_id,
-  entity_name: c.display_label ?? '',
-  entity_type: 'ATP:0000005',
-  species: '',
-  topic: '',
-  db_status: 'not_found' as const,
-  db_entity_id: null,
-  source: c.source === 'extracted' ? 'ai' as const : 'manual' as const,
-  decision: c.status,
-  evidence: c.evidence_anchors?.[0]
-    ? {
-        sentence_text: c.evidence_anchors[0].sentence_text ?? '',
-        page_number: c.evidence_anchors[0].page_number ?? null,
-        section_title: c.evidence_anchors[0].section_title ?? null,
-        chunk_ids: c.evidence_anchors[0].chunk_ids ?? [],
-      }
-    : null,
-  notes: null,
-}))
-```
+Superseded note:
+The initial implementation used a temporary page-level candidate-to-entity-tag bridge. That transition layer has been removed. The backend workspace payload now owns native `entity_tags`, and the page should consume `workspace.entity_tags` directly instead of rebuilding tags from `workspace.candidates`.
 
 - [ ] **Step 3: Run the full test suite to check for breakage**
 

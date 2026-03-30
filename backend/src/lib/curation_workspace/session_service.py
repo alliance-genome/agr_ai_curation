@@ -20,7 +20,6 @@ from src.lib.curation_adapters.entity_tag_bridge import (
     ENTITY_TYPE_FIELD_KEYS,
     SPECIES_FIELD_KEYS,
     TOPIC_FIELD_KEYS,
-    default_entity_type_for_field_key,
 )
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
@@ -159,6 +158,13 @@ CANDIDATE_DETAIL_LOAD_OPTIONS = (
 )
 
 logger = logging.getLogger(__name__)
+
+ENTITY_TAG_FIELD_KEYS: tuple[str, ...] = (
+    *ENTITY_FIELD_KEYS,
+    *ENTITY_TYPE_FIELD_KEYS,
+    *SPECIES_FIELD_KEYS,
+    *TOPIC_FIELD_KEYS,
+)
 
 
 @lru_cache(maxsize=1)
@@ -1125,11 +1131,11 @@ def _normalize_entity_field_key(value: str) -> str:
 
 
 def _matches_entity_field(
-    field: CurationDraftFieldSchema,
+    draft_field: CurationDraftFieldSchema,
     accepted_keys: Sequence[str],
 ) -> bool:
-    field_key = _normalize_entity_field_key(field.field_key)
-    field_label = _normalize_entity_field_key(field.label)
+    field_key = _normalize_entity_field_key(draft_field.field_key)
+    field_label = _normalize_entity_field_key(draft_field.label)
     return any(
         field_key == _normalize_entity_field_key(accepted_key)
         or field_label == _normalize_entity_field_key(accepted_key)
@@ -1141,10 +1147,17 @@ def _find_entity_field(
     fields: Sequence[CurationDraftFieldSchema],
     accepted_keys: Sequence[str],
 ) -> CurationDraftFieldSchema | None:
-    for field in fields:
-        if _matches_entity_field(field, accepted_keys):
-            return field
+    for draft_field in fields:
+        if _matches_entity_field(draft_field, accepted_keys):
+            return draft_field
     return None
+
+
+def _candidate_has_entity_tag_fields(candidate: CurationCandidatePayload) -> bool:
+    return any(
+        _matches_entity_field(draft_field, ENTITY_TAG_FIELD_KEYS)
+        for draft_field in candidate.draft.fields
+    )
 
 
 def _read_required_entity_string(
@@ -1198,7 +1211,6 @@ def _resolve_entity_name_field(candidate: CurationCandidatePayload) -> CurationD
 
 def _entity_type_code(
     candidate: CurationCandidatePayload,
-    entity_field: CurationDraftFieldSchema,
 ) -> CurationEntityTypeCode:
     type_field = _find_entity_field(candidate.draft.fields, ENTITY_TYPE_FIELD_KEYS)
     if type_field is not None and type_field.value is not None:
@@ -1222,12 +1234,6 @@ def _entity_type_code(
             )
 
         return normalized_type
-
-    fallback_entity_type = default_entity_type_for_field_key(
-        _normalize_entity_field_key(entity_field.field_key)
-    )
-    if fallback_entity_type is not None:
-        return fallback_entity_type
 
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1337,7 +1343,7 @@ def _entity_tag_payload(candidate: CurationCandidatePayload) -> CurationEntityTa
     return CurationEntityTagPayload(
         tag_id=candidate.candidate_id,
         entity_name=_read_required_entity_string(entity_field, candidate.candidate_id),
-        entity_type=_entity_type_code(candidate, entity_field),
+        entity_type=_entity_type_code(candidate),
         species=_read_optional_entity_string(
             _find_entity_field(candidate.draft.fields, SPECIES_FIELD_KEYS),
             candidate.candidate_id,
@@ -1622,7 +1628,11 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
     candidate_payloads = [_candidate_payload(candidate) for candidate in session.candidates]
     workspace = CurationWorkspacePayload(
         session=_session_detail(db, session, document_map, user_map),
-        entity_tags=[_entity_tag_payload(candidate) for candidate in candidate_payloads],
+        entity_tags=[
+            _entity_tag_payload(candidate)
+            for candidate in candidate_payloads
+            if _candidate_has_entity_tag_fields(candidate)
+        ],
         candidates=candidate_payloads,
         active_candidate_id=(
             str(session.current_candidate_id)

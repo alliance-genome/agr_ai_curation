@@ -171,7 +171,7 @@ describe('workspaceEntityTags', () => {
     ).toThrow(/not a supported ATP code/i)
   })
 
-  it('allows unchanged unknown entity type identifiers to pass through existing rows', () => {
+  it('rejects unchanged unknown entity type identifiers to avoid silent fallback behavior', () => {
     expect(() =>
       buildEntityTagFieldChanges(buildCandidate({
         draft: {
@@ -199,6 +199,6 @@ describe('workspaceEntityTags', () => {
       }), {
         entity_type: 'CUSTOM:entity_type',
       }),
-    ).not.toThrow()
+    ).toThrow(/not a supported ATP code/i)
   })
 })

@@ -39,5 +39,7 @@ export function getEntityTypeLabel(entityType: string): string {
     return ENTITY_TYPE_LABELS[entityType]
   }
 
-  return entityType
+  throw new Error(
+    `Unknown entity type code "${entityType}" - add it to ENTITY_TYPE_LABELS in literatureEntityTypeCatalog.ts`,
+  )
 }

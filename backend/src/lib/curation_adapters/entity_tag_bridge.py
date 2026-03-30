@@ -20,13 +20,3 @@ ENTITY_TYPE_FIELD_KEYS: Final[tuple[str, ...]] = (
 )
 SPECIES_FIELD_KEYS: Final[tuple[str, ...]] = ("species", "taxon", "taxon_id")
 TOPIC_FIELD_KEYS: Final[tuple[str, ...]] = ("topic", "topic_name", "topic_term", "topic_curie")
-
-_DEFAULT_ENTITY_TYPE_BY_FIELD_KEY: Final[dict[str, str]] = {
-    "gene_symbol": "ATP:0000005",
-}
-
-
-def default_entity_type_for_field_key(field_key: str) -> str | None:
-    """Return the temporary bridge entity-type identifier for a field key."""
-
-    return _DEFAULT_ENTITY_TYPE_BY_FIELD_KEY.get(field_key.strip().lower())
