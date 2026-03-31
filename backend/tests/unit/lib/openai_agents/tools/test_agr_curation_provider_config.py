@@ -378,6 +378,67 @@ def test_search_genes_bulk_uses_batched_detail_lookup(monkeypatch):
     assert result.data["items"][1]["results"][0]["symbol"] == "ninaE"
 
 
+def test_search_genes_uses_batched_detail_lookup(monkeypatch):
+    """Single gene search should batch detail lookup instead of per-CURIE fetches."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    captured = {"calls": []}
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type != "gene" or taxon_curie != "NCBITaxon:7227" or search_pattern != "Actin":
+                return []
+            return [
+                {"entity_curie": "FB:FBgn0000044", "entity": "Actin", "match_type": "exact"},
+                {"entity_curie": "FB:FBgn0000046", "entity": "Actin", "match_type": "exact"},
+            ]
+
+        @staticmethod
+        def get_gene(_curie):
+            raise AssertionError("Per-CURIE get_gene should not be used in single search path")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_batch_fetch(_db, curies):
+        captured["calls"].append(list(curies))
+        return {
+            "FB:FBgn0000044": {
+                "curie": "FB:FBgn0000044",
+                "symbol": "Act57B",
+                "name": "Actin 57B",
+                "taxon": "NCBITaxon:7227",
+                "gene_type": "protein_coding_gene",
+            },
+            "FB:FBgn0000046": {
+                "curie": "FB:FBgn0000046",
+                "symbol": "Act87E",
+                "name": "Actin 87E",
+                "taxon": "NCBITaxon:7227",
+                "gene_type": "protein_coding_gene",
+            },
+        }
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_gene_details_bulk", _fake_batch_fetch)
+
+    result = query_fn(
+        method="search_genes",
+        gene_symbol="Actin",
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert captured["calls"] == [["FB:FBgn0000044", "FB:FBgn0000046"]]
+    assert [entry["symbol"] for entry in result.data] == ["Act57B", "Act87E"]
+
+
 def test_search_alleles_bulk_uses_batched_detail_lookup(monkeypatch):
     """Allele bulk query should aggregate CURIE detail lookup into one batched call per taxon."""
     query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
@@ -438,3 +499,65 @@ def test_search_alleles_bulk_uses_batched_detail_lookup(monkeypatch):
     assert set(captured["calls"][0]) == {"FB:FBal0000001", "FB:FBal0000002"}
     assert result.data["items"][0]["results"][0]["curie"] == "FB:FBal0000001"
     assert result.data["items"][1]["results"][0]["symbol"] == "let-23"
+
+
+def test_search_alleles_uses_batched_detail_lookup(monkeypatch):
+    """Single allele search should batch detail lookup instead of per-CURIE fetches."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    captured = {"calls": []}
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type != "allele" or taxon_curie != "NCBITaxon:7227" or search_pattern != "Actin":
+                return []
+            return [
+                {"entity_curie": "FB:FBal0000001", "entity": "Actin", "match_type": "exact"},
+                {"entity_curie": "FB:FBal0000002", "entity": "Actin", "match_type": "starts_with"},
+            ]
+
+        @staticmethod
+        def get_allele(_curie):
+            raise AssertionError("Per-CURIE get_allele should not be used in single search path")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_batch_fetch(_db, curies):
+        captured["calls"].append(list(curies))
+        return {
+            "FB:FBal0000001": {
+                "curie": "FB:FBal0000001",
+                "symbol": "Act5C<sup>UAS.GFP</sup>",
+                "name": "Act5C UAS GFP",
+                "taxon": "NCBITaxon:7227",
+            },
+            "FB:FBal0000002": {
+                "curie": "FB:FBal0000002",
+                "symbol": "Act88F<sup>6</sup>",
+                "name": "Act88F 6",
+                "taxon": "NCBITaxon:7227",
+            },
+        }
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", _fake_batch_fetch)
+
+    result = query_fn(
+        method="search_alleles",
+        allele_symbol="Actin",
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert captured["calls"] == [["FB:FBal0000001", "FB:FBal0000002"]]
+    assert [entry["symbol"] for entry in result.data] == [
+        "Act5C<sup>UAS.GFP</sup>",
+        "Act88F<sup>6</sup>",
+    ]

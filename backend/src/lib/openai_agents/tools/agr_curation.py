@@ -567,6 +567,8 @@ def agr_curation_query(
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
+            pending_matches: List[Dict[str, Any]] = []
+            gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             genes_data: List[Dict[str, Any]] = []
             for tid in taxon_ids:
                 try:
@@ -578,29 +580,40 @@ def agr_curation_query(
                         limit=limit_value
                     )
                     for result in results:
-                        try:
-                            gene = db.get_gene(result['entity_curie'])
-                            if gene:
-                                # Preserve what entity matched the search (may differ from primary symbol)
-                                matched_entity = result['entity']
-                                primary_symbol = gene.geneSymbol.displayText if gene.geneSymbol else matched_entity
-
-                                gene_entry = {
-                                    "curie": gene.primaryExternalId,
-                                    "symbol": primary_symbol,
-                                    "name": gene.geneFullName.displayText if gene.geneFullName else None,
-                                    "taxon": tid,
-                                    "match_type": result.get('match_type', 'unknown'),
-                                }
-
-                                # Add matched_on field if search matched a synonym
-                                enrich_with_match_context(gene_entry, matched_entity, primary_symbol, 'gene')
-
-                                genes_data.append(gene_entry)
-                        except Exception as e:
-                            logger.warning('Failed to fetch gene details: %s', e)
+                        curie = result.get('entity_curie')
+                        if not curie:
+                            continue
+                        pending_matches.append({
+                            "curie": curie,
+                            "taxon": tid,
+                            "matched_entity": result.get('entity', gene_symbol),
+                            "match_type": result.get('match_type', 'unknown'),
+                        })
+                        gene_curies_by_taxon[tid].append(curie)
                 except Exception as e:
                     logger.warning('Failed to fuzzy search taxon %s: %s', tid, e)
+
+            gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in gene_curies_by_taxon.items():
+                gene_details_by_taxon[tid] = _fetch_gene_details_bulk(db, curies)
+
+            for match in pending_matches:
+                detail = gene_details_by_taxon.get(match["taxon"], {}).get(match["curie"])
+                if not detail:
+                    continue
+                matched_entity = match["matched_entity"]
+                primary_symbol = detail.get("symbol") or matched_entity
+                gene_entry = {
+                    "curie": detail.get("curie", match["curie"]),
+                    "symbol": primary_symbol,
+                    "name": detail.get("name"),
+                    "taxon": match["taxon"],
+                    "match_type": match["match_type"],
+                }
+                if detail.get("gene_type"):
+                    gene_entry["gene_type"] = detail["gene_type"]
+                enrich_with_match_context(gene_entry, matched_entity, primary_symbol, 'gene')
+                genes_data.append(gene_entry)
 
             validated_data = genes_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -863,6 +876,8 @@ def agr_curation_query(
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
+            pending_matches: List[Dict[str, Any]] = []
+            allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             alleles_data: List[Dict[str, Any]] = []
             seen_curies = set()  # Avoid duplicates
             for tid in taxon_ids:
@@ -875,36 +890,46 @@ def agr_curation_query(
                         limit=limit_value
                     )
                     for result in results:
-                        try:
-                            curie = result['entity_curie']
-                            if curie in seen_curies:
-                                continue  # Skip duplicates
-                            seen_curies.add(curie)
-
-                            allele = db.get_allele(curie)
-                            if allele:
-                                # Preserve what entity matched the search (may differ from primary symbol)
-                                matched_entity = result['entity']
-                                primary_symbol = allele.alleleSymbol.displayText if allele.alleleSymbol else matched_entity
-
-                                fullname = allele.alleleFullName.displayText if allele.alleleFullName else None
-                                allele_entry = {
-                                    "curie": allele.primaryExternalId,
-                                    "symbol": primary_symbol,
-                                    "name": fullname,
-                                    "taxon": tid,
-                                    "match_type": result.get('match_type', 'unknown'),
-                                    "fullname_attribution": _extract_fullname_attribution(fullname, tid),
-                                }
-
-                                # Add matched_on field if search matched a synonym
-                                enrich_with_match_context(allele_entry, matched_entity, primary_symbol, 'allele')
-
-                                alleles_data.append(allele_entry)
-                        except Exception as e:
-                            logger.warning('Failed to fetch allele details: %s', e)
+                        curie = result.get('entity_curie')
+                        if not curie:
+                            continue
+                        pending_matches.append({
+                            "curie": curie,
+                            "taxon": tid,
+                            "matched_entity": result.get('entity', allele_symbol),
+                            "match_type": result.get('match_type', 'unknown'),
+                        })
+                        allele_curies_by_taxon[tid].append(curie)
                 except Exception as e:
                     logger.warning('Failed to fuzzy search alleles in taxon %s: %s', tid, e)
+
+            allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in allele_curies_by_taxon.items():
+                allele_details_by_taxon[tid] = _fetch_allele_details_bulk(db, curies)
+
+            for match in pending_matches:
+                curie = match["curie"]
+                if curie in seen_curies:
+                    continue
+                seen_curies.add(curie)
+
+                detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
+                if not detail:
+                    continue
+
+                matched_entity = match["matched_entity"]
+                primary_symbol = detail.get("symbol") or matched_entity
+                fullname = detail.get("name")
+                allele_entry = {
+                    "curie": detail.get("curie", curie),
+                    "symbol": primary_symbol,
+                    "name": fullname,
+                    "taxon": match["taxon"],
+                    "match_type": match["match_type"],
+                    "fullname_attribution": _extract_fullname_attribution(fullname, match["taxon"]),
+                }
+                enrich_with_match_context(allele_entry, matched_entity, primary_symbol, 'allele')
+                alleles_data.append(allele_entry)
 
             validated_data = alleles_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
