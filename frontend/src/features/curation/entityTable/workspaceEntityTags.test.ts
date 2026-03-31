@@ -168,7 +168,34 @@ describe('workspaceEntityTags', () => {
       buildEntityTagFieldChanges(buildCandidate(), {
         entity_type: 'ATP:9999999',
       }),
-    ).toThrow(/not a supported ATP code/i)
+    ).toThrow(/not a supported entity type/i)
+  })
+
+  it('normalizes canonical entity type labels to ATP codes in editable updates', () => {
+    const fieldChanges = buildEntityTagFieldChanges(
+      buildCandidate({
+        draft: {
+          ...buildCandidate().draft,
+          fields: [
+            {
+              ...buildCandidate().draft.fields[0]!,
+            },
+            {
+              ...buildCandidate().draft.fields[1]!,
+              value: 'gene',
+              seed_value: 'gene',
+            },
+          ],
+        },
+      }),
+      {
+        entity_type: 'gene',
+      },
+    )
+
+    expect(fieldChanges).toEqual([
+      { field_key: 'entity_type', value: 'ATP:0000005' },
+    ])
   })
 
   it('rejects unchanged unknown entity type identifiers to avoid silent fallback behavior', () => {
@@ -199,6 +226,6 @@ describe('workspaceEntityTags', () => {
       }), {
         entity_type: 'CUSTOM:entity_type',
       }),
-    ).toThrow(/not a supported ATP code/i)
+    ).toThrow(/not a supported entity type/i)
   })
 })

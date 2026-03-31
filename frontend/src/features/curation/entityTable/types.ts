@@ -14,6 +14,7 @@ export {
   ENTITY_TYPE_LABELS,
   getEntityTypeLabel,
   isEntityTypeCode,
+  resolveEntityTypeCode,
   type EntityTypeCode,
 } from './literatureEntityTypeCatalog'
 

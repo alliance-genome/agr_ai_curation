@@ -5,6 +5,7 @@ import {
   DB_VALIDATION_STATUSES,
   ENTITY_TYPE_CODES,
   getEntityTypeLabel,
+  resolveEntityTypeCode,
   type EntityTag,
 } from './types'
 
@@ -48,6 +49,16 @@ describe('EntityTag type constants', () => {
     }
     expect(tag.tag_id).toBe('tag-1')
     expect(tag.evidence?.sentence_text).toContain('daf-2')
+  })
+
+  it('resolves canonical entity type labels to the matching ATP code', () => {
+    expect(resolveEntityTypeCode('gene')).toBe('ATP:0000005')
+    expect(resolveEntityTypeCode(' Sequence Targeting Reagent ')).toBe('ATP:0000093')
+  })
+
+  it('renders canonical entity type labels without requiring ATP codes', () => {
+    expect(getEntityTypeLabel('gene')).toBe('gene')
+    expect(getEntityTypeLabel('sequence targeting reagent')).toBe('sequence targeting reagent')
   })
 
   it('fails loudly when an unknown entity type code is rendered', () => {

@@ -5,7 +5,7 @@ import type {
   CurationDraftFieldChange,
 } from '@/features/curation/types'
 import type { EntityTag } from './types'
-import { isEntityTypeCode } from './types'
+import { resolveEntityTypeCode } from './types'
 
 const ENTITY_FIELD_KEYS = ['entity_name', 'gene_symbol']
 const ENTITY_TYPE_FIELD_KEYS = ['entity_type', 'entity_type_code', 'entity_type_atp_code']
@@ -54,11 +54,12 @@ function normalizeTextUpdate(value: string): string {
 
 function normalizeSupportedEntityType(entityType: string): string {
   const normalizedEntityType = normalizeTextUpdate(entityType)
-  if (!isEntityTypeCode(normalizedEntityType)) {
-    throw new Error(`Entity type ${normalizedEntityType} is not a supported ATP code.`)
+  const entityTypeCode = resolveEntityTypeCode(normalizedEntityType)
+  if (entityTypeCode === null) {
+    throw new Error(`Entity type ${normalizedEntityType} is not a supported entity type.`)
   }
 
-  return normalizedEntityType
+  return entityTypeCode
 }
 
 function buildFieldChange(

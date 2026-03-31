@@ -34,9 +34,26 @@ export function isEntityTypeCode(value: string): value is EntityTypeCode {
   return ENTITY_TYPE_CODES.includes(value as EntityTypeCode)
 }
 
-export function getEntityTypeLabel(entityType: string): string {
+const ENTITY_TYPE_ALIASES = Object.fromEntries(
+  Object.entries(ENTITY_TYPE_LABELS).map(([code, label]) => [label, code as EntityTypeCode]),
+) as Record<string, EntityTypeCode>
+
+function normalizeEntityTypeAlias(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+export function resolveEntityTypeCode(entityType: string): EntityTypeCode | null {
   if (isEntityTypeCode(entityType)) {
-    return ENTITY_TYPE_LABELS[entityType]
+    return entityType
+  }
+
+  return ENTITY_TYPE_ALIASES[normalizeEntityTypeAlias(entityType)] ?? null
+}
+
+export function getEntityTypeLabel(entityType: string): string {
+  const entityTypeCode = resolveEntityTypeCode(entityType)
+  if (entityTypeCode !== null) {
+    return ENTITY_TYPE_LABELS[entityTypeCode]
   }
 
   throw new Error(

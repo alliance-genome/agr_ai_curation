@@ -85,6 +85,18 @@ describe('EntityTagRow', () => {
     expect(screen.getByText('AI')).toBeInTheDocument()
   })
 
+  it('renders canonical entity type labels from the workspace payload', () => {
+    render(
+      <EntityTagRow
+        {...defaultProps}
+        tag={makeTag({ entity_type: 'gene' })}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.getByText('gene')).toBeInTheDocument()
+  })
+
   it('fails loudly for unknown entity type identifiers', () => {
     expect(() =>
       render(
