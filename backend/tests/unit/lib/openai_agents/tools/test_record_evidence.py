@@ -124,3 +124,40 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
         "section": "Results and Discussion",
         "subsection": "2.3. The molar abundance of actins, optins, and crumbs in fly eyes",
     }
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_prefers_pdfx_page_no_provenance_when_chunk_page_is_stale(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-pdfx-page-no-repro",
+            "text": (
+                "Actin 5C at 344 +/- 23 fmoles/eye is the most abundant among all actins, "
+                "followed by Actin 87E (80 +/- 51 fmoles/eye)."
+            ),
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+            "doc_items": [
+                {"page_no": 3},
+                {"page_no": 3},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="Actin 87E",
+        chunk_id="chunk-pdfx-page-no-repro",
+        claimed_quote="followed by Actin 87E (80 +/- 51 fmoles/eye).",
+    )
+
+    assert result == {
+        "status": "verified",
+        "verified_quote": "followed by Actin 87E (80 +/- 51 fmoles/eye).",
+        "page": 3,
+        "section": "Results and Discussion",
+        "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+    }

@@ -20,6 +20,8 @@ interface MockFindResponse {
   total: number
   current: number
   pageIdx: number | null
+  pageMatches?: number[]
+  pageMatchesLength?: number[]
   viewerPageNumber?: number | null
   delayedSelection?: {
     pageIdx?: number | null
@@ -48,7 +50,11 @@ class MockPdfEventBus {
     private readonly onFind: (query: string) => MockFindResponse,
     private readonly getCurrentPage: () => number,
     private readonly setCurrentPage: (pageNumber: number) => void,
-    private readonly findController: { selected: { pageIdx: number; matchIdx: number } },
+    private readonly findController: {
+      selected: { pageIdx: number; matchIdx: number }
+      pageMatches: number[][]
+      pageMatchesLength: number[][]
+    },
   ) {}
 
   on(eventName: string, handler: (event: any) => void) {
@@ -70,6 +76,15 @@ class MockPdfEventBus {
     }
 
     if (eventName !== 'find') {
+      const eventPayload = eventName === 'updatetextlayermatches'
+        ? {
+            source: payload?.source ?? this.findController,
+            ...payload,
+          }
+        : payload
+      for (const handler of this.listeners.get(eventName) ?? []) {
+        handler(eventPayload)
+      }
       return
     }
 
@@ -80,6 +95,11 @@ class MockPdfEventBus {
 
     const response = this.onFind(payload.query)
     this.findQueries.push(payload.query)
+
+    if (response.pageIdx !== null && response.pageIdx >= 0) {
+      this.findController.pageMatches[response.pageIdx] = response.pageMatches ?? []
+      this.findController.pageMatchesLength[response.pageIdx] = response.pageMatchesLength ?? []
+    }
 
     const applySelection = (selection: {
       pageIdx?: number | null
@@ -92,6 +112,13 @@ class MockPdfEventBus {
         this.setCurrentPage(pageIdx + 1)
       } else if (typeof selection.viewerPageNumber === 'number' && selection.viewerPageNumber >= 1) {
         this.setCurrentPage(selection.viewerPageNumber)
+      }
+
+      for (const handler of this.listeners.get('updatetextlayermatches') ?? []) {
+        handler({
+          source: this.findController,
+          pageIndex: pageIdx ?? -1,
+        })
       }
     }
     applySelection({
@@ -168,12 +195,23 @@ const installMockPdfViewer = ({
       pageIdx: -1,
       matchIdx: -1,
     },
+    pageMatches: [] as number[][],
+    pageMatchesLength: [] as number[][],
   }
 
   let currentPageNumber = 1
-  const pageViews = new Map<number, { div: HTMLElement; viewport: { convertToViewportRectangle: (coords: number[]) => number[] } }>()
+  const pageViews = new Map<number, {
+    div: HTMLElement
+    viewport: { convertToViewportRectangle: (coords: number[]) => number[] }
+    textLayer: {
+      textDivs: Array<HTMLElement | Text>
+      textContentItemsStr: string[]
+    }
+  }>()
   const textLayers = new Map<number, HTMLElement>()
   const textNodeLayouts = new WeakMap<Text, { rect: DOMRect; charWidth: number }>()
+  const pageTextDivs = new Map<number, Array<HTMLElement | Text>>()
+  const pageTextContentItems = new Map<number, string[]>()
 
   const appendTextSegment = (pageNumber: number, segment: string) => {
     const textLayer = textLayers.get(pageNumber)
@@ -200,9 +238,17 @@ const installMockPdfViewer = ({
       })
     }
     textLayer.appendChild(span)
+    const textDivs = pageTextDivs.get(pageNumber) ?? []
+    textDivs.push(span)
+    pageTextDivs.set(pageNumber, textDivs)
+    const textItems = pageTextContentItems.get(pageNumber) ?? []
+    textItems.push(segment)
+    pageTextContentItems.set(pageNumber, textItems)
   }
 
   pages.forEach((page, pageIndex) => {
+    pageTextDivs.set(page.pageNumber, [])
+    pageTextContentItems.set(page.pageNumber, [])
     const pageTop = pageIndex * 900
     const pageDiv = iframeDocument.createElement('div')
     pageDiv.className = 'page'
@@ -224,6 +270,10 @@ const installMockPdfViewer = ({
       div: pageDiv,
       viewport: {
         convertToViewportRectangle: (coords: number[]) => coords,
+      },
+      textLayer: {
+        textDivs: pageTextDivs.get(page.pageNumber) ?? [],
+        textContentItemsStr: pageTextContentItems.get(page.pageNumber) ?? [],
       },
     })
   })
@@ -488,6 +538,58 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
   })
 
+  it('reconstructs quote rects from PDF.js page match coordinates when local normalization would miss them', async () => {
+    vi.stubEnv('VITE_DEV_MODE', 'true')
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    render(<PdfViewer />)
+
+    dispatchPDFDocumentChanged('doc-diacritics', '/fixtures/sample.pdf', 'diacritics.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('diacritics.pdf')).toBeInTheDocument()
+    })
+
+    const query = 'naive approach among proteins'
+    const pageText = 'naïve approach among proteins'
+    const { iframe } = installMockPdfViewer({
+      onFind: (candidateQuery) => ({
+        state: candidateQuery === query ? 0 : 1,
+        total: candidateQuery === query ? 1 : 0,
+        current: candidateQuery === query ? 1 : 0,
+        pageIdx: candidateQuery === query ? 2 : null,
+        pageMatches: candidateQuery === query ? [0] : [],
+        pageMatchesLength: candidateQuery === query ? [pageText.length] : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: [pageText, 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+    await waitFor(() => {
+      expect(window.__pdfViewerEvidenceSpike).toBeTypeOf('function')
+    })
+
+    const result = await window.__pdfViewerEvidenceSpike?.({
+      quote: query,
+      pageNumber: 3,
+      sectionTitle: 'Results',
+    } satisfies PdfEvidenceSpikeInput)
+
+    expect(result).toMatchObject({
+      status: 'matched',
+      matchedQuery: query,
+      matchedPage: 3,
+      matchesTotal: 1,
+      currentMatch: 1,
+    })
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+  })
+
   it('acknowledges select navigation and renders quote highlights on the matched page', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -734,6 +836,7 @@ describe('PdfViewer evidence navigation', () => {
       nativeHighlight.textContent = query
       nativeHighlight.getBoundingClientRect = () => createMockRect(48, (5 * 900) + 72, 190, 20)
       textLayer.appendChild(nativeHighlight)
+      eventBus.dispatch('updatetextlayermatches', { pageIndex: 5 })
     }, 350)
 
     dispatchPDFViewerNavigateEvidence(
@@ -902,7 +1005,7 @@ describe('PdfViewer evidence navigation', () => {
       expect(screen.getByText('delayed-text-layer.pdf')).toBeInTheDocument()
     })
 
-    const { iframe, appendTextSegment } = installMockPdfViewer({
+    const { iframe, appendTextSegment, eventBus } = installMockPdfViewer({
       onFind: (candidate) => ({
         state: candidate === query ? 0 : 1,
         total: candidate === query ? 1 : 0,
@@ -920,6 +1023,7 @@ describe('PdfViewer evidence navigation', () => {
 
     window.setTimeout(() => {
       appendTextSegment(3, query)
+      eventBus.dispatch('textlayerrendered', { pageNumber: 3 })
     }, 150)
 
     await waitFor(() => {
@@ -996,6 +1100,7 @@ describe('PdfViewer evidence navigation', () => {
       nativeHighlight.textContent = query
       nativeHighlight.getBoundingClientRect = () => createMockRect(48, (2 * 900) + 72, 190, 20)
       textLayer.appendChild(nativeHighlight)
+      eventBus.dispatch('updatetextlayermatches', { pageIndex: 2 })
     }, 150)
 
     await waitFor(() => {

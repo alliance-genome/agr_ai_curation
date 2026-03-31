@@ -261,6 +261,15 @@ def _coerce_positive_int(value: Any) -> int | None:
     return page if page > 0 else None
 
 
+def _resolve_doc_item_page(item: dict[str, Any]) -> int | None:
+    return (
+        _coerce_positive_int(item.get("page"))
+        or _coerce_positive_int(item.get("page_no"))
+        or _coerce_positive_int(item.get("page_number"))
+        or _coerce_positive_int(item.get("pageNumber"))
+    )
+
+
 def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
     metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
     page = (
@@ -270,12 +279,14 @@ def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
     )
 
     raw_doc_items = chunk.get("doc_items")
+    if not isinstance(raw_doc_items, list):
+        raw_doc_items = metadata.get("doc_items")
     doc_items = raw_doc_items if isinstance(raw_doc_items, list) else []
     doc_item_pages = [
         resolved_page
         for item in doc_items
         if isinstance(item, dict)
-        for resolved_page in [_coerce_positive_int(item.get("page"))]
+        for resolved_page in [_resolve_doc_item_page(item)]
         if resolved_page is not None
     ]
     doc_item_pages = list(dict.fromkeys(doc_item_pages))

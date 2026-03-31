@@ -564,12 +564,52 @@ interface TextLayerMatchRange {
   rawEndExclusive: number
 }
 
+interface PdfJsTextMatchBoundary {
+  divIdx: number
+  offset: number
+}
+
+interface PdfJsTextMatch {
+  begin: PdfJsTextMatchBoundary
+  end: PdfJsTextMatchBoundary
+}
+
 const getPageContainer = (iframeDoc: Document, pageNumber: number): HTMLElement | null => {
   return iframeDoc.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"]`)
 }
 
 const getPageTextLayer = (iframeDoc: Document, pageNumber: number): HTMLElement | null => {
   return getPageContainer(iframeDoc, pageNumber)?.querySelector<HTMLElement>('.textLayer') ?? null
+}
+
+const getPdfJsTextLayerBuilder = (
+  pdfApp: any,
+  pageNumber: number,
+): {
+  pageContainer: HTMLElement
+  textContentItemsStr: string[]
+  textDivs: Array<HTMLElement | Text>
+} | null => {
+  const pageView = pdfApp?.pdfViewer?.getPageView?.(pageNumber - 1)
+  const pageContainer = pageView?.div
+  const textLayer = pageView?.textLayer
+
+  if (
+    !pageContainer
+    || !textLayer
+    || !Array.isArray(textLayer.textDivs)
+    || !Array.isArray(textLayer.textContentItemsStr)
+    || textLayer.textDivs.length === 0
+    || textLayer.textContentItemsStr.length === 0
+  ) {
+    return null
+  }
+
+  return {
+    pageContainer,
+    textContentItemsStr: textLayer.textContentItemsStr,
+    textDivs: textLayer.textDivs,
+  }
 }
 
 const findPdfJsSelectedHighlightRects = (
@@ -599,6 +639,218 @@ const findPdfJsSelectedHighlightRects = (
     )
     return acc
   }, [])
+}
+
+const convertPdfJsMatches = (
+  matches: number[] | undefined | null,
+  matchesLength: number[] | undefined | null,
+  textContentItemsStr: string[],
+): PdfJsTextMatch[] => {
+  if (!matches || !matchesLength || matches.length === 0 || textContentItemsStr.length === 0) {
+    return []
+  }
+
+  let divIndex = 0
+  let itemStart = 0
+  const end = textContentItemsStr.length - 1
+  const converted: PdfJsTextMatch[] = []
+
+  for (let matchIndex = 0; matchIndex < matches.length; matchIndex += 1) {
+    let startIndex = matches[matchIndex] ?? 0
+
+    while (divIndex !== end && startIndex >= itemStart + textContentItemsStr[divIndex]!.length) {
+      itemStart += textContentItemsStr[divIndex]!.length
+      divIndex += 1
+    }
+
+    if (divIndex >= textContentItemsStr.length) {
+      break
+    }
+
+    const match: PdfJsTextMatch = {
+      begin: {
+        divIdx: divIndex,
+        offset: startIndex - itemStart,
+      },
+      end: {
+        divIdx: divIndex,
+        offset: 0,
+      },
+    }
+
+    startIndex += matchesLength[matchIndex] ?? 0
+
+    while (divIndex !== end && startIndex > itemStart + textContentItemsStr[divIndex]!.length) {
+      itemStart += textContentItemsStr[divIndex]!.length
+      divIndex += 1
+    }
+
+    match.end = {
+      divIdx: divIndex,
+      offset: startIndex - itemStart,
+    }
+    converted.push(match)
+  }
+
+  return converted
+}
+
+const collectTextNodesForEvidenceMatch = (container: HTMLElement | Text): Text[] => {
+  if (container.nodeType === Node.TEXT_NODE) {
+    return [container as Text]
+  }
+
+  const walker = container.ownerDocument.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+  for (let current = walker.nextNode(); current !== null; current = walker.nextNode()) {
+    if (current.textContent && current.textContent.length > 0) {
+      textNodes.push(current as Text)
+    }
+  }
+  return textNodes
+}
+
+const buildRectsFromPdfJsTextDivOffsets = (
+  pageContainer: HTMLElement,
+  container: HTMLElement | Text,
+  startOffset: number,
+  endOffset: number,
+  acc: EvidenceTextLayerRect[],
+  seen: Set<string>,
+): void => {
+  if (endOffset <= startOffset) {
+    return
+  }
+
+  const textNodes = collectTextNodesForEvidenceMatch(container)
+  let cumulativeOffset = 0
+
+  for (const textNode of textNodes) {
+    const textLength = textNode.textContent?.length ?? 0
+    if (textLength === 0) {
+      continue
+    }
+
+    const nodeStart = Math.max(0, startOffset - cumulativeOffset)
+    const nodeEnd = Math.min(textLength, endOffset - cumulativeOffset)
+
+    if (nodeStart < nodeEnd) {
+      const range = textNode.ownerDocument.createRange()
+      range.setStart(textNode, nodeStart)
+      range.setEnd(textNode, nodeEnd)
+
+      const clientRects = Array.from(range.getClientRects?.() ?? [])
+      if (clientRects.length > 0) {
+        clientRects.forEach((rect) => {
+          pushUniqueEvidenceTextLayerRect(
+            acc,
+            seen,
+            normalizeEvidenceTextLayerRect(pageContainer, rect),
+          )
+        })
+      } else {
+        pushUniqueEvidenceTextLayerRect(
+          acc,
+          seen,
+          normalizeEvidenceTextLayerRect(pageContainer, range.getBoundingClientRect()),
+        )
+      }
+    }
+
+    cumulativeOffset += textLength
+    if (cumulativeOffset >= endOffset) {
+      return
+    }
+  }
+}
+
+const findPdfJsMappedMatchRects = (
+  pdfApp: any,
+  pageNumber: number,
+  pageMatchIndex: number | null = null,
+): EvidenceTextLayerRect[] => {
+  const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
+  if (!textLayerBuilder) {
+    return []
+  }
+
+  const pageMatches = pdfApp?.findController?.pageMatches?.[pageNumber - 1]
+  const pageMatchesLength = pdfApp?.findController?.pageMatchesLength?.[pageNumber - 1]
+  const convertedMatches = convertPdfJsMatches(
+    pageMatches,
+    pageMatchesLength,
+    textLayerBuilder.textContentItemsStr,
+  )
+
+  if (convertedMatches.length === 0) {
+    return []
+  }
+
+  const selectedIndex = pageMatchIndex ?? pdfApp?.findController?.selected?.matchIdx ?? 0
+  const match = convertedMatches[selectedIndex] ?? convertedMatches[0]
+  if (!match) {
+    return []
+  }
+
+  const seen = new Set<string>()
+  const rects: EvidenceTextLayerRect[] = []
+
+  if (match.begin.divIdx === match.end.divIdx) {
+    const container = textLayerBuilder.textDivs[match.begin.divIdx]
+    if (!container) {
+      return []
+    }
+    buildRectsFromPdfJsTextDivOffsets(
+      textLayerBuilder.pageContainer,
+      container,
+      match.begin.offset,
+      match.end.offset,
+      rects,
+      seen,
+    )
+    return rects
+  }
+
+  const beginContainer = textLayerBuilder.textDivs[match.begin.divIdx]
+  if (beginContainer) {
+    buildRectsFromPdfJsTextDivOffsets(
+      textLayerBuilder.pageContainer,
+      beginContainer,
+      match.begin.offset,
+      textLayerBuilder.textContentItemsStr[match.begin.divIdx]?.length ?? match.begin.offset,
+      rects,
+      seen,
+    )
+  }
+
+  for (let divIdx = match.begin.divIdx + 1; divIdx < match.end.divIdx; divIdx += 1) {
+    const container = textLayerBuilder.textDivs[divIdx]
+    if (!container) {
+      continue
+    }
+    buildRectsFromPdfJsTextDivOffsets(
+      textLayerBuilder.pageContainer,
+      container,
+      0,
+      textLayerBuilder.textContentItemsStr[divIdx]?.length ?? 0,
+      rects,
+      seen,
+    )
+  }
+
+  const endContainer = textLayerBuilder.textDivs[match.end.divIdx]
+  if (endContainer) {
+    buildRectsFromPdfJsTextDivOffsets(
+      textLayerBuilder.pageContainer,
+      endContainer,
+      0,
+      match.end.offset,
+      rects,
+      seen,
+    )
+  }
+
+  return rects
 }
 
 const buildTextLayerSegments = (textLayer: HTMLElement): {
@@ -894,10 +1146,32 @@ export const findExpandedEvidenceQueryFromPageText = (
 
 const findExpandedEvidenceQueryForPage = (
   iframeDoc: Document,
+  pdfApp: any,
   pageNumber: number,
   desiredQuote: string,
   matchedFragmentQuery: string,
 ): ExpandedEvidenceQuery | null => {
+  const normalizedPageText = pdfApp?.findController?._pageContents?.[pageNumber - 1]
+  if (typeof normalizedPageText === 'string' && normalizedPageText.trim().length > 0) {
+    return findExpandedEvidenceQueryFromPageText(
+      normalizedPageText,
+      desiredQuote,
+      matchedFragmentQuery,
+    )
+  }
+
+  const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
+  if (textLayerBuilder) {
+    const joinedText = textLayerBuilder.textContentItemsStr.join('')
+    if (joinedText.trim().length > 0) {
+      return findExpandedEvidenceQueryFromPageText(
+        joinedText,
+        desiredQuote,
+        matchedFragmentQuery,
+      )
+    }
+  }
+
   const textLayer = getPageTextLayer(iframeDoc, pageNumber)
   if (!textLayer) {
     return null
@@ -911,6 +1185,55 @@ const findExpandedEvidenceQueryForPage = (
   return findExpandedEvidenceQueryFromPageText(rawText, desiredQuote, matchedFragmentQuery)
 }
 
+const getEvidenceTextLayerCandidatePages = (pageNumber: number, pdfApp: any): number[] => {
+  const liveSelectedPage = getSelectedEvidenceSpikePage(pdfApp)
+  return liveSelectedPage !== null && liveSelectedPage !== pageNumber
+    ? [pageNumber, liveSelectedPage]
+    : [pageNumber]
+}
+
+const tryResolveTextLayerMatch = (
+  iframeDoc: Document,
+  pageNumber: number,
+  query: string,
+  pageMatchIndex: number | null = null,
+  options?: {
+    pdfApp?: any
+  },
+): EvidenceTextLayerMatchResult | null => {
+  for (const candidatePage of getEvidenceTextLayerCandidatePages(pageNumber, options?.pdfApp)) {
+    const nativeHighlightRects = findPdfJsSelectedHighlightRects(iframeDoc, candidatePage)
+    if (nativeHighlightRects.length > 0) {
+      return {
+        rects: nativeHighlightRects,
+        matchedPage: candidatePage,
+      }
+    }
+
+    const mappedRects = findPdfJsMappedMatchRects(
+      options?.pdfApp,
+      candidatePage,
+      pageMatchIndex,
+    )
+    if (mappedRects.length > 0) {
+      return {
+        rects: mappedRects,
+        matchedPage: candidatePage,
+      }
+    }
+
+    const rects = findTextLayerMatchRects(iframeDoc, candidatePage, query, pageMatchIndex)
+    if (rects.length > 0) {
+      return {
+        rects,
+        matchedPage: candidatePage,
+      }
+    }
+  }
+
+  return null
+}
+
 const waitForTextLayerMatch = async (
   iframeDoc: Document,
   pageNumber: number,
@@ -922,61 +1245,165 @@ const waitForTextLayerMatch = async (
   },
 ): Promise<EvidenceTextLayerMatchResult> => {
   const startedAt = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const liveSelectedPage = getSelectedEvidenceSpikePage(options?.pdfApp)
-    const candidatePages = liveSelectedPage !== null && liveSelectedPage !== pageNumber
-      ? [pageNumber, liveSelectedPage]
-      : [pageNumber]
-
-    for (const candidatePage of candidatePages) {
-      const nativeHighlightRects = findPdfJsSelectedHighlightRects(iframeDoc, candidatePage)
-      if (nativeHighlightRects.length > 0) {
-        logPdfEvidenceDebug('Native PDF.js selection matched quote', {
-          pageNumber: candidatePage,
-          query,
-          pageMatchIndex,
-          rectCount: nativeHighlightRects.length,
-          elapsedMs: Date.now() - startedAt,
-          initialPageNumber: pageNumber,
-        })
-        return {
-          rects: nativeHighlightRects,
-          matchedPage: candidatePage,
-        }
-      }
-
-      const rects = findTextLayerMatchRects(iframeDoc, candidatePage, query, pageMatchIndex)
-      if (rects.length > 0) {
-        logPdfEvidenceDebug('Text-layer reconstruction matched quote', {
-          pageNumber: candidatePage,
-          query,
-          pageMatchIndex,
-          rectCount: rects.length,
-          elapsedMs: Date.now() - startedAt,
-          initialPageNumber: pageNumber,
-        })
-        return {
-          rects,
-          matchedPage: candidatePage,
-        }
-      }
-    }
-
-    await new Promise((resolve) => window.setTimeout(resolve, 50))
-  }
-
-  logPdfEvidenceDebug('Timed out waiting for quote highlight rects', {
+  const immediateMatch = tryResolveTextLayerMatch(
+    iframeDoc,
     pageNumber,
     query,
     pageMatchIndex,
-    timeoutMs,
-    liveSelectedPage: getSelectedEvidenceSpikePage(options?.pdfApp),
-  })
-  return {
-    rects: [],
-    matchedPage: getSelectedEvidenceSpikePage(options?.pdfApp) ?? pageNumber,
+    options,
+  )
+  if (immediateMatch) {
+    logPdfEvidenceDebug('Text-layer match resolved immediately', {
+      pageNumber: immediateMatch.matchedPage,
+      query,
+      pageMatchIndex,
+      rectCount: immediateMatch.rects.length,
+      elapsedMs: Date.now() - startedAt,
+      initialPageNumber: pageNumber,
+    })
+    return immediateMatch
   }
+
+  const eventBus = options?.pdfApp?.eventBus
+  if (!eventBus?.on || !eventBus?.off) {
+    logPdfEvidenceDebug('PDF.js event bus unavailable while waiting for quote highlight rects', {
+      pageNumber,
+      query,
+      pageMatchIndex,
+      elapsedMs: Date.now() - startedAt,
+    })
+    return {
+      rects: [],
+      matchedPage: getSelectedEvidenceSpikePage(options?.pdfApp) ?? pageNumber,
+    }
+  }
+
+  return new Promise((resolve) => {
+    let settled = false
+    let attemptTimeoutId: number | null = null
+
+    const finish = (result: EvidenceTextLayerMatchResult) => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      window.clearTimeout(timeoutId)
+      if (attemptTimeoutId !== null) {
+        window.clearTimeout(attemptTimeoutId)
+      }
+      eventBus.off('textlayerrendered', handleTextLayerRendered)
+      eventBus.off('updatetextlayermatches', handleTextLayerMatchesUpdated)
+      eventBus.off('pagerendered', handlePageRendered)
+      resolve(result)
+    }
+
+    const scheduleAttempt = (
+      eventName: 'listener-attached' | 'pagerendered' | 'textlayerrendered' | 'updatetextlayermatches',
+      detail: Record<string, unknown> = {},
+    ) => {
+      if (settled || attemptTimeoutId !== null) {
+        return
+      }
+
+      // Let PDF.js finish any same-tick DOM updates before we inspect the text layer.
+      attemptTimeoutId = window.setTimeout(() => {
+        attemptTimeoutId = null
+        const nextMatch = tryResolveTextLayerMatch(
+          iframeDoc,
+          pageNumber,
+          query,
+          pageMatchIndex,
+          options,
+        )
+        if (!nextMatch) {
+          return
+        }
+
+        logPdfEvidenceDebug('Event-driven text-layer match resolved', {
+          eventName,
+          pageNumber: nextMatch.matchedPage,
+          query,
+          pageMatchIndex,
+          rectCount: nextMatch.rects.length,
+          elapsedMs: Date.now() - startedAt,
+          initialPageNumber: pageNumber,
+          ...detail,
+        })
+        finish(nextMatch)
+      }, 0)
+    }
+
+    const handleTextLayerRendered = (event: any) => {
+      const eventPageNumber = typeof event?.pageNumber === 'number' ? event.pageNumber : null
+      if (
+        eventPageNumber !== null
+        && !getEvidenceTextLayerCandidatePages(pageNumber, options?.pdfApp).includes(eventPageNumber)
+      ) {
+        return
+      }
+
+      scheduleAttempt('textlayerrendered', {
+        eventPageNumber,
+      })
+    }
+
+    const handleTextLayerMatchesUpdated = (event: any) => {
+      if (event?.source && event.source !== options?.pdfApp?.findController) {
+        return
+      }
+
+      const eventPageIndex = typeof event?.pageIndex === 'number' ? event.pageIndex : null
+      const eventPageNumber = eventPageIndex !== null && eventPageIndex >= 0
+        ? eventPageIndex + 1
+        : null
+      if (
+        eventPageIndex !== -1
+        && eventPageNumber !== null
+        && !getEvidenceTextLayerCandidatePages(pageNumber, options?.pdfApp).includes(eventPageNumber)
+      ) {
+        return
+      }
+
+      scheduleAttempt('updatetextlayermatches', {
+        eventPageIndex,
+        eventPageNumber,
+      })
+    }
+
+    const handlePageRendered = (event: any) => {
+      const eventPageNumber = typeof event?.pageNumber === 'number' ? event.pageNumber : null
+      if (
+        eventPageNumber !== null
+        && !getEvidenceTextLayerCandidatePages(pageNumber, options?.pdfApp).includes(eventPageNumber)
+      ) {
+        return
+      }
+
+      scheduleAttempt('pagerendered', {
+        eventPageNumber,
+      })
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      logPdfEvidenceDebug('Timed out waiting for quote highlight rects', {
+        pageNumber,
+        query,
+        pageMatchIndex,
+        timeoutMs,
+        liveSelectedPage: getSelectedEvidenceSpikePage(options?.pdfApp),
+      })
+      finish({
+        rects: [],
+        matchedPage: getSelectedEvidenceSpikePage(options?.pdfApp) ?? pageNumber,
+      })
+    }, timeoutMs)
+
+    eventBus.on('textlayerrendered', handleTextLayerRendered)
+    eventBus.on('updatetextlayermatches', handleTextLayerMatchesUpdated)
+    eventBus.on('pagerendered', handlePageRendered)
+    scheduleAttempt('listener-attached')
+  })
 }
 
 const isDegradedLocatorQuality = (quality: EvidenceLocatorQuality): boolean => {
@@ -2026,6 +2453,7 @@ export function PdfViewer({
         )
           ? findExpandedEvidenceQueryForPage(
             iframeDoc,
+            pdfApp,
             matchedPage,
             quote || searchText,
             candidate.query,
