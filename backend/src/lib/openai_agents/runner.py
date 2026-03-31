@@ -1015,13 +1015,20 @@ async def _run_agent_with_tracing(
 
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
+        expected_output_type = getattr(agent, "output_type", None)
         structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
         if (
-            structured_result_requires_evidence(structured_result)
+            structured_result_requires_evidence(
+                structured_result,
+                expected_output_type=expected_output_type,
+            )
             and (
                 not evidence_records
                 or not structured_evidence_records
-                or structured_result_missing_evidence_record_refs(structured_result)
+                or structured_result_missing_evidence_record_refs(
+                    structured_result,
+                    expected_output_type=expected_output_type,
+                )
             )
         ):
             logger.error(

@@ -396,9 +396,15 @@ def _emit_specialist_evidence_summary_or_raise(
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
     evidence_records = extract_evidence_records_from_structured_result(final_output)
-    requires_evidence = structured_result_requires_evidence(final_output)
+    requires_evidence = structured_result_requires_evidence(
+        final_output,
+        expected_output_type=expected_output_type,
+    )
     missing_record_refs = (
-        structured_result_missing_evidence_record_refs(final_output)
+        structured_result_missing_evidence_record_refs(
+            final_output,
+            expected_output_type=expected_output_type,
+        )
         if requires_evidence
         else False
     )

@@ -1,9 +1,17 @@
 import hashlib
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
 logger = logging.getLogger(__name__)
+
+_NON_RETAINED_COLLECTION_DESCRIPTION_MARKERS = (
+    "raw mention",
+    "excluded",
+    "ambiguous",
+    "verified evidence registry",
+    "normalization decisions",
+)
 
 
 def coerce_tool_event_dict(value: Any) -> Optional[Dict[str, Any]]:
@@ -749,42 +757,106 @@ def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str
     return normalize_evidence_records(payload.get("evidence_records"))
 
 
-def structured_result_missing_evidence_record_refs(value: Any) -> bool:
+def _coerce_dict_list(value: Any) -> List[Dict[str, Any]]:
+    """Coerce a list of dict-like records into plain dictionaries."""
+
+    if not isinstance(value, list):
+        return []
+
+    records: List[Dict[str, Any]] = []
+    for item in value:
+        item_dict = _coerce_evidence_record_dict(item)
+        if not isinstance(item_dict, dict):
+            return []
+        records.append(item_dict)
+
+    return records
+
+
+def _annotation_item_model(annotation: Any) -> Any:
+    """Return the inner model type for list-like annotations when available."""
+
+    origin = get_origin(annotation)
+    if origin not in {list, List}:
+        return None
+
+    args = get_args(annotation)
+    if len(args) != 1:
+        return None
+
+    return args[0]
+
+
+def _field_is_retained_evidence_collection(field_info: Any) -> bool:
+    """Whether a schema field represents retained evidence-backed findings."""
+
+    item_model = _annotation_item_model(getattr(field_info, "annotation", None))
+    model_fields = getattr(item_model, "model_fields", None)
+    if not isinstance(model_fields, dict) or "evidence_record_ids" not in model_fields:
+        return False
+
+    description = str(getattr(field_info, "description", "") or "").casefold()
+    return not any(marker in description for marker in _NON_RETAINED_COLLECTION_DESCRIPTION_MARKERS)
+
+
+def _structured_result_retained_collections(
+    payload: Dict[str, Any],
+    *,
+    expected_output_type: Any = None,
+) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """Return evidence-backed retained collections for a structured result payload."""
+
+    schema_fields = getattr(expected_output_type, "model_fields", None)
+    if isinstance(schema_fields, dict):
+        retained_collections: List[Tuple[str, List[Dict[str, Any]]]] = []
+        for field_name, field_info in schema_fields.items():
+            if not _field_is_retained_evidence_collection(field_info):
+                continue
+
+            field_records = _coerce_dict_list(payload.get(field_name))
+            if field_records:
+                retained_collections.append((field_name, field_records))
+
+        if retained_collections:
+            return retained_collections
+
+    item_records = _coerce_dict_list(payload.get("items"))
+    return [("items", item_records)] if item_records else []
+
+
+def structured_result_missing_evidence_record_refs(value: Any, *, expected_output_type: Any = None) -> bool:
     """Whether retained structured items are missing canonical evidence_record_ids."""
 
     payload = _coerce_evidence_record_dict(value)
     if not isinstance(payload, dict):
         return False
 
-    if not structured_result_requires_evidence(payload):
+    if not structured_result_requires_evidence(payload, expected_output_type=expected_output_type):
         return False
 
-    items = payload.get("items")
-    if not isinstance(items, list):
+    retained_collections = _structured_result_retained_collections(
+        payload,
+        expected_output_type=expected_output_type,
+    )
+    if not retained_collections:
         return True
 
-    if not items:
-        return True
-
-    for item in items:
-        item_dict = _coerce_evidence_record_dict(item)
-        if not isinstance(item_dict, dict):
-            return True
-        if not _merge_unique_reference_ids(item_dict.get("evidence_record_ids")):
-            return True
+    for _, records in retained_collections:
+        for record in records:
+            if not _merge_unique_reference_ids(record.get("evidence_record_ids")):
+                return True
 
     return False
 
 
-def structured_result_requires_evidence(value: Any) -> bool:
+def structured_result_requires_evidence(value: Any, *, expected_output_type: Any = None) -> bool:
     """Whether a structured result represents retained extraction findings that require evidence."""
 
     payload = _coerce_evidence_record_dict(value)
     if not isinstance(payload, dict):
         return False
 
-    items = payload.get("items")
-    if isinstance(items, list) and items:
+    if _structured_result_retained_collections(payload, expected_output_type=expected_output_type):
         return True
 
     run_summary = payload.get("run_summary")

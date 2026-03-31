@@ -3,7 +3,9 @@
 from src.lib.openai_agents.evidence_summary import (
     canonicalize_structured_result_payload,
     structured_result_missing_evidence_record_refs,
+    structured_result_requires_evidence,
 )
+from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
 
 
 def _record(
@@ -69,4 +71,57 @@ def test_missing_evidence_record_refs_when_kept_count_positive_and_items_missing
             ],
             "run_summary": {"kept_count": 1},
         }
+    ) is True
+
+
+def test_schema_defined_retained_collection_satisfies_evidence_guard_without_items():
+    payload = {
+        "summary": "Retained one focal allele with verified evidence.",
+        "alleles": [
+            {
+                "mention": "Actin 5C",
+                "normalized_symbol": "Act5C",
+                "normalized_id": "FB:FBal0000001",
+                "associated_gene": "Act5C",
+                "confidence": "high",
+                "evidence_record_ids": ["evidence-live-a"],
+            }
+        ],
+        "items": [],
+        "evidence_records": [
+            {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+
+    assert structured_result_requires_evidence(
+        payload,
+        expected_output_type=AlleleExtractionResultEnvelope,
+    ) is True
+    assert structured_result_missing_evidence_record_refs(
+        payload,
+        expected_output_type=AlleleExtractionResultEnvelope,
+    ) is False
+
+
+def test_schema_defined_auxiliary_lists_do_not_satisfy_retained_evidence_guard():
+    payload = {
+        "summary": "Kept count drifted positive but only raw mentions survived.",
+        "raw_mentions": [
+            {
+                "mention": "Actin 5C",
+                "entity_type": "allele",
+                "evidence_record_ids": ["evidence-live-a"],
+            }
+        ],
+        "items": [],
+        "evidence_records": [
+            {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+
+    assert structured_result_missing_evidence_record_refs(
+        payload,
+        expected_output_type=AlleleExtractionResultEnvelope,
     ) is True

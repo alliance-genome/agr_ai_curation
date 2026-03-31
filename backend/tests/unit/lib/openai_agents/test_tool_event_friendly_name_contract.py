@@ -7,6 +7,7 @@ import pytest
 
 from src.lib.openai_agents import runner, streaming_tools
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
 
 
 class _FakeRunResult:
@@ -660,6 +661,94 @@ async def test_runner_fails_fast_when_kept_count_is_positive_but_items_are_missi
 
 
 @pytest.mark.asyncio
+async def test_runner_accepts_schema_defined_retained_collection_without_items(monkeypatch):
+    verified_quote = "Actin 5C was the focal allele examined in the study."
+    expected_record = _build_expected_evidence_record(
+        entity="Actin 5C",
+        chunk_id="chunk-1",
+        verified_quote=verified_quote,
+        page=4,
+        section="Results",
+    )
+    fake_events = [
+        _tool_call_stream_event(
+            "record_evidence",
+            arguments=json.dumps(
+                {
+                    "entity": "Actin 5C",
+                    "chunk_id": "chunk-1",
+                    "claimed_quote": verified_quote,
+                }
+            ),
+        ),
+        _tool_output_stream_event(
+            json.dumps(
+                {
+                    "status": "verified",
+                    "verified_quote": verified_quote,
+                    "page": 4,
+                    "section": "Results",
+                }
+            )
+        ),
+    ]
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            fake_events,
+            final_output={
+                "summary": "Retained one focal allele with verified evidence.",
+                "alleles": [
+                    {
+                        "mention": "Actin 5C",
+                        "normalized_symbol": "Act5C",
+                        "normalized_id": "FB:FBal0000001",
+                        "associated_gene": "Act5C",
+                        "confidence": "high",
+                        "evidence_record_ids": [expected_record["evidence_record_id"]],
+                    }
+                ],
+                "items": [],
+                "evidence_records": [],
+                "run_summary": {"kept_count": 1},
+            },
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[],
+        model="gpt-4o",
+        output_type=AlleleExtractionResultEnvelope,
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "extract alleles"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="extract alleles",
+            trace_id="trace-allele-collection",
+        )
+    ]
+
+    assert not any(event.get("type") == "RUN_ERROR" for event in emitted_events)
+    assert any(event.get("type") == "evidence_summary" for event in emitted_events)
+    assert emitted_events[-1]["type"] == "RUN_FINISHED"
+
+
+@pytest.mark.asyncio
 async def test_runner_emits_reasoning_file_ready_chat_output_and_handoff_events(monkeypatch):
     class _FakeTextDelta:
         def __init__(self, delta):
@@ -1226,6 +1315,89 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
     specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
     assert len(specialist_errors) == 1
     assert specialist_errors[0]["details"]["reason"] == "missing_evidence_records"
+
+
+@pytest.mark.asyncio
+async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch):
+    verified_quote = "Actin 5C was the focal allele examined in the study."
+    expected_record = _build_expected_evidence_record(
+        entity="Actin 5C",
+        chunk_id="chunk-1",
+        verified_quote=verified_quote,
+        page=4,
+        section="Results",
+    )
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments=json.dumps(
+                        {
+                            "entity": "Actin 5C",
+                            "chunk_id": "chunk-1",
+                            "claimed_quote": verified_quote,
+                        }
+                    ),
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "verified",
+                            "verified_quote": verified_quote,
+                            "page": 4,
+                            "section": "Results",
+                        }
+                    )
+                ),
+            ],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Retained one focal allele with verified evidence.",
+                    "alleles": [
+                        {
+                            "mention": "Actin 5C",
+                            "normalized_symbol": "Act5C",
+                            "normalized_id": "FB:FBal0000001",
+                            "associated_gene": "Act5C",
+                            "confidence": "high",
+                            "evidence_record_ids": [expected_record["evidence_record_id"]],
+                        }
+                    ],
+                    "items": [],
+                    "evidence_records": [],
+                    "run_summary": {"kept_count": 1},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Allele/Variant Extraction Agent",
+        tools=[],
+        output_type=AlleleExtractionResultEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract findings",
+        specialist_name="Allele/Variant Extraction Agent",
+        max_turns=3,
+        tool_name="ask_allele_extractor_specialist",
+    )
+
+    assert not any(event.get("type") == "SPECIALIST_ERROR" for event in captured_events)
+    assert any(event.get("type") == "evidence_summary" for event in captured_events)
+    assert json.loads(result)["alleles"][0]["evidence_record_ids"] == [expected_record["evidence_record_id"]]
 
 
 @pytest.mark.asyncio
