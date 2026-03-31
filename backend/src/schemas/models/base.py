@@ -9,7 +9,7 @@ This module contains foundational types used across all schema models:
 
 from typing import List, Optional
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 
 class Destination(str, Enum):
@@ -73,6 +73,7 @@ class EvidenceRecord(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    evidence_record_id: Optional[str] = Field(default=None, description="Stable evidence record ID returned by record_evidence")
     entity: Optional[str] = Field(default=None, description="Human-readable entity label the extractor/tool was evaluating")
     verified_quote: Optional[str] = Field(default=None, description="Verbatim paper text returned by evidence verification")
     page: Optional[int] = Field(default=None, ge=1, description="1-based page number if known")
@@ -92,6 +93,7 @@ class EvidenceRecord(BaseModel):
 
     @field_validator(
         "entity",
+        "evidence_record_id",
         "verified_quote",
         "section",
         "subsection",
@@ -116,7 +118,10 @@ class MentionCandidate(BaseModel):
 
     mention: str = Field(description="Original mention text from the paper")
     entity_type: Optional[str] = Field(default=None, description="Entity type guess (gene, allele, disease, etc.)")
-    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Supporting evidence for the raw mention")
+    evidence_record_ids: List[StrictStr] = Field(
+        default_factory=list,
+        description="Stable IDs of verified evidence records supporting the raw mention",
+    )
 
 
 class ExtractionItem(BaseModel):
@@ -128,7 +133,10 @@ class ExtractionItem(BaseModel):
     entity_type: Optional[str] = Field(default=None, description="Entity type (gene, expression, phenotype, etc.)")
     normalized_id: Optional[str] = Field(default=None, description="Normalized CURIE/ontology ID when resolved")
     source_mentions: List[str] = Field(default_factory=list, description="Raw mentions that support this normalized item")
-    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence used to retain the item")
+    evidence_record_ids: List[StrictStr] = Field(
+        default_factory=list,
+        description="Stable IDs of verified evidence records used to retain the item",
+    )
 
 
 class ExclusionRecord(BaseModel):
@@ -138,7 +146,10 @@ class ExclusionRecord(BaseModel):
 
     mention: str = Field(description="Candidate mention that was excluded")
     reason_code: ExclusionReasonCode = Field(description="Canonical exclusion reason code")
-    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence supporting the exclusion")
+    evidence_record_ids: List[StrictStr] = Field(
+        default_factory=list,
+        description="Stable IDs of verified evidence records supporting the exclusion",
+    )
     details: Optional[str] = Field(default=None, description="Optional free-text explanation")
 
 
@@ -150,7 +161,10 @@ class AmbiguityRecord(BaseModel):
     mention: str = Field(description="Ambiguous mention text")
     why_ambiguous: str = Field(description="Why normalization/classification is ambiguous")
     recommended_followup: Optional[str] = Field(default=None, description="Action suggested for curator follow-up")
-    evidence: List[EvidenceRecord] = Field(default_factory=list, description="Evidence associated with ambiguity")
+    evidence_record_ids: List[StrictStr] = Field(
+        default_factory=list,
+        description="Stable IDs of verified evidence records associated with the ambiguity",
+    )
 
 
 class ExtractionRunSummary(BaseModel):

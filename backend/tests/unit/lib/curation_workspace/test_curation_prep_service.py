@@ -26,6 +26,7 @@ def _make_item(
     entity_type: str | None = "observation",
     normalized_id: str | None = "OBS:0001",
     source_mentions: list[str] | None = None,
+    evidence_record_ids: list[str] | None = None,
     evidence: list[dict] | None = None,
 ) -> dict:
     return {
@@ -33,19 +34,31 @@ def _make_item(
         "entity_type": entity_type,
         "normalized_id": normalized_id,
         "source_mentions": source_mentions if source_mentions is not None else ["Alpha mention"],
-        "evidence": evidence
-        if evidence is not None
-        else [
-            {
-                "entity": "Candidate Alpha",
-                "verified_quote": "Candidate Alpha was supported by a verified observation.",
-                "page": 5,
-                "section": "Results",
-                "subsection": "Observation set",
-                "chunk_id": "chunk-1",
-                "figure_reference": "Table 2",
-            }
-        ],
+        "evidence_record_ids": evidence_record_ids if evidence_record_ids is not None else ["evidence-1"],
+        "evidence": evidence if evidence is not None else [],
+    }
+
+
+def _make_evidence_record(
+    *,
+    evidence_record_id: str = "evidence-1",
+    entity: str = "Candidate Alpha",
+    verified_quote: str = "Candidate Alpha was supported by a verified observation.",
+    page: int = 5,
+    section: str = "Results",
+    subsection: str = "Observation set",
+    chunk_id: str = "chunk-1",
+    figure_reference: str = "Table 2",
+) -> dict:
+    return {
+        "evidence_record_id": evidence_record_id,
+        "entity": entity,
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "subsection": subsection,
+        "chunk_id": chunk_id,
+        "figure_reference": figure_reference,
     }
 
 
@@ -60,7 +73,7 @@ def _make_extraction_result(
     ),
 ) -> CurationExtractionResultRecord:
     items = items or [_make_item()]
-    evidence_records = evidence_records or list(items[0].get("evidence", []))
+    evidence_records = evidence_records or [_make_evidence_record()]
 
     return CurationExtractionResultRecord.model_validate(
         {
@@ -119,6 +132,7 @@ async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypa
         "normalized_id",
         "source_mentions.0",
     ]
+    assert candidate.evidence_records[0].evidence_record_id == "evidence-1"
     assert candidate.evidence_records[0].anchor.snippet_text == (
         "Candidate Alpha was supported by a verified observation."
     )
@@ -154,23 +168,20 @@ async def test_run_curation_prep_gates_candidates_without_item_level_evidence(mo
                 label="Candidate Alpha",
                 normalized_id="OBS:0001",
                 source_mentions=["Alpha mention"],
-                evidence=[
-                    {
-                        "entity": "Candidate Alpha",
-                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
-                        "page": 5,
-                        "section": "Results",
-                        "chunk_id": "chunk-1",
-                    }
-                ],
+                evidence_record_ids=["evidence-1"],
             ),
             _make_item(
                 label="Candidate Beta",
                 normalized_id="OBS:0002",
                 source_mentions=["Beta mention"],
-                evidence=[],
+                evidence_record_ids=[],
             ),
-        ]
+        ],
+        evidence_records=[
+            _make_evidence_record(
+                evidence_record_id="evidence-1",
+            )
+        ],
     )
 
     monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
@@ -191,17 +202,11 @@ async def test_run_curation_prep_does_not_fall_back_to_top_level_evidence_record
     extraction_result = _make_extraction_result(
         items=[
             _make_item(
-                evidence=[],
+                evidence_record_ids=[],
             )
         ],
         evidence_records=[
-            {
-                "entity": "Candidate Alpha",
-                "verified_quote": "Candidate Alpha was supported by a verified observation.",
-                "page": 5,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
+            _make_evidence_record()
         ],
     )
 
@@ -230,6 +235,7 @@ async def test_run_curation_prep_rejects_when_all_candidates_fail_evidence_gate(
     extraction_result = _make_extraction_result(
         items=[
             _make_item(
+                evidence_record_ids=[],
                 evidence=[
                     {
                         "entity": "Candidate Alpha",
@@ -260,6 +266,37 @@ async def test_run_curation_prep_rejects_when_all_candidates_fail_evidence_gate(
         )
 
     assert persist_called is False
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_supports_legacy_inline_item_evidence(monkeypatch):
+    extraction_result = _make_extraction_result(
+        items=[
+            _make_item(
+                evidence_record_ids=[],
+                evidence=[
+                    {
+                        "entity": "Candidate Alpha",
+                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
+                        "page": 5,
+                        "section": "Results",
+                        "subsection": "Observation set",
+                        "chunk_id": "chunk-1",
+                    }
+                ],
+            )
+        ],
+        evidence_records=[],
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=_make_scope_confirmation(),
+    )
+
+    assert len(prep_output.candidates) == 1
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from src.lib.openai_agents.models import GeneExpressionEnvelope as RuntimeGeneEx
 from src.schemas.models import GeneExpressionEnvelope as CoreGeneExpressionEnvelope
 from src.schemas.models import PdfExtractionEnvelope
 from src.schemas.models import PdfSpecialistEnvelope
-from src.schemas.models.base import ExclusionReasonCode, ExclusionRecord, EvidenceRecord
+from src.schemas.models.base import ExclusionReasonCode, ExclusionRecord
 
 
 def test_runtime_gene_expression_envelope_has_contract_defaults():
@@ -25,7 +25,7 @@ def test_runtime_gene_expression_envelope_accepts_reason_coded_exclusions():
     exclusion = ExclusionRecord(
         mention="marker transgene only",
         reason_code=ExclusionReasonCode.MARKER_ONLY_VISUALIZATION,
-        evidence=[EvidenceRecord(verified_quote="marker used to visualize neurons only")],
+        evidence_record_ids=["evidence-marker-only"],
     )
 
     envelope = RuntimeGeneExpressionEnvelope(exclusions=[exclusion])

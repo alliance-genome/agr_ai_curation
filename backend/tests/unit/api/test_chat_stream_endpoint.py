@@ -10,6 +10,7 @@ import pytest
 
 from src.api import chat
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 
 
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
@@ -22,6 +23,20 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
         if line.startswith("data: "):
             payloads.append(json.loads(line[6:]))
     return payloads
+
+
+def _expected_evidence_record() -> dict[str, object]:
+    record = {
+        "entity": "crumb",
+        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Gene Expression Analysis",
+        "chunk_id": "abc123",
+        "figure_reference": "Figure 2A",
+    }
+    record["evidence_record_id"] = build_evidence_record_id(evidence_record=record)
+    return record
 
 
 def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
@@ -228,6 +243,7 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
 
 
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
+    expected_record = _expected_evidence_record()
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -306,20 +322,11 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
         "evidence_summary",
         "RUN_FINISHED",
     ]
-    assert events[2]["evidence_records"] == [
-        {
-            "entity": "crumb",
-            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-            "page": 4,
-            "section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "chunk_id": "abc123",
-            "figure_reference": "Figure 2A",
-        }
-    ]
+    assert events[2]["evidence_records"] == [expected_record]
 
 
 def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
+    expected_record = _expected_evidence_record()
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -377,17 +384,7 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
         yield {
             "type": "evidence_summary",
             "timestamp": "2026-03-28T12:00:00Z",
-            "evidence_records": [
-                {
-                    "entity": "crumb",
-                    "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                    "page": 4,
-                    "section": "Results",
-                    "subsection": "Gene Expression Analysis",
-                    "chunk_id": "abc123",
-                    "figure_reference": "Figure 2A",
-                }
-            ],
+            "evidence_records": [expected_record],
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
@@ -419,20 +416,11 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
         None
     )
     assert evidence_summary_event is not None
-    assert evidence_summary_event["evidence_records"] == [
-        {
-            "entity": "crumb",
-            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-            "page": 4,
-            "section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "chunk_id": "abc123",
-            "figure_reference": "Figure 2A",
-        }
-    ]
+    assert evidence_summary_event["evidence_records"] == [expected_record]
 
 
 def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
+    expected_record = _expected_evidence_record()
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -491,17 +479,7 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
             "type": "evidence_summary",
             "timestamp": "2026-03-28T12:00:00Z",
             "details": {
-                "evidence_records": [
-                    {
-                        "entity": "crumb",
-                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                        "page": 4,
-                        "section": "Results",
-                        "subsection": "Gene Expression Analysis",
-                        "chunk_id": "abc123",
-                        "figure_reference": "Figure 2A",
-                    }
-                ],
+                "evidence_records": [expected_record],
             },
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
@@ -534,17 +512,7 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
         None
     )
     assert evidence_summary_event is not None
-    assert evidence_summary_event["evidence_records"] == [
-        {
-            "entity": "crumb",
-            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-            "page": 4,
-            "section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "chunk_id": "abc123",
-            "figure_reference": "Figure 2A",
-        }
-    ]
+    assert evidence_summary_event["evidence_records"] == [expected_record]
 
 
 def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(monkeypatch):

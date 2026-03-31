@@ -279,6 +279,7 @@ def _candidate_blueprints(
     if not isinstance(raw_items, list):
         return []
 
+    evidence_records_by_id = _evidence_records_by_id(payload)
     blueprints: list[_CandidateBlueprint] = []
 
     for candidate_index, raw_item in enumerate(raw_items, start=1):
@@ -296,6 +297,7 @@ def _candidate_blueprints(
                     extraction_result,
                     raw_item,
                     candidate_index=candidate_index,
+                    evidence_records_by_id=evidence_records_by_id,
                 ),
                 conversation_context_summary=_candidate_conversation_summary(
                     extraction_result,
@@ -314,7 +316,7 @@ def _candidate_payload_from_item(
         {
             key: value
             for key, value in raw_item.items()
-            if key != "evidence"
+            if key not in {"evidence", "evidence_record_ids"}
         }
     )
     if not isinstance(candidate_payload, dict):
@@ -327,12 +329,33 @@ def _candidate_evidence_records(
     raw_item: Mapping[str, Any],
     *,
     candidate_index: int,
+    evidence_records_by_id: Mapping[str, Mapping[str, Any]],
 ) -> list[_CandidateEvidence]:
+    source_records: list[_CandidateEvidence] = []
+    evidence_index = 0
+    for evidence_record_id in _normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
+        raw_record = evidence_records_by_id.get(evidence_record_id)
+        if not isinstance(raw_record, Mapping):
+            continue
+        anchor = _build_source_evidence_anchor(raw_record)
+        if anchor is None:
+            continue
+        evidence_index += 1
+        source_records.append(
+            _CandidateEvidence(
+                evidence_record_id=evidence_record_id,
+                extraction_result_id=extraction_result.extraction_result_id,
+                anchor=anchor,
+            )
+        )
+
+    if source_records:
+        return source_records
+
     raw_records = raw_item.get("evidence")
     if not isinstance(raw_records, list):
         return []
 
-    source_records: list[_CandidateEvidence] = []
     for evidence_index, raw_record in enumerate(raw_records, start=1):
         if not isinstance(raw_record, Mapping):
             continue
@@ -352,6 +375,41 @@ def _candidate_evidence_records(
         )
 
     return source_records
+
+
+def _evidence_records_by_id(
+    payload: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    raw_records = payload.get("evidence_records")
+    if not isinstance(raw_records, list):
+        return {}
+
+    records_by_id: dict[str, Mapping[str, Any]] = {}
+    for raw_record in raw_records:
+        if not isinstance(raw_record, Mapping):
+            continue
+        evidence_record_id = _normalized_optional_string(raw_record.get("evidence_record_id"))
+        if not evidence_record_id:
+            continue
+        records_by_id[evidence_record_id] = raw_record
+
+    return records_by_id
+
+
+def _normalized_evidence_record_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    evidence_record_ids: list[str] = []
+    seen: set[str] = set()
+    for candidate in value:
+        evidence_record_id = _normalized_optional_string(candidate)
+        if not evidence_record_id or evidence_record_id in seen:
+            continue
+        seen.add(evidence_record_id)
+        evidence_record_ids.append(evidence_record_id)
+
+    return evidence_record_ids
 
 
 def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnchor | None:

@@ -62,6 +62,7 @@ from .evidence_summary import (
     canonicalize_structured_result_payload,
     extract_evidence_records_from_structured_result,
     normalize_evidence_records,
+    structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
 from .streaming_tools import (
@@ -799,7 +800,10 @@ async def _run_agent_with_tracing(
                             tool_output=output,
                         )
                         if evidence_record is not None:
-                            evidence_records.append(evidence_record)
+                            evidence_records = _merge_evidence_records(
+                                evidence_records,
+                                [evidence_record],
+                            )
 
                         # Emit any remaining collected specialist events (fallback for batch mode)
                         # Most events should have been streamed via queue, this catches any stragglers
@@ -983,9 +987,15 @@ async def _run_agent_with_tracing(
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
-                structured_result = canonicalize_structured_result_payload(final_output.model_dump())
+                structured_result = canonicalize_structured_result_payload(
+                    final_output.model_dump(),
+                    preferred_evidence_records=evidence_records,
+                )
             elif isinstance(final_output, dict):
-                structured_result = canonicalize_structured_result_payload(final_output)
+                structured_result = canonicalize_structured_result_payload(
+                    final_output,
+                    preferred_evidence_records=evidence_records,
+                )
             if not full_response:
                 full_response = str(final_output)
 
@@ -1006,9 +1016,16 @@ async def _run_agent_with_tracing(
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
         structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
-        if structured_result_requires_evidence(structured_result) and not structured_evidence_records:
+        if (
+            structured_result_requires_evidence(structured_result)
+            and (
+                not evidence_records
+                or not structured_evidence_records
+                or structured_result_missing_evidence_record_refs(structured_result)
+            )
+        ):
             logger.error(
-                "Structured extraction result is missing required evidence records",
+                "Structured extraction result is missing required verified evidence records or references",
                 extra={
                     "trace_id": trace_id,
                     "user_id": user_id,
@@ -1021,7 +1038,7 @@ async def _run_agent_with_tracing(
                 "type": "RUN_ERROR",
                 "data": {
                     "message": (
-                        "Extraction completed without the required evidence records. "
+                        "Extraction completed without the required verified evidence records. "
                         "Please report this run so we can investigate."
                     ),
                     "error_type": "MissingEvidenceRecords",
@@ -1031,7 +1048,10 @@ async def _run_agent_with_tracing(
             return
 
         if structured_evidence_records:
-            evidence_records = structured_evidence_records
+            evidence_records = _merge_evidence_records(
+                evidence_records,
+                structured_evidence_records,
+            )
 
         try:
             parsed_answer = Answer.model_validate(structured_result)

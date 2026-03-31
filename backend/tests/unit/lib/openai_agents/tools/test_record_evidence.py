@@ -3,11 +3,34 @@
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
+from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.fixtures.evidence.harness import chunk_map, load_evidence_fixture, tool_case_map
 
 
 FIXTURE = load_evidence_fixture()
 TOOL_CASES = tool_case_map(FIXTURE)
+
+
+def _expected_verified_result(
+    tool_input: dict[str, object],
+    expected_tool_result: dict[str, object],
+) -> dict[str, object]:
+    if expected_tool_result.get("status") != "verified":
+        return expected_tool_result
+
+    enriched_result = dict(expected_tool_result)
+    enriched_result["evidence_record_id"] = build_evidence_record_id(
+        evidence_record={
+            "entity": tool_input["entity"],
+            "verified_quote": expected_tool_result["verified_quote"],
+            "page": expected_tool_result.get("page"),
+            "section": expected_tool_result.get("section"),
+            "chunk_id": tool_input["chunk_id"],
+            "subsection": expected_tool_result.get("subsection"),
+            "figure_reference": expected_tool_result.get("figure_reference"),
+        }
+    )
+    return enriched_result
 
 
 class _Tracker:
@@ -52,7 +75,7 @@ async def test_record_evidence_records_exact_match_and_tracker_usage(monkeypatch
 
     result = await tool(**case["tool_input"])
 
-    assert result == case["expected_tool_result"]
+    assert result == _expected_verified_result(case["tool_input"], case["expected_tool_result"])
     assert captured == {
         "chunk_id": case["tool_input"]["chunk_id"],
         "user_id": "user-1",
@@ -84,7 +107,7 @@ async def test_record_evidence_fixture_cases(monkeypatch, case_id):
 
     result = await tool(**case["tool_input"])
 
-    assert result == case["expected_tool_result"]
+    assert result == _expected_verified_result(case["tool_input"], case["expected_tool_result"])
     assert captured == {
         "chunk_id": case["tool_input"]["chunk_id"],
         "user_id": "user-1",
@@ -117,13 +140,20 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
         claimed_quote="Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
     )
 
-    assert result == {
+    expected = {
         "status": "verified",
         "verified_quote": "Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
         "page": 6,
         "section": "Results and Discussion",
         "subsection": "2.3. The molar abundance of actins, optins, and crumbs in fly eyes",
     }
+    assert result == _expected_verified_result(
+        {
+            "entity": "Act 87E",
+            "chunk_id": "chunk-live-repro",
+        },
+        expected,
+    )
 
 
 @pytest.mark.asyncio
@@ -154,10 +184,17 @@ async def test_record_evidence_prefers_pdfx_page_no_provenance_when_chunk_page_i
         claimed_quote="followed by Actin 87E (80 +/- 51 fmoles/eye).",
     )
 
-    assert result == {
+    expected = {
         "status": "verified",
         "verified_quote": "followed by Actin 87E (80 +/- 51 fmoles/eye).",
         "page": 3,
         "section": "Results and Discussion",
         "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
     }
+    assert result == _expected_verified_result(
+        {
+            "entity": "Actin 87E",
+            "chunk_id": "chunk-pdfx-page-no-repro",
+        },
+        expected,
+    )

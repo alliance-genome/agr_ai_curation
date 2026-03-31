@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
 
+from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from src.lib.weaviate_client.chunks import get_chunk_by_id
 
 if TYPE_CHECKING:
@@ -440,6 +441,18 @@ def create_record_evidence_tool(
         figure_reference = _extract_figure_reference(chunk, chunk_text)
         if figure_reference:
             payload["figure_reference"] = figure_reference
+
+        payload["evidence_record_id"] = build_evidence_record_id(
+            evidence_record={
+                "entity": str(entity or "").strip(),
+                "verified_quote": verified_quote,
+                "page": page,
+                "section": section,
+                "chunk_id": str(chunk_id or "").strip(),
+                "subsection": subsection,
+                "figure_reference": figure_reference,
+            }
+        )
 
         return payload
 

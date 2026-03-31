@@ -4,7 +4,7 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 
 from datetime import datetime
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictStr
 
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.base import (
@@ -73,6 +73,10 @@ class Answer(BaseModel):
 class PdfEvidenceRecord(BaseModel):
     """Verified evidence record for generic document extraction."""
 
+    evidence_record_id: Optional[str] = Field(
+        None,
+        description="Stable ID returned by record_evidence for this verified quote"
+    )
     entity: str = Field(
         ...,
         description="Display label for the extracted claim or entity this quote supports"
@@ -115,9 +119,9 @@ class PdfMentionCandidate(BaseModel):
         None,
         description="Best-effort entity or claim type such as strain, method, finding, or reagent"
     )
-    evidence: List[PdfEvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting why this mention was considered"
+        description="Stable IDs of verified evidence records supporting why this mention was considered"
     )
 
 
@@ -140,9 +144,9 @@ class PdfExtractionItem(BaseModel):
         default_factory=list,
         description="Mention strings that support this retained item"
     )
-    evidence: List[PdfEvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting the retained item"
+        description="Stable IDs of verified evidence records supporting the retained item"
     )
 
 
@@ -161,9 +165,9 @@ class PdfExclusionRecord(BaseModel):
         ...,
         description="Short machine-friendly reason code explaining the exclusion"
     )
-    evidence: List[PdfEvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting the exclusion decision"
+        description="Stable IDs of verified evidence records supporting the exclusion decision"
     )
     details: Optional[str] = Field(
         None,
@@ -190,9 +194,9 @@ class PdfAmbiguityRecord(BaseModel):
         None,
         description="Suggested curator follow-up to resolve the ambiguity"
     )
-    evidence: List[PdfEvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence associated with the ambiguity"
+        description="Stable IDs of verified evidence records associated with the ambiguity"
     )
 
 
@@ -246,7 +250,7 @@ class PdfExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[PdfEvidenceRecord] = Field(
         default_factory=list,
-        description="All verified evidence records that support retained or excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -526,9 +530,9 @@ class PhenotypeObservation(BaseModel):
         default_factory=list,
         description="Alternative candidate terms considered for mapping"
     )
-    evidence: List[EvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting this phenotype assertion"
+        description="Stable IDs of verified evidence records supporting this phenotype assertion"
     )
 
 
@@ -552,7 +556,7 @@ class PhenotypeResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -598,9 +602,9 @@ class AlleleExtractionFinding(BaseModel):
         "medium",
         description="Extractor confidence in normalization and classification"
     )
-    evidence: List[EvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting this retained allele/variant assertion"
+        description="Stable IDs of verified evidence records supporting this retained allele/variant assertion"
     )
 
 
@@ -624,7 +628,7 @@ class AlleleExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -670,9 +674,9 @@ class DiseaseExtractionFinding(BaseModel):
         "medium",
         description="Extractor confidence in normalization and role classification"
     )
-    evidence: List[EvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting this retained disease assertion"
+        description="Stable IDs of verified evidence records supporting this retained disease assertion"
     )
 
 
@@ -696,7 +700,7 @@ class DiseaseExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -750,9 +754,9 @@ class ChemicalExtractionFinding(BaseModel):
         "medium",
         description="Extractor confidence in normalization and role classification"
     )
-    evidence: List[EvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting this retained chemical assertion"
+        description="Stable IDs of verified evidence records supporting this retained chemical assertion"
     )
 
 
@@ -776,7 +780,7 @@ class ChemicalExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -822,9 +826,9 @@ class GeneExtractionFinding(BaseModel):
         "medium",
         description="Extractor confidence in normalization and classification"
     )
-    evidence: List[EvidenceRecord] = Field(
+    evidence_record_ids: List[StrictStr] = Field(
         default_factory=list,
-        description="Verified evidence supporting this retained gene assertion"
+        description="Stable IDs of verified evidence records supporting this retained gene assertion"
     )
 
 
@@ -848,7 +852,7 @@ class GeneExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[EvidenceRecord] = Field(
         default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
+        description="Canonical verified evidence registry populated from record_evidence tool calls"
     )
     normalization_notes: List[str] = Field(
         default_factory=list,

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -47,9 +48,9 @@ def _coerce_evidence_record_dict(value: Any) -> Optional[Dict[str, Any]]:
 def _normalize_evidence_record(
     value: Any,
     *,
-    entity_override: Optional[str] = None,
+    entity_fallback: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Normalize one evidence record, optionally overriding the display entity."""
+    """Normalize one evidence record and guarantee a stable evidence_record_id."""
 
     record_dict = _coerce_evidence_record_dict(value)
     if not isinstance(record_dict, dict):
@@ -59,7 +60,9 @@ def _normalize_evidence_record(
         )
         return None
 
-    entity_source = entity_override if entity_override is not None else record_dict.get("entity")
+    entity_source = record_dict.get("entity")
+    if entity_source in (None, ""):
+        entity_source = entity_fallback
     entity = str(entity_source or "").strip()
     verified_quote = str(record_dict.get("verified_quote") or "").strip()
     section = str(record_dict.get("section") or "").strip()
@@ -88,10 +91,10 @@ def _normalize_evidence_record(
             invalid_fields.append(f"page={page!r}")
 
         logger.debug(
-            "Dropping malformed evidence record with invalid fields %s; keys=%s entity_override=%r",
+            "Dropping malformed evidence record with invalid fields %s; keys=%s entity_fallback=%r",
             ",".join(invalid_fields),
             sorted(record_dict.keys()),
-            entity_override,
+            entity_fallback,
         )
         return None
 
@@ -111,7 +114,43 @@ def _normalize_evidence_record(
     if figure_reference:
         evidence_record["figure_reference"] = figure_reference
 
+    evidence_record["evidence_record_id"] = build_evidence_record_id(
+        record_dict.get("evidence_record_id"),
+        evidence_record=evidence_record,
+    )
+
     return evidence_record
+
+
+def build_evidence_record_id(
+    existing_id: Any = None,
+    *,
+    evidence_record: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return a stable evidence record ID, preferring an existing valid ID."""
+
+    normalized_existing = str(existing_id or "").strip()
+    if normalized_existing:
+        return normalized_existing
+
+    if not isinstance(evidence_record, dict):
+        raise ValueError("evidence_record is required when existing_id is empty")
+
+    canonical_blob = json.dumps(
+        [
+            str(evidence_record.get("entity") or "").strip(),
+            str(evidence_record.get("verified_quote") or "").strip(),
+            evidence_record.get("page"),
+            str(evidence_record.get("section") or "").strip(),
+            str(evidence_record.get("chunk_id") or "").strip(),
+            str(evidence_record.get("subsection") or "").strip(),
+            str(evidence_record.get("figure_reference") or "").strip(),
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha1(canonical_blob.encode("utf-8")).hexdigest()[:16]
+    return f"evidence-{digest}"
 
 
 def _merge_unique_strings(*values: Any) -> List[str]:
@@ -136,6 +175,28 @@ def _merge_unique_strings(*values: Any) -> List[str]:
                 _append(item)
             continue
         _append(value)
+
+    return merged
+
+
+def _merge_unique_reference_ids(*values: Any) -> List[str]:
+    """Merge evidence record IDs while preserving first-seen order."""
+
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        if isinstance(value, list):
+            candidates = value
+        else:
+            candidates = [value]
+
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
 
     return merged
 
@@ -213,46 +274,92 @@ def _collect_preferred_labels(payload: Dict[str, Any]) -> Dict[str, str]:
     return preferred_labels
 
 
-def _merge_normalized_evidence_records(
-    *,
-    existing: Any,
-    incoming: Any,
-    entity_override: str,
-) -> List[Dict[str, Any]]:
-    """Merge evidence records under a canonical entity label."""
+def _evidence_record_key(record: Dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        record.get("entity"),
+        record.get("verified_quote"),
+        record.get("page"),
+        record.get("section"),
+        record.get("chunk_id"),
+        record.get("subsection"),
+        record.get("figure_reference"),
+    )
 
-    merged: List[Dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
 
-    for source in (existing, incoming):
-        if not isinstance(source, list):
-            continue
-        for record in source:
-            evidence_record = _normalize_evidence_record(
-                record,
-                entity_override=entity_override,
+def _evidence_locator_key(record: Dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        record.get("verified_quote"),
+        record.get("page"),
+        record.get("section"),
+        record.get("chunk_id"),
+        record.get("subsection"),
+        record.get("figure_reference"),
+    )
+
+
+class _EvidenceRegistry:
+    """Canonical evidence registry keyed by stable tool-verified record IDs."""
+
+    def __init__(self) -> None:
+        self._records: List[Dict[str, Any]] = []
+        self._records_by_id: Dict[str, Dict[str, Any]] = {}
+        self._id_by_exact_key: Dict[tuple[Any, ...], str] = {}
+        self._ids_by_locator_key: Dict[tuple[Any, ...], List[str]] = {}
+
+    def add_many(
+        self,
+        values: Any,
+        *,
+        entity_fallback: Optional[str] = None,
+        allow_locator_fallback: bool = False,
+    ) -> List[str]:
+        if not isinstance(values, list):
+            return []
+
+        added_ids: List[str] = []
+        for value in values:
+            evidence_record_id = self.add(
+                value,
+                entity_fallback=entity_fallback,
+                allow_locator_fallback=allow_locator_fallback,
             )
-            if evidence_record is None:
-                continue
+            if evidence_record_id:
+                added_ids.append(evidence_record_id)
+        return added_ids
 
-            # chunk_id is the stable passage anchor after verification, so records
-            # that share entity/quote/page/section/chunk_id are treated as the
-            # same evidence even when optional labels are absent in one payload.
-            key = (
-                evidence_record.get("entity"),
-                evidence_record.get("verified_quote"),
-                evidence_record.get("page"),
-                evidence_record.get("section"),
-                evidence_record.get("chunk_id"),
-                evidence_record.get("subsection"),
-                evidence_record.get("figure_reference"),
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(evidence_record)
+    def add(
+        self,
+        value: Any,
+        *,
+        entity_fallback: Optional[str] = None,
+        allow_locator_fallback: bool = False,
+    ) -> Optional[str]:
+        normalized_record = _normalize_evidence_record(
+            value,
+            entity_fallback=entity_fallback,
+        )
+        if normalized_record is None:
+            return None
 
-    return merged
+        exact_key = _evidence_record_key(normalized_record)
+        existing_id = self._id_by_exact_key.get(exact_key)
+        if existing_id:
+            return existing_id
+
+        locator_key = _evidence_locator_key(normalized_record)
+        locator_ids = self._ids_by_locator_key.get(locator_key, [])
+        if allow_locator_fallback and len(locator_ids) == 1:
+            return locator_ids[0]
+
+        evidence_record_id = str(normalized_record["evidence_record_id"])
+        self._records.append(normalized_record)
+        self._records_by_id[evidence_record_id] = normalized_record
+        self._id_by_exact_key[exact_key] = evidence_record_id
+        self._ids_by_locator_key.setdefault(locator_key, []).append(evidence_record_id)
+        return evidence_record_id
+
+    def records(self) -> List[Dict[str, Any]]:
+        return list(self._records)
 
 
 def _consolidate_items(
@@ -293,10 +400,8 @@ def _consolidate_items(
                 item_dict.get("source_mentions"),
                 item_dict.get("label"),
             )
-            merged_item["evidence"] = _merge_normalized_evidence_records(
-                existing=[],
-                incoming=item_dict.get("evidence"),
-                entity_override=display_label,
+            merged_item["evidence_record_ids"] = _merge_unique_reference_ids(
+                item_dict.get("evidence_record_ids"),
             )
             grouped_indexes[identity_key] = len(consolidated)
             consolidated.append(merged_item)
@@ -310,10 +415,9 @@ def _consolidate_items(
             item_dict.get("source_mentions"),
             item_dict.get("label"),
         )
-        merged_item["evidence"] = _merge_normalized_evidence_records(
-            existing=merged_item.get("evidence"),
-            incoming=item_dict.get("evidence"),
-            entity_override=display_label,
+        merged_item["evidence_record_ids"] = _merge_unique_reference_ids(
+            merged_item.get("evidence_record_ids"),
+            item_dict.get("evidence_record_ids"),
         )
         consolidated[existing_index] = merged_item
 
@@ -353,18 +457,13 @@ def _merge_retained_record(
             incoming_record.get("label"),
         )
 
-    entity_override = preferred_label or str(
-        merged_record.get("label")
-        or merged_record.get("mention")
-        or incoming_record.get("label")
-        or incoming_record.get("mention")
-        or ""
-    ).strip()
-    merged_record["evidence"] = _merge_normalized_evidence_records(
-        existing=merged_record.get("evidence"),
-        incoming=incoming_record.get("evidence"),
-        entity_override=entity_override,
+    merged_record["evidence_record_ids"] = _merge_unique_reference_ids(
+        merged_record.get("evidence_record_ids"),
+        incoming_record.get("evidence_record_ids"),
     )
+
+    if preferred_label and "label" in merged_record:
+        merged_record["label"] = preferred_label
 
     return merged_record
 
@@ -484,6 +583,11 @@ def build_record_evidence_summary_record(
     if figure_reference:
         evidence_record["figure_reference"] = figure_reference
 
+    evidence_record["evidence_record_id"] = build_evidence_record_id(
+        output_payload.get("evidence_record_id"),
+        evidence_record=evidence_record,
+    )
+
     return evidence_record
 
 
@@ -503,35 +607,74 @@ def normalize_evidence_records(value: Any) -> List[Dict[str, Any]]:
     return evidence_records
 
 
-def _extract_evidence_records_from_items(value: Any) -> List[Dict[str, Any]]:
-    """Extract canonical evidence records from retained structured items."""
+def _candidate_entity_fallback(record_dict: Dict[str, Any]) -> Optional[str]:
+    for key in ("label", "mention"):
+        candidate = str(record_dict.get(key) or "").strip()
+        if candidate:
+            return candidate
 
-    if not isinstance(value, list):
-        return []
+    source_mentions = record_dict.get("source_mentions")
+    if isinstance(source_mentions, list):
+        for candidate in source_mentions:
+            text = str(candidate or "").strip()
+            if text:
+                return text
 
-    evidence_records: List[Dict[str, Any]] = []
+    return None
 
-    for item in value:
-        item_dict = _coerce_evidence_record_dict(item)
-        if not isinstance(item_dict, dict):
+
+def _canonicalize_nested_evidence_references(
+    value: Any,
+    *,
+    registry: _EvidenceRegistry,
+    top_level: bool = False,
+) -> Any:
+    """Replace legacy inline evidence blobs with evidence_record_ids recursively."""
+
+    if isinstance(value, list):
+        return [
+            _canonicalize_nested_evidence_references(item, registry=registry)
+            for item in value
+        ]
+
+    record_dict = _coerce_evidence_record_dict(value)
+    if not isinstance(record_dict, dict):
+        return value
+
+    canonical_record: Dict[str, Any] = {}
+    for key, nested_value in record_dict.items():
+        if key in {"evidence", "evidence_record_ids"}:
             continue
-
-        canonical_entity = str(item_dict.get("label") or "").strip()
-        if not canonical_entity:
+        if top_level and key == "evidence_records":
             continue
+        canonical_record[key] = _canonicalize_nested_evidence_references(
+            nested_value,
+            registry=registry,
+        )
 
-        for record in item_dict.get("evidence") or []:
-            evidence_record = _normalize_evidence_record(
-                record,
-                entity_override=canonical_entity,
-            )
-            if evidence_record is not None:
-                evidence_records.append(evidence_record)
+    evidence_record_ids = _merge_unique_reference_ids(record_dict.get("evidence_record_ids"))
+    legacy_evidence = record_dict.get("evidence")
+    if isinstance(legacy_evidence, list):
+        evidence_record_ids = _merge_unique_reference_ids(
+            evidence_record_ids,
+            registry.add_many(
+                legacy_evidence,
+                entity_fallback=_candidate_entity_fallback(record_dict),
+                allow_locator_fallback=True,
+            ),
+        )
 
-    return evidence_records
+    if "evidence_record_ids" in record_dict or isinstance(legacy_evidence, list):
+        canonical_record["evidence_record_ids"] = evidence_record_ids
+
+    return canonical_record
 
 
-def canonicalize_structured_result_payload(value: Any) -> Any:
+def canonicalize_structured_result_payload(
+    value: Any,
+    *,
+    preferred_evidence_records: Any = None,
+) -> Any:
     """Collapse duplicate retained normalized items in structured extraction payloads."""
 
     payload = _coerce_evidence_record_dict(value)
@@ -539,16 +682,27 @@ def canonicalize_structured_result_payload(value: Any) -> Any:
         return value
 
     preferred_labels = _collect_preferred_labels(payload)
-    canonical_payload = dict(payload)
+    registry = _EvidenceRegistry()
+    registry.add_many(
+        preferred_evidence_records if preferred_evidence_records is not None else payload.get("evidence_records")
+    )
+    canonical_payload = _canonicalize_nested_evidence_references(
+        payload,
+        registry=registry,
+        top_level=True,
+    )
 
-    original_items = payload.get("items")
+    original_items = canonical_payload.get("items")
     canonical_items = _consolidate_items(
         original_items,
         preferred_labels=preferred_labels,
     )
+    if isinstance(original_items, list):
+        canonical_payload["items"] = canonical_items
+        canonical_payload["evidence_records"] = registry.records()
+
     if canonical_items:
         canonical_payload["items"] = canonical_items
-        canonical_payload["evidence_records"] = _extract_evidence_records_from_items(canonical_items)
 
         run_summary = canonical_payload.get("run_summary")
         if isinstance(run_summary, dict):
@@ -570,14 +724,17 @@ def canonicalize_structured_result_payload(value: Any) -> Any:
             )
 
     for key, field_value in payload.items():
-        if key == "items":
+        if key in {"items", "evidence_records"}:
             continue
         consolidated_field = _consolidate_retained_normalized_list(
-            field_value,
+            canonical_payload.get(key, field_value),
             preferred_labels=preferred_labels,
         )
         if consolidated_field is not None:
             canonical_payload[key] = consolidated_field
+
+    if "evidence_records" in payload or registry.records():
+        canonical_payload["evidence_records"] = registry.records()
 
     return canonical_payload
 
@@ -589,11 +746,34 @@ def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str
     if not isinstance(payload, dict):
         return []
 
-    item_evidence_records = _extract_evidence_records_from_items(payload.get("items"))
-    if item_evidence_records:
-        return item_evidence_records
-
     return normalize_evidence_records(payload.get("evidence_records"))
+
+
+def structured_result_missing_evidence_record_refs(value: Any) -> bool:
+    """Whether retained structured items are missing canonical evidence_record_ids."""
+
+    payload = _coerce_evidence_record_dict(value)
+    if not isinstance(payload, dict):
+        return False
+
+    if not structured_result_requires_evidence(payload):
+        return False
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return True
+
+    if not items:
+        return True
+
+    for item in items:
+        item_dict = _coerce_evidence_record_dict(item)
+        if not isinstance(item_dict, dict):
+            return True
+        if not _merge_unique_reference_ids(item_dict.get("evidence_record_ids")):
+            return True
+
+    return False
 
 
 def structured_result_requires_evidence(value: Any) -> bool:

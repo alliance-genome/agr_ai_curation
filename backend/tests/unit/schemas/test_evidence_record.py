@@ -11,6 +11,7 @@ from src.schemas.models.base import EvidenceRecord
 
 def _tool_evidence_payload() -> dict[str, object]:
     return {
+        "evidence_record_id": "evidence-crumb-1",
         "entity": "crumb",
         "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
         "page": 4,
@@ -24,6 +25,7 @@ def _tool_evidence_payload() -> dict[str, object]:
 def test_evidence_record_defaults_optional_fields_to_none_when_quote_present():
     evidence = EvidenceRecord(verified_quote="Crumb is essential for epithelial polarity.")
 
+    assert evidence.evidence_record_id is None
     assert evidence.entity is None
     assert evidence.verified_quote == "Crumb is essential for epithelial polarity."
     assert evidence.page is None
@@ -68,7 +70,7 @@ def test_runtime_gene_extraction_envelope_round_trips_verified_evidence_json():
                 {
                     "mention": "crumb",
                     "normalized_symbol": "crumb",
-                    "evidence": [evidence_payload],
+                    "evidence_record_ids": [evidence_payload["evidence_record_id"]],
                 }
             ],
             "evidence_records": [evidence_payload],
@@ -78,7 +80,7 @@ def test_runtime_gene_extraction_envelope_round_trips_verified_evidence_json():
     dumped = envelope.model_dump(mode="json")
     round_tripped = GeneExtractionResultEnvelope.model_validate_json(envelope.model_dump_json())
 
-    assert dumped["genes"][0]["evidence"][0] == evidence_payload
+    assert dumped["genes"][0]["evidence_record_ids"] == [evidence_payload["evidence_record_id"]]
     assert dumped["evidence_records"][0] == evidence_payload
     assert round_tripped.model_dump(mode="json") == dumped
 
@@ -89,15 +91,14 @@ def test_runtime_gene_extraction_envelope_accepts_partial_evidence_during_migrat
             "genes": [
                 {
                     "mention": "crumb",
-                    "evidence": [{"section": "Results"}],
+                    "evidence_record_ids": ["evidence-1"],
                 }
             ],
             "evidence_records": [{"page": 4, "section": "Results"}],
         }
     )
 
-    assert envelope.genes[0].evidence[0].section == "Results"
-    assert envelope.genes[0].evidence[0].verified_quote is None
+    assert envelope.genes[0].evidence_record_ids == ["evidence-1"]
     assert envelope.evidence_records[0].page == 4
     assert envelope.evidence_records[0].verified_quote is None
 
@@ -176,7 +177,7 @@ def test_runtime_gene_extraction_envelope_rejects_non_string_evidence_fields():
                 "genes": [
                     {
                         "mention": "crumb",
-                        "evidence": [{"section": {"title": "Results"}}],
+                        "evidence_record_ids": [123],
                     }
                 ],
                 "evidence_records": [{"verified_quote": ["quoted text"]}],
@@ -185,7 +186,7 @@ def test_runtime_gene_extraction_envelope_rejects_non_string_evidence_fields():
 
     errors = exc_info.value.errors()
 
-    assert any(error["loc"] == ("genes", 0, "evidence", 0, "section") for error in errors)
+    assert any(error["loc"] == ("genes", 0, "evidence_record_ids", 0) for error in errors)
     assert any(error["loc"] == ("evidence_records", 0, "verified_quote") for error in errors)
 
 
@@ -196,7 +197,7 @@ def test_runtime_gene_extraction_envelope_rejects_invalid_page_values():
                 "genes": [
                     {
                         "mention": "crumb",
-                        "evidence": [{"page": True}],
+                        "evidence_record_ids": ["evidence-1"],
                     }
                 ],
                 "evidence_records": [{"page": "1"}],
@@ -205,5 +206,4 @@ def test_runtime_gene_extraction_envelope_rejects_invalid_page_values():
 
     errors = exc_info.value.errors()
 
-    assert any(error["loc"] == ("genes", 0, "evidence", 0, "page") for error in errors)
     assert any(error["loc"] == ("evidence_records", 0, "page") for error in errors)

@@ -28,8 +28,10 @@ from agents import Agent, Runner, RunConfig
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns
 from .evidence_summary import (
+    build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
     extract_evidence_records_from_structured_result,
+    structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
 
@@ -390,10 +392,18 @@ def _emit_specialist_evidence_summary_or_raise(
     specialist_name: str,
     expected_output_type: Any,
     final_output: Any,
+    live_evidence_records: List[Dict[str, Any]],
 ):
-    """Emit specialist evidence summary from structured output or fail fast if it is missing."""
+    """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
     evidence_records = extract_evidence_records_from_structured_result(final_output)
-    if evidence_records:
+    requires_evidence = structured_result_requires_evidence(final_output)
+    missing_record_refs = (
+        structured_result_missing_evidence_record_refs(final_output)
+        if requires_evidence
+        else False
+    )
+
+    if evidence_records and not missing_record_refs:
         add_specialist_event({
             "type": "evidence_summary",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -401,12 +411,20 @@ def _emit_specialist_evidence_summary_or_raise(
         })
         return
 
-    if not structured_result_requires_evidence(final_output):
+    if not requires_evidence:
+        return
+
+    if live_evidence_records and not missing_record_refs:
+        add_specialist_event({
+            "type": "evidence_summary",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "evidence_records": live_evidence_records,
+        })
         return
 
     output_type_name = getattr(expected_output_type, "__name__", "response")
     error_message = (
-        f"{specialist_name} completed extraction output without the required evidence records."
+        f"{specialist_name} completed extraction output without the required verified evidence records."
     )
     logger.error("%s", error_message)
     add_specialist_event({
@@ -854,6 +872,7 @@ async def run_specialist_with_events(
     """
     start_time = datetime.now(timezone.utc)
     tool_calls: List[SpecialistToolCall] = []
+    live_evidence_records: List[Dict[str, Any]] = []
     current_tool_start: Optional[datetime] = None
     current_tool_name: Optional[str] = None
 
@@ -1277,6 +1296,14 @@ async def run_specialist_with_events(
                         if tool_calls:
                             tool_calls[-1].output_preview = output_preview
                             tool_calls[-1].duration_ms = duration_ms
+
+                        evidence_record = build_record_evidence_summary_record(
+                            tool_name=current_tool_name,
+                            tool_input=tool_calls[-1].tool_args if tool_calls else None,
+                            tool_output=output,
+                        )
+                        if evidence_record is not None:
+                            live_evidence_records.append(evidence_record)
 
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
@@ -1837,11 +1864,24 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     )
+    if expected_output_type is not None and final_output:
+        try:
+            payload = json.loads(final_output)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            final_output = json.dumps(
+                canonicalize_structured_result_payload(
+                    payload,
+                    preferred_evidence_records=live_evidence_records,
+                )
+            )
 
     _emit_specialist_evidence_summary_or_raise(
         specialist_name=specialist_name,
         expected_output_type=expected_output_type,
         final_output=final_output,
+        live_evidence_records=live_evidence_records,
     )
 
     final_output = _reduce_specialist_output_for_supervisor(
