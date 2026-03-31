@@ -1,3 +1,4 @@
+import type { CurationEvidenceRecord } from '@/features/curation/types'
 import { describe, expect, it } from 'vitest'
 import { buildEntityTagNavigationCommand } from './entityTagNavigation'
 import type { EntityTag } from './types'
@@ -19,6 +20,33 @@ const makeTag = (overrides: Partial<EntityTag> = {}): EntityTag => ({
     chunk_ids: ['chunk-1'],
   },
   notes: null,
+  ...overrides,
+})
+
+const makeEvidenceRecord = (
+  overrides: Partial<CurationEvidenceRecord> = {},
+): CurationEvidenceRecord => ({
+  anchor_id: 'anchor-1',
+  candidate_id: 'tag-1',
+  source: 'extracted',
+  field_keys: ['gene_symbol'],
+  field_group_keys: ['primary'],
+  is_primary: true,
+  anchor: {
+    anchor_kind: 'snippet',
+    locator_quality: 'exact_quote',
+    supports_decision: 'supports',
+    sentence_text: 'The PDF anchor quote is longer than the legacy preview.',
+    snippet_text: 'The PDF anchor quote is longer than the legacy preview.',
+    viewer_search_text: 'The PDF anchor quote is longer than the legacy preview.',
+    viewer_highlightable: true,
+    page_number: 7,
+    section_title: 'Detailed Results',
+    chunk_ids: ['chunk-7'],
+  },
+  created_at: '2026-03-31T00:00:00Z',
+  updated_at: '2026-03-31T00:00:00Z',
+  warnings: [],
   ...overrides,
 })
 
@@ -53,5 +81,15 @@ describe('buildEntityTagNavigationCommand', () => {
       makeTag({ evidence: { sentence_text: '  ', page_number: 3, section_title: 'Results', chunk_ids: [] } }),
     )
     expect(command).toBeNull()
+  })
+
+  it('prefers candidate evidence anchors over flattened tag preview evidence', () => {
+    const command = buildEntityTagNavigationCommand(makeTag(), makeEvidenceRecord())
+
+    expect(command?.anchorId).toBe('anchor-1')
+    expect(command?.searchText).toBe('The PDF anchor quote is longer than the legacy preview.')
+    expect(command?.pageNumber).toBe(7)
+    expect(command?.sectionTitle).toBe('Detailed Results')
+    expect(command?.anchor.chunk_ids).toEqual(['chunk-7'])
   })
 })

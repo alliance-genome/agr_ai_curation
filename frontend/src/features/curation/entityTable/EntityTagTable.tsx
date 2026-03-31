@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material'
 import { dispatchPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
+import type { CurationEvidenceRecord } from '@/features/curation/types'
 import { useEntityTagState } from './useEntityTagState'
 import { buildEntityTagNavigationCommand } from './entityTagNavigation'
 import EntityTagToolbar from './EntityTagToolbar'
@@ -11,6 +12,7 @@ import type { EntityTag } from './types'
 
 interface EntityTagTableProps {
   tags: EntityTag[]
+  candidateEvidenceByTagId?: Record<string, CurationEvidenceRecord[]>
   selectedTagId: string | null
   onSelectTag: (tagId: string) => void
   onAcceptTag: (tagId: string) => Promise<void> | void
@@ -22,8 +24,19 @@ interface EntityTagTableProps {
 
 const HEADER_CELLS = ['Entity', 'Type', 'Species', 'Topic', 'DB Status', 'Source', 'Decision']
 
+function primaryEvidenceRecord(
+  evidenceRecords: CurationEvidenceRecord[] | undefined,
+): CurationEvidenceRecord | null {
+  if (!Array.isArray(evidenceRecords) || evidenceRecords.length === 0) {
+    return null
+  }
+
+  return evidenceRecords.find((record) => record.is_primary) ?? evidenceRecords[0] ?? null
+}
+
 export default function EntityTagTable({
   tags,
+  candidateEvidenceByTagId = {},
   selectedTagId,
   onSelectTag,
   onAcceptTag,
@@ -35,17 +48,30 @@ export default function EntityTagTable({
   const state = useEntityTagState(tags, selectedTagId)
   const selectedTag = state.selectedTag
   const selectedTagIdValue = state.selectedTagId
+  const selectedPrimaryEvidence = selectedTag
+    ? primaryEvidenceRecord(candidateEvidenceByTagId[selectedTag.tag_id])
+    : null
 
   useEffect(() => {
     if (!selectedTagIdValue || !selectedTag) {
       return
     }
 
-    const command = buildEntityTagNavigationCommand(selectedTag)
+    const command = buildEntityTagNavigationCommand(
+      selectedTag,
+      selectedPrimaryEvidence,
+    )
     if (command) {
       dispatchPDFViewerNavigateEvidence(command)
     }
-  }, [selectedTagIdValue])
+  }, [
+    selectedPrimaryEvidence?.anchor_id,
+    selectedTag?.evidence?.page_number,
+    selectedTag?.evidence?.section_title,
+    selectedTag?.evidence?.sentence_text,
+    selectedTag?.tag_id,
+    selectedTagIdValue,
+  ])
 
   const handleSelect = useCallback((tagId: string) => {
     state.selectTag()
@@ -53,11 +79,14 @@ export default function EntityTagTable({
   }, [onSelectTag, state])
 
   const handleShowInPdf = useCallback(
-    (tag: EntityTag) => {
-      const command = buildEntityTagNavigationCommand(tag)
+    (tag: EntityTag, evidence?: CurationEvidenceRecord | null) => {
+      const command = buildEntityTagNavigationCommand(
+        tag,
+        evidence ?? primaryEvidenceRecord(candidateEvidenceByTagId[tag.tag_id]),
+      )
       if (command) dispatchPDFViewerNavigateEvidence(command)
     },
-    [],
+    [candidateEvidenceByTagId],
   )
 
   const handleAccept = useCallback(async (tagId: string) => {
@@ -161,7 +190,15 @@ export default function EntityTagTable({
       </TableContainer>
 
       <Box sx={{ flex: '0 0 auto', minHeight: 120, borderTop: 1, borderColor: 'divider' }}>
-        <EvidencePreviewPane tag={state.selectedTag} onShowInPdf={handleShowInPdf} />
+        <EvidencePreviewPane
+          tag={state.selectedTag}
+          evidenceRecords={
+            state.selectedTag
+              ? (candidateEvidenceByTagId[state.selectedTag.tag_id] ?? [])
+              : []
+          }
+          onShowInPdf={handleShowInPdf}
+        />
       </Box>
     </Box>
   )

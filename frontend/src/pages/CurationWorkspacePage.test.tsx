@@ -118,8 +118,8 @@ function buildWorkspace(): CurationWorkspace {
         decision: 'pending',
         evidence: {
           sentence_text: 'APOE evidence sentence',
-          page_number: 3,
-          section_title: 'Results',
+          page_number: 1,
+          section_title: 'Results and Discussion',
           chunk_ids: ['chunk-1'],
         },
         notes: null,
@@ -274,6 +274,28 @@ function buildWorkspace(): CurationWorkspace {
             },
             created_at: '2026-03-20T12:03:00Z',
             updated_at: '2026-03-20T12:04:00Z',
+            warnings: [],
+          },
+          {
+            anchor_id: 'anchor-2',
+            candidate_id: 'candidate-pending',
+            source: 'manual',
+            field_keys: ['gene_symbol'],
+            field_group_keys: ['primary'],
+            is_primary: false,
+            anchor: {
+              anchor_kind: 'snippet',
+              locator_quality: 'exact_quote',
+              supports_decision: 'supports',
+              snippet_text: 'APOE follow-up evidence sentence',
+              sentence_text: 'APOE follow-up evidence sentence',
+              viewer_search_text: 'APOE follow-up evidence sentence',
+              page_number: 5,
+              section_title: 'Discussion',
+              chunk_ids: ['chunk-2'],
+            },
+            created_at: '2026-03-20T12:03:30Z',
+            updated_at: '2026-03-20T12:04:30Z',
             warnings: [],
           },
         ],
@@ -436,7 +458,14 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getByText(/Evidence for/i)).toBeInTheDocument()
-    expect(screen.getByText('Show in PDF')).toBeInTheDocument()
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName.toLowerCase() === 'p'
+        && (element.textContent?.includes('APOE follow-up evidence sentence') ?? false),
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
+    expect(screen.getAllByText('Show in PDF')).toHaveLength(2)
   })
 
   it('submits inline accept actions through the workspace decision service', async () => {

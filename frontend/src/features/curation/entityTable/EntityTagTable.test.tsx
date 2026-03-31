@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
+import type { CurationEvidenceRecord } from '@/features/curation/types'
 import theme from '@/theme'
 import EntityTagTable from './EntityTagTable'
 import type { EntityTag } from './types'
@@ -49,16 +50,94 @@ const makeTags = (): EntityTag[] => [
   },
 ]
 
+const makeEvidenceRecordsByTagId = (): Record<string, CurationEvidenceRecord[]> => ({
+  'tag-1': [
+    {
+      anchor_id: 'anchor-1',
+      candidate_id: 'tag-1',
+      source: 'extracted',
+      field_keys: ['gene_symbol'],
+      field_group_keys: ['primary'],
+      is_primary: true,
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        sentence_text: 'The daf-2 receptor regulates lifespan.',
+        snippet_text: 'The daf-2 receptor regulates lifespan.',
+        viewer_search_text: 'The daf-2 receptor regulates lifespan.',
+        viewer_highlightable: true,
+        page_number: 3,
+        section_title: 'Results',
+        chunk_ids: ['c1'],
+      },
+      created_at: '2026-03-31T00:00:00Z',
+      updated_at: '2026-03-31T00:00:00Z',
+      warnings: [],
+    },
+    {
+      anchor_id: 'anchor-2',
+      candidate_id: 'tag-1',
+      source: 'extracted',
+      field_keys: ['gene_symbol'],
+      field_group_keys: ['primary'],
+      is_primary: false,
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        sentence_text: 'A second daf-2 evidence sentence.',
+        snippet_text: 'A second daf-2 evidence sentence.',
+        viewer_search_text: 'A second daf-2 evidence sentence.',
+        viewer_highlightable: true,
+        page_number: 4,
+        section_title: 'Discussion',
+        chunk_ids: ['c1b'],
+      },
+      created_at: '2026-03-31T00:00:01Z',
+      updated_at: '2026-03-31T00:00:01Z',
+      warnings: [],
+    },
+  ],
+  'tag-2': [
+    {
+      anchor_id: 'anchor-3',
+      candidate_id: 'tag-2',
+      source: 'extracted',
+      field_keys: ['gene_symbol'],
+      field_group_keys: ['primary'],
+      is_primary: true,
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        sentence_text: 'ins-1 is an insulin peptide.',
+        snippet_text: 'ins-1 is an insulin peptide.',
+        viewer_search_text: 'ins-1 is an insulin peptide.',
+        viewer_highlightable: true,
+        page_number: 5,
+        section_title: 'Discussion',
+        chunk_ids: ['c2'],
+      },
+      created_at: '2026-03-31T00:00:00Z',
+      updated_at: '2026-03-31T00:00:00Z',
+      warnings: [],
+    },
+  ],
+})
+
 function ControlledTable({
   onAcceptTag = vi.fn(),
   onRejectTag = vi.fn(),
   onSaveTag = vi.fn(),
   onCreateManualTag = vi.fn(async () => 'manual-1'),
+  candidateEvidenceByTagId = makeEvidenceRecordsByTagId(),
 }: {
   onAcceptTag?: (tagId: string) => Promise<void> | void
   onRejectTag?: (tagId: string) => Promise<void> | void
   onSaveTag?: (tagId: string, updates: Partial<EntityTag>) => Promise<void> | void
   onCreateManualTag?: (tag: EntityTag) => Promise<string> | string
+  candidateEvidenceByTagId?: Record<string, CurationEvidenceRecord[]>
 }) {
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null)
   const [tags, setTags] = useState(makeTags())
@@ -66,6 +145,7 @@ function ControlledTable({
   return (
     <EntityTagTable
       tags={tags}
+      candidateEvidenceByTagId={candidateEvidenceByTagId}
       selectedTagId={selectedTagId}
       onSelectTag={setSelectedTagId}
       onAcceptTag={async (tagId) => {
@@ -124,6 +204,14 @@ describe('EntityTagTable', () => {
         ),
       ).toBeInTheDocument()
     })
+
+    expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName.toLowerCase() === 'p'
+        && (element.textContent?.includes('A second daf-2 evidence sentence.') ?? false),
+      ),
+    ).toBeInTheDocument()
   })
 
   it('dispatches PDF navigation when a row is selected', async () => {
@@ -149,6 +237,7 @@ describe('EntityTagTable', () => {
     const { rerender } = render(
       <EntityTagTable
         tags={initialTags}
+        candidateEvidenceByTagId={makeEvidenceRecordsByTagId()}
         selectedTagId="tag-1"
         onSelectTag={vi.fn()}
         onAcceptTag={vi.fn()}
@@ -167,6 +256,7 @@ describe('EntityTagTable', () => {
     rerender(
       <EntityTagTable
         tags={initialTags.map((tag) => ({ ...tag }))}
+        candidateEvidenceByTagId={makeEvidenceRecordsByTagId()}
         selectedTagId="tag-1"
         onSelectTag={vi.fn()}
         onAcceptTag={vi.fn()}

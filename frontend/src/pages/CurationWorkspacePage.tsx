@@ -97,6 +97,14 @@ function CurationWorkspacePageContent({
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const entityTags = workspace.entity_tags
+  const candidateEvidenceByTagId = useMemo(
+    () =>
+      candidates.reduce<Record<string, CurationCandidate['evidence_anchors']>>((index, candidate) => {
+        index[candidate.candidate_id] = candidate.evidence_anchors ?? []
+        return index
+      }, {}),
+    [candidates],
+  )
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
@@ -369,6 +377,7 @@ function CurationWorkspacePageContent({
         entityTableSlot={(
           <EntityTagTable
             tags={entityTags}
+            candidateEvidenceByTagId={candidateEvidenceByTagId}
             selectedTagId={activeCandidateId}
             onSelectTag={handleSelectTag}
             onAcceptTag={handleAcceptTag}
