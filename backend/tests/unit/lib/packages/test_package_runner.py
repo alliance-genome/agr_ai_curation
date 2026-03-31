@@ -7,11 +7,13 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from src.lib.packages.env_manager import PackageEnvironmentManager
 from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.package_runner import PackageToolRunner
 from src.lib.packages.paths import (
@@ -20,6 +22,7 @@ from src.lib.packages.paths import (
     get_package_runner_venv_dir,
 )
 from src.lib.packages.runner_protocol import PROTOCOL_VERSION, RunnerRequest, encode_request
+from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import load_tool_registry
 
 REPO_ROOT = find_repo_root(Path(__file__))
@@ -140,6 +143,73 @@ def test_package_runner_returns_bootstrap_failure(monkeypatch, tmp_path):
     assert result.error is not None
     assert result.error.code == "bootstrap_failure"
     assert result.error.details["step"] == "install_requirements"
+
+
+def test_environment_manager_serializes_concurrent_bootstrap(monkeypatch, tmp_path):
+    package_dir = _stage_fixture_package(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    (package_dir / "requirements" / "runtime.txt").write_text(
+        "demo-dependency==1.0\n",
+        encoding="utf-8",
+    )
+
+    registry = load_package_registry(
+        package_dir.parent,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    package = registry.get_package("demo.runner")
+    assert package is not None
+
+    manager = PackageEnvironmentManager(host_python=Path(sys.executable))
+    install_started = threading.Event()
+    allow_install_to_finish = threading.Event()
+    steps: list[str] = []
+
+    def fake_run_command(command, *, package_id, step):
+        steps.append(step)
+        if step == "create_venv":
+            python_path = get_package_runner_venv_dir(package_id) / "bin" / "python"
+            python_path.parent.mkdir(parents=True, exist_ok=True)
+            python_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            return
+        if step == "install_requirements":
+            install_started.set()
+            assert allow_install_to_finish.wait(timeout=5)
+            return
+        raise AssertionError(f"Unexpected step: {step}")
+
+    monkeypatch.setattr(manager, "_run_command", fake_run_command)
+
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def _bootstrap() -> None:
+        try:
+            results.append(manager.ensure_environment(package))
+        except BaseException as exc:  # pragma: no cover - defensive test harness
+            errors.append(exc)
+
+    first = threading.Thread(target=_bootstrap)
+    second = threading.Thread(target=_bootstrap)
+    first.start()
+    assert install_started.wait(timeout=5)
+    second.start()
+
+    # The second call should wait for the lock rather than re-running bootstrap.
+    assert steps.count("create_venv") == 1
+    assert steps.count("install_requirements") == 1
+
+    allow_install_to_finish.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    reused_flags = sorted(result.reused for result in results)
+    assert reused_flags == [False, True]
+    assert steps.count("create_venv") == 1
+    assert steps.count("install_requirements") == 1
 
 
 def test_package_runner_returns_import_failure(monkeypatch, tmp_path):

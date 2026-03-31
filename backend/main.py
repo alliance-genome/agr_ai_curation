@@ -20,6 +20,7 @@ from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
 from src.lib.weaviate_client.settings import get_embedding_config
 from src.models.sql.database import SessionLocal
@@ -242,6 +243,14 @@ async def lifespan(app: FastAPI):
         raise
     except Exception as e:
         logger.error("FATAL: Unexpected provider validation error: %s", e)
+        raise
+
+    try:
+        prewarmed = maybe_prepare_package_tool_environments_on_start()
+        if prewarmed:
+            logger.info("Package tool environments prepared during app startup")
+    except Exception as e:
+        logger.error("FATAL: Failed to prepare package tool environments: %s", e)
         raise
 
     try:

@@ -20,6 +20,8 @@ def _main_module():
 def set_pdf_extraction_timeout(monkeypatch):
     """Set PDF_EXTRACTION_TIMEOUT to valid value for all tests in this module."""
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
+    monkeypatch.delenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", raising=False)
+    monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
 
 
 def make_connection(list_all_return=None):
@@ -135,13 +137,31 @@ class TestLifespan:
         connection, client = make_connection()
         mock_conn_cls.return_value = connection
 
+        with patch("main.maybe_prepare_package_tool_environments_on_start", return_value=False) as mock_prewarm:
+            app = FastAPI()
+
+            async with _main_module().lifespan(app):
+                mock_conn_cls.assert_called_once()
+                connection.connect_to_weaviate.assert_awaited_once()
+                client.collections.list_all.assert_called()
+                mock_init.assert_awaited_once_with(connection)
+            mock_prewarm.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_fail_fast_on_package_environment_prepare_error(self, mock_init, mock_conn_cls):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+
         app = FastAPI()
 
-        async with _main_module().lifespan(app):
-            mock_conn_cls.assert_called_once()
-            connection.connect_to_weaviate.assert_awaited_once()
-            client.collections.list_all.assert_called()
-            mock_init.assert_awaited_once_with(connection)
+        with patch("main.maybe_prepare_package_tool_environments_on_start", side_effect=RuntimeError("package bootstrap failed")):
+            with pytest.raises(RuntimeError, match="package bootstrap failed"):
+                async with _main_module().lifespan(app):
+                    pass
+        mock_conn_cls.assert_not_called()
+        mock_init.assert_not_awaited()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")

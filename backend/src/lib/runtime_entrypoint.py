@@ -40,6 +40,7 @@ DEFAULT_SERVER_HOST = "0.0.0.0"
 DEFAULT_SERVER_PORT = "8000"
 DEFAULT_SERVER_WORKERS = "1"
 PACKAGE_ENV_BOOTSTRAP_ENV_VAR = "AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START"
+PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR = "AGR_PACKAGE_ENVS_PREPARED"
 _PREFIX_QUERIES = (
     "SELECT DISTINCT split_part(referencedcurie, ':', 1) AS prefix "
     "FROM crossreference WHERE referencedcurie LIKE '%:%' AND referencedcurie IS NOT NULL;",
@@ -149,6 +150,11 @@ def bootstrap_package_environments(registry: PackageRegistry) -> None:
         )
         return
 
+    _bootstrap_package_environments(registry)
+
+
+def _bootstrap_package_environments(registry: PackageRegistry) -> None:
+    """Create per-package virtual environments for tool-bearing packages."""
     env_manager = PackageEnvironmentManager()
     bootstrapped = 0
     for package in registry.loaded_packages:
@@ -166,7 +172,30 @@ def bootstrap_package_environments(registry: PackageRegistry) -> None:
             environment.reused,
         )
 
+    os.environ[PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR] = "1"
     logger.info("Eager package environment bootstrap complete for %s package(s)", bootstrapped)
+
+
+def maybe_prepare_package_tool_environments_on_start() -> bool:
+    """Optionally validate runtime packages and prewarm tool environments on app startup."""
+    if os.getenv(PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR) == "1":
+        logger.info(
+            "Skipping eager package environment bootstrap (%s already set)",
+            PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR,
+        )
+        return False
+
+    if not _parse_bool_env(PACKAGE_ENV_BOOTSTRAP_ENV_VAR, False):
+        logger.info(
+            "Skipping eager package environment bootstrap (%s=false)",
+            PACKAGE_ENV_BOOTSTRAP_ENV_VAR,
+        )
+        return False
+
+    ensure_runtime_layout()
+    registry = validate_runtime_packages()
+    _bootstrap_package_environments(registry)
+    return True
 
 
 def maybe_bootstrap_database() -> None:

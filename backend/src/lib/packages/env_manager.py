@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 from typing import Any
 
 from .paths import (
@@ -73,14 +76,74 @@ class PackageEnvironmentManager:
         state_dir = get_package_runner_package_state_dir(package.package_id)
         venv_dir = get_package_runner_venv_dir(package.package_id)
         metadata_path = get_package_runner_metadata_path(package.package_id)
-        python_executable = self._resolve_venv_python(venv_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with self._bootstrap_lock(state_dir):
+            python_executable = self._resolve_venv_python(venv_dir)
+            metadata = self._read_metadata(metadata_path)
+            if (
+                metadata is not None
+                and metadata.get("fingerprint") == fingerprint
+                and python_executable.is_file()
+            ):
+                return PackageEnvironment(
+                    package_id=package.package_id,
+                    package_version=package.version,
+                    venv_dir=venv_dir,
+                    python_executable=python_executable,
+                    requirements_path=requirements_path,
+                    fingerprint=fingerprint,
+                    reused=True,
+                )
 
-        metadata = self._read_metadata(metadata_path)
-        if (
-            metadata is not None
-            and metadata.get("fingerprint") == fingerprint
-            and python_executable.is_file()
-        ):
+            if venv_dir.exists():
+                shutil.rmtree(venv_dir)
+            if metadata_path.exists():
+                metadata_path.unlink()
+
+            self._run_command(
+                [str(self._host_python), "-m", "venv", str(venv_dir)],
+                package_id=package.package_id,
+                step="create_venv",
+            )
+
+            python_executable = self._resolve_venv_python(venv_dir)
+            if not python_executable.is_file():
+                raise PackageEnvironmentBootstrapError(
+                    package.package_id,
+                    f"Virtual environment python was not created for package '{package.package_id}'",
+                    details={"venv_dir": str(venv_dir)},
+                )
+
+            if requirements_text.strip():
+                self._run_command(
+                    [
+                        str(python_executable),
+                        "-m",
+                        "pip",
+                        "install",
+                        "-r",
+                        str(requirements_path),
+                    ],
+                    package_id=package.package_id,
+                    step="install_requirements",
+                )
+
+            metadata_payload = {
+                "package_id": package.package_id,
+                "package_version": package.version,
+                "fingerprint": fingerprint,
+                "requirements_path": str(requirements_path),
+                "requirements_sha256": hashlib.sha256(
+                    requirements_text.encode("utf-8")
+                ).hexdigest(),
+                "python_package_root": package.manifest.python_package_root,
+                "python_executable": str(python_executable),
+            }
+            metadata_path.write_text(
+                json.dumps(metadata_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
             return PackageEnvironment(
                 package_id=package.package_id,
                 package_version=package.version,
@@ -88,68 +151,8 @@ class PackageEnvironmentManager:
                 python_executable=python_executable,
                 requirements_path=requirements_path,
                 fingerprint=fingerprint,
-                reused=True,
+                reused=False,
             )
-
-        state_dir.mkdir(parents=True, exist_ok=True)
-        if venv_dir.exists():
-            shutil.rmtree(venv_dir)
-        if metadata_path.exists():
-            metadata_path.unlink()
-
-        self._run_command(
-            [str(self._host_python), "-m", "venv", str(venv_dir)],
-            package_id=package.package_id,
-            step="create_venv",
-        )
-
-        python_executable = self._resolve_venv_python(venv_dir)
-        if not python_executable.is_file():
-            raise PackageEnvironmentBootstrapError(
-                package.package_id,
-                f"Virtual environment python was not created for package '{package.package_id}'",
-                details={"venv_dir": str(venv_dir)},
-            )
-
-        if requirements_text.strip():
-            self._run_command(
-                [
-                    str(python_executable),
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    str(requirements_path),
-                ],
-                package_id=package.package_id,
-                step="install_requirements",
-            )
-
-        metadata_payload = {
-            "package_id": package.package_id,
-            "package_version": package.version,
-            "fingerprint": fingerprint,
-            "requirements_path": str(requirements_path),
-            "requirements_sha256": hashlib.sha256(
-                requirements_text.encode("utf-8")
-            ).hexdigest(),
-            "python_package_root": package.manifest.python_package_root,
-            "python_executable": str(python_executable),
-        }
-        metadata_path.write_text(
-            json.dumps(metadata_payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-
-        return PackageEnvironment(
-            package_id=package.package_id,
-            package_version=package.version,
-            venv_dir=venv_dir,
-            python_executable=python_executable,
-            requirements_path=requirements_path,
-            fingerprint=fingerprint,
-            reused=False,
-        )
 
     def _build_fingerprint(self, package: LoadedPackage, requirements_text: str) -> str:
         payload = {
@@ -182,6 +185,23 @@ class PackageEnvironmentManager:
         # Preserve the venv-local interpreter path. Resolving symlinks here can
         # collapse back to the base interpreter and defeat isolation.
         return (venv_dir / bin_dir / executable).expanduser()
+
+    @contextmanager
+    def _bootstrap_lock(self, state_dir: Path) -> Iterator[None]:
+        """Serialize environment bootstrap so parallel tool calls cannot race."""
+        lock_path = state_dir / ".bootstrap.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            if os.name != "nt":
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return
+
+            yield
 
     def _run_command(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -31,6 +32,7 @@ def _clear_runtime_env(monkeypatch):
         "IDENTIFIER_PREFIX_STATE_DIR",
         "IDENTIFIER_PREFIX_FILE_PATH",
         "AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START",
+        "AGR_PACKAGE_ENVS_PREPARED",
         "RUN_DB_BOOTSTRAP_ON_START",
         "RUN_DB_MIGRATIONS_ON_START",
         "CURATION_DB_URL",
@@ -111,6 +113,122 @@ def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, 
     runtime_entrypoint.bootstrap_package_environments(registry)
 
     assert bootstrapped == ["agr.tooling"]
+
+
+def test_maybe_prepare_package_tool_environments_on_start_skips_when_disabled(monkeypatch):
+    called = {"ensure_layout": False, "validate": False, "bootstrap": False}
+
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "ensure_runtime_layout",
+        lambda: called.__setitem__("ensure_layout", True),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "validate_runtime_packages",
+        lambda: called.__setitem__("validate", True),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "_bootstrap_package_environments",
+        lambda _registry: called.__setitem__("bootstrap", True),
+    )
+
+    assert runtime_entrypoint.maybe_prepare_package_tool_environments_on_start() is False
+    assert called == {"ensure_layout": False, "validate": False, "bootstrap": False}
+
+
+def test_maybe_prepare_package_tool_environments_on_start_skips_when_already_prepared(monkeypatch):
+    called = {"ensure_layout": False, "validate": False, "bootstrap": False}
+
+    monkeypatch.setenv("AGR_PACKAGE_ENVS_PREPARED", "1")
+    monkeypatch.setenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", "true")
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "ensure_runtime_layout",
+        lambda: called.__setitem__("ensure_layout", True),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "validate_runtime_packages",
+        lambda: called.__setitem__("validate", True),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "_bootstrap_package_environments",
+        lambda _registry: called.__setitem__("bootstrap", True),
+    )
+
+    assert runtime_entrypoint.maybe_prepare_package_tool_environments_on_start() is False
+    assert called == {"ensure_layout": False, "validate": False, "bootstrap": False}
+
+
+def test_maybe_prepare_package_tool_environments_on_start_warms_packages(monkeypatch, tmp_path: Path):
+    package_dir = tmp_path / "packages"
+    package_dir.mkdir()
+    registry = PackageRegistry(
+        packages_dir=package_dir,
+        runtime_version="1.0.0",
+        supported_package_api_version="1.0.0",
+        loaded_packages=(
+            _loaded_package("agr.tooling", package_dir / "agr.tooling", has_tool_binding=True),
+        ),
+        failed_packages=(),
+        validation_errors=(),
+    )
+
+    monkeypatch.setenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", "true")
+
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "ensure_runtime_layout",
+        lambda: calls.append("ensure_layout"),
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "validate_runtime_packages",
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "_bootstrap_package_environments",
+        lambda value: calls.append(value),
+    )
+
+    assert runtime_entrypoint.maybe_prepare_package_tool_environments_on_start() is True
+    assert calls[0] == "ensure_layout"
+    assert calls[1] is registry
+
+
+def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_path: Path):
+    package_dir = tmp_path / "packages"
+    package_dir.mkdir()
+    registry = PackageRegistry(
+        packages_dir=package_dir,
+        runtime_version="1.0.0",
+        supported_package_api_version="1.0.0",
+        loaded_packages=(
+            _loaded_package("agr.tooling", package_dir / "agr.tooling", has_tool_binding=True),
+        ),
+        failed_packages=(),
+        validation_errors=(),
+    )
+    monkeypatch.setenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", "true")
+
+    class FakeEnvironment:
+        reused = False
+
+    class FakeManager:
+        def ensure_environment(self, _package: LoadedPackage):
+            return FakeEnvironment()
+
+    monkeypatch.setattr(runtime_entrypoint, "PackageEnvironmentManager", lambda: FakeManager())
+
+    runtime_entrypoint.bootstrap_package_environments(registry)
+
+    assert os.getenv("AGR_PACKAGE_ENVS_PREPARED") == "1"
 
 
 def test_refresh_identifier_prefixes_writes_runtime_state_file(monkeypatch, tmp_path: Path):

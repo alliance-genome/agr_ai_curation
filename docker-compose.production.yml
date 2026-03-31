@@ -146,6 +146,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       AGR_RUNTIME_ROOT: /runtime
+      AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START: "${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}"
       DEV_MODE: "${DEV_MODE:-false}"
       LOKI_URL: "${LOKI_URL:-http://loki:3100}"
       RUN_DB_BOOTSTRAP_ON_START: "${RUN_DB_BOOTSTRAP_ON_START:-true}"
@@ -266,7 +267,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 120s
 
   trace_review_backend:
     pids_limit: 100

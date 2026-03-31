@@ -140,6 +140,7 @@ services:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START=${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
       - PDF_EXTRACTION_SERVICE_URL=${PDF_EXTRACTION_SERVICE_URL:-}
       - PDF_EXTRACTION_TIMEOUT=${PDF_EXTRACTION_TIMEOUT:-300}
@@ -262,7 +263,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 120s
 
   # Optional one-shot identifier prefix refresh (project-specific)
   # Run only when needed:
