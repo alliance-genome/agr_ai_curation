@@ -129,7 +129,7 @@ def _create_extraction_result(
                 "warnings": [],
             },
         },
-        extraction_metadata={"final_run_metadata": {"model_name": "gpt-5-mini"}},
+        extraction_metadata={"final_run_metadata": {"model_name": "gpt-5.4-nano"}},
         created_at=created_at,
     )
     db_session.add(record)

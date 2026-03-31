@@ -85,10 +85,10 @@ def test_get_agent_config_env_override_beats_registry_model(monkeypatch):
     )
     monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.4")
 
-    with patch.dict(os.environ, {"AGENT_GENE_EXTRACTOR_MODEL": "gpt-5-mini"}, clear=True):
+    with patch.dict(os.environ, {"AGENT_GENE_EXTRACTOR_MODEL": "gpt-5.4-nano"}, clear=True):
         config = get_agent_config("gene_extractor")
 
-    assert config.model == "gpt-5-mini"
+    assert config.model == "gpt-5.4-nano"
 
 
 def test_resolve_model_provider_uses_model_catalog_and_provider_registry(monkeypatch):
@@ -115,7 +115,7 @@ def test_resolve_model_provider_requires_known_model(monkeypatch):
 def test_resolve_model_provider_rejects_unknown_override(monkeypatch):
     monkeypatch.setattr("src.lib.config.providers_loader.get_provider", lambda _provider_id: None)
     with pytest.raises(ValueError, match="Unknown provider_id"):
-        resolve_model_provider("gpt-5-mini", provider_override="not-real")
+        resolve_model_provider("gpt-5.4-nano", provider_override="not-real")
 
 
 def test_support_flags_require_model_catalog(monkeypatch):

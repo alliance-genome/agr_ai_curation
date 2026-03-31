@@ -67,7 +67,7 @@ def _agent_definition(
             if output_schema is not None
             else ("GeneValidationEnvelope" if folder_name == "gene" else None)
         ),
-        model_config=ModelConfig(model="gpt-5-mini", temperature=0.2, reasoning="medium"),
+        model_config=ModelConfig(model="gpt-5.4-nano", temperature=0.2, reasoning="medium"),
         requires_document=requires_document,
         group_rules_enabled=(folder_name == "gene"),
         frontend=FrontendConfig(icon="G", show_in_palette=True),
@@ -322,7 +322,7 @@ def test_sync_does_not_reenable_disabled_agent(monkeypatch):
         name="Gene Agent",
         description="gene description",
         instructions="prompt:gene",
-        model_id="gpt-5-mini",
+        model_id="gpt-5.4-nano",
         model_temperature=0.2,
         model_reasoning="medium",
         tool_ids=["agr_curation_query"],

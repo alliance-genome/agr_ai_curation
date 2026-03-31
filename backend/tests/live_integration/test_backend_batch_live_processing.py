@@ -216,7 +216,7 @@ def _create_live_client(
     api_user = f"live-batch-{uuid4().hex[:8]}"
     supervisor_model = os.getenv("LIVE_BATCH_OPENAI_MODEL", "").strip()
     if not supervisor_model:
-        supervisor_model = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5-mini").strip()
+        supervisor_model = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.4-nano").strip()
 
     monkeypatch.setenv("TESTING_API_KEY", api_key)
     monkeypatch.setenv("TESTING_API_KEY_USER", api_user)

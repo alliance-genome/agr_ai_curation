@@ -24,7 +24,7 @@ def _agent(**kwargs):
         "user_id": 1,
         "project_id": None,
         "template_source": None,
-        "model_id": "gpt-5-mini",
+        "model_id": "gpt-5.4-nano",
         "model_reasoning": None,
         "tool_ids": [],
         "output_schema_key": None,
@@ -41,7 +41,7 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -69,7 +69,7 @@ def test_build_agent_runtime_report_unknown_tool_only_warns_and_disables(monkeyp
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -98,7 +98,7 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene", "phenotype_extractor"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -131,7 +131,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
         lambda: (set(), "Failed to load expected system agents from layered sources: boom"),
     )
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -156,7 +156,7 @@ def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatc
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"supervisor"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -209,7 +209,7 @@ def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monk
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
@@ -248,7 +248,7 @@ def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monk
     ])
     monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
-    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5-mini")])
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-nano")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",

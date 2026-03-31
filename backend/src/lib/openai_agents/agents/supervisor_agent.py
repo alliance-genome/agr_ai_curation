@@ -479,7 +479,7 @@ def _build_model_settings(
     Build ModelSettings with optional reasoning for models that support it.
 
     Reasoning is supported on:
-    - GPT-5 family models (gpt-5, gpt-5-mini)
+    - GPT-5 family models (gpt-5, gpt-5.4-nano)
     - Gemini 3 models (gemini-3.0-pro) - uses "low"/"high" thinking levels
     - Gemini 2.5 models (gemini-2.5-pro, gemini-2.5-flash) - uses thinking budgets
 

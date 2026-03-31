@@ -202,12 +202,12 @@ async def test_extract_abstract_with_llm_omits_temperature_for_gpt5(monkeypatch)
             self.chat = SimpleNamespace(completions=_FakeCompletions())
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-nano")
 
     abstract = await prompt_utils._extract_abstract_with_llm("raw text for abstract extraction")
 
     assert abstract == "A" * 80
-    assert captured["model"] == "gpt-5-mini"
+    assert captured["model"] == "gpt-5.4-nano"
     assert "temperature" not in captured
 
 
@@ -249,7 +249,7 @@ async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_outpu
             self.chat = SimpleNamespace(completions=_FakeCompletionsNone())
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-nano")
 
     assert await prompt_utils._extract_abstract_with_llm("raw text") is None
 

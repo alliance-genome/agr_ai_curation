@@ -241,7 +241,7 @@ def _reference_prep_output_payload() -> dict[str, object]:
             }
         ],
         "run_metadata": {
-            "model_name": "gpt-5-mini",
+            "model_name": "gpt-5.4-nano",
             "token_usage": {
                 "input_tokens": 90,
                 "output_tokens": 35,

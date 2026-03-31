@@ -116,7 +116,7 @@ def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(mon
     )
 
     settings = supervisor_agent._build_model_settings(
-        model="gpt-5-mini",
+        model="gpt-5.4-nano",
         temperature=0.7,
         reasoning_effort="high",
     )

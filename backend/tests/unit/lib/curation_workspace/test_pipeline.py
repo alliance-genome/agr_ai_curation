@@ -175,7 +175,7 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
         {
             "candidates": candidates,
             "run_metadata": {
-                "model_name": "gpt-5-mini",
+                "model_name": "gpt-5.4-nano",
                 "token_usage": {
                     "input_tokens": 120,
                     "output_tokens": 45,
@@ -323,7 +323,7 @@ def _make_reference_prep_output() -> CurationPrepAgentOutput:
                 }
             ],
             "run_metadata": {
-                "model_name": "gpt-5-mini",
+                "model_name": "gpt-5.4-nano",
                 "token_usage": {
                     "input_tokens": 90,
                     "output_tokens": 35,

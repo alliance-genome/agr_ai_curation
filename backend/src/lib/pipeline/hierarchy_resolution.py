@@ -224,7 +224,7 @@ async def resolve_document_hierarchy(
             top_level_sections=top_level_sections,
             abstract_section_title=abstract_section_title,
             created_at=datetime.now(timezone.utc).isoformat(),
-            model_used=os.getenv("HIERARCHY_LLM_MODEL", "gpt-5-mini"),
+            model_used=os.getenv("HIERARCHY_LLM_MODEL", "gpt-5.4-nano"),
             llm_raw_response=raw_response
         )
 
@@ -336,7 +336,7 @@ Common abstract locations when not explicitly labeled:
     user_prompt = f"Classify these section titles from a scientific paper. Each entry shows the section title followed by a preview of its content:\n\n{sections_text}"
 
     try:
-        model_name = os.getenv("HIERARCHY_LLM_MODEL", "gpt-5-mini")
+        model_name = os.getenv("HIERARCHY_LLM_MODEL", "gpt-5.4-nano")
         reasoning_effort = os.getenv("HIERARCHY_LLM_REASONING", "low")
         logger.info('[HIERARCHY] Calling %s (reasoning=%s) for hierarchy resolution...', model_name, reasoning_effort)
 

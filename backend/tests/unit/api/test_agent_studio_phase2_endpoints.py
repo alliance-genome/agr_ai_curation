@@ -15,8 +15,8 @@ def test_get_models_endpoint_returns_sorted_models(monkeypatch):
         "list_model_definitions",
         lambda: [
             SimpleNamespace(
-                model_id="gpt-5-mini",
-                name="GPT-5 Mini",
+                model_id="gpt-5.4-nano",
+                name="GPT-5.4 Nano",
                 provider="openai",
                 description="Fast",
                 guidance="Fast guidance",
@@ -51,7 +51,7 @@ def test_get_models_endpoint_returns_sorted_models(monkeypatch):
     response = asyncio.run(api_module.get_models_endpoint(user={"sub": "test"}))
 
     assert len(response.models) == 1
-    assert response.models[0].model_id == "gpt-5-mini"
+    assert response.models[0].model_id == "gpt-5.4-nano"
     assert response.models[0].default_reasoning == "medium"
 
 

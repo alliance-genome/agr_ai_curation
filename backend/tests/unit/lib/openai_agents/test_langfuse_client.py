@@ -167,7 +167,7 @@ def test_log_agent_config_and_flush_when_not_configured(monkeypatch):
     lc.log_agent_config(
         agent_name="PDF Specialist",
         instructions="Do extraction",
-        model="gpt-5-mini",
+        model="gpt-5.4-nano",
         tools=["search"],
         model_settings={"temperature": 0},
         metadata={"document_id": 123},
