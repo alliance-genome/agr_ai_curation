@@ -163,8 +163,6 @@ def _create_extraction_result(
         id=uuid4(),
         document_id=document_id,
         adapter_key="reference_adapter",
-        profile_key="primary",
-        domain_key="gene",
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id="chat-session-1",
@@ -425,7 +423,6 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
         assert candidate.adapter_key == "reference_adapter"
         assert set(candidate.model_dump(mode="json").keys()) == {
             "adapter_key",
-            "profile_key",
             "payload",
             "evidence_records",
             "conversation_context_summary",
@@ -455,7 +452,6 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
         document_id=str(document.id),
         anchor=_anchor(snippet_text="Example quote."),
         adapter_key="reference_adapter",
-        profile_key="primary",
         field_path="gene.symbol",
         current_user_id="curator-1",
         prep_extraction_result_id=str(extraction_result.id),
@@ -497,7 +493,6 @@ def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
         document_id=str(document.id),
         anchor=_anchor(snippet_text="Example quote.", page_number=None),
         adapter_key="reference_adapter",
-        profile_key="primary",
         field_path="gene.symbol",
         current_user_id="curator-1",
         prep_extraction_result_id=str(extraction_result.id),

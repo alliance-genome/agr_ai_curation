@@ -6,6 +6,11 @@ from .discovery import (
     discover_package_manifests,
     iter_runtime_package_dirs,
 )
+from .curation_adapter_loader import (
+    CurationAdapterLoadError,
+    LoadedCurationAdapterExport,
+    load_package_curation_adapter_exports,
+)
 from .env_manager import (
     PackageEnvironment,
     PackageEnvironmentBootstrapError,
@@ -94,8 +99,10 @@ from .tool_registry import (
 
 __all__ = [
     "DiscoveredPackage",
+    "CurationAdapterLoadError",
     "ExportKind",
     "LoadedPackage",
+    "LoadedCurationAdapterExport",
     "LoadedToolBindingExport",
     "PROTOCOL_VERSION",
     "PackageContractError",
@@ -158,6 +165,7 @@ __all__ = [
     "get_runtime_state_dir",
     "get_tool_bindings_path",
     "iter_runtime_package_dirs",
+    "load_package_curation_adapter_exports",
     "load_package_tool_binding_exports",
     "load_package_manifest",
     "load_package_registry",

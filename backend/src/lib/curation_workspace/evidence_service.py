@@ -82,7 +82,6 @@ def recompute_evidence(
                 document_id=str(session.document_id),
                 anchor=EvidenceAnchor.model_validate(evidence_row.anchor or {}),
                 adapter_key=candidate.adapter_key,
-                profile_key=candidate.profile_key,
                 field_path=(evidence_row.field_keys or [None])[0],
                 current_user_id=current_user_id,
                 prep_extraction_result_id=_prep_extraction_result_id(candidate),
@@ -249,7 +248,6 @@ def resolve_evidence(
         document_id=str(session.document_id),
         anchor=request.anchor,
         adapter_key=candidate.adapter_key,
-        profile_key=candidate.profile_key,
         field_path=field_key,
         current_user_id=current_user_id,
         prep_extraction_result_id=_prep_extraction_result_id(candidate),
@@ -514,7 +512,6 @@ def _resolve_anchor_against_document(
     document_id: str,
     anchor: EvidenceAnchor,
     adapter_key: str,
-    profile_key: str | None,
     field_path: str | None,
     current_user_id: str,
     prep_extraction_result_id: str,
@@ -530,7 +527,6 @@ def _resolve_anchor_against_document(
     prep_candidate = CurationPrepCandidate.model_validate(
         {
             "adapter_key": adapter_key,
-            "profile_key": profile_key,
             "payload": _build_anchor_resolution_payload(
                 resolved_field_path,
                 _anchor_seed_text(anchor),
@@ -562,7 +558,6 @@ def _resolve_anchor_against_document(
         context=EvidenceResolutionContext(
             document_id=document_id,
             adapter_key=adapter_key,
-            profile_key=profile_key,
             prep_extraction_result_id=prep_extraction_result_id,
             candidate_index=0,
         ),

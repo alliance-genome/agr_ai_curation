@@ -77,6 +77,7 @@ interface DocumentListProps {
 
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
+const PDF_BACKGROUND_PROCESSING_TOAST_AUTO_HIDE_MS = 6000;
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
   loading,
@@ -222,7 +223,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     emitGlobalToast({
       message: PDF_BACKGROUND_PROCESSING_TOAST,
       severity: 'info',
-      autoHideDurationMs: 8000,
+      autoHideDurationMs: PDF_BACKGROUND_PROCESSING_TOAST_AUTO_HIDE_MS,
       anchorOrigin: { vertical: 'bottom', horizontal: 'left' },
     });
   }, []);

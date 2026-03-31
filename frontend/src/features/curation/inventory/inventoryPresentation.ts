@@ -91,12 +91,7 @@ export function getStatusChipColor(status: CurationSessionStatus): NonNullable<C
 }
 
 export function getAdapterLabel(adapter: CurationAdapterRef): string {
-  const baseLabel = adapter.display_label || adapter.adapter_key
-  if (!adapter.profile_label && !adapter.profile_key) {
-    return baseLabel
-  }
-
-  return `${baseLabel} / ${adapter.profile_label || adapter.profile_key}`
+  return adapter.display_label || adapter.adapter_key
 }
 
 export function getAdapterChipColor(

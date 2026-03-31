@@ -66,8 +66,6 @@ describe('openCurationWorkspace', () => {
       documentId: 'doc-1',
       originSessionId: 'chat-session-1',
       adapterKeys: ['gene'],
-      profileKeys: ['primary'],
-      domainKeys: ['disease'],
       navigate,
     })
 
@@ -80,8 +78,6 @@ describe('openCurationWorkspace', () => {
     expect(parsedUrl.searchParams.get('document_id')).toBe('doc-1')
     expect(parsedUrl.searchParams.get('origin_session_id')).toBe('chat-session-1')
     expect(parsedUrl.searchParams.getAll('adapter_key')).toEqual(['gene'])
-    expect(parsedUrl.searchParams.getAll('profile_key')).toEqual(['primary'])
-    expect(parsedUrl.searchParams.getAll('domain_key')).toEqual(['disease'])
     expect(parsedUrl.searchParams.get('sort_by')).toBe('prepared_at')
     expect(parsedUrl.searchParams.get('sort_direction')).toBe('desc')
     expect(parsedUrl.searchParams.get('page')).toBe('1')
@@ -128,8 +124,6 @@ describe('openCurationWorkspace', () => {
       flowRunId: 'flow-7',
       originSessionId: 'chat-session-7',
       adapterKeys: ['gene'],
-      profileKeys: ['primary'],
-      domainKeys: ['disease'],
       navigate,
     })
 
@@ -141,8 +135,6 @@ describe('openCurationWorkspace', () => {
     expect(parsedListUrl.searchParams.get('flow_run_id')).toBe('flow-7')
     expect(parsedListUrl.searchParams.get('origin_session_id')).toBe('chat-session-7')
     expect(parsedListUrl.searchParams.getAll('adapter_key')).toEqual(['gene'])
-    expect(parsedListUrl.searchParams.getAll('profile_key')).toEqual(['primary'])
-    expect(parsedListUrl.searchParams.getAll('domain_key')).toEqual(['disease'])
 
     const [bootstrapUrl, bootstrapInit] = vi.mocked(global.fetch).mock.calls[1]
     expect(String(bootstrapUrl)).toBe('/api/curation-workspace/documents/doc-1/bootstrap')
@@ -154,8 +146,6 @@ describe('openCurationWorkspace', () => {
       },
       body: JSON.stringify({
         adapter_key: 'gene',
-        profile_key: 'primary',
-        domain_key: 'disease',
         flow_run_id: 'flow-7',
         origin_session_id: 'chat-session-7',
       }),
@@ -219,8 +209,6 @@ describe('openCurationWorkspace', () => {
       flowRunId: 'flow-7',
       originSessionId: 'chat-session-7',
       adapterKeys: ['gene'],
-      profileKeys: ['primary'],
-      domainKeys: ['disease'],
     })
 
     expect(availability).toEqual({
@@ -236,8 +224,6 @@ describe('openCurationWorkspace', () => {
     expect(parsedAvailabilityUrl.searchParams.get('flow_run_id')).toBe('flow-7')
     expect(parsedAvailabilityUrl.searchParams.get('origin_session_id')).toBe('chat-session-7')
     expect(parsedAvailabilityUrl.searchParams.get('adapter_key')).toBe('gene')
-    expect(parsedAvailabilityUrl.searchParams.get('profile_key')).toBe('primary')
-    expect(parsedAvailabilityUrl.searchParams.get('domain_key')).toBe('disease')
     expect(availabilityInit).toEqual({
       credentials: 'include',
     })

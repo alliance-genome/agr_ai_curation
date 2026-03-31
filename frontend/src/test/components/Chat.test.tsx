@@ -39,8 +39,6 @@ function mockChatFetch(options?: {
     extraction_result_count: number
     conversation_message_count: number
     adapter_keys: string[]
-    profile_keys: string[]
-    domain_keys: string[]
     blocking_reasons: string[]
   }
   prepRun?: {
@@ -50,8 +48,6 @@ function mockChatFetch(options?: {
     warnings: string[]
     processing_notes: string[]
     adapter_keys: string[]
-    profile_keys: string[]
-    domain_keys: string[]
   }
   activeDocument?: {
     id: string
@@ -96,8 +92,6 @@ function mockChatFetch(options?: {
           extraction_result_count: 0,
           conversation_message_count: 0,
           adapter_keys: [],
-          profile_keys: [],
-          domain_keys: [],
           blocking_reasons: [
             'No candidate annotations are available from this chat yet.',
           ],
@@ -115,8 +109,6 @@ function mockChatFetch(options?: {
           warnings: [],
           processing_notes: [],
           adapter_keys: ['disease'],
-          profile_keys: ['primary'],
-          domain_keys: ['disease'],
         },
       } as Response
     }
@@ -462,8 +454,6 @@ describe('Chat persistence', () => {
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['disease'],
-        profile_keys: ['primary'],
-        domain_keys: ['disease'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -473,8 +463,6 @@ describe('Chat persistence', () => {
         warnings: ['Review warnings are available.'],
         processing_notes: ['Prep completed successfully.'],
         adapter_keys: ['disease'],
-        profile_keys: ['primary'],
-        domain_keys: ['disease'],
       },
     })
 
@@ -505,8 +493,6 @@ describe('Chat persistence', () => {
         body: JSON.stringify({
           session_id: 'session-1',
           adapter_keys: ['disease'],
-          profile_keys: ['primary'],
-          domain_keys: ['disease'],
         }),
       })
     })
@@ -533,8 +519,6 @@ describe('Chat persistence', () => {
         extraction_result_count: 1,
         conversation_message_count: 4,
         adapter_keys: ['gene'],
-        profile_keys: ['primary'],
-        domain_keys: ['gene'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -544,8 +528,6 @@ describe('Chat persistence', () => {
         warnings: [],
         processing_notes: [],
         adapter_keys: ['gene'],
-        profile_keys: ['primary'],
-        domain_keys: ['gene'],
       },
     })
 
@@ -560,8 +542,6 @@ describe('Chat persistence', () => {
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
-          profileKeys: ['primary'],
-          domainKeys: ['gene'],
           navigate: mockNavigate,
         })
       )
@@ -582,8 +562,6 @@ describe('Chat persistence', () => {
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
-          profileKeys: ['primary'],
-          domainKeys: ['gene'],
           navigate: mockNavigate,
         })
       )
@@ -598,8 +576,6 @@ describe('Chat persistence', () => {
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
-          profileKeys: ['primary'],
-          domainKeys: ['gene'],
           navigate: mockNavigate,
         })
       )
@@ -616,8 +592,6 @@ describe('Chat persistence', () => {
         extraction_result_count: 1,
         conversation_message_count: 2,
         adapter_keys: ['gene'],
-        profile_keys: ['primary'],
-        domain_keys: ['gene'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -627,8 +601,6 @@ describe('Chat persistence', () => {
         warnings: [],
         processing_notes: [],
         adapter_keys: ['gene'],
-        profile_keys: ['primary'],
-        domain_keys: ['gene'],
       },
     })
 
@@ -643,8 +615,6 @@ describe('Chat persistence', () => {
           documentId: 'doc-from-backend',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
-          profileKeys: ['primary'],
-          domainKeys: ['gene'],
           navigate: mockNavigate,
         })
       )

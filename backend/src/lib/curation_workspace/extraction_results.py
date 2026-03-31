@@ -40,8 +40,6 @@ class ExtractionEnvelopeCandidate:
     payload_json: dict[str, Any] | list[Any]
     candidate_count: int = 0
     adapter_key: Optional[str] = None
-    profile_key: Optional[str] = None
-    domain_key: Optional[str] = None
     conversation_summary: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -77,8 +75,6 @@ def build_extraction_envelope_candidate(
     agent_key: Optional[str],
     conversation_summary: Optional[str] = None,
     adapter_key: Optional[str] = None,
-    profile_key: Optional[str] = None,
-    domain_key: Optional[str] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> Optional[ExtractionEnvelopeCandidate]:
     """Convert a tool output payload into a persistable extraction candidate."""
@@ -96,84 +92,44 @@ def build_extraction_envelope_candidate(
     candidate_count_raw = run_summary.get("candidate_count", 0)
     candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
     resolved_adapter_key = str(adapter_key or "").strip() or None
-    resolved_domain_key = str(domain_key or "").strip() or None
+    agent_curation = None
+    if resolved_adapter_key is None:
+        agent_curation = _get_agent_curation_metadata(canonical_agent_key)
+        if agent_curation is not None and not agent_curation["launchable"]:
+            return None
+        if agent_curation is not None:
+            resolved_adapter_key = agent_curation["adapter_key"]
 
     if isinstance(payload, dict):
-        payload_adapter_key = payload.get("adapter_key")
         actor = payload.get("actor")
         destination = payload.get("destination")
-        envelope_adapter_key = (
-            payload_adapter_key.strip() or None
-            if isinstance(payload_adapter_key, str)
-            else None
-        )
         envelope_destination = (
             destination.strip() or None if isinstance(destination, str) else None
         )
 
-        if envelope_adapter_key is not None:
-            resolved_adapter_key = envelope_adapter_key
         if actor:
             envelope_metadata.setdefault("envelope_actor", actor)
         if envelope_destination is not None:
             envelope_metadata.setdefault("envelope_destination", envelope_destination)
 
-    if resolved_domain_key is None:
-        inferred_domain_key = _infer_domain_key_from_agent_key(canonical_agent_key)
-        if inferred_domain_key is not None:
-            resolved_domain_key = inferred_domain_key
-            envelope_metadata.setdefault("inferred_domain_key", inferred_domain_key)
+    if agent_curation is not None and resolved_adapter_key is None:
+        raise ValueError(
+            "Launchable curation extraction agents must declare curation.adapter_key "
+            f"(agent_key={canonical_agent_key})."
+        )
+    if resolved_adapter_key is None:
+        return None
 
     return ExtractionEnvelopeCandidate(
         agent_key=canonical_agent_key,
         payload_json=payload,
         candidate_count=max(candidate_count, 0),
         adapter_key=resolved_adapter_key,
-        profile_key=profile_key,
-        domain_key=resolved_domain_key,
         conversation_summary=str(conversation_summary).strip() or None
         if conversation_summary is not None
         else None,
         metadata=envelope_metadata,
     )
-
-
-def enrich_extraction_result_scope(
-    record: CurationExtractionResultRecord,
-) -> CurationExtractionResultRecord:
-    """Backfill inferred scope for persisted extraction records when possible."""
-
-    candidate = build_extraction_envelope_candidate(
-        record.payload_json,
-        agent_key=record.agent_key,
-        adapter_key=record.adapter_key,
-        profile_key=record.profile_key,
-        domain_key=record.domain_key,
-        metadata=record.metadata,
-    )
-    if candidate is None:
-        return record
-
-    updated_fields: dict[str, Any] = {}
-
-    if candidate.adapter_key != record.adapter_key:
-        updated_fields["adapter_key"] = candidate.adapter_key
-    if candidate.profile_key != record.profile_key:
-        updated_fields["profile_key"] = candidate.profile_key
-    if candidate.domain_key != record.domain_key:
-        updated_fields["domain_key"] = candidate.domain_key
-
-    merged_metadata = dict(record.metadata)
-    merged_metadata.update(candidate.metadata)
-    if merged_metadata != dict(record.metadata):
-        updated_fields["metadata"] = merged_metadata
-
-    if not updated_fields:
-        return record
-
-    return record.model_copy(update=updated_fields)
-
-
 def persist_extraction_result(
     request: CurationExtractionPersistenceRequest,
     *,
@@ -328,15 +284,24 @@ def _is_extraction_envelope_payload(payload: Any) -> bool:
     return any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS)
 
 
-def _infer_domain_key_from_agent_key(agent_key: str | None) -> str | None:
-    """Infer a stable domain key from the agent key when envelopes omit one."""
+def _get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
+    from src.lib.agent_studio.catalog_service import get_agent_metadata
 
-    normalized = str(agent_key or "").strip().replace("-", "_")
-    if not normalized:
+    try:
+        metadata = get_agent_metadata(agent_key)
+    except ValueError:
         return None
-    if normalized.endswith("_extractor"):
-        normalized = normalized[: -len("_extractor")]
-    return normalized or None
+
+    curation = metadata.get("curation")
+    if not isinstance(curation, Mapping):
+        return None
+
+    adapter_key = str(curation.get("adapter_key") or "").strip() or None
+    launchable = bool(curation.get("launchable", False))
+    return {
+        "adapter_key": adapter_key,
+        "launchable": launchable,
+    }
 
 
 def _record_to_schema(
@@ -352,8 +317,6 @@ def _record_to_schema(
         extraction_result_id=str(record.id),
         document_id=str(record.document_id),
         adapter_key=record.adapter_key,
-        profile_key=record.profile_key,
-        domain_key=record.domain_key,
         agent_key=record.agent_key,
         source_kind=record.source_kind,
         origin_session_id=record.origin_session_id,
@@ -376,8 +339,6 @@ def _build_extraction_result_record(
     return CurationExtractionResultRecordModel(
         document_id=UUID(str(request.document_id)),
         adapter_key=request.adapter_key,
-        profile_key=request.profile_key,
-        domain_key=request.domain_key,
         agent_key=request.agent_key,
         source_kind=request.source_kind,
         origin_session_id=request.origin_session_id,

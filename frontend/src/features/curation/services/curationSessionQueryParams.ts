@@ -12,8 +12,6 @@ export function appendCurationSessionFilters(
 ) {
   appendStringList(params, 'status', filters?.statuses)
   appendStringList(params, 'adapter_key', filters?.adapter_keys)
-  appendStringList(params, 'profile_key', filters?.profile_keys)
-  appendStringList(params, 'domain_key', filters?.domain_keys)
   appendStringList(params, 'curator_id', filters?.curator_ids)
   appendStringList(params, 'tag', filters?.tags)
 

@@ -18,8 +18,6 @@ function buildSavedView(overrides: Partial<CurationSavedView> = {}): CurationSav
     filters: {
       statuses: ['in_progress'],
       adapter_keys: ['gene'],
-      profile_keys: ['alpha'],
-      domain_keys: [],
       curator_ids: ['user-1'],
       tags: [],
       flow_run_id: null,
@@ -67,8 +65,6 @@ function renderSelector(props: Partial<ComponentProps<typeof SavedViewSelector>>
           filters={{
             statuses: [],
             adapter_keys: ['gene'],
-            profile_keys: [],
-            domain_keys: [],
             curator_ids: [],
             tags: [],
             flow_run_id: null,
@@ -187,8 +183,6 @@ describe('SavedViewSelector', () => {
       filters: {
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
-        profile_keys: [],
-        domain_keys: [],
         curator_ids: [],
         tags: [],
         flow_run_id: null,

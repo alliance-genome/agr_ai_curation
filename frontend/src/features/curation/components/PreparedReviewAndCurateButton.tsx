@@ -10,8 +10,6 @@ type PreparedReviewAndCurateButtonProps = Omit<ReviewAndCurateButtonProps, 'sess
 export default function PreparedReviewAndCurateButton({
   sessionId,
   adapterKeys,
-  profileKeys,
-  domainKeys,
   ...buttonProps
 }: PreparedReviewAndCurateButtonProps) {
   return (
@@ -19,8 +17,6 @@ export default function PreparedReviewAndCurateButton({
       {...buttonProps}
       sessionId={sessionId}
       adapterKeys={normalizeCurationWorkspaceScopeValues(adapterKeys)}
-      profileKeys={normalizeCurationWorkspaceScopeValues(profileKeys)}
-      domainKeys={normalizeCurationWorkspaceScopeValues(domainKeys)}
     />
   )
 }

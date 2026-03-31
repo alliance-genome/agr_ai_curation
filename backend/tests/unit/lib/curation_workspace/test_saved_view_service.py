@@ -110,8 +110,6 @@ def _create_saved_view(
         filters={
             "statuses": ["new"],
             "adapter_keys": ["gene"],
-            "profile_keys": [],
-            "domain_keys": [],
             "curator_ids": [],
             "tags": [],
             "flow_run_id": None,
@@ -145,8 +143,6 @@ def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
             filters={
                 "statuses": ["in_progress"],
                 "adapter_keys": ["gene"],
-                "profile_keys": ["alpha"],
-                "domain_keys": [],
                 "curator_ids": ["user-1"],
                 "tags": [],
                 "flow_run_id": None,
@@ -177,6 +173,25 @@ def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
     assert response.view.filters.saved_view_id is None
     assert response.view.created_by is not None
     assert response.view.created_by.display_name == "Curator One"
+
+
+def test_list_saved_views_strips_deleted_scope_fields_from_legacy_payloads(db_session):
+    _create_user(db_session, "user-1", name="Curator One")
+    saved_view = _create_saved_view(
+        db_session,
+        owner_id="user-1",
+        name="Legacy scope view",
+    )
+    saved_view.filters["profile_keys"] = ["alpha"]
+    saved_view.filters["domain_keys"] = ["disease"]
+    db_session.commit()
+
+    response = module.list_saved_views(db_session, current_user_id="user-1")
+
+    assert len(response.views) == 1
+    assert response.views[0].filters.adapter_keys == ["gene"]
+    assert not hasattr(response.views[0].filters, "profile_keys")
+    assert not hasattr(response.views[0].filters, "domain_keys")
 
 
 def test_create_saved_view_sets_only_one_default_per_user(db_session):

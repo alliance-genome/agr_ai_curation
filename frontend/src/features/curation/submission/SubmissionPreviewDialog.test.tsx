@@ -27,9 +27,7 @@ function buildSession(): CurationReviewSession {
     status: 'in_progress',
     adapter: {
       adapter_key: 'reference_adapter',
-      profile_key: 'primary',
       display_label: 'Reference adapter',
-      profile_label: 'Primary',
       color_token: 'green',
       metadata: {},
     },

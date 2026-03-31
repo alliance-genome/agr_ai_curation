@@ -434,20 +434,12 @@ class CurationActorRef(CurationWorkspaceBaseModel):
 
 
 class CurationAdapterRef(CurationWorkspaceBaseModel):
-    """Adapter or adapter-profile metadata surfaced in inventory and workspace views."""
+    """Adapter metadata surfaced in inventory and workspace views."""
 
     adapter_key: str = Field(description="Canonical adapter identifier")
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter-owned profile or subdomain key",
-    )
     display_label: Optional[str] = Field(
         default=None,
         description="UI-facing adapter label",
-    )
-    profile_label: Optional[str] = Field(
-        default=None,
-        description="UI-facing profile label",
     )
     color_token: Optional[str] = Field(
         default=None,
@@ -802,10 +794,6 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     status: CurationCandidateStatus = Field(description="Current curator decision state")
     order: int = Field(default=0, ge=0, description="Display order in the candidate queue")
     adapter_key: str = Field(description="Adapter responsible for the candidate shape")
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter-owned profile or subdomain key",
-    )
     display_label: Optional[str] = Field(
         default=None,
         description="Primary queue label shown to curators",
@@ -903,10 +891,6 @@ class CurationExportPayloadContext(CurationWorkspaceBaseModel):
     """Deterministic adapter input for export bundles built from approved candidates."""
 
     session_id: str = Field(description="Owning session identifier")
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter-owned profile or subdomain key",
-    )
     document: Optional[CurationDocumentRef] = Field(
         default=None,
         description="Document metadata included with the export bundle",
@@ -1023,8 +1007,6 @@ class CurationSessionFilters(CurationWorkspaceBaseModel):
 
     statuses: list[CurationSessionStatus] = Field(default_factory=list)
     adapter_keys: list[str] = Field(default_factory=list)
-    profile_keys: list[str] = Field(default_factory=list)
-    domain_keys: list[str] = Field(default_factory=list)
     curator_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     flow_run_id: Optional[str] = Field(
@@ -1187,14 +1169,6 @@ class CurationExtractionResultRecord(CurationWorkspaceBaseModel):
         default=None,
         description="Adapter that will consume or produced the extraction envelope",
     )
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
-    domain_key: Optional[str] = Field(
-        default=None,
-        description="Optional domain key persisted alongside the extraction",
-    )
     agent_key: str = Field(description="Agent or pipeline key that produced the envelope")
     source_kind: CurationExtractionSourceKind = Field(
         description="Originating execution surface for the extraction envelope",
@@ -1349,7 +1323,7 @@ class CurationSessionStats(CurationWorkspaceBaseModel):
     """Aggregate counts powering inventory summary cards and dashboards."""
 
     total_sessions: int = Field(default=0, ge=0)
-    domain_count: int = Field(default=0, ge=0)
+    adapter_count: int = Field(default=0, ge=0)
     new_sessions: int = Field(default=0, ge=0)
     in_progress_sessions: int = Field(default=0, ge=0)
     ready_for_submission_sessions: int = Field(default=0, ge=0)
@@ -1524,10 +1498,6 @@ class CurationSessionCreateRequest(CurationWorkspaceBaseModel):
 
     document_id: str = Field(description="Document identifier")
     adapter_key: str = Field(description="Adapter that will own the session")
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
     curator_id: Optional[str] = Field(
         default=None,
         description="Curator who should own the new session",
@@ -1552,14 +1522,6 @@ class CurationDocumentBootstrapRequest(CurationWorkspaceBaseModel):
     adapter_key: Optional[str] = Field(
         default=None,
         description="Optional adapter key to scope bootstrap selection",
-    )
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
-    domain_key: Optional[str] = Field(
-        default=None,
-        description="Optional domain filter for bootstrap selection",
     )
     flow_run_id: Optional[str] = Field(
         default=None,
@@ -1707,10 +1669,6 @@ class CurationManualCandidateCreateRequest(CurationWorkspaceBaseModel):
 
     session_id: str = Field(description="Owning session identifier")
     adapter_key: str = Field(description="Adapter that will own the manual candidate")
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
     source: CurationCandidateSource = Field(
         default=CurationCandidateSource.MANUAL,
         description="Candidate source, defaulting to manual",
@@ -1948,20 +1906,11 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     source_kind: CurationExtractionSourceKind = Field(
         description="Execution surface that produced the envelope",
     )
-    adapter_key: Optional[str] = Field(
-        default=None,
+    adapter_key: str = Field(
         description=(
             "Adapter key associated with the envelope. "
             "Curation prep persistence requires exactly one adapter key."
         ),
-    )
-    profile_key: Optional[str] = Field(
-        default=None,
-        description="Optional adapter profile or subdomain key",
-    )
-    domain_key: Optional[str] = Field(
-        default=None,
-        description="Optional domain key persisted alongside the envelope",
     )
     origin_session_id: Optional[str] = Field(
         default=None,

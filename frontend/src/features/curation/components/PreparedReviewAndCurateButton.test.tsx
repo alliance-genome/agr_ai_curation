@@ -51,8 +51,6 @@ describe('PreparedReviewAndCurateButton', () => {
         documentId="doc-1"
         flowRunId="flow-1"
         adapterKeys={[' gene ', 'gene', '']}
-        profileKeys={[' primary ', 'primary']}
-        domainKeys={[' disease ', 'disease']}
         iconOnly={true}
       />
     )
@@ -67,8 +65,6 @@ describe('PreparedReviewAndCurateButton', () => {
           documentId: 'doc-1',
           flowRunId: 'flow-1',
           adapterKeys: ['gene'],
-          profileKeys: ['primary'],
-          domainKeys: ['disease'],
           navigate: mockNavigate,
         })
       )
@@ -93,13 +89,11 @@ describe('PreparedReviewAndCurateButton', () => {
     })
   })
 
-  it('normalizes adapter, profile, and domain keys', () => {
+  it('normalizes adapter keys', () => {
     render(
       <PreparedReviewAndCurateButton
         documentId="doc-1"
         adapterKeys={[' gene ', 'gene', '', ' allele ']}
-        profileKeys={[' primary ', 'primary', '']}
-        domainKeys={[' disease ', '', 'disease']}
         iconOnly={true}
       />
     )

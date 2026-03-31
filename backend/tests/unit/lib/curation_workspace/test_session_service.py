@@ -52,6 +52,8 @@ from src.schemas.curation_workspace import (
     CurationSubmissionPreviewRequest,
     CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
+    FieldValidationResult,
+    FieldValidationStatus,
     SubmissionMode,
     SubmissionPayloadContract,
 )
@@ -144,7 +146,7 @@ def _create_extraction_result(
     db_session,
     *,
     document_id: str,
-    domain_key: str,
+    label: str,
     origin_session_id: str = "chat-session-1",
     flow_run_id: str = "flow-1",
     candidate_count: int = 1,
@@ -154,16 +156,14 @@ def _create_extraction_result(
         id=uuid4(),
         document_id=UUID(document_id),
         adapter_key="reference_adapter",
-        profile_key="primary",
-        domain_key=domain_key,
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=origin_session_id,
-        trace_id=f"trace-{domain_key}",
+        trace_id=f"trace-{label}",
         flow_run_id=flow_run_id,
         user_id="user-1",
         candidate_count=candidate_count,
-        conversation_summary=f"Prep summary for {domain_key}.",
+        conversation_summary=f"Prep summary for {label}.",
         payload_json={
             "candidates": [],
             "run_metadata": {
@@ -285,7 +285,6 @@ def _build_manual_candidate_request(
     return CurationManualCandidateCreateRequest(
         session_id=session_id,
         adapter_key="reference_adapter",
-        profile_key="primary",
         source=source,
         display_label="Manual candidate",
         draft={
@@ -533,12 +532,12 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
     extraction_alpha = _create_extraction_result(
         db_session,
         document_id=document_id,
-        domain_key="alpha",
+        label="alpha",
     )
     extraction_beta = _create_extraction_result(
         db_session,
         document_id=document_id,
-        domain_key="beta",
+        label="beta",
     )
     session_alpha = _create_session_for_extraction(
         db_session,
@@ -550,7 +549,6 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         db_session,
         document_id=document_id,
         adapter_key="reference_adapter",
-        profile_key="primary",
         flow_run_id="flow-1",
         prep_extraction_result_id=str(extraction_beta.id),
     )
@@ -561,7 +559,6 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         db_session,
         document_id=document_id,
         adapter_key="reference_adapter",
-        profile_key="primary",
         flow_run_id="flow-1",
         prep_extraction_result_id=str(extraction_alpha.id),
     )
@@ -575,7 +572,7 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
     extraction_result = _create_extraction_result(
         db_session,
         document_id=str(document.id),
-        domain_key="alpha",
+        label="alpha",
     )
     session_row = _create_session_for_extraction(
         db_session,
@@ -594,7 +591,6 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
     assert response.candidate.status == CurationCandidateStatus.PENDING
     assert response.candidate.order == 1
     assert response.candidate.display_label == "Manual candidate"
-    assert response.candidate.profile_key == "primary"
     assert response.candidate.draft.title == "Manual candidate"
     assert response.candidate.draft.fields[0].seed_value == "value alpha"
     assert response.candidate.draft.fields[0].dirty is False
@@ -637,7 +633,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
     extraction_result = _create_extraction_result(
         db_session,
         document_id=str(document.id),
-        domain_key="alpha",
+        label="alpha",
     )
     session_row = _create_session_for_extraction(
         db_session,
@@ -892,7 +888,7 @@ def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_se
     extraction_result = _create_extraction_result(
         db_session,
         document_id=str(document.id),
-        domain_key="alpha",
+        label="alpha",
         candidate_count=0,
     )
     session_row = ReviewSessionModel(
@@ -931,13 +927,13 @@ def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db
     extraction_chat_one = _create_extraction_result(
         db_session,
         document_id=document_id,
-        domain_key="alpha",
+        label="alpha",
         origin_session_id="chat-session-1",
     )
     extraction_chat_two = _create_extraction_result(
         db_session,
         document_id=document_id,
-        domain_key="beta",
+        label="beta",
         origin_session_id="chat-session-2",
     )
     session_one = _create_session_for_extraction(
@@ -1445,6 +1441,35 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
     assert response.submission.payload.payload_json == {"adapter_owned": True}
 
 
+def test_submission_validation_blocking_reason_ignores_warning_only_fields():
+    field = module.CurationDraftFieldSchema.model_validate(
+        {
+            "field_key": "identifiers.pmid",
+            "label": "PMID",
+            "value": None,
+            "seed_value": None,
+            "order": 0,
+            "required": False,
+            "read_only": False,
+            "dirty": False,
+            "stale_validation": False,
+            "evidence_anchor_ids": [],
+            "metadata": {
+                "validation": {
+                    "rules": ["pmid_format"],
+                    "severity": "warning",
+                }
+            },
+        }
+    )
+    validation_result = FieldValidationResult(
+        status=FieldValidationStatus.INVALID_FORMAT,
+        warnings=["PMID is optional."],
+    )
+
+    assert module._submission_validation_blocking_reason(field, validation_result) is None
+
+
 def test_submission_preview_handles_candidates_without_matching_validation_snapshots(
     db_session,
     monkeypatch,
@@ -1489,7 +1514,7 @@ def test_submission_preview_handles_candidates_without_matching_validation_snaps
     assert response.session_validation is None
 
 
-def test_submission_preview_keeps_export_mode_in_preview_state_when_no_exporter_is_configured(
+def test_submission_preview_builds_export_payload_when_ready_candidates_are_filtered(
     db_session,
 ):
     seeded = _create_decision_session(
@@ -1542,9 +1567,12 @@ def test_submission_preview_keeps_export_mode_in_preview_state_when_no_exporter_
     assert response.submission.payload.candidate_ids == []
     assert response.submission.payload.payload_json is not None
     assert response.submission.payload.payload_json["candidate_count"] == 0
-    assert response.submission.payload.payload_text is None
-    assert response.submission.payload.content_type is None
-    assert response.submission.payload.filename is None
+    assert response.submission.payload.payload_text is not None
+    assert response.submission.payload.content_type == "application/json"
+    assert (
+        response.submission.payload.filename
+        == f"reference_adapter-{seeded['session_id']}-export-bundle.json"
+    )
     assert response.submission.payload.warnings == [
         "No accepted candidates are ready for submission."
     ]

@@ -303,7 +303,6 @@ function CurationWorkspacePageContent({
       const response = await createManualCurationCandidate({
         session_id: workspace.session.session_id,
         adapter_key: templateCandidate.adapter_key,
-        profile_key: templateCandidate.profile_key ?? null,
         source: 'manual',
         display_label: tag.entity_name.trim(),
         draft,

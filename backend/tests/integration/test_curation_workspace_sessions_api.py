@@ -232,8 +232,6 @@ def seeded_review_sessions(client: TestClient, test_db):
             id=extraction_alpha_id,
             document_id=document_alpha_id,
             adapter_key="disease",
-            profile_key="primary",
-            domain_key="disease",
             agent_key="curation_prep",
             source_kind=CurationExtractionSourceKind.FLOW,
             flow_run_id="flow-alpha",
@@ -246,8 +244,6 @@ def seeded_review_sessions(client: TestClient, test_db):
             id=extraction_beta_id,
             document_id=document_beta_id,
             adapter_key="gene",
-            profile_key="secondary",
-            domain_key="gene",
             agent_key="curation_prep",
             source_kind=CurationExtractionSourceKind.FLOW,
             flow_run_id="flow-alpha",
@@ -260,8 +256,6 @@ def seeded_review_sessions(client: TestClient, test_db):
             id=extraction_gamma_id,
             document_id=document_gamma_id,
             adapter_key="disease",
-            profile_key="primary",
-            domain_key="disease",
             agent_key="curation_prep",
             source_kind=CurationExtractionSourceKind.FLOW,
             flow_run_id="flow-beta",
@@ -709,7 +703,6 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     response = client.get(
         "/api/curation-workspace/sessions",
         params={
-            "domain_key": "disease",
             "curator_id": seeded_review_sessions["current_user_auth_sub"],
             "prepared_from": "2026-03-01T00:00:00Z",
             "prepared_to": "2026-03-15T00:00:00Z",
@@ -745,7 +738,6 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
             "status": "in_progress",
             "adapter_key": "gene",
             "flow_run_id": "flow-alpha",
-            "domain_key": "gene",
             "curator_id": seeded_review_sessions["other_user_auth_sub"],
             "sort_by": "last_worked_at",
             "sort_direction": "desc",
@@ -837,7 +829,7 @@ def test_get_review_session_returns_detail_payload(
     assert payload["document"]["title"] == "Beta_gene paper"
     assert payload["document"]["page_count"] == 4
     assert payload["assigned_curator"]["actor_id"] == seeded_review_sessions["other_user_auth_sub"]
-    assert payload["extraction_results"][0]["domain_key"] == "gene"
+    assert payload["extraction_results"][0]["adapter_key"] == "gene"
     assert payload["latest_submission"]["status"] == "preview_ready"
     assert payload["latest_submission"]["payload"]["payload_json"] == {"ok": True}
 
@@ -1025,7 +1017,7 @@ def test_get_review_session_stats_returns_aggregate_counts(
     stats = payload["stats"]
 
     assert stats["total_sessions"] == 3
-    assert stats["domain_count"] == 2
+    assert stats["adapter_count"] == 2
     assert stats["new_sessions"] == 1
     assert stats["in_progress_sessions"] == 1
     assert stats["ready_for_submission_sessions"] == 0
@@ -1057,8 +1049,6 @@ def test_get_next_review_session_returns_queue_navigation_context(
         "filters": {
             "statuses": [],
             "adapter_keys": [],
-            "profile_keys": [],
-            "domain_keys": [],
             "curator_ids": [],
             "tags": [],
             "flow_run_id": None,

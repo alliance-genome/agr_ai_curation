@@ -69,6 +69,14 @@ class FrontendConfig:
 
 
 @dataclass
+class CurationConfig:
+    """Optional curation-routing metadata declared by the owning package."""
+
+    adapter_key: str | None = None
+    launchable: bool = False
+
+
+@dataclass
 class AgentDefinition:
     """
     Complete agent definition loaded from agent.yaml.
@@ -107,6 +115,7 @@ class AgentDefinition:
     batch_capabilities: List[str] = field(default_factory=list)
     group_rules_enabled: bool = False
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
+    curation: CurationConfig = field(default_factory=CurationConfig)
 
     @property
     def tool_name(self) -> str:
@@ -160,6 +169,11 @@ class AgentDefinition:
             icon=frontend_data.get("icon", "🤖"),
             show_in_palette=frontend_data.get("show_in_palette", True),
         )
+        curation_data = data.get("curation", {})
+        curation = CurationConfig(
+            adapter_key=str(curation_data.get("adapter_key") or "").strip() or None,
+            launchable=bool(curation_data.get("launchable", False)),
+        )
 
         return cls(
             folder_name=folder_name,
@@ -177,6 +191,7 @@ class AgentDefinition:
             batch_capabilities=data.get("batch_capabilities", []),
             group_rules_enabled=data.get("group_rules_enabled", False),
             frontend=frontend,
+            curation=curation,
         )
 
 

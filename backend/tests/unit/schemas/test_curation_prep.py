@@ -40,7 +40,6 @@ def make_anchor_payload() -> dict[str, object]:
 def make_candidate_payload() -> dict[str, object]:
     return {
         "adapter_key": "disease",
-        "profile_key": "primary",
         "payload": {
             "gene_symbol": "APOE",
             "phenotype": {"label": "late onset phenotype"},
@@ -125,7 +124,7 @@ def test_curation_prep_candidate_rejects_non_json_payload_values():
 
 
 def test_curation_prep_scope_confirmation_requires_scope_when_confirmed():
-    with pytest.raises(ValidationError, match="Confirmed scope must include at least one"):
+    with pytest.raises(ValidationError, match="Confirmed scope must include at least one adapter"):
         CurationPrepScopeConfirmation(confirmed=True)
 
 

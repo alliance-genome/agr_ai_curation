@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
     list_extraction_results,
@@ -196,8 +197,6 @@ def _record_row(**overrides):
         "id": 1,
         "document_id": uuid4(),
         "adapter_key": "reference_adapter",
-        "profile_key": None,
-        "domain_key": "disease",
         "agent_key": "disease_extractor",
         "source_kind": CurationExtractionSourceKind.CHAT,
         "origin_session_id": "session-1",
@@ -214,7 +213,15 @@ def _record_row(**overrides):
     return SimpleNamespace(**payload)
 
 
-def test_build_extraction_envelope_candidate_parses_json_tool_output():
+def test_build_extraction_envelope_candidate_parses_json_tool_output(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    )
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_envelope_payload()),
         agent_key="gene-expression",
@@ -224,29 +231,46 @@ def test_build_extraction_envelope_candidate_parses_json_tool_output():
 
     assert candidate is not None
     assert candidate.agent_key == "gene-expression"
-    assert candidate.adapter_key == "reference_adapter"
+    assert candidate.adapter_key == "gene"
     assert candidate.candidate_count == 2
-    assert candidate.domain_key == "gene_expression"
     assert candidate.payload_json["items"] == [{"label": "notch"}]
     assert candidate.metadata["tool_name"] == "ask_gene_expression_specialist"
     assert candidate.metadata["envelope_actor"] == "gene_expression_specialist"
     assert candidate.metadata["envelope_destination"] == "gene_expression"
 
 
-def test_build_extraction_envelope_candidate_prefers_envelope_adapter_key_over_caller_fallback():
+def test_build_extraction_envelope_candidate_prefers_explicit_adapter_key_over_agent_metadata(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    )
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_envelope_payload()),
         agent_key="gene-expression",
         adapter_key="caller_adapter",
-        domain_key="caller_domain",
     )
 
     assert candidate is not None
-    assert candidate.adapter_key == "reference_adapter"
-    assert candidate.domain_key == "caller_domain"
+    assert candidate.adapter_key == "caller_adapter"
 
 
-def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one():
+def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": None,
+            "launchable": False,
+        },
+    )
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_legacy_envelope_payload()),
         agent_key="gene-expression",
@@ -255,10 +279,19 @@ def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envel
 
     assert candidate is not None
     assert candidate.adapter_key == "caller_adapter"
-    assert candidate.domain_key == "gene_expression"
 
 
-def test_build_extraction_envelope_candidate_leaves_adapter_unset_and_inferrs_domain():
+def test_build_extraction_envelope_candidate_returns_none_for_non_launchable_agents(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": None,
+            "launchable": False,
+        },
+    )
     candidate = build_extraction_envelope_candidate(
         json.dumps(
             {
@@ -279,10 +312,20 @@ def test_build_extraction_envelope_candidate_leaves_adapter_unset_and_inferrs_do
         agent_key="gene_extractor",
     )
 
-    assert candidate is not None
-    assert candidate.adapter_key is None
-    assert candidate.domain_key == "gene"
-    assert candidate.metadata["inferred_domain_key"] == "gene"
+    assert candidate is None
+
+
+def test_build_extraction_envelope_candidate_raises_when_agent_metadata_lookup_fails(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_metadata",
+        lambda _agent_key: (_ for _ in ()).throw(RuntimeError("catalog unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="catalog unavailable"):
+        build_extraction_envelope_candidate(
+            json.dumps(_sample_envelope_payload()),
+            agent_key="gene-expression",
+        )
 
 
 def test_build_extraction_envelope_candidate_ignores_non_extraction_payload():
@@ -299,7 +342,6 @@ def test_persist_extraction_result_writes_record_and_returns_schema():
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()),
         adapter_key="gene_expression",
-        domain_key="gene_expression",
         agent_key="gene-expression",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id="session-1",
@@ -331,7 +373,6 @@ def test_persist_extraction_result_sanitizes_nul_characters_before_persisting():
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()),
         adapter_key="reference_adapter",
-        domain_key="gene",
         agent_key="gene_extractor",
         source_kind=CurationExtractionSourceKind.CHAT,
         candidate_count=1,
@@ -377,6 +418,7 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     session = _FakeSession(fail_commit=True)
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()),
+        adapter_key="gene",
         agent_key="gene-expression",
         source_kind=CurationExtractionSourceKind.FLOW,
         payload_json=_sample_envelope_payload(),
@@ -395,12 +437,14 @@ def test_persist_extraction_results_writes_all_records_in_one_commit():
     requests = [
         CurationExtractionPersistenceRequest(
             document_id=str(uuid4()),
+            adapter_key="gene",
             agent_key="gene-expression",
             source_kind=CurationExtractionSourceKind.CHAT,
             payload_json=_sample_envelope_payload(),
         ),
         CurationExtractionPersistenceRequest(
             document_id=str(uuid4()),
+            adapter_key="pdf",
             agent_key="pdf-extraction",
             source_kind=CurationExtractionSourceKind.FLOW,
             payload_json=_sample_envelope_payload(),
@@ -423,12 +467,14 @@ def test_persist_extraction_results_rolls_back_batch_on_commit_error():
     requests = [
         CurationExtractionPersistenceRequest(
             document_id=str(uuid4()),
+            adapter_key="gene",
             agent_key="gene-expression",
             source_kind=CurationExtractionSourceKind.CHAT,
             payload_json=_sample_envelope_payload(),
         ),
         CurationExtractionPersistenceRequest(
             document_id=str(uuid4()),
+            adapter_key="pdf",
             agent_key="pdf-extraction",
             source_kind=CurationExtractionSourceKind.FLOW,
             payload_json=_sample_envelope_payload(),

@@ -16,7 +16,6 @@ def _candidate() -> CurationPrepCandidate:
     return CurationPrepCandidate.model_validate(
         {
             "adapter_key": REFERENCE_ADAPTER_KEY,
-            "profile_key": None,
             "payload": {
                 "citation": {
                     "title": "  Adapter-owned editor packs stay outside the shared editor  ",
@@ -62,7 +61,6 @@ def test_reference_candidate_normalizer_builds_adapter_owned_payload_and_layout(
         context=CandidateNormalizationContext(
             document_id="document-1",
             adapter_key=REFERENCE_ADAPTER_KEY,
-            profile_key=None,
             prep_extraction_result_id="prep-result-1",
             candidate_index=0,
             flow_run_id="flow-1",

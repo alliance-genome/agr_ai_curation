@@ -33,8 +33,6 @@ export default function ReviewAndCurateButton({
   flowRunId,
   originSessionId,
   adapterKeys,
-  profileKeys,
-  domainKeys,
   label = 'Review & Curate',
   disabled = false,
   iconOnly = false,
@@ -62,8 +60,6 @@ export default function ReviewAndCurateButton({
         flowRunId,
         originSessionId,
         adapterKeys,
-        profileKeys,
-        domainKeys,
         navigate,
       })
       onOpened?.(openedSessionId)

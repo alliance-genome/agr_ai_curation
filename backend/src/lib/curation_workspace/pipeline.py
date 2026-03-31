@@ -13,10 +13,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.lib.curation_adapters.reference import (
-    REFERENCE_ADAPTER_KEY,
-    ReferenceCandidateNormalizer,
-)
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
 from src.lib.curation_workspace.evidence_quality import (
     evidence_anchor_payload_with_quality,
@@ -69,11 +66,9 @@ EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
 
 
 def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer]:
-    """Build the default adapter registry for candidate normalization."""
+    """Build the package-driven adapter registry for candidate normalization."""
 
-    return {
-        REFERENCE_ADAPTER_KEY: ReferenceCandidateNormalizer(),
-    }
+    return load_curation_adapter_registry().candidate_normalizers()
 
 
 class PipelineExecutionMode(str, Enum):
@@ -99,7 +94,6 @@ class PostCurationPipelineRequest:
     document_id: str
     source_kind: CurationExtractionSourceKind
     adapter_key: str | None = None
-    profile_key: str | None = None
     flow_run_id: str | None = None
     origin_session_id: str | None = None
     trace_id: str | None = None
@@ -134,7 +128,6 @@ class CandidateNormalizationContext:
 
     document_id: str
     adapter_key: str
-    profile_key: str | None
     prep_extraction_result_id: str
     candidate_index: int
     flow_run_id: str | None = None
@@ -158,7 +151,6 @@ class EvidenceResolutionContext:
 
     document_id: str
     adapter_key: str
-    profile_key: str | None
     prep_extraction_result_id: str
     candidate_index: int
 
@@ -169,7 +161,6 @@ class BatchValidationContext:
 
     document_id: str
     adapter_key: str
-    profile_key: str | None
     validated_at: datetime
 
 
@@ -224,32 +215,6 @@ class PipelineTaskScheduler(Protocol):
 
     def schedule(self, task: Callable[[], None], *, task_name: str) -> str | None:
         """Schedule a synchronous task to run outside the request path."""
-
-
-class PassthroughCandidateNormalizer:
-    """Default adapter normalizer that preserves prep output verbatim."""
-
-    def normalize(
-        self,
-        payload: dict[str, Any],
-        *,
-        prep_candidate: CurationPrepCandidate,
-        context: CandidateNormalizationContext,
-    ) -> NormalizedCandidate:
-        normalized_payload = dict(payload)
-        draft_fields = _build_passthrough_draft_fields(normalized_payload)
-        display_values = _scalar_display_values(normalized_payload)
-        display_label = display_values[0] if display_values else f"Candidate {context.candidate_index + 1}"
-        secondary_label = display_values[1] if len(display_values) > 1 else None
-
-        return NormalizedCandidate(
-            prep_candidate=prep_candidate,
-            normalized_payload=normalized_payload,
-            draft_fields=draft_fields,
-            display_label=display_label,
-            secondary_label=secondary_label,
-            metadata={NORMALIZER_METADATA_KEY: type(self).__name__},
-        )
 
 
 class PassthroughEvidenceAnchorResolver:
@@ -387,9 +352,6 @@ class AsyncioPipelineTaskScheduler:
 class PostCurationPipelineDependencies:
     """Replaceable collaborators for normalization, evidence, validation, and async dispatch."""
 
-    default_candidate_normalizer: CurationCandidateNormalizer = field(
-        default_factory=PassthroughCandidateNormalizer
-    )
     candidate_normalizers: Mapping[str, CurationCandidateNormalizer] = field(
         default_factory=_default_candidate_normalizers
     )
@@ -482,7 +444,6 @@ def _execute_pipeline_steps(
 ) -> tuple[PreparedSessionUpsertResult, str]:
     prep_extraction_result = _resolve_prep_extraction_result(db, request)
     adapter_key = _resolve_pipeline_adapter_key(request)
-    profile_key = _resolve_pipeline_profile_key(request)
 
     normalized_candidates: list[NormalizedCandidate] = []
     evidence_records_by_candidate: list[list[PreparedEvidenceRecordInput]] = []
@@ -491,19 +452,19 @@ def _execute_pipeline_steps(
         _validate_candidate_scope(
             candidate,
             adapter_key=adapter_key,
-            profile_key=profile_key,
         )
-        normalizer = dependencies.candidate_normalizers.get(
-            candidate.adapter_key,
-            dependencies.default_candidate_normalizer,
-        )
+        normalizer = dependencies.candidate_normalizers.get(candidate.adapter_key)
+        if normalizer is None:
+            raise LookupError(
+                "No package-owned curation adapter normalizer is registered for "
+                f"adapter_key={candidate.adapter_key!r}."
+            )
         normalized_candidate = normalizer.normalize(
             candidate.payload,
             prep_candidate=candidate,
             context=CandidateNormalizationContext(
                 document_id=request.document_id,
                 adapter_key=adapter_key,
-                profile_key=profile_key,
                 prep_extraction_result_id=str(prep_extraction_result.id),
                 candidate_index=candidate_index,
                 flow_run_id=request.flow_run_id,
@@ -516,7 +477,6 @@ def _execute_pipeline_steps(
             context=EvidenceResolutionContext(
                 document_id=request.document_id,
                 adapter_key=adapter_key,
-                profile_key=profile_key,
                 prep_extraction_result_id=str(prep_extraction_result.id),
                 candidate_index=candidate_index,
             ),
@@ -537,7 +497,6 @@ def _execute_pipeline_steps(
         context=BatchValidationContext(
             document_id=request.document_id,
             adapter_key=adapter_key,
-            profile_key=profile_key,
             validated_at=validated_at,
         ),
     )
@@ -571,7 +530,6 @@ def _execute_pipeline_steps(
         PreparedSessionUpsertRequest(
             document_id=request.document_id,
             adapter_key=adapter_key,
-            profile_key=profile_key,
             review_session_id=request.review_session_id,
             flow_run_id=request.flow_run_id,
             created_by_id=request.created_by_id,
@@ -614,7 +572,6 @@ def _prepared_candidate_input(
         status=CurationCandidateStatus.PENDING,
         order=candidate_index,
         adapter_key=prep_candidate.adapter_key,
-        profile_key=prep_candidate.profile_key,
         display_label=normalized_candidate.display_label,
         secondary_label=normalized_candidate.secondary_label,
         conversation_summary=prep_candidate.conversation_context_summary,
@@ -659,8 +616,6 @@ def _resolve_prep_extraction_result(
 
     if request.adapter_key is not None:
         statement = statement.where(ExtractionResultModel.adapter_key == request.adapter_key)
-    if request.profile_key is not None:
-        statement = statement.where(ExtractionResultModel.profile_key == request.profile_key)
     if request.flow_run_id is not None:
         statement = statement.where(ExtractionResultModel.flow_run_id == request.flow_run_id)
     if request.origin_session_id is not None:
@@ -720,27 +675,13 @@ def _resolve_pipeline_adapter_key(request: PostCurationPipelineRequest) -> str:
     raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
 
 
-def _resolve_pipeline_profile_key(request: PostCurationPipelineRequest) -> str | None:
-    if request.profile_key is not None:
-        return request.profile_key
-
-    profile_keys = {candidate.profile_key for candidate in request.prep_output.candidates}
-    profile_keys.discard(None)
-    if len(profile_keys) <= 1:
-        return next(iter(profile_keys), None)
-    raise ValueError("Deterministic pipeline requires prep candidates for at most one profile")
-
-
 def _validate_candidate_scope(
     candidate: CurationPrepCandidate,
     *,
     adapter_key: str,
-    profile_key: str | None,
 ) -> None:
     if candidate.adapter_key != adapter_key:
         raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
-    if candidate.profile_key != profile_key:
-        raise ValueError("Deterministic pipeline requires prep candidates for at most one profile")
 
 
 def _select_execution_mode(
@@ -783,96 +724,6 @@ def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
         seen.add(group_key)
         group_keys.append(group_key)
     return group_keys
-
-
-def _build_passthrough_draft_fields(payload: dict[str, Any]) -> list[PreparedDraftFieldInput]:
-    return [
-        PreparedDraftFieldInput(
-            field_key=field_key,
-            label=_humanize_path(field_key),
-            value=value,
-            seed_value=value,
-            field_type=_payload_field_type(value),
-            group_key=_field_group_key(field_key),
-            group_label=_humanize_path(_field_group_key(field_key)),
-            order=index,
-            metadata={"source_field_path": field_key},
-        )
-        for index, (field_key, value) in enumerate(_iter_payload_field_items(payload))
-    ]
-
-
-def _iter_payload_field_items(payload: Any, *, prefix: str = "") -> list[tuple[str, Any]]:
-    if isinstance(payload, dict):
-        if not payload and prefix:
-            return [(prefix, {})]
-        items: list[tuple[str, Any]] = []
-        for key, value in payload.items():
-            field_key = f"{prefix}.{key}" if prefix else str(key)
-            items.extend(_iter_payload_field_items(value, prefix=field_key))
-        return items
-
-    if isinstance(payload, list):
-        if not payload and prefix:
-            return [(prefix, [])]
-        items: list[tuple[str, Any]] = []
-        for index, value in enumerate(payload):
-            field_key = f"{prefix}.{index}" if prefix else str(index)
-            items.extend(_iter_payload_field_items(value, prefix=field_key))
-        return items
-
-    if not prefix:
-        return []
-    return [(prefix, payload)]
-
-
-def _payload_field_type(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if isinstance(value, str):
-        return "string"
-    if value is None:
-        return "null"
-    return "json"
-
-
-def _humanize_path(path: str | None) -> str | None:
-    if path is None:
-        return None
-    segments = [segment.replace("_", " ").strip() for segment in path.split(".") if segment]
-    if not segments:
-        return None
-    return " / ".join(segment.title() for segment in segments)
-
-
-def _scalar_display_values(payload: Any) -> list[str]:
-    values: list[str] = []
-    _collect_scalar_display_values(payload, values)
-    return _dedupe(values)
-
-
-def _collect_scalar_display_values(payload: Any, values: list[str]) -> None:
-    if payload is None:
-        return
-    if isinstance(payload, bool):
-        values.append(str(payload).lower())
-        return
-    if isinstance(payload, (int, float, str)):
-        rendered = str(payload).strip()
-        if rendered:
-            values.append(rendered)
-        return
-    if isinstance(payload, dict):
-        for value in payload.values():
-            _collect_scalar_display_values(value, values)
-        return
-    if isinstance(payload, list):
-        for value in payload:
-            _collect_scalar_display_values(value, values)
-
-
 def _field_validation_status(value: Any) -> tuple[FieldValidationStatus, list[str]]:
     return field_validation_status(value)
 
@@ -901,7 +752,6 @@ __all__ = [
     "EvidenceAnchorResolver",
     "EvidenceResolutionContext",
     "NormalizedCandidate",
-    "PassthroughCandidateNormalizer",
     "PassthroughEvidenceAnchorResolver",
     "PipelineExecutionMode",
     "PipelineRunStatus",

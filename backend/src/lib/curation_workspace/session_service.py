@@ -239,7 +239,6 @@ class PreparedCandidateInput:
     status: CurationCandidateStatus
     order: int
     adapter_key: str
-    profile_key: str | None = None
     display_label: str | None = None
     secondary_label: str | None = None
     conversation_summary: str | None = None
@@ -261,7 +260,6 @@ class PreparedSessionUpsertRequest:
 
     document_id: str
     adapter_key: str
-    profile_key: str | None = None
     review_session_id: str | UUID | None = None
     flow_run_id: str | None = None
     created_by_id: str | None = None
@@ -450,9 +448,6 @@ def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
     if filters.adapter_keys:
         statement = statement.where(ReviewSessionModel.adapter_key.in_(filters.adapter_keys))
 
-    if filters.profile_keys:
-        statement = statement.where(ReviewSessionModel.profile_key.in_(filters.profile_keys))
-
     if filters.curator_ids:
         statement = statement.where(ReviewSessionModel.assigned_curator_id.in_(filters.curator_ids))
 
@@ -495,19 +490,6 @@ def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
             statement = statement.where(ReviewSessionModel.last_worked_at >= filters.last_worked_between.from_at)
         if filters.last_worked_between.to_at is not None:
             statement = statement.where(ReviewSessionModel.last_worked_at <= filters.last_worked_between.to_at)
-
-    if filters.domain_keys:
-        domain_exists = (
-            select(ExtractionResultModel.id)
-            .select_from(CurationCandidate)
-            .join(
-                ExtractionResultModel,
-                CurationCandidate.extraction_result_id == ExtractionResultModel.id,
-            )
-            .where(CurationCandidate.session_id == ReviewSessionModel.id)
-            .where(ExtractionResultModel.domain_key.in_(filters.domain_keys))
-        )
-        statement = statement.where(exists(domain_exists))
 
     if filters.search:
         search_value = filters.search.strip()
@@ -578,7 +560,6 @@ def _sort_order_clauses(
     if sort_by == CurationSessionSortField.ADAPTER:
         return (
             _ordered_clause(func.lower(func.coalesce(ReviewSessionModel.adapter_key, "")), sort_direction),
-            _ordered_clause(func.lower(func.coalesce(ReviewSessionModel.profile_key, "")), sort_direction),
             ReviewSessionModel.prepared_at.desc(),
             ReviewSessionModel.id.asc(),
         )
@@ -690,16 +671,9 @@ def _adapter_ref(
     metadata: Mapping[str, Any] | None = None,
 ) -> CurationAdapterRef:
     display_label = session.adapter_key.replace("_", " ").title()
-    profile_label = (
-        session.profile_key.replace("_", " ").title()
-        if session.profile_key
-        else None
-    )
     return CurationAdapterRef(
         adapter_key=session.adapter_key,
-        profile_key=session.profile_key,
         display_label=display_label,
-        profile_label=profile_label,
         metadata=dict(metadata or {}),
     )
 
@@ -867,7 +841,6 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         status=candidate.status,
         order=candidate.order,
         adapter_key=candidate.adapter_key,
-        profile_key=candidate.profile_key,
         display_label=candidate.display_label,
         secondary_label=candidate.secondary_label,
         conversation_summary=candidate.conversation_summary,
@@ -979,8 +952,6 @@ def _extraction_records(session: ReviewSessionModel) -> list[CurationExtractionR
                 extraction_result_id=str(extraction_result.id),
                 document_id=str(extraction_result.document_id),
                 adapter_key=extraction_result.adapter_key,
-                profile_key=extraction_result.profile_key,
-                domain_key=extraction_result.domain_key,
                 agent_key=extraction_result.agent_key,
                 source_kind=extraction_result.source_kind,
                 origin_session_id=extraction_result.origin_session_id,
@@ -1255,6 +1226,8 @@ def _entity_db_status(
         return CurationEntityTagDbValidationStatus.AMBIGUOUS
     if field_status is FieldValidationStatus.NOT_FOUND:
         return CurationEntityTagDbValidationStatus.NOT_FOUND
+    if field_status is FieldValidationStatus.SKIPPED:
+        return CurationEntityTagDbValidationStatus.NOT_FOUND
     if field_status is not None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1280,6 +1253,8 @@ def _entity_db_status(
         return CurationEntityTagDbValidationStatus.AMBIGUOUS
     if summary.counts.validated > 0:
         return CurationEntityTagDbValidationStatus.VALIDATED
+    if summary.counts.skipped > 0:
+        return CurationEntityTagDbValidationStatus.NOT_FOUND
 
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1377,7 +1352,6 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         status=candidate.status,
         order=candidate.order,
         adapter_key=candidate.adapter_key,
-        profile_key=candidate.profile_key,
         display_label=candidate.display_label,
         secondary_label=candidate.secondary_label,
         conversation_summary=candidate.conversation_summary,
@@ -1695,7 +1669,6 @@ def find_reusable_prepared_session(
     *,
     document_id: str,
     adapter_key: str,
-    profile_key: str | None,
     flow_run_id: str | None,
     prep_extraction_result_id: str | UUID,
 ) -> ReusablePreparedSessionContext | None:
@@ -1717,11 +1690,6 @@ def find_reusable_prepared_session(
             ReviewSessionModel.id.desc(),
         )
     )
-
-    if profile_key is None:
-        statement = statement.where(ReviewSessionModel.profile_key.is_(None))
-    else:
-        statement = statement.where(ReviewSessionModel.profile_key == profile_key)
 
     if flow_run_id is None:
         statement = statement.where(ReviewSessionModel.flow_run_id.is_(None))
@@ -1959,7 +1927,6 @@ def create_manual_candidate(
         )
 
     adapter_key = _normalized_required_string(request.adapter_key, field_name="adapter_key")
-    profile_key = _normalized_optional_string(request.profile_key, field_name="profile_key")
     display_label = _normalized_optional_string(request.display_label, field_name="display_label")
     draft_adapter_key = _normalized_required_string(
         request.draft.adapter_key,
@@ -1986,7 +1953,6 @@ def create_manual_candidate(
             detail="adapter_key must match the session adapter",
         )
 
-    resolved_profile_key = profile_key if profile_key is not None else session_row.profile_key
     field_inputs = _manual_candidate_field_inputs(request.draft.fields)
     evidence_inputs = _manual_candidate_evidence_inputs(request.evidence_anchors)
     available_field_keys = {
@@ -2024,7 +1990,6 @@ def create_manual_candidate(
         status=CurationCandidateStatus.PENDING,
         order=next_order,
         adapter_key=adapter_key,
-        profile_key=resolved_profile_key,
         display_label=resolved_display_label,
         secondary_label=None,
         conversation_summary=None,
@@ -2095,7 +2060,6 @@ def create_manual_candidate(
         message="Manual candidate created",
         action_metadata={
             "adapter_key": adapter_key,
-            "profile_key": resolved_profile_key,
             "source": CurationCandidateSource.MANUAL.value,
             "display_label": resolved_display_label,
             "evidence_count": len(request.evidence_anchors),
@@ -2426,6 +2390,9 @@ def _submission_validation_blocking_reason(
     field: CurationDraftFieldSchema | None,
     validation_result: FieldValidationResult,
 ) -> str | None:
+    if _field_validation_is_warning_only(field):
+        return None
+
     field_label = field.label if field is not None else "A submission field"
 
     if validation_result.status == "invalid_format":
@@ -2438,6 +2405,20 @@ def _submission_validation_blocking_reason(
         return f"{field_label} has conflicting validation results."
 
     return None
+
+
+def _field_validation_is_warning_only(
+    field: CurationDraftFieldSchema | None,
+) -> bool:
+    if field is None:
+        return False
+
+    validation_config = field.metadata.get("validation")
+    if not isinstance(validation_config, Mapping):
+        return False
+
+    severity = validation_config.get("severity")
+    return isinstance(severity, str) and severity.strip().lower() == "warning"
 
 
 def _candidate_submission_readiness(
@@ -2502,7 +2483,6 @@ def _submission_candidate_bundle(
     return {
         "candidate_id": str(candidate.id),
         "adapter_key": candidate.adapter_key,
-        "profile_key": candidate.profile_key,
         "display_label": candidate.display_label,
         "secondary_label": candidate.secondary_label,
         "fields": {
@@ -2536,7 +2516,6 @@ class _SharedSubmissionPreviewAdapter:
         payload_json: dict[str, Any] = {
             "session_id": payload_context["session_id"],
             "adapter_key": self.adapter_key,
-            "profile_key": payload_context["profile_key"],
             "mode": mode.value,
             "target_key": target_key,
             "candidate_count": payload_context["candidate_count"],
@@ -2598,6 +2577,33 @@ def _resolve_submission_preview_target_key(
     return submission_adapter, _default_submission_target_key(adapter_key)
 
 
+def _resolve_export_preview_target_key(
+    *,
+    adapter_key: str,
+    requested_target_key: str | None,
+):
+    export_adapter = _resolve_export_adapter(adapter_key)
+    supported_target_keys = tuple(export_adapter.supported_target_keys or ())
+
+    if requested_target_key:
+        if supported_target_keys and requested_target_key not in supported_target_keys:
+            supported_targets = ", ".join(supported_target_keys)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Unsupported export target '{requested_target_key}' for "
+                    f"adapter '{adapter_key}'. Supported targets: {supported_targets}"
+                ),
+            )
+
+        return export_adapter, requested_target_key
+
+    if supported_target_keys:
+        return export_adapter, supported_target_keys[0]
+
+    return export_adapter, _default_submission_target_key(adapter_key)
+
+
 def _resolve_export_adapter(adapter_key: str):
     export_adapter = _export_adapter_registry().get(adapter_key)
     if export_adapter is not None:
@@ -2632,7 +2638,6 @@ def _base_submission_payload_context(
 
     return {
         "session_id": str(session_row.id),
-        "profile_key": session_row.profile_key,
         "document": (
             _document_ref(document).model_dump(mode="json")
             if document is not None
@@ -3235,10 +3240,17 @@ def submission_preview(
     )
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
-    submission_adapter, target_key = _resolve_submission_preview_target_key(
-        adapter_key=session_row.adapter_key,
-        requested_target_key=request.target_key,
-    )
+    submission_adapter = None
+    if request.mode == SubmissionMode.EXPORT:
+        _, target_key = _resolve_export_preview_target_key(
+            adapter_key=session_row.adapter_key,
+            requested_target_key=request.target_key,
+        )
+    else:
+        submission_adapter, target_key = _resolve_submission_preview_target_key(
+            adapter_key=session_row.adapter_key,
+            requested_target_key=request.target_key,
+        )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
     readiness = [
@@ -3262,14 +3274,25 @@ def submission_preview(
     ]
 
     payload = (
-        _build_submission_preview_payload(
-            db=db,
-            session_row=session_row,
-            submission_adapter=submission_adapter,
-            mode=request.mode,
-            target_key=target_key,
-            ready_candidates=ready_candidates,
-            session_validation=validation_response.session_validation,
+        (
+            _build_submission_execute_payload(
+                db=db,
+                session_row=session_row,
+                mode=request.mode,
+                target_key=target_key,
+                ready_candidates=ready_candidates,
+                session_validation=validation_response.session_validation,
+            )
+            if request.mode == SubmissionMode.EXPORT
+            else _build_submission_preview_payload(
+                db=db,
+                session_row=session_row,
+                submission_adapter=submission_adapter,
+                mode=request.mode,
+                target_key=target_key,
+                ready_candidates=ready_candidates,
+                session_validation=validation_response.session_validation,
+            )
         )
         if request.include_payload
         else None
@@ -3797,21 +3820,16 @@ def get_session_stats(
         .where(ReviewSessionModel.id.in_(select(filtered_ids_subquery.c.id)))
     ).one()
 
-    domain_count = db.scalar(
-        select(func.count(func.distinct(ExtractionResultModel.domain_key)))
-        .select_from(CurationCandidate)
-        .join(
-            ExtractionResultModel,
-            CurationCandidate.extraction_result_id == ExtractionResultModel.id,
+    adapter_count = db.scalar(
+        select(func.count(func.distinct(ReviewSessionModel.adapter_key))).where(
+            ReviewSessionModel.id.in_(select(filtered_ids_subquery.c.id))
         )
-        .where(CurationCandidate.session_id.in_(select(filtered_ids_subquery.c.id)))
-        .where(ExtractionResultModel.domain_key.is_not(None))
     ) or 0
 
     return CurationSessionStatsResponse(
         stats=CurationSessionStats(
             total_sessions=count_row[0],
-            domain_count=domain_count,
+            adapter_count=adapter_count,
             new_sessions=count_row[1],
             in_progress_sessions=count_row[2],
             ready_for_submission_sessions=count_row[3],
@@ -4024,7 +4042,6 @@ def _load_or_initialize_prepared_session(
         session_row = ReviewSessionModel(
             document_id=_normalize_uuid(request.document_id, field_name="document_id"),
             adapter_key=request.adapter_key,
-            profile_key=request.profile_key,
             prepared_at=request.prepared_at,
             created_at=request.prepared_at,
             updated_at=request.prepared_at,
@@ -4065,7 +4082,7 @@ def _apply_prepared_session_metadata(
 ) -> None:
     session_row.status = request.status
     session_row.adapter_key = request.adapter_key
-    session_row.profile_key = request.profile_key
+    session_row.profile_key = None
     session_row.document_id = _normalize_uuid(request.document_id, field_name="document_id")
     session_row.flow_run_id = request.flow_run_id
     session_row.assigned_curator_id = request.assigned_curator_id
@@ -4131,7 +4148,7 @@ def _persist_prepared_candidates(
             status=candidate_input.status,
             order=candidate_input.order,
             adapter_key=candidate_input.adapter_key,
-            profile_key=candidate_input.profile_key,
+            profile_key=None,
             display_label=candidate_input.display_label,
             secondary_label=candidate_input.secondary_label,
             conversation_summary=candidate_input.conversation_summary,

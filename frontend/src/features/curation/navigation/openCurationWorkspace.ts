@@ -11,8 +11,6 @@ export interface CurationWorkspaceLaunchTarget {
   flowRunId?: string | null
   originSessionId?: string | null
   adapterKeys?: string[]
-  profileKeys?: string[]
-  domainKeys?: string[]
 }
 
 export interface OpenCurationWorkspaceOptions extends CurationWorkspaceLaunchTarget {
@@ -43,13 +41,9 @@ function assertWorkspaceTarget(target: CurationWorkspaceLaunchTarget) {
 
 function buildBootstrapRequest(target: CurationWorkspaceLaunchTarget) {
   const adapterKey = resolveSingleScopeValue(target.adapterKeys)
-  const profileKey = resolveSingleScopeValue(target.profileKeys)
-  const domainKey = resolveSingleScopeValue(target.domainKeys)
 
   return {
     ...(adapterKey ? { adapter_key: adapterKey } : {}),
-    ...(profileKey ? { profile_key: profileKey } : {}),
-    ...(domainKey ? { domain_key: domainKey } : {}),
     ...(target.flowRunId ? { flow_run_id: target.flowRunId } : {}),
     ...(target.originSessionId ? { origin_session_id: target.originSessionId } : {}),
   }
@@ -103,8 +97,6 @@ export async function findExistingCurationSessionId(
       flow_run_id: target.flowRunId ?? null,
       origin_session_id: target.originSessionId ?? null,
       adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
-      profile_keys: normalizeCurationWorkspaceScopeValues(target.profileKeys),
-      domain_keys: normalizeCurationWorkspaceScopeValues(target.domainKeys),
     },
     sort_by: 'prepared_at',
     sort_direction: 'desc',

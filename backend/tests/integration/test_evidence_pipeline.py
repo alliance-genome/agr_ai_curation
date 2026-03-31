@@ -23,6 +23,34 @@ from tests.integration.evidence_test_support import (
 pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
+def _fixture_adapter_key(evidence_fixture: dict[str, object]) -> str:
+    expected_candidates = build_expected_candidates(evidence_fixture)
+    if not expected_candidates:
+        raise ValueError("Evidence fixture must declare at least one expected candidate.")
+
+    adapter_key = str(expected_candidates[0]["adapter_key"]).strip()
+    if not adapter_key:
+        raise ValueError("Evidence fixture expected candidate must declare an adapter_key.")
+
+    return adapter_key
+
+
+def _adapter_only_scope_confirmation_payload(
+    evidence_fixture: dict[str, object],
+) -> dict[str, object]:
+    extraction = evidence_fixture["extraction"]
+    scope_confirmation = extraction.get("scope_confirmation") or {}
+    notes = list(scope_confirmation.get("notes") or []) if isinstance(scope_confirmation, dict) else []
+
+    payload: dict[str, object] = {
+        "confirmed": True,
+        "adapter_keys": [_fixture_adapter_key(evidence_fixture)],
+    }
+    if notes:
+        payload["notes"] = notes
+    return payload
+
+
 def _record_to_schema(record):
     from src.schemas.curation_workspace import CurationExtractionResultRecord
 
@@ -31,8 +59,6 @@ def _record_to_schema(record):
             "extraction_result_id": str(record.id),
             "document_id": str(record.document_id),
             "adapter_key": record.adapter_key,
-            "profile_key": record.profile_key,
-            "domain_key": record.domain_key,
             "agent_key": record.agent_key,
             "source_kind": record.source_kind,
             "origin_session_id": record.origin_session_id,
@@ -61,15 +87,12 @@ def _fixture_extraction_result(
     )
 
     extraction = evidence_fixture["extraction"]
-    scope = build_extraction_scope(extraction)
 
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "fixture-extract-1",
             "document_id": document_id,
-            "adapter_key": scope["adapter_key"],
-            "profile_key": scope["profile_key"],
-            "domain_key": scope["domain_key"],
+            "adapter_key": _fixture_adapter_key(evidence_fixture),
             "agent_key": extraction["agent_key"],
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": origin_session_id,
@@ -90,6 +113,7 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     evidence_fixture,
 ):
     native_scope = build_extraction_scope(evidence_fixture)
+    native_adapter_key = _fixture_adapter_key(evidence_fixture)
 
     native_extraction_result = _fixture_extraction_result(
         evidence_fixture,
@@ -97,8 +121,9 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
         user_id="user-fixture",
         origin_session_id="session-fixture",
     )
-    assert native_scope["domain_key"] is not None
-    assert native_extraction_result.domain_key == native_scope["domain_key"]
+    assert native_extraction_result.adapter_key == native_adapter_key
+    assert native_extraction_result.payload_json.get("profile_key") == native_scope["profile_key"]
+    assert "domain_key" not in native_extraction_result.payload_json
 
     scoped_fixture = copy.deepcopy(evidence_fixture)
     scoped_fixture["extraction"]["profile_key"] = "pilot"
@@ -116,8 +141,8 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
     assert payload["profile_key"] == "pilot"
     assert payload["scope_confirmation"]["profile_keys"] == ["pilot"]
     assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
-    assert extraction_result.profile_key == "pilot"
-    assert extraction_result.domain_key == "disease"
+    assert extraction_result.payload_json["profile_key"] == "pilot"
+    assert "domain_key" not in extraction_result.payload_json
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
@@ -139,6 +164,14 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     extraction = evidence_fixture["extraction"]
     expected_candidate = build_expected_candidates(evidence_fixture)[0]
     session_id = "session-evidence-pipeline"
+
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results._get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": expected_candidate["adapter_key"],
+            "launchable": True,
+        },
+    )
 
     configure_chat_stream_mocks(
         monkeypatch,
@@ -174,7 +207,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     prep_output = await run_curation_prep(
         [persisted_extraction],
         scope_confirmation=CurationPrepScopeConfirmation.model_validate(
-            extraction["scope_confirmation"]
+            _adapter_only_scope_confirmation_payload(evidence_fixture)
         ),
         db=test_db,
         persistence_context=CurationPrepPersistenceContext(
@@ -188,7 +221,6 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
 
     prep_candidate = prep_output.candidates[0]
     assert prep_candidate.adapter_key == expected_candidate["adapter_key"]
-    assert prep_candidate.profile_key == expected_candidate["profile_key"]
     assert prep_candidate.payload == expected_candidate["payload"]
     assert [record.field_paths for record in prep_candidate.evidence_records] == [
         expected_candidate["field_paths"],
@@ -245,7 +277,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 @pytest.mark.asyncio
-async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace_candidate(
+async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_shared_payloads(
     client,
     evidence_fixture,
     evidence_integration_context,
@@ -274,7 +306,7 @@ async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace
     prep_output = await run_curation_prep(
         [extraction_result],
         scope_confirmation=CurationPrepScopeConfirmation.model_validate(
-            scoped_fixture["extraction"]["scope_confirmation"]
+            _adapter_only_scope_confirmation_payload(scoped_fixture)
         ),
         db=test_db,
         persistence_context=CurationPrepPersistenceContext(
@@ -284,7 +316,7 @@ async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace
     )
 
     assert len(prep_output.candidates) == 1
-    assert prep_output.candidates[0].profile_key == "pilot"
+    assert "profile_key" not in prep_output.model_dump(mode="json")["candidates"][0]
 
     prep_record = test_db.scalars(
         select(ExtractionResultModel).where(
@@ -294,8 +326,7 @@ async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace
     ).one()
     persisted_prep = _record_to_schema(prep_record)
 
-    assert persisted_prep.profile_key == "pilot"
-    assert persisted_prep.payload_json["candidates"][0]["profile_key"] == "pilot"
+    assert "profile_key" not in persisted_prep.payload_json["candidates"][0]
 
     bootstrap_response = client.post(
         (
@@ -313,7 +344,7 @@ async def test_fixture_scoped_prep_bootstrap_resolves_profile_scope_to_workspace
     assert workspace_response.status_code == 200, workspace_response.text
     workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
 
-    assert workspace_candidate["profile_key"] == "pilot"
+    assert "profile_key" not in workspace_candidate
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
@@ -344,6 +375,6 @@ async def test_run_curation_prep_rejects_fixture_payload_when_all_candidates_hav
         await run_curation_prep(
             [extraction_result],
             scope_confirmation=CurationPrepScopeConfirmation.model_validate(
-                evidence_fixture["extraction"]["scope_confirmation"]
+                _adapter_only_scope_confirmation_payload(evidence_fixture)
             ),
         )

@@ -49,6 +49,8 @@ def _actor_ref(user_map: dict[str, User], actor_id: str | None) -> CurationActor
 
 def _saved_view_filters(filters: dict[str, Any] | None) -> CurationSessionFilters:
     payload = dict(filters or {})
+    payload.pop("profile_keys", None)
+    payload.pop("domain_keys", None)
     payload["origin_session_id"] = None
     payload["saved_view_id"] = None
     return CurationSessionFilters.model_validate(payload)

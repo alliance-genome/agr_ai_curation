@@ -57,9 +57,7 @@ describe('curation workspace substrate types', () => {
           status: 'in_progress',
           adapter: {
             adapter_key: 'disease',
-            profile_key: 'primary',
             display_label: 'Disease',
-            profile_label: 'Primary',
             color_token: 'teal',
             metadata: {},
           },
@@ -130,7 +128,6 @@ describe('curation workspace substrate types', () => {
               extraction_result_id: 'extract-1',
               document_id: 'document-1',
               adapter_key: 'disease',
-              profile_key: 'primary',
               agent_key: 'curation_prep',
               source_kind: 'chat',
               candidate_count: 2,

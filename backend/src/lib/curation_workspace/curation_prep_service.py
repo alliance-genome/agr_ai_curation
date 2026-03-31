@@ -54,7 +54,6 @@ class _CandidateBlueprint:
     payload: dict[str, Any]
     evidence_records: list["_CandidateEvidence"]
     conversation_context_summary: str
-    profile_key: str | None
 
 
 @dataclass(frozen=True)
@@ -243,7 +242,6 @@ def _map_extraction_result(
         candidates.append(
             CurationPrepCandidate(
                 adapter_key=blueprint.adapter_key,
-                profile_key=blueprint.profile_key,
                 payload=blueprint.payload,
                 evidence_records=[
                     CurationPrepEvidenceRecord(
@@ -268,11 +266,6 @@ def _map_extraction_result(
 def _resolve_candidate_adapter_key(
     extraction_result: CurationExtractionResultRecord,
 ) -> str | None:
-    # Extraction persistence may use a transport adapter key while the review
-    # session should target the extracted domain-specific adapter/runtime.
-    domain_key = _normalized_optional_string(extraction_result.domain_key)
-    if domain_key is not None:
-        return domain_key
     return _normalized_optional_string(extraction_result.adapter_key)
 
 
@@ -287,7 +280,6 @@ def _candidate_blueprints(
         return []
 
     blueprints: list[_CandidateBlueprint] = []
-    profile_key = _normalized_optional_string(extraction_result.profile_key)
 
     for candidate_index, raw_item in enumerate(raw_items, start=1):
         if not isinstance(raw_item, Mapping):
@@ -309,7 +301,6 @@ def _candidate_blueprints(
                     extraction_result,
                     candidate_payload,
                 ),
-                profile_key=profile_key,
             )
         )
 
@@ -509,38 +500,6 @@ def _resolve_required_adapter_key(
     return adapter_key
 
 
-def _resolve_profile_key(
-    candidates: Sequence[CurationPrepCandidate],
-    *,
-    extraction_results: Sequence[CurationExtractionResultRecord],
-    scope_confirmation: CurationPrepScopeConfirmation,
-) -> str | None:
-    candidate_profile_key = _resolve_single_value(
-        candidate.profile_key for candidate in candidates if candidate.profile_key
-    )
-    if candidate_profile_key is not None:
-        return candidate_profile_key
-
-    return _resolve_single_value(
-        [
-            *scope_confirmation.profile_keys,
-            *(record.profile_key for record in extraction_results if record.profile_key),
-        ]
-    )
-
-
-def _resolve_domain_key(
-    extraction_results: Sequence[CurationExtractionResultRecord],
-    scope_confirmation: CurationPrepScopeConfirmation,
-) -> str | None:
-    return _resolve_single_value(
-        [
-            *scope_confirmation.domain_keys,
-            *(record.domain_key for record in extraction_results if record.domain_key),
-        ]
-    )
-
-
 def _build_persistence_request(
     prep_output: CurationPrepAgentOutput,
     *,
@@ -556,12 +515,6 @@ def _build_persistence_request(
         agent_key=CURATION_PREP_AGENT_ID,
         source_kind=persistence_context.source_kind or primary_extraction_result.source_kind,
         adapter_key=adapter_key,
-        profile_key=_resolve_profile_key(
-            prep_output.candidates,
-            extraction_results=extraction_results,
-            scope_confirmation=scope_confirmation,
-        ),
-        domain_key=_resolve_domain_key(extraction_results, scope_confirmation),
         origin_session_id=(
             persistence_context.origin_session_id
             or primary_extraction_result.origin_session_id
@@ -579,8 +532,6 @@ def _build_persistence_request(
             "final_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
             "scope_confirmed": scope_confirmation.confirmed,
             "scope_adapter_keys": list(scope_confirmation.adapter_keys),
-            "scope_profile_keys": list(scope_confirmation.profile_keys),
-            "scope_domain_keys": list(scope_confirmation.domain_keys),
             "source_extraction_result_ids": [
                 record.extraction_result_id for record in extraction_results
             ],
@@ -610,17 +561,9 @@ def _record_matches_scope(
     scope_confirmation: CurationPrepScopeConfirmation,
 ) -> bool:
     adapter_key = _normalized_optional_string(record.adapter_key)
-    profile_key = _normalized_optional_string(record.profile_key)
-    domain_key = _normalized_optional_string(record.domain_key)
 
     if scope_confirmation.adapter_keys:
         if adapter_key is None or adapter_key not in scope_confirmation.adapter_keys:
-            return False
-    if scope_confirmation.profile_keys:
-        if profile_key is None or profile_key not in scope_confirmation.profile_keys:
-            return False
-    if scope_confirmation.domain_keys:
-        if domain_key is None or domain_key not in scope_confirmation.domain_keys:
             return False
 
     return True
@@ -637,19 +580,6 @@ def _filter_extraction_results_for_scope(
     ]
     if scoped_results:
         return scoped_results, []
-
-    if extraction_results and all(
-        _normalized_optional_string(record.adapter_key) is None
-        and _normalized_optional_string(record.profile_key) is None
-        and _normalized_optional_string(record.domain_key) is None
-        for record in extraction_results
-    ):
-        return list(extraction_results), [
-            (
-                "Persisted extraction results did not include scope keys; using current "
-                "session extraction context with curator-confirmed scope."
-            )
-        ]
 
     return [], []
 

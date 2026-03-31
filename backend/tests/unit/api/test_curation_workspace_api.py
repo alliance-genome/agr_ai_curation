@@ -68,8 +68,6 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
             extraction_result_count=1,
             conversation_message_count=4,
             adapter_keys=["reference_adapter"],
-            profile_keys=["primary"],
-            domain_keys=["disease"],
             blocking_reasons=[],
         ),
     )
@@ -103,7 +101,6 @@ async def test_post_review_session_delegates_to_manual_create_service(monkeypatc
     request = CurationSessionCreateRequest(
         document_id="document-1",
         adapter_key="reference_adapter",
-        profile_key="primary",
         curator_id="curator-2",
         notes="Manual queue seed.",
         tags=["triage"],
@@ -268,8 +265,6 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
 
     request = CurationDocumentBootstrapRequest(
         adapter_key="reference_adapter",
-        profile_key="primary",
-        domain_key="entity",
         flow_run_id="flow-7",
         origin_session_id="chat-session-7",
         curator_id="curator-2",
@@ -327,9 +322,10 @@ async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
     expected = CurationDocumentBootstrapAvailabilityResponse(eligible=True)
     captured: dict[str, object] = {}
 
-    def _get_document_bootstrap_availability(document_id, request, *, db):
+    def _get_document_bootstrap_availability(document_id, request, *, current_user_id, db):
         captured["document_id"] = document_id
         captured["request"] = request
+        captured["current_user_id"] = current_user_id
         captured["db"] = db
         return expected
 
@@ -357,6 +353,7 @@ async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
             adapter_key="reference_adapter",
             flow_run_id="flow-7",
         ),
+        "current_user_id": "user-1",
         "db": db,
     }
 
@@ -418,7 +415,6 @@ async def test_post_manual_candidate_delegates_to_service(monkeypatch):
     request = CurationManualCandidateCreateRequest(
         session_id=str(session_id),
         adapter_key="reference_adapter",
-        profile_key="primary",
         source="manual",
         display_label="Manual candidate",
         draft={
@@ -958,8 +954,6 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
             warnings=["Review evidence alignment before downstream normalization."],
             processing_notes=["Prepared from chat extraction context."],
             adapter_keys=["reference_adapter"],
-            profile_keys=["primary"],
-            domain_keys=["disease"],
         )
 
     monkeypatch.setattr(module, "run_chat_curation_prep", _run_chat_prep)

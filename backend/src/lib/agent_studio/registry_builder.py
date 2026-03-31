@@ -908,6 +908,10 @@ def _agent_definition_to_registry_entry(
             "icon": agent_def.frontend.icon,
             "show_in_palette": agent_def.frontend.show_in_palette,
         },
+        "curation": {
+            "adapter_key": agent_def.curation.adapter_key,
+            "launchable": agent_def.curation.launchable,
+        },
         "documentation": doc if doc else None,
     }
 

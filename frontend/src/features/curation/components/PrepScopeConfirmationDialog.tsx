@@ -138,8 +138,6 @@ function PrepScopeConfirmationDialog({
 
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                 <ScopePill label="Adapters" values={preview.adapter_keys} />
-                <ScopePill label="Profiles" values={preview.profile_keys} />
-                <ScopePill label="Domains" values={preview.domain_keys} />
               </Box>
 
               {!preview.ready && preview.blocking_reasons.length > 0 && (

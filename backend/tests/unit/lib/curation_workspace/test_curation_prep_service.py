@@ -16,8 +16,6 @@ def _make_scope_confirmation() -> CurationPrepScopeConfirmation:
     return CurationPrepScopeConfirmation(
         confirmed=True,
         adapter_keys=["reference_adapter"],
-        profile_keys=["pilot"],
-        domain_keys=["observation"],
         notes=["User confirmed the current chat extraction scope."],
     )
 
@@ -57,8 +55,6 @@ def _make_extraction_result(
     evidence_records: list[dict] | None = None,
     document_id: str = "document-1",
     adapter_key: str | None = "reference_adapter",
-    profile_key: str | None = "pilot",
-    domain_key: str | None = "observation",
     conversation_summary: str | None = (
         "Conversation focused on evidence-backed extraction findings."
     ),
@@ -71,8 +67,6 @@ def _make_extraction_result(
             "extraction_result_id": "extract-1",
             "document_id": document_id,
             "adapter_key": adapter_key,
-            "profile_key": profile_key,
-            "domain_key": domain_key,
             "agent_key": "observation_extractor",
             "source_kind": CurationExtractionSourceKind.CHAT,
             "origin_session_id": "chat-session-1",
@@ -112,8 +106,7 @@ async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypa
 
     assert len(prep_output.candidates) == 1
     candidate = prep_output.candidates[0]
-    assert candidate.adapter_key == "observation"
-    assert candidate.profile_key == "pilot"
+    assert candidate.adapter_key == "reference_adapter"
     assert candidate.payload == {
         "label": "Candidate Alpha",
         "entity_type": "observation",
@@ -141,9 +134,7 @@ async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypa
     assert persisted_request.document_id == "document-1"
     assert persisted_request.agent_key == "curation_prep"
     assert persisted_request.source_kind is CurationExtractionSourceKind.CHAT
-    assert persisted_request.adapter_key == "observation"
-    assert persisted_request.profile_key == "pilot"
-    assert persisted_request.domain_key == "observation"
+    assert persisted_request.adapter_key == "reference_adapter"
     assert persisted_request.origin_session_id == "chat-session-1"
     assert persisted_request.trace_id == "trace-upstream"
     assert persisted_request.user_id == "user-upstream"

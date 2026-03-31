@@ -28,18 +28,14 @@ import {
 interface CurationInventoryFilterBarProps {
   statuses: CurationSessionStatus[]
   adapterKeys: string[]
-  profileKeys: string[]
   searchInput: string
   adapterOptions: InventoryFilterOption[]
-  profileOptions: InventoryFilterOption[]
   stats?: CurationSessionStats
   isRefreshing: boolean
   onToggleStatus: (status: CurationSessionStatus) => void
   onClearStatuses: () => void
   onToggleAdapterKey: (adapterKey: string) => void
   onClearAdapterKeys: () => void
-  onToggleProfileKey: (profileKey: string) => void
-  onClearProfileKeys: () => void
   onSearchChange: (value: string) => void
   onClearAllFilters: () => void
   hasActiveFilters: boolean
@@ -101,18 +97,14 @@ function FilterChipGroup({
 export default function CurationInventoryFilterBar({
   statuses,
   adapterKeys,
-  profileKeys,
   searchInput,
   adapterOptions,
-  profileOptions,
   stats,
   isRefreshing,
   onToggleStatus,
   onClearStatuses,
   onToggleAdapterKey,
   onClearAdapterKeys,
-  onToggleProfileKey,
-  onClearProfileKeys,
   onSearchChange,
   onClearAllFilters,
   hasActiveFilters,
@@ -170,14 +162,6 @@ export default function CurationInventoryFilterBar({
               onToggle={onToggleAdapterKey}
               options={adapterOptions}
               selectedKeys={adapterKeys}
-            />
-
-            <FilterChipGroup
-              label="Profiles"
-              onClear={onClearProfileKeys}
-              onToggle={onToggleProfileKey}
-              options={profileOptions}
-              selectedKeys={profileKeys}
             />
           </Stack>
 

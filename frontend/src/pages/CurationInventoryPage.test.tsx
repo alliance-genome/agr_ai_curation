@@ -82,9 +82,7 @@ describe('CurationInventoryPage', () => {
         status: 'in_progress',
         adapter: {
           adapter_key: 'gene',
-          profile_key: 'alpha',
           display_label: 'Gene Adapter',
-          profile_label: 'Alpha Profile',
           color_token: 'teal',
           metadata: {},
         },
@@ -166,8 +164,6 @@ describe('CurationInventoryPage', () => {
     applied_filters: {
       statuses: [],
       adapter_keys: [],
-      profile_keys: [],
-      domain_keys: [],
       curator_ids: [],
       tags: [],
       flow_run_id: null,
@@ -186,7 +182,7 @@ describe('CurationInventoryPage', () => {
   const statsResponse: CurationSessionStatsResponse = {
     stats: {
       total_sessions: 12,
-      domain_count: 2,
+      adapter_count: 2,
       new_sessions: 4,
       in_progress_sessions: 3,
       ready_for_submission_sessions: 2,
@@ -209,8 +205,6 @@ describe('CurationInventoryPage', () => {
         filters: {
           statuses: ['new'],
           adapter_keys: ['gene'],
-          profile_keys: ['alpha'],
-          domain_keys: [],
           curator_ids: [],
           tags: [],
           flow_run_id: null,
@@ -312,9 +306,9 @@ describe('CurationInventoryPage', () => {
 
     expect(await screen.findByText('Curation Inventory')).toBeInTheDocument()
     expect(await screen.findByText('Total Sessions')).toBeInTheDocument()
-    expect(screen.getByText('across 2 domains')).toBeInTheDocument()
+    expect(screen.getByText('across 2 adapters')).toBeInTheDocument()
     expect(await screen.findByText('Alpha paper')).toBeInTheDocument()
-    expect(screen.getByText('Gene Adapter / Alpha Profile')).toBeInTheDocument()
+    expect(screen.getAllByText('Gene Adapter').length).toBeGreaterThan(0)
     expect(screen.getByText('Alex Curator')).toBeInTheDocument()
     expect(screen.getByText('8 / 10 resolved')).toBeInTheDocument()
 
@@ -365,7 +359,7 @@ describe('CurationInventoryPage', () => {
       expect(sessionListCalls.some((url) => url.includes('search=beta'))).toBe(true)
     })
 
-    expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(1)
   }, 15000) // Filter-driven refetches plus MUI interactions can exceed the default timeout under CI load.
 
   it('applies a saved view through the inventory hook and re-queries the session list', async () => {
@@ -390,7 +384,6 @@ describe('CurationInventoryPage', () => {
         sessionListCalls.some((url) =>
           url.includes('status=new') &&
           url.includes('adapter_key=gene') &&
-          url.includes('profile_key=alpha') &&
           url.includes('search=pending') &&
           url.includes('sort_by=adapter') &&
           url.includes('sort_direction=asc') &&

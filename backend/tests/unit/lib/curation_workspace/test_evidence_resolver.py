@@ -12,7 +12,6 @@ def _make_candidate(anchor_payload: dict, *, field_path: str = "gene_symbol") ->
     return CurationPrepCandidate.model_validate(
         {
             "adapter_key": "gene",
-            "profile_key": "pilot",
             "payload": {
                 "gene_symbol": "tinman",
                 "anatomy_label": "embryonic heart",
@@ -60,7 +59,6 @@ def _make_context() -> EvidenceResolutionContext:
     return EvidenceResolutionContext(
         document_id="document-1",
         adapter_key="gene",
-        profile_key="pilot",
         prep_extraction_result_id="prep-result-1",
         candidate_index=0,
     )
