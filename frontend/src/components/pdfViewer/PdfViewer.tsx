@@ -38,6 +38,7 @@ import {
   sanitizeEvidenceSearchText,
   splitNormalizedWords,
 } from '@/components/pdfViewer/textNormalization'
+import { findAnchoredEvidenceSpan } from '@/components/pdfViewer/textAnchoring'
 import type { EvidenceAnchor, EvidenceLocatorQuality } from '@/features/curation/contracts'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 
@@ -880,6 +881,52 @@ const buildTextLayerSegments = (textLayer: HTMLElement): {
   return { rawText, segments }
 }
 
+const buildPdfJsTextLayerSegments = (
+  textLayerBuilder: {
+    pageContainer: HTMLElement
+    textContentItemsStr: string[]
+    textDivs: Array<HTMLElement | Text>
+  },
+): {
+  rawText: string
+  segments: TextLayerTextSegment[]
+} => {
+  const segments: TextLayerTextSegment[] = []
+  let rawText = ''
+
+  textLayerBuilder.textDivs.forEach((container, index) => {
+    const itemText = textLayerBuilder.textContentItemsStr[index] ?? ''
+    if (!itemText) {
+      return
+    }
+
+    const textNodes = collectTextNodesForEvidenceMatch(container)
+    let itemOffset = 0
+
+    textNodes.forEach((textNode) => {
+      const value = textNode.textContent ?? ''
+      if (!value) {
+        return
+      }
+
+      const containerElement = textNode.parentElement
+        ?? (container.nodeType === Node.ELEMENT_NODE ? container as HTMLElement : textLayerBuilder.pageContainer)
+
+      segments.push({
+        node: textNode,
+        container: containerElement,
+        start: rawText.length + itemOffset,
+        end: rawText.length + itemOffset + value.length,
+      })
+      itemOffset += value.length
+    })
+
+    rawText += itemText
+  })
+
+  return { rawText, segments }
+}
+
 const normalizeEvidenceTextLayerRect = (
   pageContainer: HTMLElement,
   rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>,
@@ -964,6 +1011,35 @@ const findTextLayerMatchRange = (
 
   const normalizedMatchIndex = pageMatchIndex ?? 0
   return matchRanges[normalizedMatchIndex] ?? matchRanges[0]
+}
+
+const findPdfJsMatchRawRange = (
+  pdfApp: any,
+  pageNumber: number,
+  pageMatchIndex: number | null,
+): TextLayerMatchRange | null => {
+  const pageMatches = pdfApp?.findController?.pageMatches?.[pageNumber - 1]
+  const pageMatchesLength = pdfApp?.findController?.pageMatchesLength?.[pageNumber - 1]
+  if (!Array.isArray(pageMatches) || !Array.isArray(pageMatchesLength) || pageMatches.length === 0) {
+    return null
+  }
+
+  const selectedIndex = pageMatchIndex ?? pdfApp?.findController?.selected?.matchIdx ?? 0
+  const rawStart = pageMatches[selectedIndex] ?? pageMatches[0]
+  const rawLength = pageMatchesLength[selectedIndex] ?? pageMatchesLength[0]
+  if (
+    typeof rawStart !== 'number'
+    || rawStart < 0
+    || typeof rawLength !== 'number'
+    || rawLength <= 0
+  ) {
+    return null
+  }
+
+  return {
+    rawStart,
+    rawEndExclusive: rawStart + rawLength,
+  }
 }
 
 const buildRectsFromTextRange = (
@@ -1183,6 +1259,83 @@ const findExpandedEvidenceQueryForPage = (
   }
 
   return findExpandedEvidenceQueryFromPageText(rawText, desiredQuote, matchedFragmentQuery)
+}
+
+const findAnchoredEvidenceSpanForPage = (
+  iframeDoc: Document,
+  pageNumber: number,
+  desiredQuote: string,
+  options?: {
+    preferredAnchor?: string | null
+    pageMatchIndex?: number | null
+    pdfApp?: any
+  },
+): {
+  query: string
+  rects: EvidenceTextLayerRect[]
+  coverage: number
+  score: number
+} | null => {
+  const pageContainer = getPageContainer(iframeDoc, pageNumber)
+  const textLayer = getPageTextLayer(iframeDoc, pageNumber)
+  if (!pageContainer || !textLayer) {
+    return null
+  }
+
+  const textLayerBuilder = getPdfJsTextLayerBuilder(options?.pdfApp, pageNumber)
+  const pageText = textLayerBuilder
+    ? buildPdfJsTextLayerSegments(textLayerBuilder)
+    : buildTextLayerSegments(textLayer)
+  const { rawText, segments } = pageText
+  if (!rawText || segments.length === 0) {
+    return null
+  }
+
+  const preferredAnchorRange = options?.preferredAnchor
+    ? (
+        findPdfJsMatchRawRange(options?.pdfApp, pageNumber, options?.pageMatchIndex ?? null)
+        ?? findTextLayerMatchRange(rawText, options.preferredAnchor, options?.pageMatchIndex ?? null)
+      )
+    : null
+  const anchoringWindowRadius = Math.max(desiredQuote.length, 240)
+  const rawWindowStart = preferredAnchorRange
+    ? Math.max(0, preferredAnchorRange.rawStart - anchoringWindowRadius)
+    : 0
+  const rawWindowEnd = preferredAnchorRange
+    ? Math.min(rawText.length, preferredAnchorRange.rawEndExclusive + anchoringWindowRadius)
+    : rawText.length
+  const preferredWindowRange = preferredAnchorRange
+    ? {
+        rawStart: Math.max(0, preferredAnchorRange.rawStart - rawWindowStart),
+        rawEndExclusive: Math.min(
+          rawWindowEnd - rawWindowStart,
+          preferredAnchorRange.rawEndExclusive - rawWindowStart,
+        ),
+      }
+    : null
+
+  const anchoredSpan = findAnchoredEvidenceSpan(rawText.slice(rawWindowStart, rawWindowEnd), desiredQuote, {
+    preferredAnchor: options?.preferredAnchor,
+    preferredRawRange: preferredWindowRange,
+  })
+  if (!anchoredSpan) {
+    return null
+  }
+
+  const rects = buildRectsFromTextRange(pageContainer, segments, {
+    rawStart: anchoredSpan.rawStart + rawWindowStart,
+    rawEndExclusive: anchoredSpan.rawEndExclusive + rawWindowStart,
+  })
+  if (rects.length === 0) {
+    return null
+  }
+
+  return {
+    query: anchoredSpan.rawQuery,
+    rects,
+    coverage: anchoredSpan.coverage,
+    score: anchoredSpan.score,
+  }
 }
 
 const getEvidenceTextLayerCandidatePages = (pageNumber: number, pdfApp: any): number[] => {
@@ -1431,11 +1584,16 @@ const buildQuoteMatchNavigationNote = (
   options?: {
     nativeOnly?: boolean
     expandedAroundFragment?: boolean
+    anchoredToPageText?: boolean
   },
 ): string => {
   const suffix = options?.nativeOnly
     ? 'using the viewer native text selection.'
     : 'on the PDF text layer.'
+
+  if (options?.anchoredToPageText) {
+    return `Recovered the best matching quote span from the PDF page text ${suffix}`
+  }
 
   if (options?.expandedAroundFragment) {
     return `Recovered a longer contiguous quote around the matched fragment ${suffix}`
@@ -2418,6 +2576,7 @@ export function PdfViewer({
         let effectiveMatchesTotal = outcome.matchesTotal
         let effectivePageMatchIndex = outcome.pageMatchIndex
         let expandedAroundFragment = false
+        let anchoredToPageText = false
 
         const liveMatchedPage = getSelectedEvidenceSpikePage(pdfApp)
         if (
@@ -2445,8 +2604,60 @@ export function PdfViewer({
           matchedPage = textLayerMatch.matchedPage
         }
 
+        const anchoredSpanCandidate = (
+          iframeDoc
+          && matchedPage !== null
+          && (quote || searchText).trim().length > 0
+        )
+          ? findAnchoredEvidenceSpanForPage(
+            iframeDoc,
+            matchedPage,
+            quote || searchText,
+            {
+              preferredAnchor: candidate.query,
+              pageMatchIndex: outcome.pageMatchIndex,
+              pdfApp,
+            },
+          )
+          : null
+        const anchoredQueryWordCount = anchoredSpanCandidate
+          ? countNormalizedEvidenceWords(anchoredSpanCandidate.query)
+          : 0
+        const candidateQueryWordCount = countNormalizedEvidenceWords(candidate.query)
+
+        if (
+          anchoredSpanCandidate
+          && (
+            textLayerRects.length === 0
+            || anchoredQueryWordCount > candidateQueryWordCount
+            || (
+              anchoredQueryWordCount >= candidateQueryWordCount
+              && anchoredSpanCandidate.query.trim() !== candidate.query.trim()
+            )
+            || (
+              anchoredQueryWordCount >= candidateQueryWordCount
+              && normalizeEvidenceSpikeText(anchoredSpanCandidate.query) !== normalizeEvidenceSpikeText(candidate.query)
+            )
+          )
+        ) {
+          effectiveQuery = anchoredSpanCandidate.query
+          textLayerRects = anchoredSpanCandidate.rects
+          anchoredToPageText = true
+          expandedAroundFragment = anchoredQueryWordCount > candidateQueryWordCount
+          logPdfEvidenceDebug('Recovered a best-match quote span from the PDF page text', {
+            anchorId: command.anchorId,
+            candidateQuery: candidate.query,
+            anchoredQuery: anchoredSpanCandidate.query,
+            matchedPage,
+            coverage: anchoredSpanCandidate.coverage,
+            score: anchoredSpanCandidate.score,
+            rectCount: anchoredSpanCandidate.rects.length,
+          })
+        }
+
         const fragmentExpansionCandidate = (
           textLayerRects.length > 0
+          && !anchoredToPageText
           && iframeDoc
           && matchedPage !== null
           && countNormalizedEvidenceWords(candidate.query) < countNormalizedEvidenceWords(quote || searchText)
@@ -2574,6 +2785,7 @@ export function PdfViewer({
           rectCount: textLayerRects.length,
           locatorQuality,
           renderOverlay,
+          anchoredToPageText,
           expandedAroundFragment,
         })
         return {
@@ -2588,6 +2800,7 @@ export function PdfViewer({
           currentMatch: effectiveCurrentMatch,
           note: buildQuoteMatchNavigationNote(candidate.reason, {
             nativeOnly: !renderOverlay,
+            anchoredToPageText,
             expandedAroundFragment,
           }),
         }

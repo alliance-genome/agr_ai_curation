@@ -523,7 +523,7 @@ describe('PdfViewer evidence navigation', () => {
     expect(result).toMatchObject({
       status: 'matched',
       strategy: 'normalized-quote',
-      matchedQuery: 'Raw quote with "smart" punctuation',
+      matchedQuery: 'Raw quote with “smart” punctuation',
       matchedPage: 5,
       matchesTotal: 1,
       currentMatch: 1,
@@ -1280,7 +1280,6 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     expect(eventBus.findQueries).toContain(fragmentCandidate)
-    expect(eventBus.findQueries).toContain(expandedQuery)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
       strategy: 'window-fragment',
@@ -1288,11 +1287,374 @@ describe('PdfViewer evidence navigation', () => {
       degraded: false,
       matchedPage: 3,
       matchedQuery: expandedQuery,
-      note: 'Recovered a longer contiguous quote around the matched fragment on the PDF text layer.',
+      note: expect.stringContaining('Recovered'),
     }))
     await waitFor(() => {
       expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
     })
+  })
+
+  it('recovers the best matching PDF quote span when the stored quote drifts from the page text', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const pageText = [
+      'Actin 5C at 344 +/- 23 fmoles/eye is the most abundant among all actins,',
+      'followed by Actin 87E (80 +/- 51 fmoles/eye) and Actin 57B (81 +/- 19 fmoles/eye).',
+      'Higher abundance of Actin 5C in comparison to Actin 87E and Actin 57B corroborates',
+      'genetic evidence indicating that amongst the six actin genes in the Drosophila genome,',
+      'actin 5C is critical for photoreceptor',
+    ].join(' ')
+    const query = [
+      'Actin 5C at 344 ± 23 fmoles/eye is the most abundant among all actins,',
+      'followed by Actin 87E (80 ± 51 fmoles/eye) and Actin 57B (81 ± 19 fmoles/eye).',
+      'Higher abundance of Actin 5C in comparison to Actin 87E and Actin 57B corroborates',
+      'genetic evidence indicating that amongst the six *actin* genes in the *Drosophila* genome,',
+      '*actin* 5C is critical for photoreceptor',
+    ].join(' ')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason.includes('fragment') && pageText.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 1,
+        section_title: 'Results',
+        subsection_title: '2.3. The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes',
+        chunk_ids: ['chunk-fuzzy-anchor'],
+      },
+      searchText: query,
+      pageNumber: 1,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-fuzzy-anchor', '/fixtures/sample.pdf', 'fuzzy-anchor.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('fuzzy-anchor.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate ? 0 : 1,
+        total: candidate === fragmentCandidate ? 1 : 0,
+        current: candidate === fragmentCandidate ? 1 : 0,
+        pageIdx: candidate === fragmentCandidate ? 2 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: [pageText, 'Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: expect.stringContaining('fragment'),
+      locatorQuality: 'normalized_quote',
+      degraded: false,
+      matchedPage: 3,
+      matchedQuery: pageText,
+      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+  })
+
+  it('keeps fuzzy anchoring aligned to the selected repeated match on the same page', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const firstSpan = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs function in organizing the cytoskeleton.',
+    ].join(' ')
+    const secondSpan = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs function in organizing the cytoskeleton and should be prioritized for the selected occurrence.',
+    ].join(' ')
+    const pageText = [
+      'First occurrence.',
+      firstSpan,
+      'Bridge text.',
+      secondSpan,
+      'Results and Discussion',
+    ].join(' ')
+    const query = [
+      'In summary, all proteins changed in the allele lacking the *crb_C* isoform',
+      'constitute interesting candidates in the connection of the Crumbs function',
+      'in organizing the cytoskeleton and should be prioritized for the selected occurrence.',
+    ].join(' ')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason.includes('fragment') && firstSpan.includes(candidate.query) && secondSpan.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+
+    const firstMatchIndex = pageText.indexOf(fragmentCandidate ?? '')
+    const secondMatchIndex = pageText.indexOf(fragmentCandidate ?? '', firstMatchIndex + 1)
+    expect(firstMatchIndex).toBeGreaterThanOrEqual(0)
+    expect(secondMatchIndex).toBeGreaterThan(firstMatchIndex)
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 1,
+        section_title: 'Results and Discussion',
+        subsection_title: null,
+        chunk_ids: ['chunk-repeated-fuzzy-anchor'],
+      },
+      searchText: query,
+      pageNumber: 1,
+      sectionTitle: 'Results and Discussion',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-repeated-fuzzy-anchor', '/fixtures/sample.pdf', 'repeated-fuzzy-anchor.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('repeated-fuzzy-anchor.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate ? 0 : 1,
+        total: candidate === fragmentCandidate ? 2 : 0,
+        current: candidate === fragmentCandidate ? 2 : 0,
+        pageIdx: candidate === fragmentCandidate ? 2 : null,
+        pageMatches: candidate === fragmentCandidate ? [firstMatchIndex, secondMatchIndex] : [],
+        pageMatchesLength: candidate === fragmentCandidate
+          ? [fragmentCandidate?.length ?? 0, fragmentCandidate?.length ?? 0]
+          : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: [pageText] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: expect.stringContaining('fragment'),
+      matchedPage: 3,
+      matchedQuery: secondSpan,
+      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+    }))
+  })
+
+  it('keeps exact repeated quote recovery aligned to the selected repeated fragment occurrence', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const repeatedQuote = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs function in organizing the cytoskeleton.',
+    ].join(' ')
+    const query = `In summary, ${repeatedQuote}`
+    const textSegments = ['Header ', repeatedQuote, ' Bridge ', repeatedQuote, ' Results']
+    const pageText = textSegments.join('')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason.includes('fragment') && repeatedQuote.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+
+    const firstMatchIndex = pageText.indexOf(fragmentCandidate ?? '')
+    const secondMatchIndex = pageText.indexOf(fragmentCandidate ?? '', firstMatchIndex + 1)
+    expect(firstMatchIndex).toBeGreaterThanOrEqual(0)
+    expect(secondMatchIndex).toBeGreaterThan(firstMatchIndex)
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 1,
+        section_title: 'Results',
+        subsection_title: null,
+        chunk_ids: ['chunk-repeated-exact-anchor'],
+      },
+      searchText: query,
+      pageNumber: 1,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-repeated-exact-anchor', '/fixtures/sample.pdf', 'repeated-exact-anchor.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('repeated-exact-anchor.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate ? 0 : 1,
+        total: candidate === fragmentCandidate ? 2 : 0,
+        current: candidate === fragmentCandidate ? 2 : 0,
+        pageIdx: candidate === fragmentCandidate ? 2 : null,
+        pageMatches: candidate === fragmentCandidate ? [firstMatchIndex, secondMatchIndex] : [],
+        pageMatchesLength: candidate === fragmentCandidate
+          ? [fragmentCandidate?.length ?? 0, fragmentCandidate?.length ?? 0]
+          : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: expect.stringContaining('fragment'),
+      matchedPage: 3,
+      matchedQuery: repeatedQuote,
+      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
+  })
+
+  it('reuses PDF.js selected match offsets when local preferred-fragment rematching would fail', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const pageQuote = 'Actin 87E (80 +/- 51 fmoles/eye) is critical for photoreceptor maintenance.'
+    const query = 'Actin 87E (80 ± 51 fmoles/eye) is critical for photoreceptor maintenance.'
+    const textSegments = ['Header ', pageQuote, ' Bridge ', pageQuote, ' Results']
+    const pageText = textSegments.join('')
+    const firstMatchIndex = pageText.indexOf(pageQuote)
+    const secondMatchIndex = pageText.indexOf(pageQuote, firstMatchIndex + 1)
+
+    const command = buildNavigationCommand({
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 1,
+        section_title: 'Results',
+        subsection_title: null,
+        chunk_ids: ['chunk-pdfjs-offset-anchor'],
+      },
+      searchText: query,
+      pageNumber: 1,
+      sectionTitle: 'Results',
+    })
+
+    render(
+      <PdfViewer
+        pendingNavigation={command}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-pdfjs-offset-anchor', '/fixtures/sample.pdf', 'pdfjs-offset-anchor.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('pdfjs-offset-anchor.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 2 : 0,
+        current: candidate === query ? 2 : 0,
+        pageIdx: candidate === query ? 2 : null,
+        pageMatches: candidate === query ? [firstMatchIndex, secondMatchIndex] : [],
+        pageMatchesLength: candidate === query
+          ? [pageQuote.length, pageQuote.length]
+          : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      matchedPage: 3,
+      matchedQuery: pageQuote,
+      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+    }))
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
   })
 
   it('renders hover previews differently from selected evidence highlights', async () => {
