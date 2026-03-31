@@ -362,6 +362,12 @@ Response (`ChunkListResponse`):
 
 Use this endpoint to verify embedding coverage or to reconstruct provenance overlays produced by `/api/chat/stream` (the SSE `CHUNK_PROVENANCE` events reuse the same `doc_items` schema).
 
+Legacy note:
+`doc_items` bounding boxes are still useful for chunk-provenance diagnostics, but they are not the canonical evidence-quote highlighting strategy anymore.
+The current evidence-navigation design uses the real PDF.js text layer as the viewer-side source of truth; see:
+- `docs/plans/2026-03-20-localization-policy.md`
+- `docs/design/pdf-evidence-fuzzy-anchoring.md`
+
 ---
 
 ## Processing Controls

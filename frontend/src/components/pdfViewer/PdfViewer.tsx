@@ -2816,6 +2816,132 @@ const dispatchEvidenceSpikeFind = async (pdfApp: any, candidate: PdfEvidenceSpik
   return resultPromise
 }
 
+const ensureNativePdfJsQuoteHighlight = async (
+  iframeDoc: Document,
+  pdfApp: any,
+  query: string,
+  pageNumber: number,
+  options?: {
+    currentQuery?: string | null
+    reason?: string
+  },
+): Promise<{
+  preserved: boolean
+  matchedPage: number | null
+  matchesTotal: number
+  currentMatch: number
+  pageMatchIndex: number | null
+}> => {
+  const currentQuery = options?.currentQuery ?? null
+  const trimmedCurrentQuery = (currentQuery ?? '').trim()
+  const trimmedTargetQuery = query.trim()
+  const selectedMatchedPage = getSelectedEvidenceSpikeMatchedPage(pdfApp)
+  const selectedMatchIndex = getSelectedEvidenceSpikeMatchIndex(pdfApp)
+  const selectedPageMatches = selectedMatchedPage !== null
+    ? pdfApp?.findController?.pageMatches?.[selectedMatchedPage - 1]
+    : null
+  const hasVisibleNativeSelection = (
+    selectedMatchedPage === pageNumber
+    && selectedMatchIndex !== null
+    && findPdfJsSelectedHighlightRects(iframeDoc, pageNumber).length > 0
+  )
+
+  if (trimmedCurrentQuery === trimmedTargetQuery && hasVisibleNativeSelection) {
+    const pageMatchesByPage = Array.isArray(pdfApp?.findController?.pageMatches)
+      ? pdfApp.findController.pageMatches
+      : []
+    const selectedPageMatchCount = Array.isArray(selectedPageMatches)
+      ? selectedPageMatches.length
+      : 0
+    const globalMatchesTotal = pageMatchesByPage.reduce((sum: number, pageMatches: unknown) => (
+      sum + (Array.isArray(pageMatches) ? pageMatches.length : 0)
+    ), 0)
+    const matchesBeforeSelectedPage = pageMatchesByPage
+      .slice(0, Math.max(0, selectedMatchedPage - 1))
+      .reduce((sum: number, pageMatches: unknown) => (
+        sum + (Array.isArray(pageMatches) ? pageMatches.length : 0)
+      ), 0)
+    const effectiveCurrentMatch = selectedPageMatchCount > 0
+      ? matchesBeforeSelectedPage + Math.min(selectedMatchIndex, selectedPageMatchCount - 1) + 1
+      : selectedMatchIndex + 1
+    const effectiveMatchesTotal = globalMatchesTotal > 0
+      ? globalMatchesTotal
+      : (selectedPageMatchCount > 0 ? selectedPageMatchCount : 1)
+
+    logPdfEvidenceDebug('Reusing existing native PDF.js quote highlight', {
+      query,
+      pageNumber,
+      reason: options?.reason ?? 'quote-match',
+      pageMatchIndex: selectedMatchIndex,
+      currentMatch: effectiveCurrentMatch,
+      matchesTotal: effectiveMatchesTotal,
+    })
+    return {
+      preserved: true,
+      matchedPage: pageNumber,
+      matchesTotal: effectiveMatchesTotal,
+      currentMatch: effectiveCurrentMatch,
+      pageMatchIndex: selectedMatchIndex,
+    }
+  }
+
+  setEvidenceSpikePage(pdfApp, pageNumber)
+  const nativeOutcome = await dispatchEvidenceSpikeFind(pdfApp, {
+    query,
+    reason: 'exact-quote',
+  })
+  const matchedPage = nativeOutcome.matchedPage ?? getSelectedEvidenceSpikeMatchedPage(pdfApp)
+  if (!(nativeOutcome.found || nativeOutcome.matchesTotal > 0) || matchedPage !== pageNumber) {
+    logPdfEvidenceDebug('Recovered quote span could not be synchronized back into native PDF.js highlight state', {
+      query,
+      pageNumber,
+      matchedPage,
+      reason: options?.reason ?? 'quote-match',
+      outcome: nativeOutcome,
+    })
+    return {
+      preserved: false,
+      matchedPage,
+      matchesTotal: nativeOutcome.matchesTotal,
+      currentMatch: nativeOutcome.currentMatch,
+      pageMatchIndex: nativeOutcome.pageMatchIndex,
+    }
+  }
+
+  await waitForTextLayerMatch(
+    iframeDoc,
+    pageNumber,
+    query,
+    nativeOutcome.pageMatchIndex,
+    PDF_TEXT_LAYER_RETRY_TIMEOUT_MS,
+    { pdfApp },
+  )
+
+  const nativeRects = findPdfJsSelectedHighlightRects(iframeDoc, pageNumber)
+  const preserved = nativeRects.length > 0
+  logPdfEvidenceDebug(
+    preserved
+      ? 'Synchronized recovered quote span into native PDF.js highlight state'
+      : 'Recovered quote span re-query settled but native PDF.js highlight is still not visibly rendered',
+    {
+      query,
+      pageNumber,
+      reason: options?.reason ?? 'quote-match',
+      pageMatchIndex: nativeOutcome.pageMatchIndex,
+      rectCount: nativeRects.length,
+      outcome: nativeOutcome,
+    },
+  )
+
+  return {
+    preserved,
+    matchedPage,
+    matchesTotal: nativeOutcome.matchesTotal,
+    currentMatch: nativeOutcome.currentMatch,
+    pageMatchIndex: nativeOutcome.pageMatchIndex,
+  }
+}
+
 const loadStoredSettings = (): HighlightSettings => {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
@@ -3682,6 +3808,27 @@ export function PdfViewer({
           continue
         }
 
+        let preservedNativeHighlight = false
+        if (!renderOverlay && iframeDoc) {
+          const nativeHighlight = await ensureNativePdfJsQuoteHighlight(
+            iframeDoc,
+            pdfApp,
+            effectiveQuery,
+            matchedPage,
+            {
+              currentQuery: candidate.query,
+              reason: 'quote-match',
+            },
+          )
+          preservedNativeHighlight = nativeHighlight.preserved
+          if (nativeHighlight.preserved) {
+            effectiveCurrentMatch = nativeHighlight.currentMatch
+            effectiveMatchesTotal = nativeHighlight.matchesTotal
+            effectivePageMatchIndex = nativeHighlight.pageMatchIndex
+          }
+        }
+        const shouldRenderOverlay = renderOverlay || !preservedNativeHighlight
+
         setEvidenceHighlight({
           anchorId: command.anchorId,
           kind: 'quote',
@@ -3690,10 +3837,10 @@ export function PdfViewer({
           query: effectiveQuery,
           pageMatchIndex: effectivePageMatchIndex,
           rects: textLayerRects,
-          renderOverlay,
+          renderOverlay: shouldRenderOverlay,
         })
         maybeClearPdfJsFindHighlights(pdfApp, {
-          preserveNativeHighlight: !renderOverlay,
+          preserveNativeHighlight: preservedNativeHighlight,
           reason: 'quote-match',
         })
         logPdfEvidenceDebug('Evidence navigation matched successfully', {
@@ -3703,7 +3850,8 @@ export function PdfViewer({
           matchedPage,
           rectCount: textLayerRects.length,
           locatorQuality,
-          renderOverlay,
+          renderOverlay: shouldRenderOverlay,
+          preservedNativeHighlight,
           anchoredToPageText,
           expandedAroundFragment,
         })
@@ -3718,7 +3866,7 @@ export function PdfViewer({
           matchesTotal: effectiveMatchesTotal,
           currentMatch: effectiveCurrentMatch,
           note: buildQuoteMatchNavigationNote(candidate.reason, {
-            nativeOnly: !renderOverlay,
+            nativeOnly: preservedNativeHighlight,
             anchoredToPageText,
             expandedAroundFragment,
           }),
@@ -3776,18 +3924,41 @@ export function PdfViewer({
 
       if (documentRects.length > 0) {
         const locatorQuality = resolveQuoteMatchLocatorQuality(anchor.locator_quality, 'exact-quote')
+        let preservedNativeHighlight = false
+        let effectiveCurrentMatch = 1
+        let effectiveMatchesTotal = 1
+        let effectivePageMatchIndex: number | null = null
+        if (!renderOverlay) {
+          const nativeHighlight = await ensureNativePdfJsQuoteHighlight(
+            iframeDoc,
+            pdfApp,
+            effectiveDocumentQuery,
+            matchedDocumentPage,
+            {
+              currentQuery: documentAnchoredQuote.query,
+              reason: 'document-anchored-quote-match',
+            },
+          )
+          preservedNativeHighlight = nativeHighlight.preserved
+          if (nativeHighlight.preserved) {
+            effectiveCurrentMatch = nativeHighlight.currentMatch
+            effectiveMatchesTotal = nativeHighlight.matchesTotal
+            effectivePageMatchIndex = nativeHighlight.pageMatchIndex
+          }
+        }
+        const shouldRenderOverlay = renderOverlay || !preservedNativeHighlight
         setEvidenceHighlight({
           anchorId: command.anchorId,
           kind: 'quote',
           mode: command.mode,
           pageNumber: matchedDocumentPage,
           query: effectiveDocumentQuery,
-          pageMatchIndex: null,
+          pageMatchIndex: effectivePageMatchIndex,
           rects: documentRects,
-          renderOverlay,
+          renderOverlay: shouldRenderOverlay,
         })
         maybeClearPdfJsFindHighlights(pdfApp, {
-          preserveNativeHighlight: !renderOverlay,
+          preserveNativeHighlight: preservedNativeHighlight,
           reason: 'document-anchored-quote-match',
         })
         logPdfEvidenceDebug('Document-wide anchored quote recovery matched successfully', {
@@ -3799,6 +3970,7 @@ export function PdfViewer({
           coverage: documentAnchoredSpan?.coverage ?? documentAnchoredQuote.coverage,
           score: documentAnchoredSpan?.score ?? documentAnchoredQuote.score,
           locatorQuality,
+          preservedNativeHighlight,
         })
         return {
           ...baseResult,
@@ -3808,9 +3980,12 @@ export function PdfViewer({
           degraded: isDegradedLocatorQuality(locatorQuality),
           matchedQuery: effectiveDocumentQuery,
           matchedPage: matchedDocumentPage,
-          matchesTotal: 1,
-          currentMatch: 1,
-          note: 'Recovered the best matching quote span from the PDF page text elsewhere in the document after page-hinted matching failed.',
+          matchesTotal: effectiveMatchesTotal,
+          currentMatch: effectiveCurrentMatch,
+          note: buildQuoteMatchNavigationNote('exact-quote', {
+            nativeOnly: preservedNativeHighlight,
+            anchoredToPageText: true,
+          }),
         }
       }
 

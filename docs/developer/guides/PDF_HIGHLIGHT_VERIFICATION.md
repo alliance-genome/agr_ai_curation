@@ -1,5 +1,20 @@
 # PDF Highlight Verification
 
+Legacy note:
+This guide is for the older `CHUNK_PROVENANCE` / `doc_items` bounding-box overlay path.
+It is not the canonical design for evidence quote highlighting anymore.
+If you are debugging evidence quote matching/highlighting, stop here and use the newer docs below instead.
+The remainder of this file applies only to legacy chunk-overlay diagnostics.
+
+Current evidence-highlighting source of truth:
+- `docs/plans/2026-03-20-localization-policy.md`
+- `docs/design/pdf-evidence-fuzzy-anchoring.md`
+
+Those newer docs define the intended behavior:
+- use the real PDF.js text layer as the highlightable surface
+- treat stored page/section data as hints, not pixel coordinates
+- degrade through quote -> section -> page -> document states instead of relying on bbox overlays
+
 Use this checklist when debugging or validating PDF chunk highlighting regressions.
 
 ## Quick Verification Flow
