@@ -38,7 +38,11 @@ import {
   sanitizeEvidenceSearchText,
   splitNormalizedWords,
 } from '@/components/pdfViewer/textNormalization'
-import { findAnchoredEvidenceSpan } from '@/components/pdfViewer/textAnchoring'
+import {
+  findAnchoredEvidenceSpan,
+  getAnchoredEvidenceSpanDebugInfo,
+} from '@/components/pdfViewer/textAnchoring'
+import type { AnchoredEvidenceSpanWindowDebug } from '@/components/pdfViewer/textAnchoring'
 import type { EvidenceAnchor, EvidenceLocatorQuality } from '@/features/curation/contracts'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 
@@ -57,6 +61,7 @@ const EVIDENCE_SPIKE_EVENT_NAME = 'pdf-viewer-evidence-spike'
 const EVIDENCE_SPIKE_RESULT_EVENT_NAME = 'pdf-viewer-evidence-spike-result'
 const PDF_EVIDENCE_DEBUG_STORAGE_KEY = 'pdf-evidence-debug'
 const PDF_EVIDENCE_DEBUG_URL_PARAM = 'pdfEvidenceDebug'
+const PDF_EVIDENCE_DEBUG_MAX_ENTRIES = 800
 const EVIDENCE_SPIKE_FRAGMENT_WORDS = 24
 const EVIDENCE_SPIKE_WINDOW_FRAGMENT_MIN_WORDS = 8
 const EVIDENCE_SPIKE_WINDOW_FRAGMENT_TARGET_WORDS = 12
@@ -170,6 +175,12 @@ export interface PdfViewerNavigationResult {
 
 export type PdfEvidenceSpikeResult = PdfViewerNavigationResult
 
+interface PdfEvidenceDebugEntry {
+  timestamp: string
+  message: string
+  detail?: unknown
+}
+
 export type OverlayDocItemDropReason = 'missing-page' | 'missing-bbox' | 'invalid-bbox'
 
 export interface OverlayDocItemDropDiagnostic {
@@ -219,6 +230,9 @@ const DEFAULT_SETTINGS: HighlightSettings = {
   clearOnNewQuery: true,
 }
 
+const pdfEvidenceDebugEntries: PdfEvidenceDebugEntry[] = []
+let lastPdfEvidenceNavigationResult: PdfViewerNavigationResult | null = null
+
 const DEFAULT_STATE: ViewerState = {
   currentPage: 1,
   zoomLevel: 100,
@@ -234,7 +248,93 @@ declare global {
       enabled: boolean
       storageKey: string
       setEnabled: (enabled: boolean) => boolean
+      getEntries: () => PdfEvidenceDebugEntry[]
+      clearEntries: () => void
+      getLastResult: () => PdfViewerNavigationResult | null
     }
+  }
+}
+
+const truncateDebugText = (value: string, maxLength: number = 240): string => {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, maxLength)}...`
+}
+
+const sanitizePdfEvidenceDebugDetail = (
+  value: unknown,
+  depth: number = 0,
+  seen: WeakSet<object> = new WeakSet(),
+): unknown => {
+  if (value === null || value === undefined) {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    return value.length > 1200 ? `${value.slice(0, 1200)}...` : value
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+
+  if (depth >= 5) {
+    return '[max-depth]'
+  }
+
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 25).map((entry) => sanitizePdfEvidenceDebugDetail(entry, depth + 1, seen))
+    return value.length > 25 ? [...items, `[+${value.length - 25} more]`] : items
+  }
+
+  if (typeof value === 'object') {
+    if (value instanceof DOMRect) {
+      return {
+        left: value.left,
+        top: value.top,
+        width: value.width,
+        height: value.height,
+      }
+    }
+
+    if (value instanceof HTMLElement) {
+      return {
+        type: 'HTMLElement',
+        tagName: value.tagName,
+        className: value.className,
+        text: truncateDebugText(value.textContent ?? '', 120),
+      }
+    }
+
+    if (seen.has(value as object)) {
+      return '[circular]'
+    }
+    seen.add(value as object)
+
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 40)
+    return Object.fromEntries(
+      entries.map(([key, entryValue]) => [
+        key,
+        sanitizePdfEvidenceDebugDetail(entryValue, depth + 1, seen),
+      ]),
+    )
+  }
+
+  return String(value)
+}
+
+const appendPdfEvidenceDebugEntry = (message: string, detail?: unknown) => {
+  pdfEvidenceDebugEntries.push({
+    timestamp: new Date().toISOString(),
+    message,
+    detail: detail === undefined ? undefined : sanitizePdfEvidenceDebugDetail(detail),
+  })
+
+  if (pdfEvidenceDebugEntries.length > PDF_EVIDENCE_DEBUG_MAX_ENTRIES) {
+    pdfEvidenceDebugEntries.splice(0, pdfEvidenceDebugEntries.length - PDF_EVIDENCE_DEBUG_MAX_ENTRIES)
   }
 }
 
@@ -302,6 +402,8 @@ const logPdfEvidenceDebug = (message: string, detail?: unknown) => {
   if (!isPdfEvidenceDebugEnabled()) {
     return
   }
+
+  appendPdfEvidenceDebugEntry(message, detail)
 
   if (detail === undefined) {
     console.info(`[PDF EVIDENCE DEBUG] ${message}`)
@@ -480,6 +582,13 @@ const getSelectedEvidenceSpikePage = (pdfApp: any): number | null => {
   const currentPageNumber = pdfApp?.pdfViewer?.currentPageNumber
   return typeof currentPageNumber === 'number' && currentPageNumber >= 1
     ? currentPageNumber
+    : null
+}
+
+const getSelectedEvidenceSpikeMatchedPage = (pdfApp: any): number | null => {
+  const pageIdx = pdfApp?.findController?.selected?.pageIdx
+  return typeof pageIdx === 'number' && pageIdx >= 0
+    ? pageIdx + 1
     : null
 }
 
@@ -927,6 +1036,385 @@ const buildPdfJsTextLayerSegments = (
   return { rawText, segments }
 }
 
+const buildPageTextDebugSnapshot = (
+  iframeDoc: Document,
+  pdfApp: any,
+  pageNumber: number,
+): {
+  source: 'pdfjs-page-contents' | 'pdfjs-text-layer-builder' | 'dom-text-layer' | 'unavailable'
+  length: number
+  preview: string
+} => {
+  const pageContents = pdfApp?.findController?._pageContents?.[pageNumber - 1]
+  if (typeof pageContents === 'string' && pageContents.trim().length > 0) {
+    return {
+      source: 'pdfjs-page-contents',
+      length: pageContents.length,
+      preview: truncateDebugText(pageContents, 320),
+    }
+  }
+
+  const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
+  if (textLayerBuilder) {
+    const joinedText = textLayerBuilder.textContentItemsStr.join('')
+    if (joinedText.trim().length > 0) {
+      return {
+        source: 'pdfjs-text-layer-builder',
+        length: joinedText.length,
+        preview: truncateDebugText(joinedText, 320),
+      }
+    }
+  }
+
+  const textLayer = getPageTextLayer(iframeDoc, pageNumber)
+  if (textLayer) {
+    const { rawText } = buildTextLayerSegments(textLayer)
+    if (rawText.trim().length > 0) {
+      return {
+        source: 'dom-text-layer',
+        length: rawText.length,
+        preview: truncateDebugText(rawText, 320),
+      }
+    }
+  }
+
+  return {
+    source: 'unavailable',
+    length: 0,
+    preview: '',
+  }
+}
+
+const chooseBetterAnchoredDebugWindow = (
+  currentBest: AnchoredEvidenceSpanWindowDebug | null,
+  candidate: AnchoredEvidenceSpanWindowDebug,
+): AnchoredEvidenceSpanWindowDebug => {
+  if (!currentBest) {
+    return candidate
+  }
+
+  if (candidate.passesThreshold !== currentBest.passesThreshold) {
+    return candidate.passesThreshold ? candidate : currentBest
+  }
+
+  const candidateCoverage = candidate.coverage ?? -1
+  const currentCoverage = currentBest.coverage ?? -1
+  if (candidateCoverage !== currentCoverage) {
+    return candidateCoverage > currentCoverage ? candidate : currentBest
+  }
+
+  const candidateScore = candidate.score ?? -1
+  const currentScore = currentBest.score ?? -1
+  if (candidateScore !== currentScore) {
+    return candidateScore > currentScore ? candidate : currentBest
+  }
+
+  if (candidate.matchedPairCount !== currentBest.matchedPairCount) {
+    return candidate.matchedPairCount > currentBest.matchedPairCount ? candidate : currentBest
+  }
+
+  return candidate.searchWindow.rawStart < currentBest.searchWindow.rawStart ? candidate : currentBest
+}
+
+const summarizeAnchoredDebugWindow = (
+  windowDebug: AnchoredEvidenceSpanWindowDebug,
+): Record<string, unknown> => ({
+  resolution: windowDebug.resolution,
+  searchWindow: windowDebug.searchWindow,
+  adjustedPreferredRawRange: windowDebug.adjustedPreferredRawRange,
+  quoteTokenCount: windowDebug.quoteTokenCount,
+  pageTokenCount: windowDebug.pageTokenCount,
+  exactMatchCount: windowDebug.exactMatchCount,
+  alignmentScore: windowDebug.alignmentScore,
+  matchedPairCount: windowDebug.matchedPairCount,
+  boundaryMatchCount: windowDebug.boundaryMatchCount,
+  leadingContiguousMatchCount: windowDebug.leadingContiguousMatchCount,
+  trailingContiguousMatchCount: windowDebug.trailingContiguousMatchCount,
+  coverage: windowDebug.coverage,
+  score: windowDebug.score,
+  spanDensity: windowDebug.spanDensity,
+  largestMatchedPageGap: windowDebug.largestMatchedPageGap,
+  leadingAnchorMatched: windowDebug.leadingAnchorMatched,
+  trailingAnchorMatched: windowDebug.trailingAnchorMatched,
+  firstLeadingMismatch: windowDebug.firstLeadingMismatch,
+  firstTrailingMismatch: windowDebug.firstTrailingMismatch,
+  matchedTokenPreview: windowDebug.matchedTokenPreview,
+  includesPreferredAnchor: windowDebug.includesPreferredAnchor,
+  containsPreferredRawRange: windowDebug.containsPreferredRawRange,
+  candidateRawRange: windowDebug.candidateRawRange,
+  candidateRawQuery: windowDebug.candidateRawQuery
+    ? truncateDebugText(windowDebug.candidateRawQuery, 220)
+    : null,
+  passesThreshold: windowDebug.passesThreshold,
+  rejectionReasons: windowDebug.rejectionReasons,
+})
+
+const summarizeAnchoredDebugWindows = (
+  windows: AnchoredEvidenceSpanWindowDebug[],
+  limit: number = 3,
+): Record<string, unknown>[] => {
+  const bestWindows = windows.reduce<AnchoredEvidenceSpanWindowDebug[]>((selected, windowDebug) => {
+    const next = [...selected, windowDebug]
+      .sort((left, right) => {
+        const better = chooseBetterAnchoredDebugWindow(left, right)
+        return better === left ? -1 : 1
+      })
+      .slice(0, limit)
+    return next
+  }, [])
+
+  return bestWindows.map((windowDebug) => summarizeAnchoredDebugWindow(windowDebug))
+}
+
+const getEvidenceAnchoringPageText = (
+  iframeDoc: Document,
+  pdfApp: any,
+  pageNumber: number,
+): {
+  rawText: string
+  source: 'pdfjs-page-contents' | 'pdfjs-text-layer-builder' | 'dom-text-layer'
+} | null => {
+  const pageContents = pdfApp?.findController?._pageContents?.[pageNumber - 1]
+  if (typeof pageContents === 'string' && pageContents.trim().length > 0) {
+    return {
+      rawText: pageContents,
+      source: 'pdfjs-page-contents',
+    }
+  }
+
+  const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
+  if (textLayerBuilder) {
+    const { rawText } = buildPdfJsTextLayerSegments(textLayerBuilder)
+    if (rawText.trim().length > 0) {
+      return {
+        rawText,
+        source: 'pdfjs-text-layer-builder',
+      }
+    }
+  }
+
+  const textLayer = getPageTextLayer(iframeDoc, pageNumber)
+  if (textLayer) {
+    const { rawText } = buildTextLayerSegments(textLayer)
+    if (rawText.trim().length > 0) {
+      return {
+        rawText,
+        source: 'dom-text-layer',
+      }
+    }
+  }
+
+  return null
+}
+
+const getEvidenceAnchoringPageNumbers = (
+  iframeDoc: Document,
+  pdfApp: any,
+  pageCountHint?: number | null,
+): number[] => {
+  const hintedPageCount = typeof pageCountHint === 'number' && pageCountHint > 0
+    ? Math.max(0, Math.floor(pageCountHint))
+    : 0
+  const pdfDocumentPageCount = typeof pdfApp?.pdfDocument?.numPages === 'number' && pdfApp.pdfDocument.numPages > 0
+    ? Math.floor(pdfApp.pdfDocument.numPages)
+    : 0
+  const pageContentsCount = Array.isArray(pdfApp?.findController?._pageContents)
+    ? pdfApp.findController._pageContents.length
+    : 0
+  const domPageNumbers = Array.from(
+    iframeDoc.querySelectorAll<HTMLElement>('.page[data-page-number]'),
+  )
+    .map((page) => Number.parseInt(page.dataset.pageNumber ?? '', 10))
+    .filter((pageNumber) => Number.isFinite(pageNumber) && pageNumber >= 1)
+  const maxDomPageNumber = domPageNumbers.length > 0 ? Math.max(...domPageNumbers) : 0
+  const resolvedPageCount = Math.max(
+    hintedPageCount,
+    pdfDocumentPageCount,
+    pageContentsCount,
+    maxDomPageNumber,
+  )
+
+  return Array.from({ length: resolvedPageCount }, (_, index) => index + 1)
+}
+
+const chooseBetterDocumentAnchoredCandidate = (
+  currentBest: {
+    pageNumber: number
+    query: string
+    coverage: number
+    score: number
+    queryLength: number
+  } | null,
+  candidate: {
+    pageNumber: number
+    query: string
+    coverage: number
+    score: number
+    queryLength: number
+  },
+  preferredPage: number | null,
+): {
+  pageNumber: number
+  query: string
+  coverage: number
+  score: number
+  queryLength: number
+} => {
+  if (!currentBest) {
+    return candidate
+  }
+
+  if (candidate.coverage !== currentBest.coverage) {
+    return candidate.coverage > currentBest.coverage ? candidate : currentBest
+  }
+
+  if (candidate.score !== currentBest.score) {
+    return candidate.score > currentBest.score ? candidate : currentBest
+  }
+
+  if (candidate.queryLength !== currentBest.queryLength) {
+    return candidate.queryLength > currentBest.queryLength ? candidate : currentBest
+  }
+
+  if (preferredPage !== null) {
+    const candidateDistance = Math.abs(candidate.pageNumber - preferredPage)
+    const currentDistance = Math.abs(currentBest.pageNumber - preferredPage)
+    if (candidateDistance !== currentDistance) {
+      return candidateDistance < currentDistance ? candidate : currentBest
+    }
+  }
+
+  return candidate.pageNumber < currentBest.pageNumber ? candidate : currentBest
+}
+
+const findAnchoredEvidenceSpanAcrossDocument = (
+  iframeDoc: Document,
+  pdfApp: any,
+  desiredQuote: string,
+  options?: {
+    pageCountHint?: number | null
+    preferredPage?: number | null
+  },
+): {
+  pageNumber: number
+  query: string
+  coverage: number
+  score: number
+} | null => {
+  const preferredPage = options?.preferredPage ?? null
+  const pageNumbers = getEvidenceAnchoringPageNumbers(iframeDoc, pdfApp, options?.pageCountHint)
+  let bestCandidate: {
+    pageNumber: number
+    query: string
+    coverage: number
+    score: number
+    queryLength: number
+  } | null = null
+  const pageDiagnostics: Array<{
+    pageNumber: number
+    source: 'pdfjs-page-contents' | 'pdfjs-text-layer-builder' | 'dom-text-layer' | 'unavailable'
+    rawTextLength: number
+    matched: boolean
+    coverage: number | null
+    score: number | null
+    queryPreview: string | null
+    bestWindow: Record<string, unknown> | null
+  }> = []
+
+  pageNumbers.forEach((pageNumber) => {
+    const pageText = getEvidenceAnchoringPageText(iframeDoc, pdfApp, pageNumber)
+    if (!pageText) {
+      pageDiagnostics.push({
+        pageNumber,
+        source: 'unavailable',
+        rawTextLength: 0,
+        matched: false,
+        coverage: null,
+        score: null,
+        queryPreview: null,
+        bestWindow: null,
+      })
+      return
+    }
+
+    const anchoredSpanDebug = getAnchoredEvidenceSpanDebugInfo(pageText.rawText, desiredQuote)
+    const bestMatch = anchoredSpanDebug.bestMatch
+    const bestWindowSummary = summarizeAnchoredDebugWindows(anchoredSpanDebug.windows, 1)[0] ?? null
+    pageDiagnostics.push({
+      pageNumber,
+      source: pageText.source,
+      rawTextLength: pageText.rawText.length,
+      matched: Boolean(bestMatch),
+      coverage: bestMatch?.coverage ?? null,
+      score: bestMatch?.score ?? null,
+      queryPreview: bestMatch ? truncateDebugText(bestMatch.rawQuery, 160) : null,
+      bestWindow: bestWindowSummary,
+    })
+
+    if (!bestMatch) {
+      return
+    }
+
+    bestCandidate = chooseBetterDocumentAnchoredCandidate(
+      bestCandidate,
+      {
+        pageNumber,
+        query: bestMatch.rawQuery,
+        coverage: bestMatch.coverage,
+        score: bestMatch.score,
+        queryLength: bestMatch.rawEndExclusive - bestMatch.rawStart,
+      },
+      preferredPage,
+    )
+  })
+
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug(
+      bestCandidate
+        ? 'Document-wide anchored quote scan found a best matching page'
+        : 'Document-wide anchored quote scan found no reliable page candidate',
+      {
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        preferredPage,
+        pageCount: pageNumbers.length,
+        bestCandidate: bestCandidate
+          ? {
+            pageNumber: bestCandidate.pageNumber,
+            query: truncateDebugText(bestCandidate.query, 200),
+            coverage: bestCandidate.coverage,
+            score: bestCandidate.score,
+          }
+          : null,
+        pages: pageDiagnostics,
+      },
+    )
+  }
+
+  return bestCandidate
+    ? {
+      pageNumber: bestCandidate.pageNumber,
+      query: bestCandidate.query,
+      coverage: bestCandidate.coverage,
+      score: bestCandidate.score,
+    }
+    : null
+}
+
+const buildFindControllerDebugSnapshot = (
+  pdfApp: any,
+  pageNumber: number,
+): Record<string, unknown> => {
+  const pageMatches = pdfApp?.findController?.pageMatches?.[pageNumber - 1]
+  const pageMatchesLength = pdfApp?.findController?.pageMatchesLength?.[pageNumber - 1]
+  return {
+    selectedPage: getSelectedEvidenceSpikePage(pdfApp),
+    selectedMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
+    pageMatchesCount: Array.isArray(pageMatches) ? pageMatches.length : 0,
+    pageMatchesSample: Array.isArray(pageMatches) ? pageMatches.slice(0, 5) : [],
+    pageMatchesLengthSample: Array.isArray(pageMatchesLength) ? pageMatchesLength.slice(0, 5) : [],
+  }
+}
+
 const normalizeEvidenceTextLayerRect = (
   pageContainer: HTMLElement,
   rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>,
@@ -965,6 +1453,86 @@ const pushUniqueEvidenceTextLayerRect = (
 const getSourceCodeUnitLength = (value: string, index: number): number => {
   const codePoint = value.codePointAt(index)
   return codePoint !== undefined && codePoint > 0xffff ? 2 : 1
+}
+
+const buildTextMatchRangeDebugSnapshot = (
+  rawText: string,
+  query: string,
+  pageMatchIndex: number | null,
+): Record<string, unknown> => {
+  const normalizedQuery = normalizeEvidenceSpikeText(query)
+  const sourceMap = buildNormalizedTextSourceMap(rawText)
+  const normalizedPageText = sourceMap.text.toLocaleLowerCase()
+  const normalizedCandidate = normalizedQuery.toLocaleLowerCase()
+  const matchRanges: Array<{
+    rawStart: number
+    rawEndExclusive: number
+    preview: string
+  }> = []
+
+  if (normalizedPageText && normalizedCandidate) {
+    let searchStart = 0
+    while (searchStart <= normalizedPageText.length - normalizedCandidate.length) {
+      const matchIndex = normalizedPageText.indexOf(normalizedCandidate, searchStart)
+      if (matchIndex < 0) {
+        break
+      }
+
+      const rawStart = sourceMap.sourceIndices[matchIndex]
+      const rawEnd = sourceMap.sourceIndices[matchIndex + normalizedCandidate.length - 1]
+      if (rawStart !== undefined && rawEnd !== undefined) {
+        const rawEndExclusive = rawEnd + getSourceCodeUnitLength(rawText, rawEnd)
+        matchRanges.push({
+          rawStart,
+          rawEndExclusive,
+          preview: truncateDebugText(
+            rawText.slice(
+              Math.max(0, rawStart - 60),
+              Math.min(rawText.length, rawEndExclusive + 60),
+            ),
+            220,
+          ),
+        })
+      }
+
+      searchStart = matchIndex + normalizedCandidate.length
+    }
+  }
+
+  const selectedIndex = pageMatchIndex ?? 0
+  return {
+    rawTextLength: rawText.length,
+    normalizedPageTextLength: normalizedPageText.length,
+    queryLength: query.length,
+    normalizedQueryLength: normalizedCandidate.length,
+    normalizedQueryPreview: truncateDebugText(normalizedCandidate, 220),
+    matchCount: matchRanges.length,
+    selectedIndex,
+    selectedMatch: matchRanges[selectedIndex] ?? matchRanges[0] ?? null,
+    sampleMatches: matchRanges.slice(0, 4),
+  }
+}
+
+const buildTextLayerStructureDebugSnapshot = (
+  iframeDoc: Document,
+  pageNumber: number,
+  pdfApp?: any,
+): Record<string, unknown> => {
+  const pageContainer = getPageContainer(iframeDoc, pageNumber)
+  const textLayer = getPageTextLayer(iframeDoc, pageNumber)
+  const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
+  const domText = textLayer ? buildTextLayerSegments(textLayer) : null
+
+  return {
+    pageNumber,
+    hasPageContainer: Boolean(pageContainer),
+    hasTextLayer: Boolean(textLayer),
+    domRawTextLength: domText?.rawText.length ?? 0,
+    domSegmentCount: domText?.segments.length ?? 0,
+    hasPdfJsTextLayerBuilder: Boolean(textLayerBuilder),
+    pdfJsTextDivCount: textLayerBuilder?.textDivs?.length ?? 0,
+    pdfJsItemCount: textLayerBuilder?.textContentItemsStr?.length ?? 0,
+  }
 }
 
 const findTextLayerMatchRange = (
@@ -1006,11 +1574,23 @@ const findTextLayerMatchRange = (
   }
 
   if (matchRanges.length === 0) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Normalized text-layer query did not produce any candidate ranges', {
+        ...buildTextMatchRangeDebugSnapshot(rawText, query, pageMatchIndex),
+      })
+    }
     return null
   }
 
   const normalizedMatchIndex = pageMatchIndex ?? 0
-  return matchRanges[normalizedMatchIndex] ?? matchRanges[0]
+  const selectedRange = matchRanges[normalizedMatchIndex] ?? matchRanges[0]
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug('Normalized text-layer query produced candidate ranges', {
+      ...buildTextMatchRangeDebugSnapshot(rawText, query, pageMatchIndex),
+      selectedRange,
+    })
+  }
+  return selectedRange
 }
 
 const findPdfJsMatchRawRange = (
@@ -1021,6 +1601,13 @@ const findPdfJsMatchRawRange = (
   const pageMatches = pdfApp?.findController?.pageMatches?.[pageNumber - 1]
   const pageMatchesLength = pdfApp?.findController?.pageMatchesLength?.[pageNumber - 1]
   if (!Array.isArray(pageMatches) || !Array.isArray(pageMatchesLength) || pageMatches.length === 0) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('PDF.js find controller had no raw match range for page', {
+        pageNumber,
+        pageMatchIndex,
+        ...buildFindControllerDebugSnapshot(pdfApp, pageNumber),
+      })
+    }
     return null
   }
 
@@ -1033,12 +1620,62 @@ const findPdfJsMatchRawRange = (
     || typeof rawLength !== 'number'
     || rawLength <= 0
   ) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('PDF.js find controller reported an invalid raw match range', {
+        pageNumber,
+        pageMatchIndex,
+        selectedIndex,
+        rawStart,
+        rawLength,
+        ...buildFindControllerDebugSnapshot(pdfApp, pageNumber),
+      })
+    }
     return null
   }
 
-  return {
+  const range = {
     rawStart,
     rawEndExclusive: rawStart + rawLength,
+  }
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug('PDF.js find controller reported a raw match range', {
+      pageNumber,
+      pageMatchIndex,
+      selectedIndex,
+      range,
+      ...buildFindControllerDebugSnapshot(pdfApp, pageNumber),
+    })
+  }
+  return range
+}
+
+const buildTextRangeSegmentDebugSnapshot = (
+  segments: TextLayerTextSegment[],
+  matchRange: TextLayerMatchRange,
+): Record<string, unknown> => {
+  const intersectingSegments = segments.flatMap((segment, index) => {
+    const segmentStart = Math.max(matchRange.rawStart, segment.start)
+    const segmentEnd = Math.min(matchRange.rawEndExclusive, segment.end)
+    if (segmentStart >= segmentEnd) {
+      return []
+    }
+
+    return [{
+      index,
+      rawStart: segment.start,
+      rawEndExclusive: segment.end,
+      matchedRawStart: segmentStart,
+      matchedRawEndExclusive: segmentEnd,
+      text: truncateDebugText(segment.node.textContent ?? '', 120),
+    }]
+  })
+
+  return {
+    matchRange,
+    matchedSegmentCount: intersectingSegments.length,
+    startSegmentIndex: intersectingSegments[0]?.index ?? null,
+    endSegmentIndex: intersectingSegments[intersectingSegments.length - 1]?.index ?? null,
+    matchedSegments: intersectingSegments.slice(0, 8),
   }
 }
 
@@ -1111,20 +1748,57 @@ const findTextLayerMatchRects = (
   const textLayer = getPageTextLayer(iframeDoc, pageNumber)
 
   if (!pageContainer || !textLayer) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Text-layer rect mapping could not start because page DOM is incomplete', {
+        pageNumber,
+        query,
+        pageMatchIndex,
+        ...buildTextLayerStructureDebugSnapshot(iframeDoc, pageNumber),
+      })
+    }
     return []
   }
 
   const { rawText, segments } = buildTextLayerSegments(textLayer)
   if (!rawText || segments.length === 0) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Text-layer rect mapping found no DOM text content on the candidate page', {
+        pageNumber,
+        query,
+        pageMatchIndex,
+        rawTextLength: rawText.length,
+        segmentCount: segments.length,
+      })
+    }
     return []
   }
 
   const matchRange = findTextLayerMatchRange(rawText, query, pageMatchIndex)
   if (!matchRange) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Text-layer rect mapping found text content but no candidate range for the query', {
+        pageNumber,
+        query,
+        pageMatchIndex,
+        ...buildTextMatchRangeDebugSnapshot(rawText, query, pageMatchIndex),
+      })
+    }
     return []
   }
 
-  return buildRectsFromTextRange(pageContainer, segments, matchRange)
+  const rects = buildRectsFromTextRange(pageContainer, segments, matchRange)
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug('Text-layer rect mapping completed', {
+      pageNumber,
+      query,
+      pageMatchIndex,
+      matchRange,
+      rectCount: rects.length,
+      rangeSegments: buildTextRangeSegmentDebugSnapshot(segments, matchRange),
+      ...buildTextMatchRangeDebugSnapshot(rawText, query, pageMatchIndex),
+    })
+  }
+  return rects
 }
 
 const countNormalizedEvidenceWords = (value: string): number => {
@@ -1229,36 +1903,83 @@ const findExpandedEvidenceQueryForPage = (
 ): ExpandedEvidenceQuery | null => {
   const normalizedPageText = pdfApp?.findController?._pageContents?.[pageNumber - 1]
   if (typeof normalizedPageText === 'string' && normalizedPageText.trim().length > 0) {
-    return findExpandedEvidenceQueryFromPageText(
+    const expanded = findExpandedEvidenceQueryFromPageText(
       normalizedPageText,
       desiredQuote,
       matchedFragmentQuery,
     )
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Tried to expand a matched fragment using PDF.js page contents', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        matchedFragmentQuery,
+        pageTextSource: 'pdfjs-page-contents',
+        pageTextLength: normalizedPageText.length,
+        expanded,
+      })
+    }
+    return expanded
   }
 
   const textLayerBuilder = getPdfJsTextLayerBuilder(pdfApp, pageNumber)
   if (textLayerBuilder) {
     const joinedText = textLayerBuilder.textContentItemsStr.join('')
     if (joinedText.trim().length > 0) {
-      return findExpandedEvidenceQueryFromPageText(
+      const expanded = findExpandedEvidenceQueryFromPageText(
         joinedText,
         desiredQuote,
         matchedFragmentQuery,
       )
+      if (isPdfEvidenceDebugEnabled()) {
+        logPdfEvidenceDebug('Tried to expand a matched fragment using the PDF.js text layer builder', {
+          pageNumber,
+          desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+          matchedFragmentQuery,
+          pageTextSource: 'pdfjs-text-layer-builder',
+          pageTextLength: joinedText.length,
+          expanded,
+        })
+      }
+      return expanded
     }
   }
 
   const textLayer = getPageTextLayer(iframeDoc, pageNumber)
   if (!textLayer) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Could not expand a matched fragment because the page text layer is missing', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        matchedFragmentQuery,
+      })
+    }
     return null
   }
 
   const { rawText } = buildTextLayerSegments(textLayer)
   if (!rawText) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Could not expand a matched fragment because the DOM text layer is empty', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        matchedFragmentQuery,
+      })
+    }
     return null
   }
 
-  return findExpandedEvidenceQueryFromPageText(rawText, desiredQuote, matchedFragmentQuery)
+  const expanded = findExpandedEvidenceQueryFromPageText(rawText, desiredQuote, matchedFragmentQuery)
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug('Tried to expand a matched fragment using the DOM text layer', {
+      pageNumber,
+      desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+      matchedFragmentQuery,
+      pageTextSource: 'dom-text-layer',
+      pageTextLength: rawText.length,
+      expanded,
+    })
+  }
+  return expanded
 }
 
 const findAnchoredEvidenceSpanForPage = (
@@ -1275,10 +1996,19 @@ const findAnchoredEvidenceSpanForPage = (
   rects: EvidenceTextLayerRect[]
   coverage: number
   score: number
+  rawStart: number
+  rawEndExclusive: number
 } | null => {
   const pageContainer = getPageContainer(iframeDoc, pageNumber)
   const textLayer = getPageTextLayer(iframeDoc, pageNumber)
   if (!pageContainer || !textLayer) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Anchored quote recovery could not start because the page DOM is incomplete', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        ...buildTextLayerStructureDebugSnapshot(iframeDoc, pageNumber, options?.pdfApp),
+      })
+    }
     return null
   }
 
@@ -1288,6 +2018,15 @@ const findAnchoredEvidenceSpanForPage = (
     : buildTextLayerSegments(textLayer)
   const { rawText, segments } = pageText
   if (!rawText || segments.length === 0) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Anchored quote recovery found no page text to align against', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        pageTextSource: textLayerBuilder ? 'pdfjs-text-layer-builder' : 'dom-text-layer',
+        rawTextLength: rawText.length,
+        segmentCount: segments.length,
+      })
+    }
     return null
   }
 
@@ -1318,6 +2057,50 @@ const findAnchoredEvidenceSpanForPage = (
     preferredAnchor: options?.preferredAnchor,
     preferredRawRange: preferredWindowRange,
   })
+  if (isPdfEvidenceDebugEnabled()) {
+    const anchoredSpanDebug = getAnchoredEvidenceSpanDebugInfo(
+      rawText.slice(rawWindowStart, rawWindowEnd),
+      desiredQuote,
+      {
+        preferredAnchor: options?.preferredAnchor,
+        preferredRawRange: preferredWindowRange,
+      },
+    )
+    logPdfEvidenceDebug(
+      anchoredSpan
+        ? 'Anchored quote recovery produced a candidate span from the page text'
+        : 'Anchored quote recovery could not produce a candidate span from the page text',
+      {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        preferredAnchor: options?.preferredAnchor ?? null,
+        pageMatchIndex: options?.pageMatchIndex ?? null,
+        pageTextSource: textLayerBuilder ? 'pdfjs-text-layer-builder' : 'dom-text-layer',
+        rawTextLength: rawText.length,
+        searchWindow: {
+          rawStart: rawWindowStart,
+          rawEndExclusive: rawWindowEnd,
+        },
+        preferredAnchorRange,
+        preferredWindowRange,
+        bestMatch: anchoredSpanDebug.bestMatch
+          ? {
+            rawStart: anchoredSpanDebug.bestMatch.rawStart + rawWindowStart,
+            rawEndExclusive: anchoredSpanDebug.bestMatch.rawEndExclusive + rawWindowStart,
+            rawQuery: truncateDebugText(anchoredSpanDebug.bestMatch.rawQuery, 240),
+            coverage: anchoredSpanDebug.bestMatch.coverage,
+            score: anchoredSpanDebug.bestMatch.score,
+          }
+          : null,
+        topWindows: summarizeAnchoredDebugWindows(anchoredSpanDebug.windows),
+        windows: anchoredSpanDebug.windows,
+        pageTextSnapshot: {
+          source: textLayerBuilder ? 'pdfjs-text-layer-builder' : 'dom-text-layer',
+          preview: truncateDebugText(rawText.slice(rawWindowStart, rawWindowEnd), 360),
+        },
+      },
+    )
+  }
   if (!anchoredSpan) {
     return null
   }
@@ -1327,6 +2110,19 @@ const findAnchoredEvidenceSpanForPage = (
     rawEndExclusive: anchoredSpan.rawEndExclusive + rawWindowStart,
   })
   if (rects.length === 0) {
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('Anchored quote recovery found a span but rect mapping for that span returned no boxes', {
+        pageNumber,
+        desiredQuotePreview: truncateDebugText(desiredQuote, 220),
+        query: anchoredSpan.rawQuery,
+        rawStart: anchoredSpan.rawStart + rawWindowStart,
+        rawEndExclusive: anchoredSpan.rawEndExclusive + rawWindowStart,
+        rangeSegments: buildTextRangeSegmentDebugSnapshot(segments, {
+          rawStart: anchoredSpan.rawStart + rawWindowStart,
+          rawEndExclusive: anchoredSpan.rawEndExclusive + rawWindowStart,
+        }),
+      })
+    }
     return null
   }
 
@@ -1335,6 +2131,8 @@ const findAnchoredEvidenceSpanForPage = (
     rects,
     coverage: anchoredSpan.coverage,
     score: anchoredSpan.score,
+    rawStart: anchoredSpan.rawStart + rawWindowStart,
+    rawEndExclusive: anchoredSpan.rawEndExclusive + rawWindowStart,
   }
 }
 
@@ -1357,6 +2155,13 @@ const tryResolveTextLayerMatch = (
   for (const candidatePage of getEvidenceTextLayerCandidatePages(pageNumber, options?.pdfApp)) {
     const nativeHighlightRects = findPdfJsSelectedHighlightRects(iframeDoc, candidatePage)
     if (nativeHighlightRects.length > 0) {
+      logPdfEvidenceDebug('Resolved text-layer match from native PDF.js highlight rects', {
+        initialPageNumber: pageNumber,
+        candidatePage,
+        query,
+        pageMatchIndex,
+        rectCount: nativeHighlightRects.length,
+      })
       return {
         rects: nativeHighlightRects,
         matchedPage: candidatePage,
@@ -1369,6 +2174,14 @@ const tryResolveTextLayerMatch = (
       pageMatchIndex,
     )
     if (mappedRects.length > 0) {
+      logPdfEvidenceDebug('Resolved text-layer match from PDF.js match-offset rect mapping', {
+        initialPageNumber: pageNumber,
+        candidatePage,
+        query,
+        pageMatchIndex,
+        rectCount: mappedRects.length,
+        ...buildFindControllerDebugSnapshot(options?.pdfApp, candidatePage),
+      })
       return {
         rects: mappedRects,
         matchedPage: candidatePage,
@@ -1377,10 +2190,29 @@ const tryResolveTextLayerMatch = (
 
     const rects = findTextLayerMatchRects(iframeDoc, candidatePage, query, pageMatchIndex)
     if (rects.length > 0) {
+      logPdfEvidenceDebug('Resolved text-layer match from DOM text-layer remapping', {
+        initialPageNumber: pageNumber,
+        candidatePage,
+        query,
+        pageMatchIndex,
+        rectCount: rects.length,
+      })
       return {
         rects,
         matchedPage: candidatePage,
       }
+    }
+
+    if (isPdfEvidenceDebugEnabled()) {
+      logPdfEvidenceDebug('A candidate page did not yield quote highlight rects from any text-layer strategy', {
+        initialPageNumber: pageNumber,
+        candidatePage,
+        query,
+        pageMatchIndex,
+        ...buildTextLayerStructureDebugSnapshot(iframeDoc, candidatePage, options?.pdfApp),
+        pageTextSnapshot: buildPageTextDebugSnapshot(iframeDoc, options?.pdfApp, candidatePage),
+        findController: buildFindControllerDebugSnapshot(options?.pdfApp, candidatePage),
+      })
     }
   }
 
@@ -1398,6 +2230,17 @@ const waitForTextLayerMatch = async (
   },
 ): Promise<EvidenceTextLayerMatchResult> => {
   const startedAt = Date.now()
+  if (isPdfEvidenceDebugEnabled()) {
+    logPdfEvidenceDebug('Waiting for quote highlight rects on the text layer', {
+      pageNumber,
+      query,
+      pageMatchIndex,
+      timeoutMs,
+      pageTextSnapshot: buildPageTextDebugSnapshot(iframeDoc, options?.pdfApp, pageNumber),
+      textLayer: buildTextLayerStructureDebugSnapshot(iframeDoc, pageNumber, options?.pdfApp),
+      findController: buildFindControllerDebugSnapshot(options?.pdfApp, pageNumber),
+    })
+  }
   const immediateMatch = tryResolveTextLayerMatch(
     iframeDoc,
     pageNumber,
@@ -1458,6 +2301,15 @@ const waitForTextLayerMatch = async (
       if (settled || attemptTimeoutId !== null) {
         return
       }
+
+      logPdfEvidenceDebug('Scheduling another text-layer quote localization attempt', {
+        eventName,
+        pageNumber,
+        query,
+        pageMatchIndex,
+        elapsedMs: Date.now() - startedAt,
+        ...detail,
+      })
 
       // Let PDF.js finish any same-tick DOM updates before we inspect the text layer.
       attemptTimeoutId = window.setTimeout(() => {
@@ -1539,13 +2391,38 @@ const waitForTextLayerMatch = async (
     }
 
     const timeoutId = window.setTimeout(() => {
-      logPdfEvidenceDebug('Timed out waiting for quote highlight rects', {
-        pageNumber,
-        query,
-        pageMatchIndex,
-        timeoutMs,
-        liveSelectedPage: getSelectedEvidenceSpikePage(options?.pdfApp),
-      })
+      if (isPdfEvidenceDebugEnabled()) {
+        const effectivePageNumber = getSelectedEvidenceSpikePage(options?.pdfApp) ?? pageNumber
+        logPdfEvidenceDebug('Timed out waiting for quote highlight rects', {
+          pageNumber,
+          query,
+          pageMatchIndex,
+          timeoutMs,
+          liveSelectedPage: getSelectedEvidenceSpikePage(options?.pdfApp),
+          pageTextSnapshot: buildPageTextDebugSnapshot(
+            iframeDoc,
+            options?.pdfApp,
+            effectivePageNumber,
+          ),
+          textLayer: buildTextLayerStructureDebugSnapshot(
+            iframeDoc,
+            effectivePageNumber,
+            options?.pdfApp,
+          ),
+          findController: buildFindControllerDebugSnapshot(
+            options?.pdfApp,
+            effectivePageNumber,
+          ),
+        })
+      } else {
+        logPdfEvidenceDebug('Timed out waiting for quote highlight rects', {
+          pageNumber,
+          query,
+          pageMatchIndex,
+          timeoutMs,
+          liveSelectedPage: getSelectedEvidenceSpikePage(options?.pdfApp),
+        })
+      }
       finish({
         rects: [],
         matchedPage: getSelectedEvidenceSpikePage(options?.pdfApp) ?? pageNumber,
@@ -1776,9 +2653,29 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
 
     const finish = (detail?: { currentMatch?: number; matchesTotal?: number; matchedPage?: number | null; pageMatchIndex?: number | null; matchState?: number | null }) => {
       const matchState = detail?.matchState ?? latestState
-      const found = isSuccessfulEvidenceSpikeFindState(matchState)
       const resolvedCurrent = detail?.currentMatch ?? latestCurrent
       const resolvedTotal = detail?.matchesTotal ?? latestTotal
+      const selectedMatchedPage = getSelectedEvidenceSpikeMatchedPage(pdfApp)
+      const selectedMatchIndex = getSelectedEvidenceSpikeMatchIndex(pdfApp)
+      const hasConcreteSelection = selectedMatchedPage !== null && selectedMatchIndex !== null
+      const found = isSuccessfulEvidenceSpikeFindState(matchState)
+        && (resolvedTotal > 0 || hasConcreteSelection)
+      const finalOutcome = {
+        matchedPage: found
+          ? (detail?.matchedPage ?? selectedMatchedPage)
+          : null,
+        matchesTotal: resolvedTotal > 0
+          ? resolvedTotal
+          : (found && hasConcreteSelection ? 1 : 0),
+        currentMatch: resolvedCurrent > 0
+          ? resolvedCurrent
+          : (found && hasConcreteSelection ? (selectedMatchIndex ?? 0) + 1 : 0),
+        pageMatchIndex: found
+          ? (detail?.pageMatchIndex ?? selectedMatchIndex)
+          : null,
+        found,
+        matchState,
+      }
 
       window.clearTimeout(timeoutId)
       if (settleTimeoutId !== null) {
@@ -1786,14 +2683,15 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
       }
       eventBus.off('updatefindmatchescount', handleCount)
       eventBus.off('updatefindcontrolstate', handleState)
-      resolve({
-        matchedPage: detail?.matchedPage ?? getSelectedEvidenceSpikePage(pdfApp),
-        matchesTotal: found && resolvedTotal === 0 ? 1 : resolvedTotal,
-        currentMatch: found && resolvedCurrent === 0 ? 1 : resolvedCurrent,
-        pageMatchIndex: detail?.pageMatchIndex ?? getSelectedEvidenceSpikeMatchIndex(pdfApp),
-        found,
-        matchState,
+      logPdfEvidenceDebug('Settled PDF.js find request for evidence navigation', {
+        query,
+        outcome: finalOutcome,
+        ...buildFindControllerDebugSnapshot(
+          pdfApp,
+          finalOutcome.matchedPage ?? getSelectedEvidenceSpikePage(pdfApp) ?? 1,
+        ),
       })
+      resolve(finalOutcome)
     }
 
     const handleCount = (event: any) => {
@@ -1873,6 +2771,14 @@ const waitForEvidenceSpikeFindResult = (pdfApp: any, query: string): Promise<Pdf
     }
 
     const timeoutId = window.setTimeout(() => {
+      logPdfEvidenceDebug('Timed out while waiting for PDF.js find state to settle', {
+        query,
+        latestCurrent,
+        latestTotal,
+        latestState,
+        selectedPage: getSelectedEvidenceSpikePage(pdfApp),
+        selectedMatchIndex: getSelectedEvidenceSpikeMatchIndex(pdfApp),
+      })
       finish({
         currentMatch: latestCurrent,
         matchesTotal: latestTotal,
@@ -1890,6 +2796,10 @@ const dispatchEvidenceSpikeFind = async (pdfApp: any, candidate: PdfEvidenceSpik
   logPdfEvidenceDebug('Dispatching PDF.js find request', {
     query: candidate.query,
     reason: candidate.reason,
+    queryLength: candidate.query.length,
+    normalizedQueryLength: normalizeEvidenceSpikeText(candidate.query).length,
+    selectedPageBeforeDispatch: getSelectedEvidenceSpikePage(pdfApp),
+    selectedMatchIndexBeforeDispatch: getSelectedEvidenceSpikeMatchIndex(pdfApp),
   })
   const resultPromise = waitForEvidenceSpikeFindResult(pdfApp, candidate.query)
   pdfApp.eventBus.dispatch('find', {
@@ -2131,6 +3041,10 @@ export function PdfViewer({
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
+    lastPdfEvidenceNavigationResult = result
+    logPdfEvidenceDebug('Committed evidence navigation result to viewer state', {
+      result,
+    })
     setNavigationResult(result)
     onNavigationStateChange?.(result)
   }, [onNavigationStateChange])
@@ -2640,20 +3554,25 @@ export function PdfViewer({
             )
           )
         ) {
-          effectiveQuery = anchoredSpanCandidate.query
-          textLayerRects = anchoredSpanCandidate.rects
-          anchoredToPageText = true
-          expandedAroundFragment = anchoredQueryWordCount > candidateQueryWordCount
-          logPdfEvidenceDebug('Recovered a best-match quote span from the PDF page text', {
+        effectiveQuery = anchoredSpanCandidate.query
+        textLayerRects = anchoredSpanCandidate.rects
+        anchoredToPageText = true
+        expandedAroundFragment = anchoredQueryWordCount > candidateQueryWordCount
+        logPdfEvidenceDebug('Recovered a best-match quote span from the PDF page text', {
             anchorId: command.anchorId,
             candidateQuery: candidate.query,
             anchoredQuery: anchoredSpanCandidate.query,
-            matchedPage,
-            coverage: anchoredSpanCandidate.coverage,
-            score: anchoredSpanCandidate.score,
-            rectCount: anchoredSpanCandidate.rects.length,
-          })
-        }
+          matchedPage,
+          coverage: anchoredSpanCandidate.coverage,
+          score: anchoredSpanCandidate.score,
+          rectCount: anchoredSpanCandidate.rects.length,
+          queryPreview: truncateDebugText(anchoredSpanCandidate.query, 220),
+          rawRange: {
+            rawStart: anchoredSpanCandidate.rawStart,
+            rawEndExclusive: anchoredSpanCandidate.rawEndExclusive,
+          },
+        })
+      }
 
         const fragmentExpansionCandidate = (
           textLayerRects.length > 0
@@ -2805,6 +3724,102 @@ export function PdfViewer({
           }),
         }
       }
+    }
+
+    const documentAnchoredQuote = iframeDoc && (quote || searchText).trim().length > 0
+      ? findAnchoredEvidenceSpanAcrossDocument(
+        iframeDoc,
+        pdfApp,
+        quote || searchText,
+        {
+          pageCountHint: activeDocument?.pageCount ?? null,
+          preferredPage,
+        },
+      )
+      : null
+
+    if (documentAnchoredQuote && iframeDoc) {
+      logPdfEvidenceDebug('Attempting document-wide anchored quote recovery after page-local matching failed', {
+        anchorId: command.anchorId,
+        preferredPage,
+        matchedPage: documentAnchoredQuote.pageNumber,
+        query: documentAnchoredQuote.query,
+        coverage: documentAnchoredQuote.coverage,
+        score: documentAnchoredQuote.score,
+      })
+
+      setEvidenceSpikePage(pdfApp, documentAnchoredQuote.pageNumber)
+      const documentTextLayerMatch = await waitForTextLayerMatch(
+        iframeDoc,
+        documentAnchoredQuote.pageNumber,
+        documentAnchoredQuote.query,
+        null,
+        PDF_TEXT_LAYER_MATCH_TIMEOUT_MS,
+        { pdfApp },
+      )
+      const documentAnchoredSpan = documentTextLayerMatch.rects.length > 0
+        ? null
+        : findAnchoredEvidenceSpanForPage(
+          iframeDoc,
+          documentAnchoredQuote.pageNumber,
+          quote || searchText,
+          {
+            preferredAnchor: documentAnchoredQuote.query,
+            pdfApp,
+          },
+        )
+      const documentRects = documentTextLayerMatch.rects.length > 0
+        ? documentTextLayerMatch.rects
+        : (documentAnchoredSpan?.rects ?? [])
+      const effectiveDocumentQuery = documentAnchoredSpan?.query ?? documentAnchoredQuote.query
+      const matchedDocumentPage = documentTextLayerMatch.matchedPage ?? documentAnchoredQuote.pageNumber
+
+      if (documentRects.length > 0) {
+        const locatorQuality = resolveQuoteMatchLocatorQuality(anchor.locator_quality, 'exact-quote')
+        setEvidenceHighlight({
+          anchorId: command.anchorId,
+          kind: 'quote',
+          mode: command.mode,
+          pageNumber: matchedDocumentPage,
+          query: effectiveDocumentQuery,
+          pageMatchIndex: null,
+          rects: documentRects,
+          renderOverlay,
+        })
+        maybeClearPdfJsFindHighlights(pdfApp, {
+          preserveNativeHighlight: !renderOverlay,
+          reason: 'document-anchored-quote-match',
+        })
+        logPdfEvidenceDebug('Document-wide anchored quote recovery matched successfully', {
+          anchorId: command.anchorId,
+          preferredPage,
+          matchedPage: matchedDocumentPage,
+          query: effectiveDocumentQuery,
+          rectCount: documentRects.length,
+          coverage: documentAnchoredSpan?.coverage ?? documentAnchoredQuote.coverage,
+          score: documentAnchoredSpan?.score ?? documentAnchoredQuote.score,
+          locatorQuality,
+        })
+        return {
+          ...baseResult,
+          status: 'matched',
+          strategy: 'document',
+          locatorQuality,
+          degraded: isDegradedLocatorQuality(locatorQuality),
+          matchedQuery: effectiveDocumentQuery,
+          matchedPage: matchedDocumentPage,
+          matchesTotal: 1,
+          currentMatch: 1,
+          note: 'Recovered the best matching quote span from the PDF page text elsewhere in the document after page-hinted matching failed.',
+        }
+      }
+
+      logPdfEvidenceDebug('Document-wide anchored quote recovery found the right page text but could not derive stable highlight rects', {
+        anchorId: command.anchorId,
+        preferredPage,
+        matchedPage: documentAnchoredQuote.pageNumber,
+        query: documentAnchoredQuote.query,
+      })
     }
 
     const sectionCandidates = buildEvidenceSpikeSectionCandidates(sectionTitle, anchor.subsection_title)
@@ -2971,7 +3986,7 @@ export function PdfViewer({
       currentMatch: 0,
       note: 'The PDF viewer could not localize this evidence to quote, section, or page-level text in the current document.',
     }
-  }, [activeDocument?.documentId])
+  }, [activeDocument?.documentId, activeDocument?.pageCount])
 
   const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
     const result = await executeEvidenceNavigation(
@@ -3553,6 +4568,11 @@ export function PdfViewer({
         enabled: nextEnabled,
         storageKey: PDF_EVIDENCE_DEBUG_STORAGE_KEY,
         setEnabled,
+        getEntries: () => [...pdfEvidenceDebugEntries],
+        clearEntries: () => {
+          pdfEvidenceDebugEntries.splice(0, pdfEvidenceDebugEntries.length)
+        },
+        getLastResult: () => lastPdfEvidenceNavigationResult,
       }
       console.info('[PDF EVIDENCE DEBUG] Browser evidence tracing', nextEnabled ? 'enabled' : 'disabled')
       return nextEnabled
@@ -3562,6 +4582,11 @@ export function PdfViewer({
       enabled: isPdfEvidenceDebugEnabled(),
       storageKey: PDF_EVIDENCE_DEBUG_STORAGE_KEY,
       setEnabled,
+      getEntries: () => [...pdfEvidenceDebugEntries],
+      clearEntries: () => {
+        pdfEvidenceDebugEntries.splice(0, pdfEvidenceDebugEntries.length)
+      },
+      getLastResult: () => lastPdfEvidenceNavigationResult,
     }
 
     return () => {

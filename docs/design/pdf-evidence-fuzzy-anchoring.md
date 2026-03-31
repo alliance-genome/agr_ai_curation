@@ -215,6 +215,74 @@ Suggested initial policy:
 
 These thresholds may need tuning from real traces.
 
+## Debugging Workflow
+
+When a quote still fails in the live viewer, use the browser-side PDF evidence debug mode first before changing thresholds.
+
+### Enable debug mode
+
+- add `?pdfEvidenceDebug=1` to the app URL, or
+- run in the console:
+  - `window.__pdfViewerEvidenceDebug?.setEnabled(true)`
+
+### Useful console helpers
+
+The viewer now exposes:
+
+- `window.__pdfViewerEvidenceDebug.getEntries()`
+  - returns the rolling debug log for the current browser session
+- `window.__pdfViewerEvidenceDebug.getLastResult()`
+  - returns the last navigation result committed to viewer state
+- `window.__pdfViewerEvidenceDebug.clearEntries()`
+  - clears the in-memory log so a single repro is easier to inspect
+
+### What the debug logs now tell us
+
+For each quote navigation attempt, the logs should now show:
+
+- the incoming quote, page hints, section hints, and candidate search queries
+- the exact PDF.js find events and whether PDF.js selected a real match or only reported a misleading state
+- page-local anchored quote recovery details
+- document-wide anchored fallback details
+- the strongest rejected anchoring window on each scanned page
+- alignment-level details for near misses:
+  - coverage
+  - score
+  - boundary-anchor status
+  - leading contiguous match count
+  - trailing contiguous match count
+  - first leading mismatch token
+  - first trailing mismatch token
+  - a preview of matched token pairs
+- text-range-to-rect mapping details:
+  - the raw matched range
+  - which text-layer segments intersected that range
+  - the start/end segment indices
+  - the segment text previews used to build highlight rectangles
+
+### Current working hypothesis from direct probes
+
+The direct string probes on the two main failure examples are important:
+
+- the transgenic-fly quote aligns successfully once we compare it against the actual page text
+- the long Actin quote also aligns successfully, even with `±` vs `+/-` drift and the extra citation token
+
+That means the fuzzy quote alignment layer is already able to recover the intended span in those examples.
+
+The remaining likely failure surface is downstream of alignment, in one of these steps:
+
+- page hint selection before we reach the correct page
+- PDF.js-selected match offsets
+- text-layer raw-range reconstruction
+- mapping the recovered raw range back into DOM/PDF.js rectangles
+
+So when debugging a remaining failure, prioritize checking:
+
+1. Did we localize the correct page?
+2. Did `findAnchoredEvidenceSpanForPage()` recover the right `rawQuery` and `rawRange`?
+3. Did `buildTextRangeSegmentDebugSnapshot()` show the expected text segments for that range?
+4. Did rect creation fail, or did it only create boxes for a prefix of the intended range?
+
 ## Integration Points
 
 ### Current viewer path

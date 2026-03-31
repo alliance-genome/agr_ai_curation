@@ -32,14 +32,75 @@ export interface AnchoredEvidenceSpan {
   includesPreferredAnchor: boolean
 }
 
-interface AnchoringRawRange {
+export interface AnchoredEvidenceDebugRange {
   rawStart: number
   rawEndExclusive: number
 }
 
+export interface AnchoredEvidenceDebugTokenPair {
+  quoteIndex: number
+  quoteToken: string
+  pageIndex: number
+  pageToken: string
+  similarity: number
+}
+
+export interface AnchoredEvidenceDebugMismatch {
+  quoteIndex: number | null
+  quoteToken: string | null
+  pageIndex: number | null
+  pageToken: string | null
+}
+
+interface AnchoringRawRange extends AnchoredEvidenceDebugRange {}
+
 interface ExactAnchoredMatch extends AnchoringRawRange {
   normalizedStart: number
   normalizedEndExclusive: number
+}
+
+export interface AnchoredEvidenceSpanWindowDebug {
+  searchWindow: AnchoredEvidenceDebugRange
+  adjustedPreferredRawRange: AnchoredEvidenceDebugRange | null
+  resolution: 'exact' | 'alignment' | 'none'
+  normalizedPageTextLength: number
+  quoteTokenCount: number
+  pageTokenCount: number
+  exactMatchCount: number
+  selectedExactMatch: {
+    rawStart: number
+    rawEndExclusive: number
+    normalizedStart: number
+    normalizedEndExclusive: number
+  } | null
+  alignmentScore: number | null
+  matchedPairCount: number
+  boundaryMatchCount: number
+  leadingContiguousMatchCount: number
+  trailingContiguousMatchCount: number
+  coverage: number | null
+  score: number | null
+  spanDensity: number | null
+  largestMatchedPageGap: number | null
+  leadingAnchorMatched: boolean | null
+  trailingAnchorMatched: boolean | null
+  firstLeadingMismatch: AnchoredEvidenceDebugMismatch | null
+  firstTrailingMismatch: AnchoredEvidenceDebugMismatch | null
+  matchedTokenPreview: AnchoredEvidenceDebugTokenPair[]
+  includesPreferredAnchor: boolean | null
+  containsPreferredRawRange: boolean | null
+  candidateRawRange: AnchoredEvidenceDebugRange | null
+  candidateRawQuery: string | null
+  passesThreshold: boolean
+  rejectionReasons: string[]
+}
+
+export interface AnchoredEvidenceSpanDebugInfo {
+  normalizedQuote: string
+  preferredAnchorNormalized: string | null
+  preferredSearchWindows: AnchoredEvidenceDebugRange[]
+  windows: AnchoredEvidenceSpanWindowDebug[]
+  bestMatch: AnchoredEvidenceSpan | null
 }
 
 const TOKEN_PATTERN = /\S+/g
@@ -619,6 +680,138 @@ const recoverBestLocalAlignment = (
   }
 }
 
+const buildAlignmentMatchPreview = (
+  quoteTokens: AnchoringToken[],
+  pageTokens: AnchoringToken[],
+  matches: AlignmentMatch[],
+): AnchoredEvidenceDebugTokenPair[] => {
+  return matches.slice(0, 12).map((match) => ({
+    quoteIndex: match.quoteIndex,
+    quoteToken: quoteTokens[match.quoteIndex]?.value ?? '',
+    pageIndex: match.pageIndex,
+    pageToken: pageTokens[match.pageIndex]?.value ?? '',
+    similarity: match.similarity,
+  }))
+}
+
+const buildLeadingMismatch = (
+  quoteTokens: AnchoringToken[],
+  pageTokens: AnchoringToken[],
+  matchByQuoteIndex: Map<number, AlignmentMatch>,
+  matchedCount: number,
+  lastMatchedPageIndex: number,
+): AnchoredEvidenceDebugMismatch | null => {
+  if (matchedCount >= quoteTokens.length) {
+    return null
+  }
+
+  const quoteToken = quoteTokens[matchedCount] ?? null
+  const directMatch = matchByQuoteIndex.get(matchedCount)
+  const pageIndex = directMatch?.pageIndex ?? (
+    lastMatchedPageIndex + 1 < pageTokens.length
+      ? lastMatchedPageIndex + 1
+      : null
+  )
+  const pageToken = pageIndex !== null ? pageTokens[pageIndex] ?? null : null
+
+  return {
+    quoteIndex: matchedCount,
+    quoteToken: quoteToken?.value ?? null,
+    pageIndex,
+    pageToken: pageToken?.value ?? null,
+  }
+}
+
+const buildTrailingMismatch = (
+  quoteTokens: AnchoringToken[],
+  pageTokens: AnchoringToken[],
+  matchByQuoteIndex: Map<number, AlignmentMatch>,
+  matchedCount: number,
+  firstMatchedPageIndex: number,
+): AnchoredEvidenceDebugMismatch | null => {
+  if (matchedCount >= quoteTokens.length) {
+    return null
+  }
+
+  const quoteIndex = quoteTokens.length - 1 - matchedCount
+  const quoteToken = quoteTokens[quoteIndex] ?? null
+  const directMatch = matchByQuoteIndex.get(quoteIndex)
+  const pageIndex = directMatch?.pageIndex ?? (
+    firstMatchedPageIndex - 1 >= 0
+      ? firstMatchedPageIndex - 1
+      : null
+  )
+  const pageToken = pageIndex !== null ? pageTokens[pageIndex] ?? null : null
+
+  return {
+    quoteIndex,
+    quoteToken: quoteToken?.value ?? null,
+    pageIndex,
+    pageToken: pageToken?.value ?? null,
+  }
+}
+
+const buildAlignmentContiguityDebug = (
+  quoteTokens: AnchoringToken[],
+  pageTokens: AnchoringToken[],
+  matches: AlignmentMatch[],
+): {
+  leadingContiguousMatchCount: number
+  trailingContiguousMatchCount: number
+  firstLeadingMismatch: AnchoredEvidenceDebugMismatch | null
+  firstTrailingMismatch: AnchoredEvidenceDebugMismatch | null
+  matchedTokenPreview: AnchoredEvidenceDebugTokenPair[]
+} => {
+  const matchByQuoteIndex = new Map<number, AlignmentMatch>()
+  matches.forEach((match) => {
+    if (!matchByQuoteIndex.has(match.quoteIndex)) {
+      matchByQuoteIndex.set(match.quoteIndex, match)
+    }
+  })
+
+  let leadingContiguousMatchCount = 0
+  let lastLeadingPageIndex = -1
+  while (leadingContiguousMatchCount < quoteTokens.length) {
+    const match = matchByQuoteIndex.get(leadingContiguousMatchCount)
+    if (!match || match.pageIndex <= lastLeadingPageIndex) {
+      break
+    }
+    lastLeadingPageIndex = match.pageIndex
+    leadingContiguousMatchCount += 1
+  }
+
+  let trailingContiguousMatchCount = 0
+  let firstTrailingPageIndex = pageTokens.length
+  for (let quoteIndex = quoteTokens.length - 1; quoteIndex >= 0; quoteIndex -= 1) {
+    const match = matchByQuoteIndex.get(quoteIndex)
+    if (!match || match.pageIndex >= firstTrailingPageIndex) {
+      break
+    }
+    firstTrailingPageIndex = match.pageIndex
+    trailingContiguousMatchCount += 1
+  }
+
+  return {
+    leadingContiguousMatchCount,
+    trailingContiguousMatchCount,
+    firstLeadingMismatch: buildLeadingMismatch(
+      quoteTokens,
+      pageTokens,
+      matchByQuoteIndex,
+      leadingContiguousMatchCount,
+      lastLeadingPageIndex,
+    ),
+    firstTrailingMismatch: buildTrailingMismatch(
+      quoteTokens,
+      pageTokens,
+      matchByQuoteIndex,
+      trailingContiguousMatchCount,
+      firstTrailingPageIndex,
+    ),
+    matchedTokenPreview: buildAlignmentMatchPreview(quoteTokens, pageTokens, matches),
+  }
+}
+
 const spanContainsPreferredRawRange = (
   span: AnchoringRawRange,
   preferredRawRange?: AnchoringRawRange | null,
@@ -677,7 +870,7 @@ const chooseBetterAnchoredSpan = (
   return candidate.rawStart < currentBest.rawStart ? candidate : currentBest
 }
 
-const findAnchoredEvidenceSpanInWindow = (
+const evaluateAnchoredEvidenceSpanInWindow = (
   searchPageText: string,
   normalizedQuote: string,
   searchWindowStart: number,
@@ -685,34 +878,120 @@ const findAnchoredEvidenceSpanInWindow = (
     preferredAnchor?: string | null
     preferredRawRange?: AnchoringRawRange | null
   },
-): AnchoredEvidenceSpan | null => {
+): {
+  candidate: AnchoredEvidenceSpan | null
+  debug: AnchoredEvidenceSpanWindowDebug
+} => {
+  const debugWindow: AnchoredEvidenceSpanWindowDebug = {
+    searchWindow: {
+      rawStart: searchWindowStart,
+      rawEndExclusive: searchWindowStart + searchPageText.length,
+    },
+    adjustedPreferredRawRange: options?.preferredRawRange
+      ? { ...options.preferredRawRange }
+      : null,
+    resolution: 'none',
+    normalizedPageTextLength: 0,
+    quoteTokenCount: 0,
+    pageTokenCount: 0,
+    exactMatchCount: 0,
+    selectedExactMatch: null,
+    alignmentScore: null,
+    matchedPairCount: 0,
+    boundaryMatchCount: 0,
+    leadingContiguousMatchCount: 0,
+    trailingContiguousMatchCount: 0,
+    coverage: null,
+    score: null,
+    spanDensity: null,
+    largestMatchedPageGap: null,
+    leadingAnchorMatched: null,
+    trailingAnchorMatched: null,
+    firstLeadingMismatch: null,
+    firstTrailingMismatch: null,
+    matchedTokenPreview: [],
+    includesPreferredAnchor: null,
+    containsPreferredRawRange: null,
+    candidateRawRange: null,
+    candidateRawQuery: null,
+    passesThreshold: false,
+    rejectionReasons: [],
+  }
   const sourceMap = buildNormalizedTextSourceMap(searchPageText)
   const normalizedPageText = sourceMap.text
+  debugWindow.normalizedPageTextLength = normalizedPageText.length
   if (!normalizedPageText.trim()) {
-    return null
+    debugWindow.rejectionReasons.push('empty-normalized-page-text')
+    return {
+      candidate: null,
+      debug: debugWindow,
+    }
   }
 
-  const exactMatch = buildExactAnchoredSpan(
+  const exactMatches = collectExactAnchoredMatches(
     searchPageText,
     normalizedPageText,
     sourceMap.sourceIndices,
     normalizedQuote,
-    options?.preferredRawRange,
   )
-  if (exactMatch && spanContainsPreferredRawRange(exactMatch, options?.preferredRawRange)) {
-    return {
-      ...exactMatch,
+  debugWindow.exactMatchCount = exactMatches.length
+  const exactSelectedMatch = selectPreferredExactMatch(exactMatches, options?.preferredRawRange)
+  debugWindow.selectedExactMatch = exactSelectedMatch
+  const exactMatch = exactSelectedMatch
+    ? buildExactAnchoredSpan(
+      searchPageText,
+      normalizedPageText,
+      sourceMap.sourceIndices,
+      normalizedQuote,
+      options?.preferredRawRange,
+    )
+    : null
+  if (exactMatch) {
+    debugWindow.candidateRawRange = {
       rawStart: exactMatch.rawStart + searchWindowStart,
       rawEndExclusive: exactMatch.rawEndExclusive + searchWindowStart,
     }
+    debugWindow.candidateRawQuery = exactMatch.rawQuery
+    debugWindow.containsPreferredRawRange = spanContainsPreferredRawRange(exactMatch, options?.preferredRawRange)
+  }
+  if (exactMatch && debugWindow.containsPreferredRawRange) {
+    debugWindow.resolution = 'exact'
+    debugWindow.passesThreshold = true
+    return {
+      candidate: {
+        ...exactMatch,
+        rawStart: exactMatch.rawStart + searchWindowStart,
+        rawEndExclusive: exactMatch.rawEndExclusive + searchWindowStart,
+      },
+      debug: debugWindow,
+    }
+  }
+  if (exactMatch) {
+    debugWindow.rejectionReasons.push('exact-match-missed-preferred-range')
+  } else {
+    debugWindow.rejectionReasons.push('no-exact-match')
   }
 
   const quoteTokens = tokenizeNormalizedText(normalizedQuote)
   const pageTokens = tokenizeNormalizedText(normalizedPageText)
+  debugWindow.quoteTokenCount = quoteTokens.length
+  debugWindow.pageTokenCount = pageTokens.length
   const alignment = recoverBestLocalAlignment(quoteTokens, pageTokens)
   if (!alignment) {
-    return null
+    debugWindow.rejectionReasons.push('no-local-alignment')
+    return {
+      candidate: null,
+      debug: debugWindow,
+    }
   }
+  debugWindow.alignmentScore = alignment.score
+  debugWindow.matchedPairCount = alignment.matches.length
+  const contiguityDebug = buildAlignmentContiguityDebug(quoteTokens, pageTokens, alignment.matches)
+  debugWindow.leadingContiguousMatchCount = contiguityDebug.leadingContiguousMatchCount
+  debugWindow.trailingContiguousMatchCount = contiguityDebug.trailingContiguousMatchCount
+  debugWindow.firstLeadingMismatch = contiguityDebug.firstLeadingMismatch
+  debugWindow.firstTrailingMismatch = contiguityDebug.firstTrailingMismatch
+  debugWindow.matchedTokenPreview = contiguityDebug.matchedTokenPreview
 
   const boundaryMatches = alignment.matches.filter((match) => {
     const quoteToken = quoteTokens[match.quoteIndex]
@@ -720,6 +999,7 @@ const findAnchoredEvidenceSpanInWindow = (
     return Boolean(quoteToken && pageToken && isStrongBoundaryMatch(quoteToken, pageToken, match.similarity))
   })
   const effectiveBoundaryMatches = boundaryMatches.length > 0 ? boundaryMatches : alignment.matches
+  debugWindow.boundaryMatchCount = boundaryMatches.length
   const matchedQuoteIndices = effectiveBoundaryMatches.map((match) => match.quoteIndex)
   const matchedPageIndices = effectiveBoundaryMatches.map((match) => match.pageIndex)
   const firstPageIndex = Math.min(...matchedPageIndices)
@@ -745,7 +1025,11 @@ const findAnchoredEvidenceSpanInWindow = (
     normalizedEndExclusive,
   )
   if (!rawRange) {
-    return null
+    debugWindow.rejectionReasons.push('unable-to-map-normalized-range-to-raw-text')
+    return {
+      candidate: null,
+      debug: debugWindow,
+    }
   }
 
   const coverage = alignment.matches.length / quoteTokens.length
@@ -769,6 +1053,19 @@ const findAnchoredEvidenceSpanInWindow = (
   const rawQuery = searchPageText.slice(rawRange.rawStart, rawRange.rawEndExclusive)
   const includesPreferredAnchor = buildPreferredAnchorPredicate(options?.preferredAnchor)(rawQuery)
   const containsPreferredRawRange = spanContainsPreferredRawRange(rawRange, options?.preferredRawRange)
+  debugWindow.coverage = coverage
+  debugWindow.score = score
+  debugWindow.spanDensity = spanDensity
+  debugWindow.largestMatchedPageGap = largestMatchedPageGap
+  debugWindow.leadingAnchorMatched = leadingAnchorMatched
+  debugWindow.trailingAnchorMatched = trailingAnchorMatched
+  debugWindow.includesPreferredAnchor = includesPreferredAnchor
+  debugWindow.containsPreferredRawRange = containsPreferredRawRange
+  debugWindow.candidateRawRange = {
+    rawStart: rawRange.rawStart + searchWindowStart,
+    rawEndExclusive: rawRange.rawEndExclusive + searchWindowStart,
+  }
+  debugWindow.candidateRawQuery = rawQuery
 
   const passesThreshold = (
     score >= MIN_ALIGNMENT_SCORE
@@ -781,23 +1078,54 @@ const findAnchoredEvidenceSpanInWindow = (
     && includesPreferredAnchor
     && containsPreferredRawRange
   )
+  debugWindow.passesThreshold = passesThreshold
 
   if (!passesThreshold) {
-    return null
+    if (score < MIN_ALIGNMENT_SCORE) {
+      debugWindow.rejectionReasons.push('score-below-threshold')
+    }
+    if (
+      !(
+        (coverage >= MIN_ALIGNMENT_COVERAGE && leadingAnchorMatched && trailingAnchorMatched)
+        || (coverage >= STRONG_ALIGNMENT_COVERAGE && (leadingAnchorMatched || trailingAnchorMatched))
+      )
+    ) {
+      debugWindow.rejectionReasons.push('coverage-or-boundary-threshold-failed')
+    }
+    if (spanDensity < MIN_ALIGNMENT_SPAN_DENSITY) {
+      debugWindow.rejectionReasons.push('span-density-too-low')
+    }
+    if (largestMatchedPageGap > Math.max(8, Math.floor(quoteTokens.length * 0.35))) {
+      debugWindow.rejectionReasons.push('page-gap-too-large')
+    }
+    if (!includesPreferredAnchor) {
+      debugWindow.rejectionReasons.push('preferred-anchor-not-contained')
+    }
+    if (!containsPreferredRawRange) {
+      debugWindow.rejectionReasons.push('preferred-raw-range-not-contained')
+    }
+    return {
+      candidate: null,
+      debug: debugWindow,
+    }
   }
 
+  debugWindow.resolution = 'alignment'
   return {
-    rawQuery,
-    normalizedQuery: normalizedPageText.slice(normalizedStart, normalizedEndExclusive),
-    rawStart: rawRange.rawStart + searchWindowStart,
-    rawEndExclusive: rawRange.rawEndExclusive + searchWindowStart,
-    normalizedStart,
-    normalizedEndExclusive,
-    coverage,
-    score,
-    leadingAnchorMatched,
-    trailingAnchorMatched,
-    includesPreferredAnchor,
+    candidate: {
+      rawQuery,
+      normalizedQuery: normalizedPageText.slice(normalizedStart, normalizedEndExclusive),
+      rawStart: rawRange.rawStart + searchWindowStart,
+      rawEndExclusive: rawRange.rawEndExclusive + searchWindowStart,
+      normalizedStart,
+      normalizedEndExclusive,
+      coverage,
+      score,
+      leadingAnchorMatched,
+      trailingAnchorMatched,
+      includesPreferredAnchor,
+    },
+    debug: debugWindow,
   }
 }
 
@@ -848,7 +1176,7 @@ export const findAnchoredEvidenceSpan = (
         }
       : null
 
-    const candidate = findAnchoredEvidenceSpanInWindow(
+    const evaluation = evaluateAnchoredEvidenceSpanInWindow(
       searchPageText,
       normalizedQuote,
       searchWindow.rawStart,
@@ -857,12 +1185,94 @@ export const findAnchoredEvidenceSpan = (
         preferredRawRange: adjustedPreferredRawRange,
       },
     )
-    if (!candidate) {
+    if (!evaluation.candidate) {
       continue
     }
 
-    bestMatch = chooseBetterAnchoredSpan(bestMatch, candidate, options?.preferredRawRange)
+    bestMatch = chooseBetterAnchoredSpan(bestMatch, evaluation.candidate, options?.preferredRawRange)
   }
 
   return bestMatch
+}
+
+export const getAnchoredEvidenceSpanDebugInfo = (
+  rawPageText: string,
+  desiredQuote: string,
+  options?: {
+    preferredAnchor?: string | null
+    preferredRawRange?: AnchoringRawRange | null
+  },
+): AnchoredEvidenceSpanDebugInfo => {
+  const normalizedQuote = normalizeAnchoringInput(desiredQuote)
+  const preferredSearchWindows = normalizedQuote
+    ? buildPreferredSearchWindows(
+      rawPageText,
+      desiredQuote,
+      options?.preferredAnchor,
+      options?.preferredRawRange,
+    )
+    : []
+
+  if (!rawPageText.trim() || !normalizedQuote) {
+    return {
+      normalizedQuote,
+      preferredAnchorNormalized: normalizeAnchoringInput(options?.preferredAnchor ?? '') || null,
+      preferredSearchWindows,
+      windows: [],
+      bestMatch: null,
+    }
+  }
+
+  const searchWindows = preferredSearchWindows.length > 0
+    ? [
+      ...preferredSearchWindows,
+      { rawStart: 0, rawEndExclusive: rawPageText.length },
+    ]
+    : [{ rawStart: 0, rawEndExclusive: rawPageText.length }]
+
+  let bestMatch: AnchoredEvidenceSpan | null = null
+  const windows: AnchoredEvidenceSpanWindowDebug[] = []
+  const seenWindows = new Set<string>()
+
+  for (const searchWindow of searchWindows) {
+    const key = `${searchWindow.rawStart}:${searchWindow.rawEndExclusive}`
+    if (seenWindows.has(key)) {
+      continue
+    }
+    seenWindows.add(key)
+
+    const searchPageText = rawPageText.slice(searchWindow.rawStart, searchWindow.rawEndExclusive)
+    const adjustedPreferredRawRange = options?.preferredRawRange
+      ? {
+        rawStart: Math.max(0, options.preferredRawRange.rawStart - searchWindow.rawStart),
+        rawEndExclusive: Math.min(
+          searchPageText.length,
+          options.preferredRawRange.rawEndExclusive - searchWindow.rawStart,
+        ),
+      }
+      : null
+
+    const evaluation = evaluateAnchoredEvidenceSpanInWindow(
+      searchPageText,
+      normalizedQuote,
+      searchWindow.rawStart,
+      {
+        preferredAnchor: options?.preferredAnchor,
+        preferredRawRange: adjustedPreferredRawRange,
+      },
+    )
+    windows.push(evaluation.debug)
+
+    if (evaluation.candidate) {
+      bestMatch = chooseBetterAnchoredSpan(bestMatch, evaluation.candidate, options?.preferredRawRange)
+    }
+  }
+
+  return {
+    normalizedQuote,
+    preferredAnchorNormalized: normalizeAnchoringInput(options?.preferredAnchor ?? '') || null,
+    preferredSearchWindows,
+    windows,
+    bestMatch,
+  }
 }
