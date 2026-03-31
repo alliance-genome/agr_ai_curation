@@ -384,7 +384,7 @@ describe('PdfViewer evidence navigation', () => {
 
     expect(
       buildEvidenceSpikeSectionCandidates('Results', 'Quantification').map((candidate) => candidate.query),
-    ).toEqual(['Results', 'Quantification'])
+    ).toEqual(['Quantification', 'Results'])
 
     expect(normalizeEvidenceSpikePageHints({ pageNumbers: [4, 4, 0, 9], pageNumber: 2 })).toEqual([4, 9, 2])
   })
@@ -598,7 +598,7 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findbarCloseCount).toBe(1)
   })
 
-  it('keeps quote-triggered chat navigation on the matched page instead of falling through to section search', async () => {
+  it('tries section context after chat quote localization resolves only to page context', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -662,20 +662,18 @@ describe('PdfViewer evidence navigation', () => {
 
     expect(eventBus.findQueries).toEqual([
       'Exact quote from PDFX markdown',
+      'Quantification',
+      'Results',
     ])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'page-fallback',
-      locatorQuality: 'page_only',
+      status: 'section-fallback',
+      locatorQuality: 'section_only',
       degraded: true,
-      matchedQuery: 'Exact quote from PDFX markdown',
-      matchedPage: 3,
+      matchedQuery: 'Results',
+      matchedPage: 4,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
-    expect(
-      screen.getAllByText(
-        'Evidence on this page. Quote text was not matched reliably enough to highlight.',
-      ),
-    ).toHaveLength(2)
+    expect(screen.getByText('Section fallback')).toBeInTheDocument()
   })
 
   it('waits for a late-selected native PDF.js quote match during chat navigation', async () => {
@@ -1283,7 +1281,7 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toEqual(['Results'])
+    expect(eventBus.findQueries).toEqual(['Quantification', 'Results'])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'section-fallback',
       locatorQuality: 'section_only',
@@ -1439,7 +1437,7 @@ describe('PdfViewer evidence navigation', () => {
     ).toHaveLength(2)
   })
 
-  it('preserves the viewer page when PDF.js jumps to a match without populating selected.pageIdx', async () => {
+  it('falls back to subsection highlighting before a plain page banner when quote rects are unavailable', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -1449,15 +1447,15 @@ describe('PdfViewer evidence navigation', () => {
         anchor_kind: 'snippet',
         locator_quality: 'exact_quote',
         supports_decision: 'supports',
-        snippet_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        normalized_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        viewer_search_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+        snippet_text: 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.',
+        normalized_text: 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.',
+        viewer_search_text: 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.',
         page_number: 1,
         section_title: 'Results and Discussion',
         subsection_title: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
         chunk_ids: ['chunk-live-repro'],
       },
-      searchText: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+      searchText: 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.',
       pageNumber: 1,
       sectionTitle: 'Results and Discussion',
     })
@@ -1477,11 +1475,23 @@ describe('PdfViewer evidence navigation', () => {
 
     const { iframe } = installMockPdfViewer({
       onFind: (query) => ({
-        state: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 1,
-        total: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 0,
-        current: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 1 : 0,
+        state: query === 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.'
+          || query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+          ? 1
+          : 1,
+        total: query === 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.'
+          || query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+          ? 1
+          : 0,
+        current: query === 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.'
+          || query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+          ? 1
+          : 0,
         pageIdx: null,
-        viewerPageNumber: query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants' ? 6 : null,
+        viewerPageNumber: query === 'Actin 87E accumulated to a higher molar abundance in mutant fly eyes.'
+          || query === 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+          ? 6
+          : null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -1489,7 +1499,7 @@ describe('PdfViewer evidence navigation', () => {
         { pageNumber: 3, textSegments: ['Methods'] },
         { pageNumber: 4, textSegments: ['Figure legends'] },
         { pageNumber: 5, textSegments: ['Discussion'] },
-        { pageNumber: 6, textSegments: ['Nearby text that does not include the requested quote contiguously'] },
+        { pageNumber: 6, textSegments: ['2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'] },
       ],
     })
 
@@ -1500,15 +1510,17 @@ describe('PdfViewer evidence navigation', () => {
     }, { timeout: 3000 })
 
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'page-fallback',
-      locatorQuality: 'page_only',
+      status: 'section-fallback',
+      locatorQuality: 'section_only',
       degraded: true,
       matchedPage: 6,
     }))
     expect(screen.getByText('Page 6')).toBeInTheDocument()
-    expect(
-      screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
-    ).toHaveLength(2)
+    expect(screen.getByText('Section fallback')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+    })
+    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('section')
   })
 
   it('retries quote localization on a late-selected PDF.js match page before degrading', async () => {

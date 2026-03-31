@@ -249,6 +249,46 @@ def _resolve_chunk_subsection(chunk: dict[str, Any]) -> str | None:
     )
 
 
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    return page if page > 0 else None
+
+
+def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
+    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    page = (
+        _coerce_positive_int(chunk.get("page_number"))
+        or _coerce_positive_int(metadata.get("page_number"))
+        or _coerce_positive_int(metadata.get("pageNumber"))
+    )
+
+    raw_doc_items = chunk.get("doc_items")
+    doc_items = raw_doc_items if isinstance(raw_doc_items, list) else []
+    doc_item_pages = [
+        resolved_page
+        for item in doc_items
+        if isinstance(item, dict)
+        for resolved_page in [_coerce_positive_int(item.get("page"))]
+        if resolved_page is not None
+    ]
+    doc_item_pages = list(dict.fromkeys(doc_item_pages))
+
+    if not doc_item_pages:
+        return page
+
+    if page is not None and page in doc_item_pages:
+        return page
+
+    return doc_item_pages[0]
+
+
 def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | None:
     metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
     candidates: list[str | None] = [
@@ -352,8 +392,7 @@ def create_record_evidence_tool(
             )
 
         chunk_text = str(chunk.get("text") or chunk.get("content_preview") or "").strip()
-        page = chunk.get("page_number")
-        page = page if isinstance(page, int) and not isinstance(page, bool) and page > 0 else None
+        page = _resolve_chunk_page(chunk)
         section = _resolve_chunk_section(chunk)
         subsection = _resolve_chunk_subsection(chunk)
 

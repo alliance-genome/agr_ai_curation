@@ -447,14 +447,15 @@ export const buildEvidenceSpikeSectionCandidates = (
 ): PdfEvidenceSpikeCandidate[] => {
   const candidates: PdfEvidenceSpikeCandidate[] = []
 
+  const normalizedSubsectionTitle = normalizeEvidenceSpikeText(subsectionTitle ?? '')
   const normalizedTitle = normalizeEvidenceSpikeText(sectionTitle ?? '')
-  if (normalizedTitle) {
-    candidates.push({ query: normalizedTitle, reason: 'section-title' })
+
+  if (normalizedSubsectionTitle) {
+    candidates.push({ query: normalizedSubsectionTitle, reason: 'subsection-title' })
   }
 
-  const normalizedSubsectionTitle = normalizeEvidenceSpikeText(subsectionTitle ?? '')
-  if (normalizedSubsectionTitle && normalizedSubsectionTitle !== normalizedTitle) {
-    candidates.push({ query: normalizedSubsectionTitle, reason: 'subsection-title' })
+  if (normalizedTitle && normalizedTitle !== normalizedSubsectionTitle) {
+    candidates.push({ query: normalizedTitle, reason: 'section-title' })
   }
 
   return uniqueEvidenceSpikeCandidates(candidates)
@@ -2165,36 +2166,14 @@ export function PdfViewer({
       }
     }
 
+    const sectionCandidates = buildEvidenceSpikeSectionCandidates(sectionTitle, anchor.subsection_title)
     const quoteContextPage = quoteMatchedPageContext?.matchedPage
       ?? getSelectedEvidenceSpikePage(pdfApp)
       ?? preferredPage
-    if (quoteMatchedPageContext && quoteContextPage !== null) {
-      setEvidenceSpikePage(pdfApp, quoteContextPage)
-      clearPdfJsFindHighlights(pdfApp)
-      setEvidenceHighlight(null)
-      logPdfEvidenceDebug('Falling back to matched page without stable highlight rects', {
-        anchorId: command.anchorId,
-        quoteContextPage,
-        quoteMatchedPageContext,
-      })
-      return {
-        ...baseResult,
-        status: 'page-fallback',
-        strategy: 'page-hint',
-        locatorQuality: 'page_only',
-        degraded: true,
-        matchedQuery: quoteMatchedPageContext.matchedQuery,
-        matchedPage: quoteContextPage,
-        matchesTotal: quoteMatchedPageContext.matchesTotal,
-        currentMatch: quoteMatchedPageContext.currentMatch,
-        note: 'Quote search resolved this evidence to the correct page, but the viewer could not derive a stable text highlight. Staying on the matched page instead of degrading to section context.',
-      }
-    }
-
-    const sectionCandidates = buildEvidenceSpikeSectionCandidates(sectionTitle, anchor.subsection_title)
+    const sectionPreferredPage = quoteContextPage ?? preferredPage
     for (const candidate of sectionCandidates) {
-      if (preferredPage !== null) {
-        setEvidenceSpikePage(pdfApp, preferredPage)
+      if (sectionPreferredPage !== null) {
+        setEvidenceSpikePage(pdfApp, sectionPreferredPage)
       }
       attemptedQueries.push(candidate.query)
       const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
@@ -2263,6 +2242,29 @@ export function PdfViewer({
             ? 'The quote itself did not match, but a section heading on the hinted page was highlighted as degraded context.'
             : 'The quote itself did not match, but section metadata navigated to a relevant page in the PDF viewer.',
         }
+      }
+    }
+
+    if (quoteMatchedPageContext && quoteContextPage !== null) {
+      setEvidenceSpikePage(pdfApp, quoteContextPage)
+      clearPdfJsFindHighlights(pdfApp)
+      setEvidenceHighlight(null)
+      logPdfEvidenceDebug('Falling back to matched page without stable highlight rects after section localization failed', {
+        anchorId: command.anchorId,
+        quoteContextPage,
+        quoteMatchedPageContext,
+      })
+      return {
+        ...baseResult,
+        status: 'page-fallback',
+        strategy: 'page-hint',
+        locatorQuality: 'page_only',
+        degraded: true,
+        matchedQuery: quoteMatchedPageContext.matchedQuery,
+        matchedPage: quoteContextPage,
+        matchesTotal: quoteMatchedPageContext.matchesTotal,
+        currentMatch: quoteMatchedPageContext.currentMatch,
+        note: 'Quote search resolved this evidence to the correct page, but the viewer could not derive a stable text highlight or a section-level fallback. Staying on the matched page instead.',
       }
     }
 

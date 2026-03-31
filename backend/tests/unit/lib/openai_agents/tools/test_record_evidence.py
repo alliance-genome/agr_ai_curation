@@ -90,3 +90,37 @@ async def test_record_evidence_fixture_cases(monkeypatch, case_id):
         "user_id": "user-1",
         "document_id": "doc-123",
     }
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_stale(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-live-repro",
+            "text": "Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "subsection": "2.3. The molar abundance of actins, optins, and crumbs in fly eyes",
+            "doc_items": [
+                {"page": 6},
+                {"page": 6},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="Act 87E",
+        chunk_id="chunk-live-repro",
+        claimed_quote="Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
+    )
+
+    assert result == {
+        "status": "verified",
+        "verified_quote": "Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
+        "page": 6,
+        "section": "Results and Discussion",
+        "subsection": "2.3. The molar abundance of actins, optins, and crumbs in fly eyes",
+    }

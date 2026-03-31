@@ -131,6 +131,25 @@ describe('EvidenceCard', () => {
 
     unsubscribe()
   })
+
+  it('copies the evidence location and quote without dispatching navigation', async () => {
+    const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEvidenceCard()
+    await user.click(screen.getByRole('button', { name: 'crumb 2' }))
+    await user.click(await screen.findByTestId('copy-evidence-quote-chunk-1'))
+
+    expect(writeTextSpy).toHaveBeenCalledWith(
+      'p. 4 · Results › Gene Expression Analysis\n"Crumb is essential for maintaining epithelial polarity."',
+    )
+    expect(onNavigateEvidence).not.toHaveBeenCalled()
+
+    unsubscribe()
+    writeTextSpy.mockRestore()
+  })
   it('collapses the active entity when the same chip is clicked again', async () => {
     const user = userEvent.setup()
     renderEvidenceCard()
