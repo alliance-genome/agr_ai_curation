@@ -247,6 +247,159 @@ state_json_value() {
   jq -r --arg key "${key}" '.[$key] // empty' "${STATE_FILE}" 2>/dev/null || true
 }
 
+running_compose_service_container_id() {
+  local project="$1"
+  local service="$2"
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 1
+  fi
+
+  docker ps -q \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=${service}" | head -n 1
+}
+
+running_compose_service_host_port() {
+  local project="$1"
+  local service="$2"
+  local container_port="$3"
+  local container_id=""
+  local host_port=""
+
+  container_id="$(running_compose_service_container_id "${project}" "${service}")"
+  if [[ -z "${container_id}" ]]; then
+    return 1
+  fi
+
+  host_port="$(
+    docker inspect \
+      --format "{{with index .NetworkSettings.Ports \"${container_port}\"}}{{with index . 0}}{{.HostPort}}{{end}}{{end}}" \
+      "${container_id}" 2>/dev/null | tr -d '[:space:]'
+  )"
+  if [[ -z "${host_port}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${host_port}"
+}
+
+running_compose_service_env_var() {
+  local project="$1"
+  local service="$2"
+  local key="$3"
+  local container_id=""
+  local value=""
+
+  container_id="$(running_compose_service_container_id "${project}" "${service}")"
+  if [[ -z "${container_id}" ]]; then
+    return 1
+  fi
+
+  value="$(
+    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container_id}" 2>/dev/null |
+      awk -F= -v target="${key}" '$1 == target {print substr($0, index($0, "=") + 1); exit}'
+  )"
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${value}"
+}
+
+restore_ports_from_running_main_services() {
+  local running_frontend_port=""
+  local running_backend_port=""
+
+  running_frontend_port="$(running_compose_service_host_port "${COMPOSE_PROJECT}" "frontend" "80/tcp" || true)"
+  running_backend_port="$(running_compose_service_host_port "${COMPOSE_PROJECT}" "backend" "8000/tcp" || true)"
+
+  if [[ -z "${running_frontend_port}" || -z "${running_backend_port}" ]]; then
+    return 1
+  fi
+
+  FRONTEND_HOST_PORT="${running_frontend_port}"
+  BACKEND_HOST_PORT="${running_backend_port}"
+  return 0
+}
+
+restore_trace_review_ports_from_running_services() {
+  local running_frontend_port=""
+  local running_backend_port=""
+
+  running_frontend_port="$(running_compose_service_host_port "${TRACE_REVIEW_COMPOSE_PROJECT}" "frontend" "80/tcp" || true)"
+  running_backend_port="$(running_compose_service_env_var "${TRACE_REVIEW_COMPOSE_PROJECT}" "backend" "BACKEND_PORT" || true)"
+
+  if [[ -n "${running_frontend_port}" ]]; then
+    TRACE_REVIEW_FRONTEND_HOST_PORT="${running_frontend_port}"
+  fi
+
+  if [[ -n "${running_backend_port}" ]]; then
+    TRACE_REVIEW_BACKEND_HOST_PORT="${running_backend_port}"
+  fi
+}
+
+allocate_distinct_frontend_backend_pair() {
+  local preferred_frontend_port="${1:-}"
+  shift || true
+  local -a reserved_ports=("$@")
+  local frontend_port=""
+  local backend_port=""
+  local start_port="${FRONTEND_PORT_RANGE_START}"
+  local end_port="${FRONTEND_PORT_RANGE_END}"
+  local found=1
+
+  port_pair_conflicts() {
+    local candidate_frontend="$1"
+    local candidate_backend="$2"
+    local reserved_port=""
+
+    for reserved_port in "${reserved_ports[@]}"; do
+      if [[ -n "${reserved_port}" ]] && [[ "${candidate_frontend}" == "${reserved_port}" || "${candidate_backend}" == "${reserved_port}" ]]; then
+        return 0
+      fi
+    done
+
+    return 1
+  }
+
+  try_candidate_pair() {
+    local candidate_frontend="$1"
+    local candidate_backend="$2"
+
+    if (( candidate_frontend < start_port || candidate_frontend > end_port )); then
+      return 1
+    fi
+
+    if port_pair_conflicts "${candidate_frontend}" "${candidate_backend}"; then
+      return 1
+    fi
+
+    frontend_port="${candidate_frontend}"
+    backend_port="${candidate_backend}"
+    found=0
+    return 0
+  }
+
+  if [[ -n "${preferred_frontend_port}" ]]; then
+    try_candidate_pair "${preferred_frontend_port}" "$((preferred_frontend_port + BACKEND_PORT_OFFSET))" || true
+  fi
+
+  if [[ "${found}" -ne 0 ]]; then
+    local candidate_frontend
+    for candidate_frontend in $(seq "${start_port}" "${end_port}"); do
+      try_candidate_pair "${candidate_frontend}" "$((candidate_frontend + BACKEND_PORT_OFFSET))" && break
+    done
+  fi
+
+  if [[ "${found}" -ne 0 ]]; then
+    echo "Unable to allocate a distinct frontend/backend port pair within ${start_port}-${end_port}." >&2
+    exit 2
+  fi
+
+  printf '%s %s\n' "${frontend_port}" "${backend_port}"
+}
+
 ensure_review_ports() {
   local mode="${1:-prepare}"
 
@@ -275,6 +428,10 @@ ensure_review_ports() {
       exit 2
     fi
 
+    return 0
+  fi
+
+  if [[ "${mode}" == "repair" ]] && restore_ports_from_running_main_services; then
     return 0
   fi
 
@@ -356,6 +513,36 @@ ensure_trace_review_ports() {
       TRACE_REVIEW_FRONTEND_HOST_PORT="${state_trace_review_frontend_port}"
       TRACE_REVIEW_BACKEND_HOST_PORT="${state_trace_review_backend_port}"
     fi
+  fi
+
+  if [[ "${mode}" == "repair" ]]; then
+    restore_trace_review_ports_from_running_services
+  fi
+
+  if [[ -z "${TRACE_REVIEW_FRONTEND_HOST_PORT}" || -z "${TRACE_REVIEW_BACKEND_HOST_PORT}" ]] || \
+     [[ "${TRACE_REVIEW_FRONTEND_HOST_PORT}" == "${FRONTEND_HOST_PORT}" || "${TRACE_REVIEW_BACKEND_HOST_PORT}" == "${BACKEND_HOST_PORT}" ]]; then
+    local preferred_trace_frontend=""
+    local allocated_trace_pair=""
+
+    if [[ "${FRONTEND_HOST_PORT}" =~ ^[0-9]+$ ]]; then
+      preferred_trace_frontend="$((FRONTEND_HOST_PORT + 1))"
+    fi
+
+    allocated_trace_pair="$(
+      allocate_distinct_frontend_backend_pair \
+        "${preferred_trace_frontend}" \
+        "${FRONTEND_HOST_PORT}" \
+        "${BACKEND_HOST_PORT}" \
+        "${DB_TUNNEL_LOCAL_PORT}" \
+        "${DB_TUNNEL_DOCKER_PORT}" \
+        "${POSTGRES_HOST_PORT}" \
+        "${REDIS_HOST_PORT}" \
+        "${LANGFUSE_HOST_PORT}" \
+        "${WEAVIATE_HTTP_HOST_PORT}" \
+        "${WEAVIATE_GRPC_HOST_PORT}"
+    )"
+    TRACE_REVIEW_FRONTEND_HOST_PORT="${allocated_trace_pair%% *}"
+    TRACE_REVIEW_BACKEND_HOST_PORT="${allocated_trace_pair##* }"
   fi
 }
 
@@ -960,6 +1147,7 @@ prepare_sandbox() {
   kv sandbox_current_ref "${current_ref}"
 
   export_sandbox_runtime_env
+  persist_state_snapshot "last_prepare_started_at" "preparing"
   run_review_prep prepare
   prep_status=$?
 
@@ -1026,6 +1214,7 @@ repair_sandbox() {
   repair_workspace_permissions
   stop_existing_tunnel
   export_sandbox_runtime_env
+  persist_state_snapshot "last_repair_started_at" "repairing"
   run_review_prep repair
   repair_status=$?
 

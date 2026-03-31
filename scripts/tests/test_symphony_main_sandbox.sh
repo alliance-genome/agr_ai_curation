@@ -114,6 +114,24 @@ test_prepare_dry_run_rejects_overlapping_trace_review_ports() {
   assert_output_contains "Main sandbox requested overlapping host ports" "${output}"
 }
 
+test_prepare_dry_run_auto_shifts_trace_review_ports_after_main_override() {
+  local temp_dir output
+  temp_dir="$(mktemp -d)"
+
+  output="$(
+    cd "${REPO_ROOT}" && \
+      SYMPHONY_MAIN_SANDBOX_ROOT="${temp_dir}" \
+      SYMPHONY_MAIN_SANDBOX_FRONTEND_PORT=3901 \
+      SYMPHONY_MAIN_SANDBOX_BACKEND_PORT=8901 \
+      bash "${SCRIPT_PATH}" prepare --dry-run
+  )"
+
+  assert_output_contains "sandbox_frontend_port=3901" "${output}"
+  assert_output_contains "sandbox_backend_port=8901" "${output}"
+  assert_output_contains "trace_review_frontend_port=3902" "${output}"
+  assert_output_contains "trace_review_backend_port=8902" "${output}"
+}
+
 test_trace_review_compose_accepts_dev_and_langfuse_env() {
   local output
 
@@ -145,6 +163,7 @@ test_repair_dry_run_reuses_persisted_ports
 test_prepare_dry_run_reuses_persisted_ports
 test_env_overrides_replace_default_tunnel_ports
 test_prepare_dry_run_rejects_overlapping_trace_review_ports
+test_prepare_dry_run_auto_shifts_trace_review_ports_after_main_override
 test_trace_review_compose_accepts_dev_and_langfuse_env
 
 echo "symphony_main_sandbox tests passed"
