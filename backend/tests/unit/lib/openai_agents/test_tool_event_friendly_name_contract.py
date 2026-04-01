@@ -1629,6 +1629,155 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
 
 @pytest.mark.asyncio
+async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity_without_call_ids(monkeypatch):
+    crumbs_quote = "Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants"
+    ninae_quote = (
+        "Decreased levels of Rh1 induced by mutating the ninaE gene, [20] or by removal "
+        "of Vitamin A precursors [21] from the diet resulted in substantially smaller rhabdomeres"
+    )
+    crumbs_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-crumbs",
+        verified_quote=crumbs_quote,
+        page=1,
+        section="Results",
+        subsection="Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+    )
+    ninae_record = _build_expected_evidence_record(
+        entity="ninaE",
+        chunk_id="chunk-ninae",
+        verified_quote=ninae_quote,
+        page=3,
+        section="Results",
+        subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+    )
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments=json.dumps(
+                        {
+                            "entity": "crumbs",
+                            "chunk_id": "chunk-crumbs",
+                            "claimed_quote": crumbs_quote,
+                        }
+                    ),
+                ),
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments=json.dumps(
+                        {
+                            "entity": "ninaE",
+                            "chunk_id": "chunk-ninae",
+                            "claimed_quote": ninae_quote,
+                        }
+                    ),
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "verified",
+                            "entity": "ninaE",
+                            "chunk_id": "chunk-ninae",
+                            "claimed_quote": ninae_quote,
+                            "verified_quote": ninae_record["verified_quote"],
+                            "page": ninae_record["page"],
+                            "section": ninae_record["section"],
+                            "subsection": ninae_record["subsection"],
+                        }
+                    )
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "verified",
+                            "entity": "crumbs",
+                            "chunk_id": "chunk-crumbs",
+                            "claimed_quote": crumbs_quote,
+                            "verified_quote": crumbs_record["verified_quote"],
+                            "page": crumbs_record["page"],
+                            "section": crumbs_record["section"],
+                            "subsection": crumbs_record["subsection"],
+                        }
+                    )
+                ),
+            ],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Extracted focal genes with verified evidence.",
+                    "genes": [
+                        {
+                            "mention": "crumbs",
+                            "normalized_symbol": "crb",
+                            "normalized_id": "FB:FBgn0000368",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence_record_ids": [crumbs_record["evidence_record_id"]],
+                        },
+                        {
+                            "mention": "ninaE",
+                            "normalized_symbol": "ninaE",
+                            "normalized_id": "FB:FBgn0002940",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence_record_ids": [ninae_record["evidence_record_id"]],
+                        },
+                    ],
+                    "items": [
+                        {
+                            "label": "crb",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000368",
+                            "source_mentions": ["crumbs"],
+                            "evidence_record_ids": [crumbs_record["evidence_record_id"]],
+                        },
+                        {
+                            "label": "ninaE",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0002940",
+                            "source_mentions": ["ninaE"],
+                            "evidence_record_ids": [ninae_record["evidence_record_id"]],
+                        },
+                    ],
+                    "evidence_records": [],
+                    "run_summary": {"candidate_count": 2, "kept_count": 2},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Extraction Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract focal genes",
+        specialist_name="Gene Extraction Agent",
+        max_turns=3,
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    parsed = json.loads(result)
+    assert {record["evidence_record_id"] for record in parsed["evidence_records"]} == {
+        crumbs_record["evidence_record_id"],
+        ninae_record["evidence_record_id"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     fake_events = [
         _tool_call_stream_event("save_csv_file"),

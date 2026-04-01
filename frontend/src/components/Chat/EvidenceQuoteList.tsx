@@ -66,85 +66,84 @@ export default function EvidenceQuoteList({
     }
   }, [activeEntity, scrollExpandedEvidenceIntoView])
 
-  return (
-    <>
-      {groups.map((group) => {
-        const isActive = activeEntity === group.entity
+  const activeGroup = activeEntity
+    ? groups.find((group) => group.entity === activeEntity) ?? null
+    : null
 
-        return (
-          <Collapse
-            in={isActive}
-            key={group.entity}
-            onEntered={() => {
-              scrollExpandedEvidenceIntoView(group.entity)
+  return (
+    <Collapse
+      in={Boolean(activeGroup)}
+      onEntered={() => {
+        if (activeGroup) {
+          scrollExpandedEvidenceIntoView(activeGroup.entity)
+        }
+      }}
+      timeout="auto"
+      unmountOnExit
+    >
+      {activeGroup ? (
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            mt: '10px',
+            pb: '4px',
+          }}
+        >
+          {activeGroup.evidenceRecords.map((record, index) => (
+            <EvidenceQuote
+              borderColor={activeGroup.colorHex}
+              evidenceRecord={record}
+              key={`${activeGroup.entity}-${record.chunk_id}-${index}`}
+            />
+          ))}
+
+          <Box
+            sx={{
+              mt: '8px',
+              pt: '8px',
+              borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
             }}
-            timeout="auto"
-            unmountOnExit
           >
             <Box
               sx={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
-                mt: '10px',
-                pb: '4px',
+                fontSize: '11px',
+                color: 'rgba(255, 255, 255, 0.5)',
               }}
             >
-              {group.evidenceRecords.map((record, index) => (
-                <EvidenceQuote
-                  borderColor={group.colorHex}
-                  evidenceRecord={record}
-                  key={`${group.entity}-${record.chunk_id}-${index}`}
-                />
-              ))}
-
-              <Box
-                sx={{
-                  mt: '8px',
-                  pt: '8px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                <Box
-                  sx={{
-                    fontSize: '11px',
-                    color: 'rgba(255, 255, 255, 0.5)',
-                  }}
-                >
-                  Full evidence review with PDF highlighting →
-                </Box>
-
-                {onReviewAndCurateClick ? (
-                  <Box
-                    component="button"
-                    onClick={onReviewAndCurateClick}
-                    sx={{
-                      p: 0,
-                      border: 0,
-                      background: 'transparent',
-                      color: '#90caf9',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                    }}
-                    type="button"
-                  >
-                    Review & Curate
-                  </Box>
-                ) : null}
-              </Box>
-
-              <Box
-                aria-hidden="true"
-                ref={setScrollAnchorRef(group.entity)}
-                sx={{ height: 1, scrollMarginBottom: '20px' }}
-              />
+              Full evidence review with PDF highlighting →
             </Box>
-          </Collapse>
-        )
-      })}
-    </>
+
+            {onReviewAndCurateClick ? (
+              <Box
+                component="button"
+                onClick={onReviewAndCurateClick}
+                sx={{
+                  p: 0,
+                  border: 0,
+                  background: 'transparent',
+                  color: '#90caf9',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                }}
+                type="button"
+              >
+                Review & Curate
+              </Box>
+            ) : null}
+          </Box>
+
+          <Box
+            aria-hidden="true"
+            ref={setScrollAnchorRef(activeGroup.entity)}
+            sx={{ height: 1, scrollMarginBottom: '20px' }}
+          />
+        </Box>
+      ) : null}
+    </Collapse>
   )
 }

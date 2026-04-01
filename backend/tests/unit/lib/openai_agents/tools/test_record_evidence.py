@@ -15,10 +15,16 @@ def _expected_verified_result(
     tool_input: dict[str, object],
     expected_tool_result: dict[str, object],
 ) -> dict[str, object]:
-    if expected_tool_result.get("status") != "verified":
-        return expected_tool_result
+    enriched_result = {
+        **expected_tool_result,
+        "entity": tool_input["entity"],
+        "chunk_id": tool_input["chunk_id"],
+        "claimed_quote": tool_input.get("claimed_quote", ""),
+    }
 
-    enriched_result = dict(expected_tool_result)
+    if expected_tool_result.get("status") != "verified":
+        return enriched_result
+
     enriched_result["evidence_record_id"] = build_evidence_record_id(
         evidence_record={
             "entity": tool_input["entity"],
@@ -151,6 +157,7 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
         {
             "entity": "Act 87E",
             "chunk_id": "chunk-live-repro",
+            "claimed_quote": "Actin 87E accumulated to a higher molar abundance in mutant fly eyes.",
         },
         expected,
     )
@@ -195,6 +202,7 @@ async def test_record_evidence_prefers_pdfx_page_no_provenance_when_chunk_page_i
         {
             "entity": "Actin 87E",
             "chunk_id": "chunk-pdfx-page-no-repro",
+            "claimed_quote": "followed by Actin 87E (80 +/- 51 fmoles/eye).",
         },
         expected,
     )

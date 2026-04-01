@@ -31,6 +31,7 @@ from .config import get_max_turns
 from .evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
+    coerce_tool_event_dict,
     extract_evidence_records_from_structured_result,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
@@ -84,6 +85,26 @@ def _pop_matching_pending_tool_call(
             if str(candidate_tool.get("tool_id") or "").strip() == output_tool_id:
                 pending_tool_calls.remove(candidate_tool)
                 return candidate_tool
+
+    output_payload = coerce_tool_event_dict(getattr(output_item, "output", None))
+    if isinstance(output_payload, dict):
+        output_entity = str(output_payload.get("entity") or "").strip()
+        output_chunk_id = str(output_payload.get("chunk_id") or "").strip()
+        output_claimed_quote = str(output_payload.get("claimed_quote") or "").strip()
+        if output_entity and output_chunk_id and output_claimed_quote:
+            for candidate_tool in list(pending_tool_calls):
+                if str(candidate_tool.get("tool_name") or "").strip() != "record_evidence":
+                    continue
+                candidate_args = candidate_tool.get("tool_args")
+                if not isinstance(candidate_args, dict):
+                    continue
+                if (
+                    str(candidate_args.get("entity") or "").strip() == output_entity
+                    and str(candidate_args.get("chunk_id") or "").strip() == output_chunk_id
+                    and str(candidate_args.get("claimed_quote") or "").strip() == output_claimed_quote
+                ):
+                    pending_tool_calls.remove(candidate_tool)
+                    return candidate_tool
 
     if len(pending_tool_calls) > 1:
         logger.warning(

@@ -338,6 +338,9 @@ def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | N
 def _build_not_found_result(
     chunk_text: str,
     *,
+    entity: str,
+    chunk_id: str,
+    claimed_quote: str,
     page: int | None,
     section: str | None,
     subsection: str | None,
@@ -346,6 +349,9 @@ def _build_not_found_result(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "not_found",
+        "entity": entity,
+        "chunk_id": chunk_id,
+        "claimed_quote": claimed_quote,
         "chunk_content_preview": _build_preview(chunk_text, best_match),
         "message": message,
     }
@@ -371,10 +377,14 @@ def create_record_evidence_tool(
         if tracker:
             tracker.record_call("record_evidence")
 
+        normalized_entity = str(entity or "").strip()
+        normalized_chunk_id = str(chunk_id or "").strip()
+        normalized_claimed_quote = str(claimed_quote or "").strip()
+
         logger.info(
             "Verifying evidence for entity '%s' in chunk %s for document %s",
-            entity,
-            chunk_id,
+            normalized_entity,
+            normalized_chunk_id,
             document_id[:8],
         )
 
@@ -388,6 +398,9 @@ def create_record_evidence_tool(
             logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
             return _build_not_found_result(
                 "",
+                entity=normalized_entity,
+                chunk_id=normalized_chunk_id,
+                claimed_quote=normalized_claimed_quote,
                 page=None,
                 section=None,
                 subsection=None,
@@ -397,6 +410,9 @@ def create_record_evidence_tool(
         if chunk is None:
             return _build_not_found_result(
                 "",
+                entity=normalized_entity,
+                chunk_id=normalized_chunk_id,
+                claimed_quote=normalized_claimed_quote,
                 page=None,
                 section=None,
                 subsection=None,
@@ -411,16 +427,22 @@ def create_record_evidence_tool(
         if not chunk_text:
             return _build_not_found_result(
                 "",
+                entity=normalized_entity,
+                chunk_id=normalized_chunk_id,
+                claimed_quote=normalized_claimed_quote,
                 page=page,
                 section=section,
                 subsection=subsection,
                 message="This chunk has no text content. Drop this evidence or retry with another chunk.",
             )
 
-        verified_quote, best_match = _find_verified_quote(str(claimed_quote or "").strip(), chunk_text)
+        verified_quote, best_match = _find_verified_quote(normalized_claimed_quote, chunk_text)
         if verified_quote is None:
             return _build_not_found_result(
                 chunk_text,
+                entity=normalized_entity,
+                chunk_id=normalized_chunk_id,
+                claimed_quote=normalized_claimed_quote,
                 page=page,
                 section=section,
                 subsection=subsection,
@@ -429,6 +451,9 @@ def create_record_evidence_tool(
 
         payload: dict[str, Any] = {
             "status": "verified",
+            "entity": normalized_entity,
+            "chunk_id": normalized_chunk_id,
+            "claimed_quote": normalized_claimed_quote,
             "verified_quote": verified_quote,
         }
         if page is not None:
@@ -444,11 +469,11 @@ def create_record_evidence_tool(
 
         payload["evidence_record_id"] = build_evidence_record_id(
             evidence_record={
-                "entity": str(entity or "").strip(),
+                "entity": normalized_entity,
                 "verified_quote": verified_quote,
                 "page": page,
                 "section": section,
-                "chunk_id": str(chunk_id or "").strip(),
+                "chunk_id": normalized_chunk_id,
                 "subsection": subsection,
                 "figure_reference": figure_reference,
             }

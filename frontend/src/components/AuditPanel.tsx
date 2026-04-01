@@ -345,6 +345,13 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   }
 
   const hasEvents = events.length > 0
+  const actionButtonSx = {
+    minWidth: '88px',
+    textTransform: 'none',
+    fontSize: '0.75rem',
+    px: '10px',
+    py: '4px',
+  } as const
   const legendItems = [
     { label: 'In Progress', color: 'rgba(33, 150, 243, 0.5)' },
     { label: 'Processing', color: 'rgba(156, 39, 176, 0.5)' },
@@ -448,12 +455,9 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           onClick={handleCopy}
           disabled={!hasEvents}
           sx={{
-            minWidth: 'auto',
-            textTransform: 'none',
-            fontSize: '0.75rem',
+            ...actionButtonSx,
             borderColor: 'rgba(255, 255, 255, 0.23)',
             color: 'rgba(255, 255, 255, 0.7)',
-            padding: '4px 12px',
             '&:hover': {
               borderColor: 'rgba(255, 255, 255, 0.4)',
               backgroundColor: 'rgba(255, 255, 255, 0.08)'
@@ -476,12 +480,9 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           onClick={handleClear}
           disabled={!hasEvents}
           sx={{
-            minWidth: 'auto',
-            textTransform: 'none',
-            fontSize: '0.75rem',
+            ...actionButtonSx,
             borderColor: 'rgba(255, 255, 255, 0.23)',
             color: 'rgba(255, 255, 255, 0.7)',
-            padding: '4px 12px',
             '&:hover': {
               borderColor: 'rgba(255, 255, 255, 0.4)',
               backgroundColor: 'rgba(255, 255, 255, 0.08)'
@@ -507,13 +508,11 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           }}
           disabled={!isStreaming || !onStop}
           sx={{
-            minWidth: 'auto',
-            textTransform: 'none',
-            fontSize: '0.75rem',
+            ...actionButtonSx,
+            minWidth: '78px',
             borderColor: 'rgba(220, 53, 69, 0.4)',
             color: 'rgba(220, 53, 69, 0.85)',
             backgroundColor: 'rgba(220, 53, 69, 0.08)',
-            padding: '4px 12px',
             '&:hover': {
               borderColor: 'rgba(220, 53, 69, 0.6)',
               backgroundColor: 'rgba(220, 53, 69, 0.12)'
