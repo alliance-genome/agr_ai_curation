@@ -6,6 +6,7 @@ import PdfViewer, {
   buildEvidenceSpikeQuoteCandidates,
   buildEvidenceSpikeSectionCandidates,
   findExpandedEvidenceQueryFromPageText,
+  normalizeEvidenceSpikeText,
   normalizeEvidenceSpikePageHints,
   type PdfEvidenceSpikeInput,
 } from './PdfViewer'
@@ -14,12 +15,14 @@ import {
   dispatchPDFDocumentChanged,
   onPDFViewerEvidenceAnchorSelected,
 } from './pdfEvents'
+import { buildNormalizedTextSourceMap } from './textNormalization'
 
 interface MockFindResponse {
   state: number
   total: number
   current: number
   pageIdx: number | null
+  dispatchDelayMs?: number
   pageMatches?: number[]
   pageMatchesLength?: number[]
   viewerPageNumber?: number | null
@@ -38,6 +41,7 @@ interface MockFindResponse {
 interface MockPageSpec {
   pageNumber: number
   textSegments: string[]
+  pageContents?: string
 }
 
 class MockPdfEventBus {
@@ -54,7 +58,11 @@ class MockPdfEventBus {
       selected: { pageIdx: number; matchIdx: number }
       pageMatches: number[][]
       pageMatchesLength: number[][]
+      _pageContents: string[]
     },
+    private readonly getPageContents: (pageIdx: number) => string,
+    private readonly renderNativeSelection: (pageIdx: number | null, matchIdx: number | null) => void,
+    private readonly clearNativeSelection: () => void,
   ) {}
 
   on(eventName: string, handler: (event: any) => void) {
@@ -72,6 +80,7 @@ class MockPdfEventBus {
       this.findbarCloseCount += 1
       this.findController.selected.pageIdx = -1
       this.findController.selected.matchIdx = -1
+      this.clearNativeSelection()
       return
     }
 
@@ -97,8 +106,12 @@ class MockPdfEventBus {
     this.findQueries.push(payload.query)
 
     if (response.pageIdx !== null && response.pageIdx >= 0) {
-      this.findController.pageMatches[response.pageIdx] = response.pageMatches ?? []
-      this.findController.pageMatchesLength[response.pageIdx] = response.pageMatchesLength ?? []
+      const inferredRanges = inferMockQueryMatchRanges(
+        this.getPageContents(response.pageIdx),
+        payload.query,
+      )
+      this.findController.pageMatches[response.pageIdx] = response.pageMatches ?? inferredRanges.pageMatches
+      this.findController.pageMatchesLength[response.pageIdx] = response.pageMatchesLength ?? inferredRanges.pageMatchesLength
     }
 
     const applySelection = (selection: {
@@ -106,13 +119,23 @@ class MockPdfEventBus {
       viewerPageNumber?: number | null
     }) => {
       const pageIdx = selection.pageIdx ?? null
+      const pageMatchCount = pageIdx !== null
+        ? (this.findController.pageMatches[pageIdx]?.length ?? 0)
+        : 0
       this.findController.selected.pageIdx = pageIdx ?? -1
-      this.findController.selected.matchIdx = pageIdx !== null ? Math.max(response.current - 1, 0) : -1
+      this.findController.selected.matchIdx = pageIdx !== null
+        ? Math.min(Math.max(response.current - 1, 0), Math.max(pageMatchCount - 1, 0))
+        : -1
       if (pageIdx !== null) {
         this.setCurrentPage(pageIdx + 1)
       } else if (typeof selection.viewerPageNumber === 'number' && selection.viewerPageNumber >= 1) {
         this.setCurrentPage(selection.viewerPageNumber)
       }
+
+      this.renderNativeSelection(
+        pageIdx,
+        pageIdx !== null ? this.findController.selected.matchIdx : null,
+      )
 
       for (const handler of this.listeners.get('updatetextlayermatches') ?? []) {
         handler({
@@ -120,16 +143,6 @@ class MockPdfEventBus {
           pageIndex: pageIdx ?? -1,
         })
       }
-    }
-    applySelection({
-      pageIdx: response.pageIdx,
-      viewerPageNumber: response.viewerPageNumber,
-    })
-
-    if (response.delayedSelection) {
-      window.setTimeout(() => {
-        applySelection(response.delayedSelection ?? {})
-      }, response.delayedSelection.delayMs ?? 25)
     }
 
     const emitCount = (current: number, total: number) => {
@@ -144,26 +157,46 @@ class MockPdfEventBus {
       }
     }
 
-    for (const handler of this.listeners.get('updatefindcontrolstate') ?? []) {
-      handler({
-        source: this.findController,
-        state: response.state,
-        matchesCount: {
-          current: response.current,
-          total: response.total,
-        },
-        rawQuery: payload.query,
+    const emitFindResponse = () => {
+      applySelection({
+        pageIdx: response.pageIdx,
+        viewerPageNumber: response.viewerPageNumber,
       })
+
+      if (response.delayedSelection) {
+        window.setTimeout(() => {
+          applySelection(response.delayedSelection ?? {})
+        }, response.delayedSelection.delayMs ?? 25)
+      }
+
+      for (const handler of this.listeners.get('updatefindcontrolstate') ?? []) {
+        handler({
+          source: this.findController,
+          state: response.state,
+          matchesCount: {
+            current: response.current,
+            total: response.total,
+          },
+          rawQuery: payload.query,
+        })
+      }
+
+      if (response.lateCount) {
+        window.setTimeout(() => {
+          emitCount(response.lateCount?.current ?? response.current, response.lateCount?.total ?? response.total)
+        }, response.lateCount.delayMs ?? 25)
+        return
+      }
+
+      emitCount(response.current, response.total)
     }
 
-    if (response.lateCount) {
-      window.setTimeout(() => {
-        emitCount(response.lateCount?.current ?? response.current, response.lateCount?.total ?? response.total)
-      }, response.lateCount.delayMs ?? 25)
+    if (typeof response.dispatchDelayMs === 'number' && response.dispatchDelayMs > 0) {
+      window.setTimeout(emitFindResponse, response.dispatchDelayMs)
       return
     }
 
-    emitCount(response.current, response.total)
+    emitFindResponse()
   }
 }
 
@@ -179,6 +212,56 @@ const createMockRect = (left: number, top: number, width: number, height: number
     bottom: top + height,
     toJSON: () => ({}),
   } as DOMRect
+}
+
+const getSourceCodeUnitLength = (value: string, index: number): number => {
+  const codePoint = value.codePointAt(index)
+  return codePoint !== undefined && codePoint > 0xffff ? 2 : 1
+}
+
+const inferMockQueryMatchRanges = (
+  rawText: string,
+  query: string,
+): {
+  pageMatches: number[]
+  pageMatchesLength: number[]
+} => {
+  const normalizedQuery = normalizeEvidenceSpikeText(query)
+  const sourceMap = buildNormalizedTextSourceMap(rawText)
+  const normalizedPageText = sourceMap.text.toLocaleLowerCase()
+  const normalizedCandidate = normalizedQuery.toLocaleLowerCase()
+
+  if (!normalizedPageText || !normalizedCandidate) {
+    return {
+      pageMatches: [],
+      pageMatchesLength: [],
+    }
+  }
+
+  const pageMatches: number[] = []
+  const pageMatchesLength: number[] = []
+  let searchStart = 0
+
+  while (searchStart <= normalizedPageText.length - normalizedCandidate.length) {
+    const matchIndex = normalizedPageText.indexOf(normalizedCandidate, searchStart)
+    if (matchIndex < 0) {
+      break
+    }
+
+    const rawStart = sourceMap.sourceIndices[matchIndex]
+    const rawEnd = sourceMap.sourceIndices[matchIndex + normalizedCandidate.length - 1]
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      pageMatches.push(rawStart)
+      pageMatchesLength.push((rawEnd + getSourceCodeUnitLength(rawText, rawEnd)) - rawStart)
+    }
+
+    searchStart = matchIndex + normalizedCandidate.length
+  }
+
+  return {
+    pageMatches,
+    pageMatchesLength,
+  }
 }
 
 const installMockPdfViewer = ({
@@ -197,6 +280,7 @@ const installMockPdfViewer = ({
     },
     pageMatches: [] as number[][],
     pageMatchesLength: [] as number[][],
+    _pageContents: [] as string[],
   }
 
   let currentPageNumber = 1
@@ -220,7 +304,7 @@ const installMockPdfViewer = ({
     }
 
     const pageIndex = pageNumber - 1
-    const segmentIndex = textLayer.querySelectorAll('span').length
+    const segmentIndex = pageTextDivs.get(pageNumber)?.length ?? 0
     const span = iframeDocument.createElement('span')
     span.textContent = segment
     const spanRect = createMockRect(
@@ -244,6 +328,59 @@ const installMockPdfViewer = ({
     const textItems = pageTextContentItems.get(pageNumber) ?? []
     textItems.push(segment)
     pageTextContentItems.set(pageNumber, textItems)
+  }
+
+  const clearNativeSelection = () => {
+    iframeDocument.querySelectorAll('.highlight.selected').forEach((node) => node.remove())
+  }
+
+  const renderNativeSelection = (pageIdx: number | null, matchIdx: number | null) => {
+    clearNativeSelection()
+    if (pageIdx === null || matchIdx === null || matchIdx < 0) {
+      return
+    }
+
+    const pageNumber = pageIdx + 1
+    const textLayer = textLayers.get(pageNumber)
+    const textDivs = pageTextDivs.get(pageNumber) ?? []
+    const textItems = pageTextContentItems.get(pageNumber) ?? []
+    const rawStart = findController.pageMatches[pageIdx]?.[matchIdx]
+    const rawLength = findController.pageMatchesLength[pageIdx]?.[matchIdx]
+    if (!textLayer || typeof rawStart !== 'number' || typeof rawLength !== 'number' || rawLength <= 0) {
+      return
+    }
+
+    const rawEndExclusive = rawStart + rawLength
+    let cumulativeOffset = 0
+
+    textDivs.forEach((container, index) => {
+      const itemText = textItems[index] ?? ''
+      const itemStart = cumulativeOffset
+      const itemEndExclusive = itemStart + itemText.length
+      cumulativeOffset = itemEndExclusive
+      if (itemText.length === 0 || rawStart >= itemEndExclusive || rawEndExclusive <= itemStart) {
+        return
+      }
+
+      const localStart = Math.max(0, rawStart - itemStart)
+      const localEndExclusive = Math.min(itemText.length, rawEndExclusive - itemStart)
+      const textNode = container.firstChild as Text | null
+      const layout = textNode ? textNodeLayouts.get(textNode) : null
+      if (!layout || localStart >= localEndExclusive) {
+        return
+      }
+
+      const highlight = iframeDocument.createElement('span')
+      highlight.className = 'highlight selected'
+      highlight.textContent = itemText.slice(localStart, localEndExclusive)
+      highlight.getBoundingClientRect = () => createMockRect(
+        layout.rect.left + (localStart * layout.charWidth),
+        layout.rect.top,
+        (localEndExclusive - localStart) * layout.charWidth,
+        layout.rect.height,
+      )
+      textLayer.appendChild(highlight)
+    })
   }
 
   pages.forEach((page, pageIndex) => {
@@ -277,6 +414,14 @@ const installMockPdfViewer = ({
       },
     })
   })
+
+  const highestPageNumber = pages.reduce((max, page) => Math.max(max, page.pageNumber), 0)
+  findController._pageContents = Array.from(
+    { length: highestPageNumber },
+    (_, pageIndex) => pages.find((page) => page.pageNumber === pageIndex + 1)?.pageContents
+      ?? pages.find((page) => page.pageNumber === pageIndex + 1)?.textSegments.join('')
+      ?? '',
+  )
 
   iframeDocument.createRange = (() => {
     let startNode: Text | null = null
@@ -342,6 +487,9 @@ const installMockPdfViewer = ({
       currentPageNumber = nextPage
     },
     findController,
+    (pageIdx) => findController._pageContents[pageIdx] ?? '',
+    renderNativeSelection,
+    clearNativeSelection,
   )
 
   const pdfApp = {
@@ -366,12 +514,27 @@ const installMockPdfViewer = ({
     },
   })
 
-  return { iframe, eventBus, pdfViewer, appendTextSegment, findController }
+  return {
+    iframe,
+    eventBus,
+    pdfViewer,
+    appendTextSegment,
+    findController,
+    rerenderNativeSelection: (pageIdx: number | null, matchIdx: number | null) => {
+      renderNativeSelection(pageIdx, matchIdx)
+    },
+  }
 }
 
 const getEvidenceHighlightRects = (iframe: HTMLIFrameElement): HTMLElement[] => {
   return Array.from(
     iframe.contentWindow?.document.querySelectorAll<HTMLElement>('.pdf-evidence-highlight-rect') ?? [],
+  )
+}
+
+const getNativeSelectedHighlights = (iframe: HTMLIFrameElement): HTMLElement[] => {
+  return Array.from(
+    iframe.contentWindow?.document.querySelectorAll<HTMLElement>('.highlight.selected') ?? [],
   )
 }
 
@@ -426,8 +589,10 @@ describe('PdfViewer evidence navigation', () => {
     expect(reasons).toEqual(expect.arrayContaining([
       'exact-quote',
       'normalized-quote',
-      'first-sentence-fragment',
       'window-fragment',
+    ]))
+    expect(reasons).not.toEqual(expect.arrayContaining([
+      'first-sentence-fragment',
       'leading-fragment',
       'trailing-fragment',
     ]))
@@ -444,12 +609,12 @@ describe('PdfViewer evidence navigation', () => {
     const candidates = buildEvidenceSpikeQuoteCandidates(query)
 
     expect(candidates[0]).toEqual({
-      query: 'all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.',
-      reason: 'sanitized-quote',
-    })
-    expect(candidates).toContainEqual({
       query,
       reason: 'exact-quote',
+    })
+    expect(candidates[1]).toEqual({
+      query: 'all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates.',
+      reason: 'sanitized-quote',
     })
   })
 
@@ -477,7 +642,7 @@ describe('PdfViewer evidence navigation', () => {
     }))
   })
 
-  it('uses the dev harness to localize a normalized quote and render text-layer highlights', async () => {
+  it('uses the dev harness to localize a normalized quote with native PDF.js highlighting', async () => {
     vi.stubEnv('VITE_DEV_MODE', 'true')
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -533,12 +698,15 @@ describe('PdfViewer evidence navigation', () => {
       'Raw quote with "smart" punctuation',
     ])
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
-    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    })
   })
 
-  it('reconstructs quote rects from PDF.js page match coordinates when local normalization would miss them', async () => {
+  it('keeps the canonical PDF.js page substring when a normalized quote lands natively', async () => {
     vi.stubEnv('VITE_DEV_MODE', 'true')
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -580,17 +748,18 @@ describe('PdfViewer evidence navigation', () => {
 
     expect(result).toMatchObject({
       status: 'matched',
-      matchedQuery: query,
+      matchedQuery: pageText,
       matchedPage: 3,
       matchesTotal: 1,
       currentMatch: 1,
     })
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
-  it('acknowledges select navigation and renders quote highlights on the matched page', async () => {
+  it('acknowledges select navigation and keeps quote highlighting native-only on the matched page', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -645,10 +814,10 @@ describe('PdfViewer evidence navigation', () => {
       matchedPage: 3,
     }))
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
-    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('select')
-    expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('solid')
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-mode')).toBe('select')
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
   })
 
@@ -714,6 +883,7 @@ describe('PdfViewer evidence navigation', () => {
       matchedPage: 3,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     expect(eventBus.findbarCloseCount).toBe(1)
   })
 
@@ -865,7 +1035,7 @@ describe('PdfViewer evidence navigation', () => {
     expect(screen.getByText('Section fallback')).toBeInTheDocument()
   })
 
-  it('waits for a late-selected native PDF.js quote match during chat navigation', async () => {
+  it('waits for a delayed visible native PDF.js quote match during chat navigation', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -886,17 +1056,10 @@ describe('PdfViewer evidence navigation', () => {
 
     const { iframe, eventBus } = installMockPdfViewer({
       onFind: (candidate) => ({
-        state: candidate === query ? 1 : 1,
+        state: candidate === query ? 0 : 1,
         total: candidate === query ? 1 : 0,
         current: candidate === query ? 1 : 0,
-        pageIdx: null,
-        delayedSelection: candidate === query
-          ? {
-              pageIdx: 5,
-              viewerPageNumber: 6,
-              delayMs: 300,
-            }
-          : undefined,
+        pageIdx: candidate === query ? 5 : null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -904,7 +1067,7 @@ describe('PdfViewer evidence navigation', () => {
         { pageNumber: 3, textSegments: ['Completely different visible text', 'Results'] },
         { pageNumber: 4, textSegments: ['More text'] },
         { pageNumber: 5, textSegments: ['Discussion'] },
-        { pageNumber: 6, textSegments: ['Completely different visible text on the eventual matched page'] },
+        { pageNumber: 6, textSegments: [], pageContents: query },
       ],
     })
 
@@ -951,7 +1114,7 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     }, { timeout: 1200 })
 
-    expect(eventBus.findQueries).toEqual([query])
+    expect(eventBus.findQueries.every((entry) => entry === query)).toBe(true)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
       locatorQuality: 'exact_quote',
@@ -960,6 +1123,7 @@ describe('PdfViewer evidence navigation', () => {
       matchedQuery: query,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     expect(eventBus.findbarCloseCount).toBe(1)
     expect(
       screen.queryByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
@@ -967,13 +1131,26 @@ describe('PdfViewer evidence navigation', () => {
     expect(screen.getByText('Page 6')).toBeInTheDocument()
   })
 
-  it('replays the recovered page-text query through PDF.js so document-wide recovery still yields a native chat highlight', async () => {
+  it('keeps the native fragment highlighted when a longer PDF.js upgrade cannot be verified', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
-    const spacedQuote = 'Genetic eye mosaics consisting of large mutant patches of crb 11A22 and crb 8F105 were generated by crossing yw*eyFLP;;FRT82B w+ cl3R3/TM6B males [58] to w*; FRT82B crb 11A22 /TM6B and w*; FRT82B crb 8F105 /TM6B respectively.'
-    const collapsedPdfQuote = 'Genetic eye mosaics consisting of large mutant patches ofcrb11A22 and crb8F105 were generated by crossing yw*eyFLP;;FRT82B w+cl3R3/TM6B males[58] to w*; FRT82B crb11A22 /TM6B and w*; FRT82Bcrb8F105 /TM6B respectively'
+    const pageText = [
+      'all proteins changed in the allele lacking the crb_C isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton.',
+    ].join(' ')
+    const query = [
+      'In summary, all proteins changed in the allele lacking the *crb_C* isoform',
+      'constitute interesting candidates in the connection of the Crumbs',
+      'function in organizing the cytoskeleton and should be prioritized for follow-up experiments.',
+    ].join(' ')
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason === 'window-fragment' && pageText.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
 
     render(
       <PdfViewer
@@ -982,66 +1159,48 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat-document-native', '/fixtures/sample.pdf', 'chat-document-native.pdf', 10)
+    dispatchPDFDocumentChanged('doc-fragment-preserved', '/fixtures/sample.pdf', 'fragment-preserved.pdf', 8)
     await waitFor(() => {
-      expect(screen.getByText('chat-document-native.pdf')).toBeInTheDocument()
+      expect(screen.getByText('fragment-preserved.pdf')).toBeInTheDocument()
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === collapsedPdfQuote ? 0 : 1,
-        total: candidate === collapsedPdfQuote ? 1 : 0,
-        current: candidate === collapsedPdfQuote ? 1 : 0,
-        pageIdx: candidate === collapsedPdfQuote ? 7 : null,
-      }),
+      onFind: (candidate) => {
+        const isFragment = candidate === fragmentCandidate
+        return {
+          state: isFragment ? 0 : 1,
+          total: isFragment ? 1 : 0,
+          current: isFragment ? 1 : 0,
+          pageIdx: isFragment ? 2 : null,
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: ['Results'] },
-        { pageNumber: 4, textSegments: ['Discussion'] },
-        { pageNumber: 5, textSegments: ['Figure legends'] },
-        { pageNumber: 6, textSegments: ['References'] },
-        { pageNumber: 7, textSegments: ['Supplementary notes'] },
-        { pageNumber: 8, textSegments: [collapsedPdfQuote] },
+        { pageNumber: 3, textSegments: [pageText, 'Results and Discussion'] },
       ],
     })
 
     fireEvent.load(iframe)
-    window.setTimeout(() => {
-      const iframeDocument = iframe.contentWindow?.document
-      const textLayer = iframeDocument?.querySelector<HTMLElement>(
-        '.page[data-page-number="8"] .textLayer',
-      )
-      if (!iframeDocument || !textLayer) {
-        return
-      }
-
-      const nativeHighlight = iframeDocument.createElement('span')
-      nativeHighlight.className = 'highlight selected'
-      nativeHighlight.textContent = collapsedPdfQuote
-      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (7 * 900) + 72, 240, 20)
-      textLayer.appendChild(nativeHighlight)
-      eventBus.dispatch('updatetextlayermatches', { pageIndex: 7 })
-    }, 150)
 
     dispatchPDFViewerNavigateEvidence(
       buildNavigationCommand({
-        anchorId: 'chat-document-native-anchor',
+        anchorId: 'chat-fragment-preserved-anchor',
         anchor: {
           anchor_kind: 'snippet',
           locator_quality: 'exact_quote',
           supports_decision: 'supports',
-          snippet_text: spacedQuote,
-          normalized_text: spacedQuote,
-          viewer_search_text: spacedQuote,
+          snippet_text: query,
+          normalized_text: query,
+          viewer_search_text: query,
           page_number: 1,
-          section_title: 'Methods',
+          section_title: 'Results and Discussion',
           subsection_title: null,
-          chunk_ids: ['chunk-chat-document-native'],
+          chunk_ids: ['chunk-chat-fragment-preserved'],
         },
-        searchText: spacedQuote,
+        searchText: query,
         pageNumber: 1,
-        sectionTitle: 'Methods',
+        sectionTitle: 'Results and Discussion',
       }),
     )
 
@@ -1049,32 +1208,27 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     }, { timeout: 4000 })
 
-    expect(eventBus.findQueries).toContain(collapsedPdfQuote)
-    expect(
-      eventBus.findDispatches.find((dispatch) => dispatch.query === collapsedPdfQuote),
-    ).toEqual(expect.objectContaining({
-      query: collapsedPdfQuote,
-      pageBeforeDispatch: 8,
-    }))
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'document',
-      locatorQuality: 'exact_quote',
-      degraded: false,
-      matchedPage: 8,
-      matchedQuery: collapsedPdfQuote,
-      note: 'Recovered the best matching quote span from the PDF page text using the viewer native text selection.',
+      strategy: 'window-fragment',
+      locatorQuality: 'normalized_quote',
+      degraded: true,
+      matchedPage: 3,
+      matchedQuery: fragmentCandidate,
+      note: 'Kept the best native quote fragment because the longer PDF.js quote upgrade could not be verified.',
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
   })
 
-  it('falls back to derived text-layer rects when the recovered native PDF.js re-query still does not render a selected highlight', async () => {
+  it('does not render quote overlay boxes when quote navigation degrades to page context', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
-    const spacedQuote = 'Genetic eye mosaics consisting of large mutant patches of crb 11A22 and crb 8F105 were generated by crossing yw*eyFLP;;FRT82B w+ cl3R3/TM6B males [58] to w*; FRT82B crb 11A22 /TM6B and w*; FRT82B crb 8F105 /TM6B respectively.'
-    const collapsedPdfQuote = 'Genetic eye mosaics consisting of large mutant patches ofcrb11A22 and crb8F105 were generated by crossing yw*eyFLP;;FRT82B w+cl3R3/TM6B males[58] to w*; FRT82B crb11A22 /TM6B and w*; FRT82Bcrb8F105 /TM6B respectively'
+    const pageText = 'naïve approach among proteins'
+    const query = 'naive approach among proteins'
 
     render(
       <PdfViewer
@@ -1083,49 +1237,44 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat-document-overlay-fallback', '/fixtures/sample.pdf', 'chat-document-overlay-fallback.pdf', 10)
+    dispatchPDFDocumentChanged('doc-native-no-overlay', '/fixtures/sample.pdf', 'native-no-overlay.pdf', 10)
     await waitFor(() => {
-      expect(screen.getByText('chat-document-overlay-fallback.pdf')).toBeInTheDocument()
+      expect(screen.getByText('native-no-overlay.pdf')).toBeInTheDocument()
     })
 
-    const { iframe, eventBus } = installMockPdfViewer({
+    const { iframe } = installMockPdfViewer({
       onFind: (candidate) => ({
-        state: candidate === collapsedPdfQuote ? 0 : 1,
-        total: candidate === collapsedPdfQuote ? 1 : 0,
-        current: candidate === collapsedPdfQuote ? 1 : 0,
-        pageIdx: candidate === collapsedPdfQuote ? 7 : null,
+        state: candidate === query || candidate === pageText ? 0 : 1,
+        total: candidate === query || candidate === pageText ? 1 : 0,
+        current: candidate === query || candidate === pageText ? 1 : 0,
+        pageIdx: candidate === query || candidate === pageText ? 2 : null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: ['Results'] },
-        { pageNumber: 4, textSegments: ['Discussion'] },
-        { pageNumber: 5, textSegments: ['Figure legends'] },
-        { pageNumber: 6, textSegments: ['References'] },
-        { pageNumber: 7, textSegments: ['Supplementary notes'] },
-        { pageNumber: 8, textSegments: [collapsedPdfQuote] },
+        { pageNumber: 3, textSegments: [pageText, 'Results'] },
       ],
     })
 
     fireEvent.load(iframe)
     dispatchPDFViewerNavigateEvidence(
       buildNavigationCommand({
-        anchorId: 'chat-document-overlay-fallback-anchor',
+        anchorId: 'chat-native-no-overlay-anchor',
         anchor: {
           anchor_kind: 'snippet',
-          locator_quality: 'exact_quote',
+          locator_quality: 'normalized_quote',
           supports_decision: 'supports',
-          snippet_text: spacedQuote,
-          normalized_text: spacedQuote,
-          viewer_search_text: spacedQuote,
-          page_number: 1,
-          section_title: 'Methods',
+          snippet_text: query,
+          normalized_text: query,
+          viewer_search_text: query,
+          page_number: 3,
+          section_title: 'Results',
           subsection_title: null,
-          chunk_ids: ['chunk-chat-document-overlay-fallback'],
+          chunk_ids: ['chunk-chat-native-no-overlay'],
         },
-        searchText: spacedQuote,
-        pageNumber: 1,
-        sectionTitle: 'Methods',
+        searchText: query,
+        pageNumber: 3,
+        sectionTitle: 'Results',
       }),
     )
 
@@ -1133,20 +1282,17 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     }, { timeout: 4000 })
 
-    expect(eventBus.findQueries).toContain(collapsedPdfQuote)
-    await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
-    })
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'matched',
-      strategy: 'document',
-      matchedPage: 8,
-      matchedQuery: collapsedPdfQuote,
-      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+      status: 'page-fallback',
+      strategy: 'page-hint',
+      locatorQuality: 'page_only',
+      matchedPage: 3,
     }))
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(0)
   })
 
-  it('dispatches the selected anchor id when a highlight rect is clicked', async () => {
+  it('dispatches the selected anchor id when a native quote highlight is clicked', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onAnchorSelected = vi.fn()
@@ -1171,16 +1317,82 @@ describe('PdfViewer evidence navigation', () => {
 
     fireEvent.load(iframe)
 
-    const highlightRect = await waitFor(() => {
-      const [rect] = getEvidenceHighlightRects(iframe)
-      expect(rect).toBeDefined()
-      return rect
+    const nativeHighlight = await waitFor(() => {
+      const [highlight] = getNativeSelectedHighlights(iframe)
+      expect(highlight).toBeDefined()
+      return highlight
+    })
+    await waitFor(() => {
+      expect(nativeHighlight.getAttribute('data-kind')).toBe('quote')
     })
 
-    highlightRect.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    nativeHighlight.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     expect(onAnchorSelected).toHaveBeenCalledTimes(1)
     expect(onAnchorSelected.mock.calls[0][0].detail.anchorId).toBe('anchor-click')
+
+    unsubscribe()
+  })
+
+  it('keeps one keyboard focus target for a native quote and reattaches it after PDF.js rerenders the match', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onAnchorSelected = vi.fn()
+    const unsubscribe = onPDFViewerEvidenceAnchorSelected(onAnchorSelected)
+    const query = 'Exact quote from PDFX markdown'
+
+    render(<PdfViewer pendingNavigation={buildNavigationCommand({ anchorId: 'anchor-rerender' })} />)
+
+    dispatchPDFDocumentChanged('doc-rerender', '/fixtures/sample.pdf', 'rerender.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('rerender.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus, rerenderNativeSelection } = installMockPdfViewer({
+      onFind: (candidate) => ({
+        state: candidate === query ? 0 : 1,
+        total: candidate === query ? 1 : 0,
+        current: candidate === query ? 1 : 0,
+        pageIdx: candidate === query ? 2 : null,
+        pageMatches: candidate === query ? [0] : [],
+        pageMatchesLength: candidate === query ? [query.length] : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: ['Exact quote from PDFX ', 'markdown', ' Results'] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(2)
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    })
+
+    let nativeHighlights = getNativeSelectedHighlights(iframe)
+    expect(nativeHighlights.filter((node) => node.getAttribute('tabindex') === '0')).toHaveLength(1)
+    expect(nativeHighlights.filter((node) => node.getAttribute('role') === 'button')).toHaveLength(1)
+    expect(nativeHighlights[1].hasAttribute('tabindex')).toBe(false)
+
+    nativeHighlights[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(onAnchorSelected).toHaveBeenCalledTimes(1)
+    expect(onAnchorSelected.mock.calls[0][0].detail.anchorId).toBe('anchor-rerender')
+
+    rerenderNativeSelection(2, 0)
+    eventBus.dispatch('updatetextlayermatches', { pageIndex: 2 })
+
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(2)
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    })
+
+    nativeHighlights = getNativeSelectedHighlights(iframe)
+    expect(nativeHighlights.filter((node) => node.getAttribute('tabindex') === '0')).toHaveLength(1)
+    nativeHighlights[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    nativeHighlights[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(onAnchorSelected).toHaveBeenCalledTimes(3)
 
     unsubscribe()
   })
@@ -1216,12 +1428,12 @@ describe('PdfViewer evidence navigation', () => {
     fireEvent.load(iframe)
 
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
 
-    const highlightRect = getEvidenceHighlightRects(iframe)[0]
-    expect(highlightRect.style.left).toBe(`${32 + (prefix.length * 5)}px`)
-    expect(highlightRect.style.width).toBe(`${query.length * 5}px`)
+    const highlightRect = getNativeSelectedHighlights(iframe)[0].getBoundingClientRect()
+    expect(highlightRect.left).toBe(32 + (prefix.length * 5))
+    expect(highlightRect.width).toBe(query.length * 5)
   })
 
   it('uses the selected repeated same-page match index for text-layer highlighting', async () => {
@@ -1253,10 +1465,10 @@ describe('PdfViewer evidence navigation', () => {
     fireEvent.load(iframe)
 
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
 
-    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
+    expect(getNativeSelectedHighlights(iframe)[0].getBoundingClientRect().top).toBe((2 * 900) + 48 + (3 * 28))
   })
 
   it('waits for delayed text-layer rendering before degrading a successful quote match', async () => {
@@ -1281,7 +1493,7 @@ describe('PdfViewer evidence navigation', () => {
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Already normalized quote text'] },
-        { pageNumber: 3, textSegments: [] },
+        { pageNumber: 3, textSegments: [], pageContents: query },
       ],
     })
 
@@ -1289,17 +1501,33 @@ describe('PdfViewer evidence navigation', () => {
 
     window.setTimeout(() => {
       appendTextSegment(3, query)
-      eventBus.dispatch('textlayerrendered', { pageNumber: 3 })
+      const iframeDocument = iframe.contentWindow?.document
+      const textLayer = iframeDocument?.querySelector<HTMLElement>(
+        '.page[data-page-number="3"] .textLayer',
+      )
+      if (!iframeDocument || !textLayer) {
+        return
+      }
+
+      const nativeHighlight = iframeDocument.createElement('span')
+      nativeHighlight.className = 'highlight selected'
+      nativeHighlight.textContent = query
+      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (2 * 900) + 72, 190, 20)
+      textLayer.appendChild(nativeHighlight)
+      eventBus.dispatch('updatetextlayermatches', { pageIndex: 2 })
     }, 150)
 
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
 
-    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-kind')).toBe('quote')
+    })
   })
 
-  it('reuses native PDF.js match rects when raw text reconstruction cannot localize the quote', async () => {
+  it('degrades to page context when a quote resolves to the page but not to a visible native highlight', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const query = 'crumbs ( crb ) mutant eyes'
@@ -1373,18 +1601,16 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toEqual([query])
+    expect(eventBus.findQueries).toContain(query)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'matched',
-      locatorQuality: 'exact_quote',
-      degraded: false,
+      status: 'page-fallback',
+      locatorQuality: 'page_only',
+      degraded: true,
       matchedPage: 3,
+      matchedQuery: query,
     }))
-    await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
-    })
-    expect(getEvidenceHighlightRects(iframe)[0].style.left).toBe('48px')
-    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe('72px')
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(0)
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
   it('matches a contiguous quote fragment before degrading to page context', async () => {
@@ -1464,8 +1690,9 @@ describe('PdfViewer evidence navigation', () => {
       matchedQuery: fragmentCandidate,
     }))
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(screen.getByText('Approximate quote')).toBeInTheDocument()
   })
 
@@ -1526,12 +1753,18 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === fragmentCandidate || candidate === expandedQuery ? 0 : 1,
-        total: candidate === fragmentCandidate || candidate === expandedQuery ? 1 : 0,
-        current: candidate === fragmentCandidate || candidate === expandedQuery ? 1 : 0,
-        pageIdx: candidate === fragmentCandidate || candidate === expandedQuery ? 2 : null,
-      }),
+      onFind: (candidate) => {
+        const inferredRanges = inferMockQueryMatchRanges(pageText, candidate)
+        const matched = candidate === fragmentCandidate || inferredRanges.pageMatches.length > 0
+        return {
+          state: matched ? 0 : 1,
+          total: matched ? Math.max(inferredRanges.pageMatches.length, 1) : 0,
+          current: matched ? 1 : 0,
+          pageIdx: matched ? 2 : null,
+          pageMatches: matched ? inferredRanges.pageMatches : [],
+          pageMatchesLength: matched ? inferredRanges.pageMatchesLength : [],
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Already normalized quote text'] },
@@ -1552,12 +1785,13 @@ describe('PdfViewer evidence navigation', () => {
       locatorQuality: 'normalized_quote',
       degraded: false,
       matchedPage: 3,
-      matchedQuery: expandedQuery,
-      note: expect.stringContaining('Recovered'),
+      matchedQuery: expect.stringContaining('proteins changed in the allele lacking the crb_C isoform'),
+      note: 'Recovered the best native quote highlight from PDF.js page text.',
     }))
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
   it('recovers the best matching PDF quote span when the stored quote drifts from the page text', async () => {
@@ -1617,12 +1851,18 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === fragmentCandidate ? 0 : 1,
-        total: candidate === fragmentCandidate ? 1 : 0,
-        current: candidate === fragmentCandidate ? 1 : 0,
-        pageIdx: candidate === fragmentCandidate ? 2 : null,
-      }),
+      onFind: (candidate) => {
+        const inferredRanges = inferMockQueryMatchRanges(pageText, candidate)
+        const matched = candidate === fragmentCandidate || inferredRanges.pageMatches.length > 0
+        return {
+          state: matched ? 0 : 1,
+          total: matched ? Math.max(inferredRanges.pageMatches.length, 1) : 0,
+          current: matched ? 1 : 0,
+          pageIdx: matched ? 2 : null,
+          pageMatches: matched ? inferredRanges.pageMatches : [],
+          pageMatchesLength: matched ? inferredRanges.pageMatchesLength : [],
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
@@ -1639,16 +1879,17 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: expect.stringContaining('fragment'),
+      strategy: 'window-fragment',
       locatorQuality: 'normalized_quote',
       degraded: false,
       matchedPage: 3,
       matchedQuery: pageText,
-      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+      note: 'Recovered the best native quote highlight from PDF.js page text.',
     }))
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
   it('keeps fuzzy anchoring aligned to the selected repeated match on the same page', async () => {
@@ -1719,16 +1960,18 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === fragmentCandidate ? 0 : 1,
-        total: candidate === fragmentCandidate ? 2 : 0,
-        current: candidate === fragmentCandidate ? 2 : 0,
-        pageIdx: candidate === fragmentCandidate ? 2 : null,
-        pageMatches: candidate === fragmentCandidate ? [firstMatchIndex, secondMatchIndex] : [],
-        pageMatchesLength: candidate === fragmentCandidate
-          ? [fragmentCandidate?.length ?? 0, fragmentCandidate?.length ?? 0]
-          : [],
-      }),
+      onFind: (candidate) => {
+        const inferredRanges = inferMockQueryMatchRanges(pageText, candidate)
+        const matched = inferredRanges.pageMatches.length > 0
+        return {
+          state: matched ? 0 : 1,
+          total: matched ? inferredRanges.pageMatches.length : 0,
+          current: matched ? Math.min(2, inferredRanges.pageMatches.length) : 0,
+          pageIdx: matched ? 2 : null,
+          pageMatches: inferredRanges.pageMatches,
+          pageMatchesLength: inferredRanges.pageMatchesLength,
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
@@ -1745,10 +1988,10 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: expect.stringContaining('fragment'),
+      strategy: 'window-fragment',
       matchedPage: 3,
       matchedQuery: secondSpan,
-      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+      note: 'Recovered the best native quote highlight from PDF.js page text.',
     }))
   })
 
@@ -1807,16 +2050,18 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === fragmentCandidate ? 0 : 1,
-        total: candidate === fragmentCandidate ? 2 : 0,
-        current: candidate === fragmentCandidate ? 2 : 0,
-        pageIdx: candidate === fragmentCandidate ? 2 : null,
-        pageMatches: candidate === fragmentCandidate ? [firstMatchIndex, secondMatchIndex] : [],
-        pageMatchesLength: candidate === fragmentCandidate
-          ? [fragmentCandidate?.length ?? 0, fragmentCandidate?.length ?? 0]
-          : [],
-      }),
+      onFind: (candidate) => {
+        const inferredRanges = inferMockQueryMatchRanges(pageText, candidate)
+        const matched = inferredRanges.pageMatches.length > 0
+        return {
+          state: matched ? 0 : 1,
+          total: matched ? inferredRanges.pageMatches.length : 0,
+          current: matched ? Math.min(2, inferredRanges.pageMatches.length) : 0,
+          pageIdx: matched ? 2 : null,
+          pageMatches: inferredRanges.pageMatches,
+          pageMatchesLength: inferredRanges.pageMatchesLength,
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
@@ -1833,18 +2078,19 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: expect.stringContaining('fragment'),
+      strategy: 'window-fragment',
       matchedPage: 3,
       matchedQuery: repeatedQuote,
-      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+      note: 'Recovered the best native quote highlight from PDF.js page text.',
     }))
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
-    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)[0].getBoundingClientRect().top).toBe((2 * 900) + 48 + (3 * 28))
   })
 
-  it('reuses PDF.js selected match offsets when local preferred-fragment rematching would fail', async () => {
+  it('falls back to section context when normalized quote selection cannot be reverified natively', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -1888,16 +2134,18 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === query ? 0 : 1,
-        total: candidate === query ? 2 : 0,
-        current: candidate === query ? 2 : 0,
-        pageIdx: candidate === query ? 2 : null,
-        pageMatches: candidate === query ? [firstMatchIndex, secondMatchIndex] : [],
-        pageMatchesLength: candidate === query
-          ? [pageQuote.length, pageQuote.length]
-          : [],
-      }),
+      onFind: (candidate) => {
+        const inferredRanges = inferMockQueryMatchRanges(pageText, candidate)
+        const matched = candidate === query || candidate === pageQuote || inferredRanges.pageMatches.length > 0
+        return {
+          state: matched ? 0 : 1,
+          total: matched ? Math.max(inferredRanges.pageMatches.length, 1) : 0,
+          current: matched ? Math.min(2, Math.max(inferredRanges.pageMatches.length, 1)) : 0,
+          pageIdx: matched ? 2 : null,
+          pageMatches: inferredRanges.pageMatches,
+          pageMatchesLength: inferredRanges.pageMatchesLength,
+        }
+      },
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
@@ -1912,15 +2160,15 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'matched',
+      status: 'section-fallback',
+      locatorQuality: 'section_only',
       matchedPage: 3,
-      matchedQuery: pageQuote,
-      note: 'Recovered the best matching quote span from the PDF page text on the PDF text layer.',
+      matchedQuery: 'Results',
     }))
     await waitFor(() => {
       expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
     })
-    expect(getEvidenceHighlightRects(iframe)[0].style.top).toBe(`${48 + (3 * 28)}px`)
+    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('section')
   })
 
   it('renders hover previews differently from selected evidence highlights', async () => {
@@ -1949,17 +2197,18 @@ describe('PdfViewer evidence navigation', () => {
     fireEvent.load(iframe)
 
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
-    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('hover')
-    expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('dashed')
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-mode')).toBe('hover')
+    })
 
     rerender(<PdfViewer pendingNavigation={selectCommand} />)
 
     await waitFor(() => {
-      expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-mode')).toBe('select')
+      expect(getNativeSelectedHighlights(iframe)[0].getAttribute('data-mode')).toBe('select')
     })
-    expect(getEvidenceHighlightRects(iframe)[0].style.border).toContain('solid')
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
   it('highlights a section heading when quote matching fails but section metadata resolves', async () => {
@@ -2233,29 +2482,36 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
-  it('recovers a quote from a later page when the page hint is stale and the PDF text collapses spacing', async () => {
+  it('degrades to the native anchor-page highlight for a cross-page quote without rendering quote overlays', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
-    const spacedQuote = 'Genetic eye mosaics consisting of large mutant patches of crb 11A22 and crb 8F105 were generated by crossing yw*eyFLP;;FRT82B w+ cl3R3/TM6B males [58] to w*; FRT82B crb 11A22 /TM6B and w*; FRT82B crb 8F105 /TM6B respectively.'
-    const collapsedPdfQuote = 'Genetic eye mosaics consisting of large mutant patches ofcrb11A22 and crb8F105 were generated by crossing yw*eyFLP;;FRT82B w+cl3R3/TM6B males[58] to w*; FRT82B crb11A22 /TM6B and w*; FRT82Bcrb8F105 /TM6B respectively'
+    const pageThreeText = 'Cross-page quote start appears near the bottom of the anchor page and continues'
+    const pageFourText = 'onto the next page where the remaining evidence text finishes cleanly.'
+    const query = `${pageThreeText} ${pageFourText}`
+    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
+      .find((candidate) => candidate.reason === 'window-fragment' && pageThreeText.includes(candidate.query))
+      ?.query
+
+    expect(fragmentCandidate).toBeTruthy()
+
     const command = buildNavigationCommand({
       anchor: {
         anchor_kind: 'snippet',
-        locator_quality: 'exact_quote',
+        locator_quality: 'normalized_quote',
         supports_decision: 'supports',
-        snippet_text: spacedQuote,
-        normalized_text: spacedQuote,
-        viewer_search_text: spacedQuote,
-        page_number: 1,
-        section_title: 'Methods',
+        snippet_text: query,
+        normalized_text: query,
+        viewer_search_text: query,
+        page_number: 3,
+        section_title: 'Results',
         subsection_title: null,
-        chunk_ids: ['chunk-stale-page-hint'],
+        chunk_ids: ['chunk-cross-page-quote'],
       },
-      searchText: spacedQuote,
-      pageNumber: 1,
-      sectionTitle: 'Methods',
+      searchText: query,
+      pageNumber: 3,
+      sectionTitle: 'Results',
     })
 
     render(
@@ -2266,27 +2522,23 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-stale-page-hint', '/fixtures/sample.pdf', 'stale-page-hint.pdf', 10)
+    dispatchPDFDocumentChanged('doc-cross-page-quote', '/fixtures/sample.pdf', 'cross-page-quote.pdf', 10)
     await waitFor(() => {
-      expect(screen.getByText('stale-page-hint.pdf')).toBeInTheDocument()
+      expect(screen.getByText('cross-page-quote.pdf')).toBeInTheDocument()
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: () => ({
-        state: 1,
-        total: 0,
-        current: 0,
-        pageIdx: null,
+      onFind: (candidate) => ({
+        state: candidate === fragmentCandidate ? 0 : 1,
+        total: candidate === fragmentCandidate ? 1 : 0,
+        current: candidate === fragmentCandidate ? 1 : 0,
+        pageIdx: candidate === fragmentCandidate ? 2 : null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: ['Results'] },
-        { pageNumber: 4, textSegments: ['Discussion'] },
-        { pageNumber: 5, textSegments: ['Figure legends'] },
-        { pageNumber: 6, textSegments: ['References'] },
-        { pageNumber: 7, textSegments: ['Supplementary notes'] },
-        { pageNumber: 8, textSegments: [collapsedPdfQuote] },
+        { pageNumber: 3, textSegments: [pageThreeText] },
+        { pageNumber: 4, textSegments: [pageFourText] },
       ],
     })
 
@@ -2296,18 +2548,19 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     }, { timeout: 4000 })
 
+    expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'document',
-      locatorQuality: 'exact_quote',
-      degraded: false,
-      matchedPage: 8,
-      matchedQuery: collapsedPdfQuote,
+      strategy: 'window-fragment',
+      locatorQuality: 'normalized_quote',
+      degraded: true,
+      matchedPage: 3,
+      matchedQuery: fragmentCandidate,
+      note: 'Kept the best native anchor-page quote highlight because the recovered quote spans multiple PDF pages.',
     }))
-    expect(eventBus.findQueries).not.toContain('Methods')
-    expect(getEvidenceHighlightRects(iframe)).toHaveLength(1)
-    expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('quote')
-    expect(screen.getByText('Page 8')).toBeInTheDocument()
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
+    expect(screen.getByText('Page 3')).toBeInTheDocument()
   })
 
   it('falls back to subsection highlighting before a plain page banner when quote rects are unavailable', async () => {
@@ -2396,78 +2649,248 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)[0].getAttribute('data-kind')).toBe('section')
   })
 
-  it('retries quote localization on a late-selected PDF.js match page before degrading', async () => {
+  it('ignores stale async quote results when a newer evidence click wins', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
-    const command = buildNavigationCommand({
-      anchor: {
-        anchor_kind: 'snippet',
-        locator_quality: 'exact_quote',
-        supports_decision: 'supports',
-        snippet_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        normalized_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        viewer_search_text: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        page_number: 1,
-        section_title: 'Results and Discussion',
-        subsection_title: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-        chunk_ids: ['chunk-late-selected-page'],
-      },
-      searchText: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
-      pageNumber: 1,
-      sectionTitle: 'Results and Discussion',
-    })
+    const slowQuery = 'Slow quote from page six'
+    const fastQuery = 'Fast quote from page three'
 
     render(
       <PdfViewer
-        pendingNavigation={command}
         onNavigationComplete={onNavigationComplete}
         onNavigationStateChange={onNavigationStateChange}
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-late-selected-page', '/fixtures/sample.pdf', 'late-selected-page.pdf', 10)
+    dispatchPDFDocumentChanged('doc-stale-async', '/fixtures/sample.pdf', 'stale-async.pdf', 10)
     await waitFor(() => {
-      expect(screen.getByText('late-selected-page.pdf')).toBeInTheDocument()
+      expect(screen.getByText('stale-async.pdf')).toBeInTheDocument()
     })
 
-    const { iframe } = installMockPdfViewer({
-      onFind: () => ({
-        state: 1,
-        total: 1,
-        current: 1,
-        pageIdx: null,
-        delayedSelection: {
-          pageIdx: 5,
-          viewerPageNumber: 6,
-          delayMs: 300,
-        },
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query === slowQuery || query === fastQuery ? 0 : 1,
+        total: query === slowQuery || query === fastQuery ? 1 : 0,
+        current: query === slowQuery || query === fastQuery ? 1 : 0,
+        pageIdx: query === fastQuery ? 2 : 5,
+        delayedSelection: query === slowQuery
+          ? {
+              pageIdx: 5,
+              viewerPageNumber: 6,
+              delayMs: 350,
+            }
+          : undefined,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: ['Methods'] },
+        { pageNumber: 3, textSegments: [fastQuery] },
         { pageNumber: 4, textSegments: ['Figure legends'] },
         { pageNumber: 5, textSegments: ['Discussion'] },
-        { pageNumber: 6, textSegments: ['2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'] },
+        { pageNumber: 6, textSegments: [slowQuery] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({
+        anchorId: 'slow-anchor',
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          supports_decision: 'supports',
+          snippet_text: slowQuery,
+          normalized_text: slowQuery,
+          viewer_search_text: slowQuery,
+          page_number: 6,
+          section_title: 'Discussion',
+          subsection_title: null,
+          chunk_ids: ['chunk-slow'],
+        },
+        searchText: slowQuery,
+        pageNumber: 6,
+        sectionTitle: 'Discussion',
+      }),
+    )
+    window.setTimeout(() => {
+      dispatchPDFViewerNavigateEvidence(
+        buildNavigationCommand({
+          anchorId: 'fast-anchor',
+          anchor: {
+            anchor_kind: 'snippet',
+            locator_quality: 'exact_quote',
+            supports_decision: 'supports',
+            snippet_text: fastQuery,
+            normalized_text: fastQuery,
+            viewer_search_text: fastQuery,
+            page_number: 3,
+            section_title: 'Results',
+            subsection_title: null,
+            chunk_ids: ['chunk-fast'],
+          },
+          searchText: fastQuery,
+          pageNumber: 3,
+          sectionTitle: 'Results',
+        }),
+      )
+    }, 50)
+
+    await waitFor(() => {
+      expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+        status: 'matched',
+        locatorQuality: 'exact_quote',
+        degraded: false,
+        matchedPage: 3,
+        matchedQuery: fastQuery,
+      }))
+    }, { timeout: 4000 })
+
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe).some((node) => node.textContent?.includes(fastQuery))).toBe(true)
+    expect(eventBus.findQueries).toEqual([fastQuery])
+    expect(screen.getByText('Page 3')).toBeInTheDocument()
+  })
+
+  it('ignores stale async section fallback results when a newer evidence click wins', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const slowSection = 'Discussion'
+    const fastQuery = 'Fast quote from page three'
+    const slowCommand = buildNavigationCommand({
+      anchorId: 'slow-section-anchor',
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'section_only',
+        supports_decision: 'supports',
+        snippet_text: null,
+        sentence_text: null,
+        normalized_text: null,
+        viewer_search_text: null,
+        page_number: 6,
+        section_title: slowSection,
+        subsection_title: null,
+        chunk_ids: ['chunk-slow-section'],
+      },
+      searchText: null,
+      pageNumber: 6,
+      sectionTitle: slowSection,
+    })
+    const fastCommand = buildNavigationCommand({
+      anchorId: 'fast-quote-anchor',
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'exact_quote',
+        supports_decision: 'supports',
+        snippet_text: fastQuery,
+        normalized_text: fastQuery,
+        viewer_search_text: fastQuery,
+        page_number: 3,
+        section_title: 'Results',
+        subsection_title: null,
+        chunk_ids: ['chunk-fast-quote'],
+      },
+      searchText: fastQuery,
+      pageNumber: 3,
+      sectionTitle: 'Results',
+    })
+
+    const { rerender } = render(
+      <PdfViewer
+        pendingNavigation={slowCommand}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-stale-section', '/fixtures/sample.pdf', 'stale-section.pdf', 10)
+    await waitFor(() => {
+      expect(screen.getByText('stale-section.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => {
+        if (query === slowSection) {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 5,
+            dispatchDelayMs: 350,
+          }
+        }
+
+        if (query === fastQuery) {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 2,
+          }
+        }
+
+        return {
+          state: 1,
+          total: 0,
+          current: 0,
+          pageIdx: null,
+        }
+      },
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: [fastQuery] },
+        { pageNumber: 4, textSegments: ['Figure legends'] },
+        { pageNumber: 5, textSegments: ['Methods'] },
+        { pageNumber: 6, textSegments: [slowSection] },
       ],
     })
 
     fireEvent.load(iframe)
 
     await waitFor(() => {
-      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+      expect(eventBus.findQueries).toEqual([slowSection])
+    })
+
+    rerender(
+      <PdfViewer
+        pendingNavigation={fastCommand}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+        status: 'matched',
+        locatorQuality: 'exact_quote',
+        degraded: false,
+        matchedPage: 3,
+        matchedQuery: fastQuery,
+      }))
     }, { timeout: 4000 })
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(() => resolve(), 500)
+    })
 
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
       locatorQuality: 'exact_quote',
       degraded: false,
-      matchedPage: 6,
-      matchedQuery: 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+      matchedPage: 3,
+      matchedQuery: fastQuery,
     }))
-    expect(screen.getByText('Page 6')).toBeInTheDocument()
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe).some((node) => node.textContent?.includes(fastQuery))).toBe(true)
+    expect(screen.getByText('Page 3')).toBeInTheDocument()
+    expect(eventBus.findQueries[0]).toBe(slowSection)
+    expect(eventBus.findQueries.at(-1)).toBe(fastQuery)
+    expect(eventBus.findQueries.filter((query) => query === fastQuery).length).toBeGreaterThanOrEqual(1)
   })
 
   it('shows an unresolved marker when no reliable quote, section, or page target exists', async () => {
