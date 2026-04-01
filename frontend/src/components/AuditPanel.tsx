@@ -11,6 +11,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ClearIcon from '@mui/icons-material/Clear'
 import type { AuditEvent, AuditEventType } from '../types/AuditEvent'
 import AuditEventItem from './AuditEventItem'
+import { copyText } from './Chat/copyText'
 import { formatAuditEvent, parseSSEEvent } from '../utils/auditHelpers'
 import type { SSEEvent } from '../hooks/useChatStream'
 
@@ -158,9 +159,11 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     }
     return []
   })
+  const [copied, setCopied] = useState(false)
   const [prevSessionId, setPrevSessionId] = useState<string | null>(sessionId)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const processedEventIndicesRef = useRef<Set<number>>(new Set())
+  const copiedResetTimeoutRef = useRef<number | null>(null)
 
   /**
    * Filter function to identify audit event types
@@ -210,8 +213,17 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       setPrevSessionId(sessionId)
       // Reset processed events tracker for new session
       processedEventIndicesRef.current = new Set()
+      setCopied(false)
     }
   }, [sessionId, prevSessionId])
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetTimeoutRef.current !== null) {
+        window.clearTimeout(copiedResetTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Save events to localStorage whenever they change.
   // Persist only events that match the active session to prevent cross-session bleed.
@@ -287,23 +299,32 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   }, [events])
 
   // Handle copy button click
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const formattedText = events.map(event => formatAuditEvent(event)).join('\n')
 
-    // Check if Clipboard API is available
-    if (!navigator?.clipboard?.writeText) {
-      console.error('Clipboard API not available. Copy functionality requires HTTPS or localhost.')
-      return
-    }
-
-    // Call clipboard API (will be mocked in tests)
-    navigator.clipboard.writeText(formattedText).catch(err => {
+    try {
+      await copyText(formattedText)
+      setCopied(true)
+      if (copiedResetTimeoutRef.current !== null) {
+        window.clearTimeout(copiedResetTimeoutRef.current)
+      }
+      copiedResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copiedResetTimeoutRef.current = null
+      }, 2000)
+    } catch (err) {
       console.error('Failed to copy audit events:', err)
-    })
+    }
   }
 
   // Handle clear button click
   const handleClear = () => {
+    setCopied(false)
+    if (copiedResetTimeoutRef.current !== null) {
+      window.clearTimeout(copiedResetTimeoutRef.current)
+      copiedResetTimeoutRef.current = null
+    }
+
     // Clear events from state
     setEvents([])
 
@@ -443,7 +464,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
             }
           }}
         >
-          Copy
+          {copied ? 'Copied!' : 'Copy'}
         </Button>
 
         {/* Clear button */}

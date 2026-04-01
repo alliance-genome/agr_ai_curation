@@ -487,24 +487,21 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
         def record_call(self, tool_name):
             calls.append(("track", tool_name))
 
+    async def _inline_on_invoke(_ctx, input_str):
+        return {
+            "status": "verified",
+            "tool_name": "record_evidence",
+            "input": input_str,
+        }
+
     fake_tool = _FakeFunctionTool(
         name="record_evidence",
-        on_invoke_tool=None,
+        on_invoke_tool=_inline_on_invoke,
     )
     binding = SimpleNamespace(
         tool_id="record_evidence",
         required_context=("document_id", "user_id"),
     )
-
-    runner_calls = []
-
-    def _execute_tool(tool_id, **kwargs):
-        runner_calls.append((tool_id, kwargs))
-        return SimpleNamespace(
-            ok=True,
-            result={"status": "verified", "tool_id": tool_id},
-            error=None,
-        )
 
     async def _explode_to_thread(*args, **kwargs):
         raise RuntimeError("can't start new thread")
@@ -518,7 +515,7 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
     monkeypatch.setattr(
         catalog_service,
         "_get_package_tool_runner",
-        lambda: SimpleNamespace(execute_tool=_execute_tool),
+        lambda: (_ for _ in ()).throw(AssertionError("runner should not be used")),
     )
     monkeypatch.setattr(asyncio, "to_thread", _explode_to_thread)
 
@@ -533,18 +530,9 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
 
     result = await resolved.on_invoke_tool(None, '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}')
 
-    assert result == {"status": "verified", "tool_id": "record_evidence"}
+    assert result == {
+        "status": "verified",
+        "tool_name": "record_evidence",
+        "input": '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}',
+    }
     assert calls == [("track", "record_evidence")]
-    assert runner_calls == [
-        (
-            "record_evidence",
-            {
-                "kwargs": {
-                    "entity": "crb",
-                    "chunk_id": "chunk-1",
-                    "claimed_quote": "quoted text",
-                },
-                "context": {"document_id": "doc-1", "user_id": "user-1"},
-            },
-        )
-    ]

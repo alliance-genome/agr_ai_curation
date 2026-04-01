@@ -17,12 +17,14 @@ Runtime instantiation resolves directly from unified DB-backed agent records.
 import asyncio
 import errno
 import importlib
+import inspect
 import json
 import logging
 import os
 import sys
 from pathlib import Path
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from datetime import datetime
 import re
@@ -57,6 +59,7 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
+_INLINE_PACKAGE_TOOL_IDS = frozenset({"record_evidence"})
 
 
 def _is_thread_exhaustion_error(exc: BaseException) -> bool:
@@ -1053,6 +1056,11 @@ def _instantiate_package_tool(
     return imported
 
 
+def _should_execute_package_tool_inline(binding: Any) -> bool:
+    """Return whether one package-backed tool should execute in the host runtime."""
+    return getattr(binding, "tool_id", None) in _INLINE_PACKAGE_TOOL_IDS
+
+
 def _decode_tool_input(tool_id: str, input_str: str) -> Dict[str, Any]:
     """Decode the SDK tool input payload into kwargs for the package runner."""
     raw_payload = (input_str or "").strip()
@@ -1087,18 +1095,25 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             f"Package tool '{tool_id}' does not expose on_invoke_tool"
         )
 
-    runner = _get_package_tool_runner()
     tracker = execution_context.tool_tracker
-    context_payload = _binding_context_payload(binding, execution_context)
+    base_on_invoke_tool = base_tool.on_invoke_tool
 
     async def _runner_invoke(ctx, input_str):
         if tracker:
             tracker.record_call(tool_id)
 
+        if _should_execute_package_tool_inline(binding):
+            inline_ctx = ctx or SimpleNamespace(tool_name=tool_id)
+            result = base_on_invoke_tool(inline_ctx, input_str)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        runner = _get_package_tool_runner()
         decoded_kwargs = _decode_tool_input(tool_id, input_str)
         execute_kwargs = {
             "kwargs": decoded_kwargs,
-            "context": context_payload,
+            "context": _binding_context_payload(binding, execution_context),
         }
 
         try:

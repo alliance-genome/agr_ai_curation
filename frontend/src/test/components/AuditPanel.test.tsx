@@ -300,7 +300,7 @@ describe('AuditPanel - Auto-scroll (T018)', () => {
 // ===================================================================
 describe('AuditPanel - Copy Button (T018)', () => {
 
-  it('copy button copies all events as formatted text', async () => {
+  it('copy button copies all events as formatted text and shows copied feedback', async () => {
     const user = userEvent.setup()
 
     const events = [
@@ -326,6 +326,9 @@ describe('AuditPanel - Copy Button (T018)', () => {
     expect(copiedText).toContain('[SUPERVISOR] Processing user query')
     expect(copiedText).toContain('[CREW] Starting crew: disease_ontology')
     expect(copiedText).toContain('[SUPERVISOR] Done')
+    await waitFor(() => {
+      expect(copyButton).toHaveTextContent('Copied!')
+    })
 
     writeTextSpy.mockRestore()
   })
