@@ -823,6 +823,21 @@ interface NativePdfJsQuoteSyncResult {
   occurrence: PdfJsQuoteMatchOccurrence | null
 }
 
+interface NativePdfJsOccurrenceVerification {
+  matched: boolean
+  reason:
+    | 'page-mismatch'
+    | 'exact-range'
+    | 'native-text-layer-rect-overlap'
+    | 'native-text-layer-range-overlap'
+    | 'range-mismatch'
+  derivedRange: TextLayerMatchRange | null
+  rectCoverage: {
+    expectedCoverage: number
+    nativeCoverage: number
+  } | null
+}
+
 class StaleEvidenceNavigationError extends Error {
   constructor() {
     super('Evidence navigation request became stale')
@@ -1706,8 +1721,18 @@ const synchronizeNativePdfJsQuoteHighlight = async (
     getPageText: options?.pageTextLookup,
   })
   const selectedOccurrence = adapter.getSelectedOccurrence()
-  const alreadySelected = doesPdfJsOccurrenceMatchTarget(selectedOccurrence, target)
-    && findPdfJsSelectedHighlightRects(iframeDoc, target.pageNumber).length > 0
+  const currentNativeRects = findPdfJsSelectedHighlightRects(iframeDoc, target.pageNumber)
+  const currentVerification = verifyNativePdfJsOccurrenceMatchesTarget(
+    iframeDoc,
+    pdfApp,
+    selectedOccurrence,
+    target,
+    {
+      pageTextLookup: options?.pageTextLookup,
+      nativeRects: currentNativeRects,
+    },
+  )
+  const alreadySelected = currentVerification.matched && currentNativeRects.length > 0
 
   if (alreadySelected) {
     const matchCounts = resolveNativePdfJsMatchCounts(pdfApp, selectedOccurrence)
@@ -1716,6 +1741,7 @@ const synchronizeNativePdfJsQuoteHighlight = async (
       pageNumber: target.pageNumber,
       reason: options?.reason ?? 'quote-match',
       occurrence: selectedOccurrence,
+      verification: currentVerification,
       ...matchCounts,
     })
     return {
@@ -1739,8 +1765,8 @@ const synchronizeNativePdfJsQuoteHighlight = async (
   const selectedAfterFind = createPdfJsQuoteSearchAdapter(pdfApp, {
     getPageText: options?.pageTextLookup,
   }).getSelectedOccurrence()
-  if (!doesPdfJsOccurrenceMatchTarget(selectedAfterFind, target)) {
-    logPdfEvidenceDebug('Native PDF.js quote highlight did not verify the intended occurrence', {
+  if (!outcome.found) {
+    logPdfEvidenceDebug('Native PDF.js quote highlight did not produce a trusted match to verify', {
       query: target.query,
       pageNumber: target.pageNumber,
       reason: options?.reason ?? 'quote-match',
@@ -1768,14 +1794,26 @@ const synchronizeNativePdfJsQuoteHighlight = async (
   const verifiedOccurrence = createPdfJsQuoteSearchAdapter(pdfApp, {
     getPageText: options?.pageTextLookup,
   }).getSelectedOccurrence()
-  if (nativeRects.length === 0 || !doesPdfJsOccurrenceMatchTarget(verifiedOccurrence, target)) {
+  const verification = verifyNativePdfJsOccurrenceMatchesTarget(
+    iframeDoc,
+    pdfApp,
+    verifiedOccurrence,
+    target,
+    {
+      pageTextLookup: options?.pageTextLookup,
+      nativeRects,
+    },
+  )
+  if (nativeRects.length === 0 || !verification.matched) {
     logPdfEvidenceDebug('Native PDF.js quote highlight did not become visibly selected on the intended occurrence', {
       query: target.query,
       pageNumber: target.pageNumber,
       reason: options?.reason ?? 'quote-match',
       expectedRange: target.expectedRange,
+      selectedOccurrenceAfterFind: selectedAfterFind,
       selectedOccurrence: verifiedOccurrence,
       rectCount: nativeRects.length,
+      verification,
     })
     return {
       success: false,
@@ -1795,6 +1833,7 @@ const synchronizeNativePdfJsQuoteHighlight = async (
     expectedRange: target.expectedRange,
     occurrence: verifiedOccurrence,
     rectCount: nativeRects.length,
+    verification,
     ...matchCounts,
   })
   return {
@@ -1957,6 +1996,156 @@ const findTextLayerMatchRects = (
     })
   }
   return rects
+}
+
+const getEvidenceTextLayerRectArea = (rect: EvidenceTextLayerRect): number => {
+  return Math.max(0, rect.width) * Math.max(0, rect.height)
+}
+
+const getEvidenceTextLayerRectIntersectionArea = (
+  left: EvidenceTextLayerRect,
+  right: EvidenceTextLayerRect,
+): number => {
+  const overlapLeft = Math.max(left.left, right.left)
+  const overlapTop = Math.max(left.top, right.top)
+  const overlapRight = Math.min(left.left + left.width, right.left + right.width)
+  const overlapBottom = Math.min(left.top + left.height, right.top + right.height)
+  const overlapWidth = overlapRight - overlapLeft
+  const overlapHeight = overlapBottom - overlapTop
+  if (overlapWidth <= 0 || overlapHeight <= 0) {
+    return 0
+  }
+
+  return overlapWidth * overlapHeight
+}
+
+const getEvidenceTextLayerRectSetCoverage = (
+  sourceRects: EvidenceTextLayerRect[],
+  targetRects: EvidenceTextLayerRect[],
+): number => {
+  if (sourceRects.length === 0 || targetRects.length === 0) {
+    return 0
+  }
+
+  const totalSourceArea = sourceRects.reduce((sum, rect) => sum + getEvidenceTextLayerRectArea(rect), 0)
+  if (totalSourceArea <= 0) {
+    return 0
+  }
+
+  const coveredArea = sourceRects.reduce((sum, rect) => {
+    const rectArea = getEvidenceTextLayerRectArea(rect)
+    if (rectArea <= 0) {
+      return sum
+    }
+
+    const bestOverlap = targetRects.reduce((best, candidate) => (
+      Math.max(best, getEvidenceTextLayerRectIntersectionArea(rect, candidate))
+    ), 0)
+    return sum + Math.min(rectArea, bestOverlap)
+  }, 0)
+
+  return coveredArea / totalSourceArea
+}
+
+const getTextLayerRangeOverlapCoverage = (
+  left: TextLayerMatchRange,
+  right: TextLayerMatchRange,
+): number => {
+  const overlapStart = Math.max(left.rawStart, right.rawStart)
+  const overlapEndExclusive = Math.min(left.rawEndExclusive, right.rawEndExclusive)
+  const overlapLength = Math.max(0, overlapEndExclusive - overlapStart)
+  const shorterLength = Math.min(
+    left.rawEndExclusive - left.rawStart,
+    right.rawEndExclusive - right.rawStart,
+  )
+  if (shorterLength <= 0) {
+    return 0
+  }
+
+  return overlapLength / shorterLength
+}
+
+function verifyNativePdfJsOccurrenceMatchesTarget(
+  iframeDoc: Document,
+  pdfApp: any,
+  occurrence: PdfJsQuoteMatchOccurrence | null,
+  target: NativePdfJsQuoteTarget,
+  options?: {
+    pageTextLookup?: (pageNumber: number) => string | null
+    nativeRects?: EvidenceTextLayerRect[]
+  },
+): NativePdfJsOccurrenceVerification {
+  if (!occurrence || occurrence.pageNumber !== target.pageNumber) {
+    return {
+      matched: false,
+      reason: 'page-mismatch',
+      derivedRange: null,
+      rectCoverage: null,
+    }
+  }
+
+  if (doesPdfJsOccurrenceMatchTarget(occurrence, target)) {
+    return {
+      matched: true,
+      reason: 'exact-range',
+      derivedRange: target.expectedRange,
+      rectCoverage: null,
+    }
+  }
+
+  const expectedRects = findTextLayerMatchRects(
+    iframeDoc,
+    target.pageNumber,
+    target.query,
+    occurrence.pageMatchIndex,
+  )
+  const nativeRects = options?.nativeRects ?? findPdfJsSelectedHighlightRects(iframeDoc, target.pageNumber)
+  const expectedCoverage = getEvidenceTextLayerRectSetCoverage(expectedRects, nativeRects)
+  const nativeCoverage = getEvidenceTextLayerRectSetCoverage(nativeRects, expectedRects)
+  if (expectedCoverage >= 0.9 && nativeCoverage >= 0.6) {
+    return {
+      matched: true,
+      reason: 'native-text-layer-rect-overlap',
+      derivedRange: null,
+      rectCoverage: {
+        expectedCoverage,
+        nativeCoverage,
+      },
+    }
+  }
+
+  const adapter = createPdfJsQuoteSearchAdapter(pdfApp, {
+    getPageText: options?.pageTextLookup,
+  })
+  const pageText = adapter.getPageContents(target.pageNumber)
+  const derivedRange = pageText
+    ? findTextLayerMatchRange(pageText, target.query, occurrence.pageMatchIndex)
+    : null
+  if (
+    (expectedRects.length === 0 || nativeRects.length === 0)
+    && derivedRange
+    && getTextLayerRangeOverlapCoverage(derivedRange, target.expectedRange) >= 0.9
+  ) {
+    return {
+      matched: true,
+      reason: 'native-text-layer-range-overlap',
+      derivedRange,
+      rectCoverage: {
+        expectedCoverage,
+        nativeCoverage,
+      },
+    }
+  }
+
+  return {
+    matched: false,
+    reason: 'range-mismatch',
+    derivedRange,
+    rectCoverage: {
+      expectedCoverage,
+      nativeCoverage,
+    },
+  }
 }
 
 const countNormalizedEvidenceWords = (value: string): number => {
@@ -4641,7 +4830,17 @@ export function PdfViewer({
       getPageText: getCachedEvidencePageText,
     }).getSelectedOccurrence()
     const nativeRects = findPdfJsSelectedHighlightRects(iframeDoc, evidenceHighlight.pageNumber)
-    if (doesPdfJsOccurrenceMatchTarget(currentOccurrence, evidenceHighlight.nativeTarget) && nativeRects.length > 0) {
+    const currentVerification = verifyNativePdfJsOccurrenceMatchesTarget(
+      iframeDoc,
+      pdfApp,
+      currentOccurrence,
+      evidenceHighlight.nativeTarget,
+      {
+        pageTextLookup: getCachedEvidencePageText,
+        nativeRects,
+      },
+    )
+    if (currentVerification.matched && nativeRects.length > 0) {
       return
     }
 

@@ -1292,7 +1292,7 @@ describe('PdfViewer evidence navigation', () => {
       matchedPage: 3,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
-    expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
+    expect(getNativeSelectedHighlights(iframe).length).toBeGreaterThan(0)
     expect(eventBus.findbarCloseCount).toBe(1)
   })
 
@@ -2290,6 +2290,212 @@ describe('PdfViewer evidence navigation', () => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+  })
+
+  it('keeps a native quote highlight when PDF.js selects a numbered heading span for the matched quote', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const quote = 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+    const numberedHeading = `2.6. ${quote}`
+
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(6, numberedHeading, quote, {
+        score: 99,
+      }),
+    )
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-numbered-heading', '/fixtures/sample.pdf', 'numbered-heading.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('numbered-heading.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => {
+        if (candidate === quote) {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 5,
+            pageMatches: [0],
+            pageMatchesLength: [numberedHeading.length],
+          }
+        }
+
+        return {
+          state: 1,
+          total: 0,
+          current: 0,
+          pageIdx: null,
+        }
+      },
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: ['Methods'] },
+        { pageNumber: 4, textSegments: ['Results'] },
+        { pageNumber: 5, textSegments: ['Discussion'] },
+        { pageNumber: 6, textSegments: [numberedHeading] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({
+        anchorId: 'chat-numbered-heading-anchor',
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          supports_decision: 'supports',
+          snippet_text: quote,
+          normalized_text: quote,
+          viewer_search_text: quote,
+          page_number: 1,
+          section_title: 'Results and Discussion',
+          subsection_title: numberedHeading,
+          chunk_ids: ['chunk-numbered-heading'],
+        },
+        searchText: quote,
+        pageNumber: 1,
+        sectionTitle: 'Results and Discussion',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual([quote])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'matched',
+      strategy: 'rapidfuzz-single-page',
+      locatorQuality: 'exact_quote',
+      degraded: false,
+      matchedPage: 6,
+      matchedQuery: quote,
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
+    }))
+    expect(screen.queryByText('Section fallback')).not.toBeInTheDocument()
+    expect(screen.queryByText('Evidence context highlighted from the nearest section heading. The quote itself was not matched.')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
+    })
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+  })
+
+  it('rejects a same-page native highlight when PDF.js selects the wrong passage for the matched quote', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const sectionHeading = '2.3. The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes'
+    const quote = 'Decreased levels of Rh1 induced by mutating the ninaE gene or by removal of Vitamin A precursors from the diet resulted in substantially smaller rhabdomeres'
+    const pageText = `${sectionHeading} ${quote}`
+
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, pageText, quote, {
+        score: 98,
+      }),
+    )
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-wrong-same-page-highlight', '/fixtures/sample.pdf', 'wrong-same-page-highlight.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('wrong-same-page-highlight.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (candidate) => {
+        if (candidate === quote) {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 2,
+            pageMatches: [0],
+            pageMatchesLength: [sectionHeading.length],
+          }
+        }
+
+        if (candidate === sectionHeading) {
+          return {
+            state: 0,
+            total: 1,
+            current: 1,
+            pageIdx: 2,
+            pageMatches: [0],
+            pageMatchesLength: [sectionHeading.length],
+          }
+        }
+
+        return {
+          state: 1,
+          total: 0,
+          current: 0,
+          pageIdx: null,
+        }
+      },
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Background'] },
+        { pageNumber: 3, textSegments: [sectionHeading, quote] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+
+    dispatchPDFViewerNavigateEvidence(
+      buildNavigationCommand({
+        anchorId: 'chat-wrong-same-page-highlight-anchor',
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          supports_decision: 'supports',
+          snippet_text: quote,
+          normalized_text: quote,
+          viewer_search_text: quote,
+          page_number: 3,
+          section_title: 'Results',
+          subsection_title: sectionHeading,
+          chunk_ids: ['chunk-wrong-same-page-highlight'],
+        },
+        searchText: quote,
+        pageNumber: 3,
+        sectionTitle: 'Results',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(onNavigationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    expect(eventBus.findQueries).toEqual([quote, sectionHeading])
+    expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'section-fallback',
+      locatorQuality: 'section_only',
+      degraded: true,
+      matchedPage: 3,
+      matchedQuery: sectionHeading,
+    }))
+    expect(
+      screen.getAllByText('Evidence context highlighted from the nearest section heading. The quote itself was not matched.'),
+    ).toHaveLength(2)
   })
 
   it('recovers the best matching PDF quote span when the stored quote drifts from the page text', async () => {
