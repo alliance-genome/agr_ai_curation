@@ -28,10 +28,13 @@ SSM_LOG_FILE="${STATE_DIR}/ssm.log"
 SOCAT_LOG_FILE="${STATE_DIR}/socat.log"
 SSM_PID_FILE="${STATE_DIR}/ssm.pid"
 SOCAT_PID_FILE="${STATE_DIR}/socat.pid"
+WATCHDOG_LOG_FILE="${STATE_DIR}/watchdog.log"
+WATCHDOG_PID_FILE="${STATE_DIR}/watchdog.pid"
 TUNNEL_WAIT_ITERATIONS="${LOCAL_DB_TUNNEL_WAIT_ITERATIONS:-60}"
 TUNNEL_WAIT_SLEEP_SECONDS="${LOCAL_DB_TUNNEL_WAIT_SLEEP_SECONDS:-2}"
 FORWARD_WAIT_ITERATIONS="${LOCAL_DB_TUNNEL_FORWARD_WAIT_ITERATIONS:-30}"
 FORWARD_WAIT_SLEEP_SECONDS="${LOCAL_DB_TUNNEL_FORWARD_WAIT_SLEEP_SECONDS:-1}"
+KEEPALIVE_INTERVAL_SECONDS="${LOCAL_DB_TUNNEL_KEEPALIVE_INTERVAL_SECONDS:-45}"
 
 mkdir -p "${STATE_DIR}"
 
@@ -41,6 +44,9 @@ cleanup_on_error() {
     return
   fi
 
+  if [[ -n "${WATCHDOG_PID:-}" ]] && local_db_tunnel_pid_running "${WATCHDOG_PID}"; then
+    kill "${WATCHDOG_PID}" 2>/dev/null || true
+  fi
   if [[ -n "${SOCAT_PID:-}" ]] && local_db_tunnel_pid_running "${SOCAT_PID}"; then
     kill "${SOCAT_PID}" 2>/dev/null || true
   fi
@@ -50,18 +56,79 @@ cleanup_on_error() {
   if [[ -n "${SSM_SESSION_ID:-}" ]]; then
     aws ssm terminate-session --profile "${AWS_PROFILE:-ctabone}" --session-id "${SSM_SESSION_ID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${STATE_FILE}" "${ENV_FILE}" "${SSM_LOG_FILE}" "${SOCAT_LOG_FILE}" "${SSM_PID_FILE}" "${SOCAT_PID_FILE}"
+  rm -f "${STATE_FILE}" "${ENV_FILE}" "${SSM_LOG_FILE}" "${SOCAT_LOG_FILE}" "${WATCHDOG_LOG_FILE}" "${SSM_PID_FILE}" "${SOCAT_PID_FILE}" "${WATCHDOG_PID_FILE}"
   rmdir "${STATE_DIR}" >/dev/null 2>&1 || true
 }
 trap cleanup_on_error EXIT
 
+write_state_file() {
+  local state_tmp
+  state_tmp="$(mktemp "${STATE_DIR}/tunnel.state.XXXXXX")"
+  {
+    printf 'WORKSPACE_DIR=%q\n' "${WORKSPACE_DIR}"
+    printf 'ENV_FILE_PATH=%q\n' "${ENV_FILE}"
+    printf 'STATE_DIR=%q\n' "${STATE_DIR}"
+    printf 'SSM_PID=%q\n' "${SSM_PID}"
+    printf 'SOCAT_PID=%q\n' "${SOCAT_PID}"
+    printf 'WATCHDOG_PID=%q\n' "${WATCHDOG_PID:-}"
+    printf 'SSM_SESSION_ID=%q\n' "${SSM_SESSION_ID}"
+    printf 'LOCAL_PORT=%q\n' "${LOCAL_PORT}"
+    printf 'DOCKER_PORT=%q\n' "${DOCKER_PORT}"
+    printf 'FORWARD_BIND_IP=%q\n' "${FORWARD_BIND_IP}"
+    printf 'FORWARD_HOST=%q\n' "${FORWARD_HOST}"
+    printf 'SSM_LOG_FILE=%q\n' "${SSM_LOG_FILE}"
+    printf 'SOCAT_LOG_FILE=%q\n' "${SOCAT_LOG_FILE}"
+    printf 'WATCHDOG_LOG_FILE=%q\n' "${WATCHDOG_LOG_FILE}"
+  } > "${state_tmp}"
+  mv "${state_tmp}" "${STATE_FILE}"
+}
+
+spawn_watchdog() {
+  WATCHDOG_PID="$(
+    local_db_tunnel_spawn_detached \
+      "${WATCHDOG_PID_FILE}" \
+      "${WATCHDOG_LOG_FILE}" \
+      bash -lc '
+        set -euo pipefail
+        script_dir="$1"
+        workspace_dir="$2"
+        state_file="$3"
+        interval_seconds="$4"
+        while true; do
+          if [[ ! -f "${state_file}" ]]; then
+            exit 0
+          fi
+
+          # shellcheck disable=SC1090
+          source "${state_file}"
+
+          if ! "${script_dir}/symphony_local_db_tunnel_status.sh" --workspace-dir "${workspace_dir}" >/dev/null 2>&1; then
+            echo "watchdog: tunnel unhealthy, requesting restart"
+            bash "${script_dir}/symphony_local_db_tunnel_start.sh" --workspace-dir "${workspace_dir}" >/dev/null 2>&1 &
+            exit 0
+          fi
+
+          if command -v pg_isready >/dev/null 2>&1; then
+            pg_isready -h localhost -p "${LOCAL_PORT}" -t 2 >/dev/null 2>&1 || true
+          else
+            (exec 3<>"/dev/tcp/127.0.0.1/${LOCAL_PORT}") >/dev/null 2>&1 || true
+          fi
+
+          sleep "${interval_seconds}"
+        done
+      ' bash "${SCRIPT_DIR}" "${WORKSPACE_DIR}" "${STATE_FILE}" "${KEEPALIVE_INTERVAL_SECONDS}"
+  )"
+}
+
 if [[ -f "${STATE_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${STATE_FILE}"
-  if local_db_tunnel_pid_running "${SSM_PID:-}" && \
-     local_db_tunnel_pid_running "${SOCAT_PID:-}" && \
-     local_db_tunnel_local_probe_ready "${LOCAL_PORT:-0}" 1 0 && \
+  if local_db_tunnel_local_probe_ready "${LOCAL_PORT:-0}" 1 0 && \
      local_db_tunnel_wait_for_listener "${FORWARD_BIND_IP:-127.0.0.1}" "${DOCKER_PORT:-0}" 1 0; then
+    if [[ -z "${WATCHDOG_PID:-}" ]] || ! local_db_tunnel_pid_running "${WATCHDOG_PID}"; then
+      spawn_watchdog
+      write_state_file
+    fi
     local_db_tunnel_info "✅ Symphony DB tunnel already running for ${WORKSPACE_DIR}"
     local_db_tunnel_info "   Env file: ${ENV_FILE_PATH:-${ENV_FILE}}"
     exit 0
@@ -165,20 +232,9 @@ if command -v psql >/dev/null 2>&1; then
   fi
 fi
 
-{
-  printf 'WORKSPACE_DIR=%q\n' "${WORKSPACE_DIR}"
-  printf 'ENV_FILE_PATH=%q\n' "${ENV_FILE}"
-  printf 'STATE_DIR=%q\n' "${STATE_DIR}"
-  printf 'SSM_PID=%q\n' "${SSM_PID}"
-  printf 'SOCAT_PID=%q\n' "${SOCAT_PID}"
-  printf 'SSM_SESSION_ID=%q\n' "${SSM_SESSION_ID}"
-  printf 'LOCAL_PORT=%q\n' "${LOCAL_PORT}"
-  printf 'DOCKER_PORT=%q\n' "${DOCKER_PORT}"
-  printf 'FORWARD_BIND_IP=%q\n' "${FORWARD_BIND_IP}"
-  printf 'FORWARD_HOST=%q\n' "${FORWARD_HOST}"
-  printf 'SSM_LOG_FILE=%q\n' "${SSM_LOG_FILE}"
-  printf 'SOCAT_LOG_FILE=%q\n' "${SOCAT_LOG_FILE}"
-} > "${STATE_FILE}"
+write_state_file
+spawn_watchdog
+write_state_file
 
 local_db_tunnel_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 local_db_tunnel_info "✅ Symphony DB tunnel is ready"
@@ -188,6 +244,7 @@ local_db_tunnel_info "   Docker path: ${FORWARD_HOST}:${DOCKER_PORT}"
 local_db_tunnel_info "   Env file: ${ENV_FILE}"
 local_db_tunnel_info "   Status: ./scripts/utilities/symphony_local_db_tunnel_status.sh --workspace-dir \"${WORKSPACE_DIR}\""
 local_db_tunnel_info "   Stop:   ./scripts/utilities/symphony_local_db_tunnel_stop.sh --workspace-dir \"${WORKSPACE_DIR}\""
+local_db_tunnel_info "   Watchdog PID: ${WATCHDOG_PID}"
 local_db_tunnel_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 trap - EXIT

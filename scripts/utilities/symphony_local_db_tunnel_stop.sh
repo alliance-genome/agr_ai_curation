@@ -45,6 +45,10 @@ if local_db_tunnel_pid_running "${SSM_PID:-}"; then
   kill "${SSM_PID}" 2>/dev/null || true
 fi
 
+if local_db_tunnel_pid_running "${WATCHDOG_PID:-}"; then
+  kill "${WATCHDOG_PID}" 2>/dev/null || true
+fi
+
 if [[ -n "${SSM_SESSION_ID:-}" ]]; then
   aws ssm terminate-session --profile "${AWS_PROFILE:-ctabone}" --session-id "${SSM_SESSION_ID}" >/dev/null 2>&1 || true
 fi
@@ -53,7 +57,7 @@ if [[ ${KEEP_ENV_FILE} -ne 1 && -n "${ENV_FILE_PATH:-}" ]]; then
   rm -f "${ENV_FILE_PATH}"
 fi
 
-rm -f "${STATE_FILE}" "${SSM_LOG_FILE:-}" "${SOCAT_LOG_FILE:-}" "${STATE_DIR}/ssm.pid" "${STATE_DIR}/socat.pid"
+rm -f "${STATE_FILE}" "${SSM_LOG_FILE:-}" "${SOCAT_LOG_FILE:-}" "${WATCHDOG_LOG_FILE:-}" "${STATE_DIR}/ssm.pid" "${STATE_DIR}/socat.pid" "${STATE_DIR}/watchdog.pid"
 rmdir "${STATE_DIR}" >/dev/null 2>&1 || true
 
 local_db_tunnel_info "✅ Stopped Symphony DB tunnel for ${WORKSPACE_DIR}"

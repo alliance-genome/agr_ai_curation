@@ -223,6 +223,10 @@ test_successful_start_status_stop() {
   assert_contains "export PERSISTENT_STORE_DB_PASSWORD=fixture\\ pass\\!" "${env_file}"
   assert_sourced_env_value "${env_file}" "PERSISTENT_STORE_DB_PASSWORD" "fixture pass!"
   assert_sourced_env_url_components "${env_file}"
+  if ! compgen -G "${state_dir}/watchdog.pid" >/dev/null; then
+    echo "Expected watchdog.pid to be created" >&2
+    exit 1
+  fi
 
   "${REPO_ROOT}/scripts/utilities/symphony_local_db_tunnel_status.sh" --workspace-dir "${workspace}"
   "${REPO_ROOT}/scripts/utilities/symphony_local_db_tunnel_stop.sh" --workspace-dir "${workspace}"

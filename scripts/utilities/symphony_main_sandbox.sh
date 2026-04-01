@@ -1250,16 +1250,20 @@ cleanup_sandbox() {
     exit 0
   fi
 
-  rm -f "${STATE_FILE}"
-
   if [[ ! -e "${SANDBOX_DIR}" ]]; then
-    kv sandbox_status absent
+    stop_existing_runtime_from_state
+    docker_project_force_down "${COMPOSE_PROJECT}"
+    docker_project_force_down "${TRACE_REVIEW_COMPOSE_PROJECT}"
+    rm -f "${STATE_FILE}"
+    git -C "${REPO_ROOT}" worktree prune >/dev/null 2>&1 || true
+    kv sandbox_status cleaned
     kv sandbox_removed 1
     exit 0
   fi
 
   stop_existing_runtime
   repair_workspace_permissions
+  rm -f "${STATE_FILE}"
 
   if git -C "${SANDBOX_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "${REPO_ROOT}" worktree remove --force "${SANDBOX_DIR}" >/dev/null 2>&1 || true

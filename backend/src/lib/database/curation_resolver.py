@@ -226,7 +226,7 @@ class CurationConnectionResolver:
             return False
 
         try:
-            self._probe_connectivity(client)
+            self._probe_connectivity_with_refresh(client)
             return True
         except Exception:
             return False
@@ -240,6 +240,24 @@ class CurationConnectionResolver:
         providers = client.get_data_providers()
         if providers is None:
             raise RuntimeError("Curation DB connectivity probe returned no provider data")
+
+    def _probe_connectivity_with_refresh(self, client: Any) -> None:
+        """Probe connectivity, retrying once with a fresh client on failure."""
+        try:
+            self._probe_connectivity(client)
+            return
+        except Exception as initial_error:
+            logger.warning(
+                "Curation DB connectivity probe failed; retrying with a fresh client: %s",
+                initial_error,
+            )
+
+        self.close()
+        refreshed_client = self.get_db_client()
+        if refreshed_client is None:
+            raise RuntimeError("Failed to recreate curation DB client")
+
+        self._probe_connectivity(refreshed_client)
 
     def get_health_status(self) -> Dict[str, Any]:
         """Returns health check result for use in /health endpoint."""
@@ -257,7 +275,7 @@ class CurationConnectionResolver:
                     "message": "Failed to create database client",
                 }
 
-            self._probe_connectivity(client)
+            self._probe_connectivity_with_refresh(client)
             return {"status": "connected"}
 
         except Exception as e:

@@ -242,10 +242,14 @@ def test_is_available_paths(monkeypatch):
     assert resolver.is_available() is False
 
     monkeypatch.setattr(resolver, "get_db_client", lambda: object())
-    monkeypatch.setattr(resolver, "_probe_connectivity", lambda _client: None)
+    monkeypatch.setattr(resolver, "_probe_connectivity_with_refresh", lambda _client: None)
     assert resolver.is_available() is True
 
-    monkeypatch.setattr(resolver, "_probe_connectivity", lambda _client: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        resolver,
+        "_probe_connectivity_with_refresh",
+        lambda _client: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     assert resolver.is_available() is False
 
 
@@ -257,13 +261,42 @@ def test_get_health_status_connected_error_and_disconnected(monkeypatch):
     assert resolver.get_health_status()["status"] == "error"
 
     monkeypatch.setattr(resolver, "get_db_client", lambda: object())
-    monkeypatch.setattr(resolver, "_probe_connectivity", lambda _client: None)
+    monkeypatch.setattr(resolver, "_probe_connectivity_with_refresh", lambda _client: None)
     assert resolver.get_health_status()["status"] == "connected"
 
-    monkeypatch.setattr(resolver, "_probe_connectivity", lambda _client: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(
+        resolver,
+        "_probe_connectivity_with_refresh",
+        lambda _client: (_ for _ in ()).throw(RuntimeError("down")),
+    )
     status = resolver.get_health_status()
     assert status["status"] == "disconnected"
     assert "Connection failed" in status["message"]
+
+
+def test_probe_connectivity_with_refresh_recreates_client_once(monkeypatch):
+    resolver = CurationConnectionResolver()
+    initial_client = object()
+    refreshed_client = object()
+    calls = []
+
+    def fake_probe(client):
+        calls.append(client)
+        if client is initial_client:
+            raise RuntimeError("stale client")
+
+    monkeypatch.setattr(resolver, "_probe_connectivity", fake_probe)
+    monkeypatch.setattr(resolver, "close", lambda: setattr(resolver, "_db_client", None))
+    monkeypatch.setattr(
+        resolver,
+        "get_db_client",
+        lambda: initial_client if resolver._db_client is initial_client else refreshed_client,
+    )
+
+    resolver._db_client = initial_client
+    resolver._probe_connectivity_with_refresh(initial_client)
+
+    assert calls == [initial_client, refreshed_client]
 
 
 def test_close_handles_success_and_errors():

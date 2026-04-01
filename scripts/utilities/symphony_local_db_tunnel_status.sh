@@ -34,6 +34,7 @@ source "${STATE_FILE}"
 
 ssm_status="down"
 socat_status="down"
+watchdog_status="down"
 local_listener="down"
 docker_listener="down"
 
@@ -42,6 +43,9 @@ if local_db_tunnel_pid_running "${SSM_PID:-}"; then
 fi
 if local_db_tunnel_pid_running "${SOCAT_PID:-}"; then
   socat_status="running"
+fi
+if local_db_tunnel_pid_running "${WATCHDOG_PID:-}"; then
+  watchdog_status="running"
 fi
 if local_db_tunnel_local_probe_ready "${LOCAL_PORT:-0}" 1 0; then
   local_listener="ready"
@@ -57,6 +61,8 @@ echo "ssm_pid=${SSM_PID:-}"
 echo "ssm_status=${ssm_status}"
 echo "socat_pid=${SOCAT_PID:-}"
 echo "socat_status=${socat_status}"
+echo "watchdog_pid=${WATCHDOG_PID:-}"
+echo "watchdog_status=${watchdog_status}"
 echo "local_port=${LOCAL_PORT:-}"
 echo "local_listener=${local_listener}"
 echo "docker_port=${DOCKER_PORT:-}"
@@ -65,8 +71,7 @@ echo "forward_host=${FORWARD_HOST:-}"
 echo "docker_listener=${docker_listener}"
 echo "ssm_session_id=${SSM_SESSION_ID:-}"
 
-if [[ "${ssm_status}" == "running" && "${socat_status}" == "running" && \
-      "${local_listener}" == "ready" && "${docker_listener}" == "ready" ]]; then
+if [[ "${local_listener}" == "ready" && "${docker_listener}" == "ready" ]]; then
   exit 0
 fi
 
