@@ -1,5 +1,11 @@
 # PDF Evidence Fuzzy Anchoring
 
+## Related Experiment Record
+
+Empirical benchmark and matcher bakeoff results from April 1, 2026 are recorded in:
+
+- `[2026-04-01-pdf-evidence-fuzzy-search-experiments.md](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md)`
+
 ## Goal
 
 Make evidence highlighting resilient when the stored quote is close to, but not identical to, the text rendered in the PDF viewer.

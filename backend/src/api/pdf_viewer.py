@@ -1,4 +1,4 @@
-"""API endpoints for PDF viewer metadata and access."""
+"""API endpoints for PDF viewer metadata, access, and evidence localization."""
 
 from datetime import datetime, timezone
 from typing import List
@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from src.lib.pdf_viewer.rapidfuzz_matcher import (
+    MatchRange,
+    PdfPageText,
+    match_quote_to_pdf_pages,
+)
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
 
@@ -38,6 +43,50 @@ class DocumentListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PdfViewerFuzzyMatchPage(BaseModel):
+    page_number: int = Field(..., ge=1, description="1-based PDF page number")
+    text: str = Field(..., description="Raw PDF.js page text extracted from the viewer")
+
+
+class PdfViewerFuzzyMatchRequest(BaseModel):
+    quote: str = Field(..., min_length=1, description="Quote-like text to localize against PDF.js page text")
+    pages: list[PdfViewerFuzzyMatchPage] = Field(
+        ...,
+        min_length=1,
+        description="Ordered PDF.js page text corpus for the current document",
+    )
+    page_hints: list[int] = Field(
+        default_factory=list,
+        description="Preferred 1-based page hints used as a tie-breaker when scores are close",
+    )
+    min_score: float = Field(
+        default=70.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum RapidFuzz score required to accept the best candidate",
+    )
+
+
+class PdfViewerFuzzyMatchRange(BaseModel):
+    page_number: int = Field(..., ge=1)
+    raw_start: int = Field(..., ge=0)
+    raw_end_exclusive: int = Field(..., ge=0)
+    query: str
+
+
+class PdfViewerFuzzyMatchResponse(BaseModel):
+    found: bool
+    strategy: str
+    score: float = Field(..., ge=0.0, le=100.0)
+    matched_page: int | None = Field(default=None, ge=1)
+    matched_query: str | None = None
+    matched_range: PdfViewerFuzzyMatchRange | None = None
+    full_query: str | None = None
+    page_ranges: list[PdfViewerFuzzyMatchRange]
+    cross_page: bool
+    note: str
 
 
 def _viewer_url(file_path: str) -> str:
@@ -128,3 +177,51 @@ def get_document_viewer_url(
     db.commit()
 
     return ViewerURLResponse(viewer_url=_viewer_url(record.file_path))
+
+
+def _serialize_match_range(match_range: MatchRange | None) -> PdfViewerFuzzyMatchRange | None:
+    if match_range is None:
+        return None
+
+    return PdfViewerFuzzyMatchRange(
+        page_number=match_range.page_number,
+        raw_start=match_range.raw_start,
+        raw_end_exclusive=match_range.raw_end_exclusive,
+        query=match_range.query,
+    )
+
+
+@router.post("/evidence/fuzzy-match", response_model=PdfViewerFuzzyMatchResponse)
+def fuzzy_match_pdf_evidence_quote(
+    request: PdfViewerFuzzyMatchRequest,
+) -> PdfViewerFuzzyMatchResponse:
+    result = match_quote_to_pdf_pages(
+        request.quote,
+        [
+            PdfPageText(page_number=page.page_number, raw_text=page.text)
+            for page in request.pages
+        ],
+        page_hints=request.page_hints,
+        min_score=request.min_score,
+    )
+    page_ranges = [
+        serialized_range
+        for serialized_range in (
+            _serialize_match_range(page_range)
+            for page_range in result.page_ranges
+        )
+        if serialized_range is not None
+    ]
+
+    return PdfViewerFuzzyMatchResponse(
+        found=result.found,
+        strategy=result.strategy,
+        score=result.score,
+        matched_page=result.matched_page,
+        matched_query=result.matched_query,
+        matched_range=_serialize_match_range(result.matched_range),
+        full_query=result.full_query,
+        page_ranges=page_ranges,
+        cross_page=result.cross_page,
+        note=result.note,
+    )

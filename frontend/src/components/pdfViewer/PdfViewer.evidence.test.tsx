@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { fireEvent, render, screen, waitFor } from '../../test/test-utils'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import {
+  fuzzyMatchPdfEvidenceQuote,
+  type PdfEvidenceFuzzyMatchRequest,
+  type PdfEvidenceFuzzyMatchResult,
+} from '@/features/curation/services/pdfEvidenceMatcherService'
 import PdfViewer, {
   buildEvidenceSpikeQuoteCandidates,
   buildEvidenceSpikeSectionCandidates,
@@ -15,7 +20,14 @@ import {
   dispatchPDFDocumentChanged,
   onPDFViewerEvidenceAnchorSelected,
 } from './pdfEvents'
-import { buildNormalizedTextSourceMap } from './textNormalization'
+import {
+  buildNormalizedTextSourceMap,
+  sanitizeEvidenceSearchText,
+} from './textNormalization'
+
+vi.mock('@/features/curation/services/pdfEvidenceMatcherService', () => ({
+  fuzzyMatchPdfEvidenceQuote: vi.fn(),
+}))
 
 interface MockFindResponse {
   state: number
@@ -219,6 +231,37 @@ const getSourceCodeUnitLength = (value: string, index: number): number => {
   return codePoint !== undefined && codePoint > 0xffff ? 2 : 1
 }
 
+const stripCombiningMarks = (value: string): string => value.replace(/\p{M}+/gu, '')
+
+const buildFoldedTextSourceMap = (
+  value: string,
+): {
+  text: string
+  sourceIndices: number[]
+} => {
+  const baseSourceMap = buildNormalizedTextSourceMap(value)
+  const text: string[] = []
+  const sourceIndices: number[] = []
+
+  for (let index = 0; index < baseSourceMap.text.length; index += 1) {
+    const sourceIndex = baseSourceMap.sourceIndices[index]
+    if (sourceIndex === undefined) {
+      continue
+    }
+
+    const foldedChunk = stripCombiningMarks(baseSourceMap.text[index]?.normalize('NFD') ?? '')
+    for (const character of foldedChunk) {
+      text.push(character)
+      sourceIndices.push(sourceIndex)
+    }
+  }
+
+  return {
+    text: text.join(''),
+    sourceIndices,
+  }
+}
+
 const inferMockQueryMatchRanges = (
   rawText: string,
   query: string,
@@ -261,6 +304,236 @@ const inferMockQueryMatchRanges = (
   return {
     pageMatches,
     pageMatchesLength,
+  }
+}
+
+const joinMockPageRawText = (page: MockPageSpec): string => {
+  if (typeof page.pageContents === 'string') {
+    return page.pageContents
+  }
+
+  return page.textSegments.join('')
+}
+
+const findMockPageRange = (
+  rawText: string,
+  query: string,
+): {
+  rawStart: number
+  rawEndExclusive: number
+  query: string
+} | null => {
+  const normalizedQuery = normalizeEvidenceSpikeText(sanitizeEvidenceSearchText(query)).toLocaleLowerCase()
+  if (!normalizedQuery) {
+    return null
+  }
+
+  const sourceMaps = [
+    buildNormalizedTextSourceMap(rawText),
+    buildFoldedTextSourceMap(rawText),
+  ]
+  const normalizedQueries = [
+    normalizedQuery,
+    stripCombiningMarks(normalizedQuery.normalize('NFD')),
+  ]
+
+  for (let index = 0; index < sourceMaps.length; index += 1) {
+    const sourceMap = sourceMaps[index]
+    const candidateQuery = normalizedQueries[index]
+    const normalizedPageText = sourceMap.text.toLocaleLowerCase()
+    const normalizedMatchIndex = normalizedPageText.indexOf(candidateQuery)
+    if (normalizedMatchIndex < 0) {
+      continue
+    }
+
+    const rawStart = sourceMap.sourceIndices[normalizedMatchIndex]
+    const rawEndIndex = sourceMap.sourceIndices[normalizedMatchIndex + candidateQuery.length - 1]
+    if (rawStart === undefined || rawEndIndex === undefined) {
+      continue
+    }
+
+    const rawEndExclusive = rawEndIndex + getSourceCodeUnitLength(rawText, rawEndIndex)
+    return {
+      rawStart,
+      rawEndExclusive,
+      query: rawText.slice(rawStart, rawEndExclusive),
+    }
+  }
+
+  return null
+}
+
+const buildMockFuzzyMatchResponse = (
+  request: PdfEvidenceFuzzyMatchRequest,
+): PdfEvidenceFuzzyMatchResult => {
+  const normalizedQuote = normalizeEvidenceSpikeText(
+    sanitizeEvidenceSearchText(request.quote),
+  ).toLocaleLowerCase()
+
+  if (!normalizedQuote) {
+    return {
+      found: false,
+      strategy: 'none',
+      score: 0,
+      matchedPage: null,
+      matchedQuery: null,
+      matchedRange: null,
+      fullQuery: null,
+      pageRanges: [],
+      crossPage: false,
+      note: 'No quote text was provided for fuzzy PDF evidence matching.',
+    }
+  }
+
+  const hintedPages = new Set(request.pageHints ?? [])
+  const rankedPages = [...request.pages].sort((left, right) => {
+    const leftHint = hintedPages.has(left.pageNumber) ? 1 : 0
+    const rightHint = hintedPages.has(right.pageNumber) ? 1 : 0
+    return rightHint - leftHint
+  })
+  const candidateQueries = buildEvidenceSpikeQuoteCandidates(request.quote, {
+    searchText: request.quote,
+  }).map((candidate) => candidate.query)
+
+  for (const page of rankedPages) {
+    for (const candidateQuery of candidateQueries) {
+      const matchedRange = findMockPageRange(page.text, candidateQuery)
+      if (!matchedRange) {
+        continue
+      }
+
+      const expandedQuery = findExpandedEvidenceQueryFromPageText(
+        page.text,
+        request.quote,
+        candidateQuery,
+      )?.query
+      const expandedRange = expandedQuery
+        ? findMockPageRange(page.text, expandedQuery)
+        : null
+      const effectiveRange = expandedRange ?? matchedRange
+      const effectiveQuery = effectiveRange.query
+      return {
+        found: true,
+        strategy: 'rapidfuzz-single-page',
+        score: effectiveQuery.toLocaleLowerCase() === normalizedQuote ? 100 : 96,
+        matchedPage: page.pageNumber,
+        matchedQuery: effectiveQuery,
+        matchedRange: {
+          pageNumber: page.pageNumber,
+          rawStart: effectiveRange.rawStart,
+          rawEndExclusive: effectiveRange.rawEndExclusive,
+          query: effectiveRange.query,
+        },
+        fullQuery: effectiveQuery,
+        pageRanges: [{
+          pageNumber: page.pageNumber,
+          rawStart: effectiveRange.rawStart,
+          rawEndExclusive: effectiveRange.rawEndExclusive,
+          query: effectiveRange.query,
+        }],
+        crossPage: false,
+        note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+      }
+    }
+  }
+
+  for (const page of rankedPages) {
+    const matchedRange = findMockPageRange(page.text, request.quote)
+    if (matchedRange) {
+      return {
+        found: true,
+        strategy: 'rapidfuzz-single-page',
+        score: 100,
+        matchedPage: page.pageNumber,
+        matchedQuery: request.quote,
+        matchedRange: {
+          pageNumber: page.pageNumber,
+          rawStart: matchedRange.rawStart,
+          rawEndExclusive: matchedRange.rawEndExclusive,
+          query: matchedRange.query,
+        },
+        fullQuery: request.quote,
+        pageRanges: [{
+          pageNumber: page.pageNumber,
+          rawStart: matchedRange.rawStart,
+          rawEndExclusive: matchedRange.rawEndExclusive,
+          query: matchedRange.query,
+        }],
+        crossPage: false,
+        note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+      }
+    }
+  }
+
+  for (let pageIndex = 0; pageIndex < rankedPages.length - 1; pageIndex += 1) {
+    const currentPage = rankedPages[pageIndex]
+    const nextPage = rankedPages[pageIndex + 1]
+    if (nextPage.pageNumber !== currentPage.pageNumber + 1) {
+      continue
+    }
+
+    const stitchedText = `${currentPage.text} ${nextPage.text}`.trim()
+    const stitchedRange = findMockPageRange(stitchedText, request.quote)
+    if (!stitchedRange) {
+      continue
+    }
+
+    const anchorLength = currentPage.text.length
+    const anchorRawStart = Math.min(stitchedRange.rawStart, anchorLength)
+    const anchorRawEndExclusive = Math.min(stitchedRange.rawEndExclusive, anchorLength)
+    const nextRawStart = Math.max(0, stitchedRange.rawStart - (anchorLength + 1))
+    const nextRawEndExclusive = Math.max(0, stitchedRange.rawEndExclusive - (anchorLength + 1))
+    const pageRanges = [
+      {
+        pageNumber: currentPage.pageNumber,
+        rawStart: anchorRawStart,
+        rawEndExclusive: anchorRawEndExclusive,
+        query: currentPage.text.slice(anchorRawStart, anchorRawEndExclusive),
+      },
+      {
+        pageNumber: nextPage.pageNumber,
+        rawStart: nextRawStart,
+        rawEndExclusive: nextRawEndExclusive,
+        query: nextPage.text.slice(nextRawStart, nextRawEndExclusive),
+      },
+    ].filter((range) => range.rawEndExclusive > range.rawStart)
+
+    if (pageRanges.length === 0) {
+      continue
+    }
+
+    return {
+      found: true,
+      strategy: 'rapidfuzz-stitched-page',
+      score: 92,
+      matchedPage: currentPage.pageNumber,
+      matchedQuery: pageRanges[0]?.query ?? null,
+      matchedRange: pageRanges[0]
+        ? {
+            pageNumber: pageRanges[0].pageNumber,
+            rawStart: pageRanges[0].rawStart,
+            rawEndExclusive: pageRanges[0].rawEndExclusive,
+            query: pageRanges[0].query,
+          }
+        : null,
+      fullQuery: stitchedRange.query,
+      pageRanges,
+      crossPage: pageRanges.length > 1,
+      note: 'Localized quote text against stitched PDF.js page text using RapidFuzz.',
+    }
+  }
+
+  return {
+    found: false,
+    strategy: 'rapidfuzz-single-page',
+    score: 0,
+    matchedPage: null,
+    matchedQuery: null,
+    matchedRange: null,
+    fullQuery: null,
+    pageRanges: [],
+    crossPage: false,
+    note: 'No fuzzy quote match was found in the mock PDF.js page text corpus.',
   }
 }
 
@@ -418,9 +691,10 @@ const installMockPdfViewer = ({
   const highestPageNumber = pages.reduce((max, page) => Math.max(max, page.pageNumber), 0)
   findController._pageContents = Array.from(
     { length: highestPageNumber },
-    (_, pageIndex) => pages.find((page) => page.pageNumber === pageIndex + 1)?.pageContents
-      ?? pages.find((page) => page.pageNumber === pageIndex + 1)?.textSegments.join('')
-      ?? '',
+    (_, pageIndex) => {
+      const page = pages.find((candidate) => candidate.pageNumber === pageIndex + 1)
+      return page ? joinMockPageRawText(page) : ''
+    },
   )
 
   iframeDocument.createRange = (() => {
@@ -466,6 +740,27 @@ const installMockPdfViewer = ({
     } as unknown as Range)
   })()
 
+  const pdfDocument = {
+    numPages: highestPageNumber,
+    async getPage(pageNumber: number) {
+      const page = pages.find((candidate) => candidate.pageNumber === pageNumber)
+      if (!page) {
+        throw new Error(`Missing mock PDF page ${pageNumber}`)
+      }
+
+      return {
+        async getTextContent() {
+          return {
+            items: page.textSegments.map((segment) => ({
+              str: segment,
+              hasEOL: false,
+            })),
+          }
+        },
+      }
+    },
+  }
+
   const pdfViewer = {
     get currentPageNumber() {
       return currentPageNumber
@@ -474,7 +769,7 @@ const installMockPdfViewer = ({
       currentPageNumber = value
     },
     currentScaleValue: 'auto',
-    pdfDocument: {},
+    pdfDocument,
     getPageView(pageIndex: number) {
       return pageViews.get(pageIndex + 1)
     },
@@ -496,7 +791,7 @@ const installMockPdfViewer = ({
     eventBus,
     findController,
     pdfViewer,
-    pdfDocument: {},
+    pdfDocument,
     appConfig: {
       viewerContainer: iframeDocument.createElement('div'),
     },
@@ -562,6 +857,92 @@ const buildNavigationCommand = (
   ...overrides,
 })
 
+const createSinglePageFuzzyMatchResult = (
+  pageNumber: number,
+  rawText: string,
+  matchText: string,
+  options?: {
+    strategy?: PdfEvidenceFuzzyMatchResult['strategy']
+    score?: number
+    note?: string
+    fullQuery?: string | null
+    crossPage?: boolean
+  },
+): PdfEvidenceFuzzyMatchResult => {
+  const range = findMockPageRange(rawText, matchText)
+  if (!range) {
+    throw new Error(`Unable to localize "${matchText}" in mock page ${pageNumber}`)
+  }
+
+  return {
+    found: true,
+    strategy: options?.strategy ?? 'rapidfuzz-single-page',
+    score: options?.score ?? 96,
+    matchedPage: pageNumber,
+    matchedQuery: range.query,
+    matchedRange: {
+      pageNumber,
+      rawStart: range.rawStart,
+      rawEndExclusive: range.rawEndExclusive,
+      query: range.query,
+    },
+    fullQuery: options?.fullQuery ?? range.query,
+    pageRanges: [{
+      pageNumber,
+      rawStart: range.rawStart,
+      rawEndExclusive: range.rawEndExclusive,
+      query: range.query,
+    }],
+    crossPage: options?.crossPage ?? false,
+    note: options?.note ?? 'Localized quote text against PDF.js page text using RapidFuzz.',
+  }
+}
+
+const createCrossPageFuzzyMatchResult = (
+  anchorPageNumber: number,
+  anchorText: string,
+  nextPageNumber: number,
+  nextPageText: string,
+  fullMatchText: string,
+): PdfEvidenceFuzzyMatchResult => {
+  const anchorRange = findMockPageRange(anchorText, anchorText)
+  const nextRange = findMockPageRange(nextPageText, nextPageText)
+  if (!anchorRange || !nextRange) {
+    throw new Error('Unable to build mock cross-page fuzzy match result')
+  }
+
+  return {
+    found: true,
+    strategy: 'rapidfuzz-stitched-page',
+    score: 92,
+    matchedPage: anchorPageNumber,
+    matchedQuery: anchorRange.query,
+    matchedRange: {
+      pageNumber: anchorPageNumber,
+      rawStart: anchorRange.rawStart,
+      rawEndExclusive: anchorRange.rawEndExclusive,
+      query: anchorRange.query,
+    },
+    fullQuery: fullMatchText,
+    pageRanges: [
+      {
+        pageNumber: anchorPageNumber,
+        rawStart: anchorRange.rawStart,
+        rawEndExclusive: anchorRange.rawEndExclusive,
+        query: anchorRange.query,
+      },
+      {
+        pageNumber: nextPageNumber,
+        rawStart: nextRange.rawStart,
+        rawEndExclusive: nextRange.rawEndExclusive,
+        query: nextRange.query,
+      },
+    ],
+    crossPage: true,
+    note: 'Localized quote text against stitched PDF.js page text using RapidFuzz.',
+  }
+}
+
 const buildDefaultPages = (): MockPageSpec[] => [
   { pageNumber: 1, textSegments: ['Introduction'] },
   { pageNumber: 2, textSegments: ['Already normalized quote text'] },
@@ -572,10 +953,15 @@ const buildDefaultPages = (): MockPageSpec[] => [
 ]
 
 describe('PdfViewer evidence navigation', () => {
+  beforeEach(() => {
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockImplementation(async (request) => buildMockFuzzyMatchResponse(request))
+  })
+
   afterEach(() => {
     vi.unstubAllEnvs()
     vi.useRealTimers()
     vi.mocked(global.fetch).mockReset()
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockReset()
     delete window.__pdfViewerEvidenceSpike
     delete window.__pdfViewerEvidenceSpikeLastResult
   })
@@ -646,6 +1032,12 @@ describe('PdfViewer evidence navigation', () => {
     vi.stubEnv('VITE_DEV_MODE', 'true')
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
+    const pages = buildDefaultPages()
+    const pageFiveText = joinMockPageRawText(pages[4]!)
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(5, pageFiveText, pageFiveText),
+    )
+
     render(<PdfViewer />)
 
     dispatchPDFDocumentChanged('doc-1', '/fixtures/sample.pdf', 'sample.pdf', 12)
@@ -655,12 +1047,14 @@ describe('PdfViewer evidence navigation', () => {
 
     const { iframe, eventBus } = installMockPdfViewer({
       onFind: (query) => {
-        if (query === 'Raw quote with "smart" punctuation') {
+        if (query === 'Raw quote with “smart” punctuation') {
           return {
             state: 0,
             total: 1,
             current: 1,
             pageIdx: 4,
+            pageMatches: [0],
+            pageMatchesLength: [pageFiveText.length],
           }
         }
 
@@ -671,7 +1065,7 @@ describe('PdfViewer evidence navigation', () => {
           pageIdx: null,
         }
       },
-      pages: buildDefaultPages(),
+      pages,
     })
 
     fireEvent.load(iframe)
@@ -687,16 +1081,23 @@ describe('PdfViewer evidence navigation', () => {
 
     expect(result).toMatchObject({
       status: 'matched',
-      strategy: 'normalized-quote',
+      strategy: 'rapidfuzz-single-page',
       matchedQuery: 'Raw quote with “smart” punctuation',
       matchedPage: 5,
       matchesTotal: 1,
       currentMatch: 1,
     })
-    expect(eventBus.findQueries).toEqual([
-      'Raw   quote\nwith “smart” punctuation',
-      'Raw quote with "smart" punctuation',
-    ])
+    expect(fuzzyMatchPdfEvidenceQuote).toHaveBeenCalledWith(expect.objectContaining({
+      quote: 'Raw   quote\nwith “smart” punctuation',
+      pageHints: [4],
+      pages: expect.arrayContaining([
+        expect.objectContaining({
+          pageNumber: 5,
+          text: 'Raw quote with “smart” punctuation',
+        }),
+      ]),
+    }))
+    expect(eventBus.findQueries).toEqual(['Raw quote with “smart” punctuation'])
     await waitFor(() => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
     })
@@ -710,6 +1111,14 @@ describe('PdfViewer evidence navigation', () => {
     vi.stubEnv('VITE_DEV_MODE', 'true')
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
+    const query = 'naive approach among proteins'
+    const pageText = 'naïve approach among proteins'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, pageText, pageText, {
+        score: 94,
+      }),
+    )
+
     render(<PdfViewer />)
 
     dispatchPDFDocumentChanged('doc-diacritics', '/fixtures/sample.pdf', 'diacritics.pdf', 8)
@@ -717,21 +1126,20 @@ describe('PdfViewer evidence navigation', () => {
       expect(screen.getByText('diacritics.pdf')).toBeInTheDocument()
     })
 
-    const query = 'naive approach among proteins'
-    const pageText = 'naïve approach among proteins'
     const { iframe } = installMockPdfViewer({
       onFind: (candidateQuery) => ({
-        state: candidateQuery === query ? 0 : 1,
-        total: candidateQuery === query ? 1 : 0,
-        current: candidateQuery === query ? 1 : 0,
-        pageIdx: candidateQuery === query ? 2 : null,
-        pageMatches: candidateQuery === query ? [0] : [],
-        pageMatchesLength: candidateQuery === query ? [pageText.length] : [],
+        state: candidateQuery === pageText ? 0 : 1,
+        total: candidateQuery === pageText ? 1 : 0,
+        current: candidateQuery === pageText ? 1 : 0,
+        pageIdx: candidateQuery === pageText ? 2 : null,
+        pageMatches: candidateQuery === pageText ? [0] : [],
+        pageMatchesLength: candidateQuery === pageText ? [pageText.length] : [],
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: [pageText, 'Results'] },
+        { pageNumber: 3, textSegments: [pageText] },
+        { pageNumber: 4, textSegments: ['Results'] },
       ],
     })
 
@@ -748,6 +1156,7 @@ describe('PdfViewer evidence navigation', () => {
 
     expect(result).toMatchObject({
       status: 'matched',
+      strategy: 'rapidfuzz-single-page',
       matchedQuery: pageText,
       matchedPage: 3,
       matchesTotal: 1,
@@ -959,6 +1368,28 @@ describe('PdfViewer evidence navigation', () => {
 
   it('tries section context after chat quote localization resolves only to page context', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 88,
+      matchedPage: 3,
+      matchedQuery: 'Exact quote from PDFX markdown',
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Exact quote from PDFX markdown'.length,
+        query: 'Exact quote from PDFX markdown',
+      },
+      fullQuery: 'Exact quote from PDFX markdown',
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Exact quote from PDFX markdown'.length,
+        query: 'Exact quote from PDFX markdown',
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+    })
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
@@ -977,15 +1408,6 @@ describe('PdfViewer evidence navigation', () => {
 
     const { iframe, eventBus } = installMockPdfViewer({
       onFind: (query) => {
-        if (query === 'Exact quote from PDFX markdown') {
-          return {
-            state: 0,
-            total: 1,
-            current: 1,
-            pageIdx: 2,
-          }
-        }
-
         if (query === 'Results') {
           return {
             state: 0,
@@ -1041,6 +1463,9 @@ describe('PdfViewer evidence navigation', () => {
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
     const query = 'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(6, query, query),
+    )
 
     render(
       <PdfViewer
@@ -1060,6 +1485,8 @@ describe('PdfViewer evidence navigation', () => {
         total: candidate === query ? 1 : 0,
         current: candidate === query ? 1 : 0,
         pageIdx: candidate === query ? 5 : null,
+        pageMatches: candidate === query ? [0] : [],
+        pageMatchesLength: candidate === query ? [query.length] : [],
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -1151,6 +1578,11 @@ describe('PdfViewer evidence navigation', () => {
       ?.query
 
     expect(fragmentCandidate).toBeTruthy()
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, pageText, fragmentCandidate ?? '', {
+        score: 84,
+      }),
+    )
 
     render(
       <PdfViewer
@@ -1172,6 +1604,8 @@ describe('PdfViewer evidence navigation', () => {
           total: isFragment ? 1 : 0,
           current: isFragment ? 1 : 0,
           pageIdx: isFragment ? 2 : null,
+          pageMatches: isFragment && fragmentCandidate ? [pageText.indexOf(fragmentCandidate)] : [],
+          pageMatchesLength: isFragment && fragmentCandidate ? [fragmentCandidate.length] : [],
         }
       },
       pages: [
@@ -1211,12 +1645,12 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       locatorQuality: 'normalized_quote',
-      degraded: true,
+      degraded: false,
       matchedPage: 3,
       matchedQuery: fragmentCandidate,
-      note: 'Kept the best native quote fragment because the longer PDF.js quote upgrade could not be verified.',
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
@@ -1229,6 +1663,11 @@ describe('PdfViewer evidence navigation', () => {
     const onNavigationStateChange = vi.fn()
     const pageText = 'naïve approach among proteins'
     const query = 'naive approach among proteins'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, `${pageText}Results`, pageText, {
+        score: 94,
+      }),
+    )
 
     render(
       <PdfViewer
@@ -1243,11 +1682,11 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === query || candidate === pageText ? 0 : 1,
-        total: candidate === query || candidate === pageText ? 1 : 0,
-        current: candidate === query || candidate === pageText ? 1 : 0,
-        pageIdx: candidate === query || candidate === pageText ? 2 : null,
+      onFind: () => ({
+        state: 1,
+        total: 0,
+        current: 0,
+        pageIdx: null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -1287,6 +1726,9 @@ describe('PdfViewer evidence navigation', () => {
       strategy: 'page-hint',
       locatorQuality: 'page_only',
       matchedPage: 3,
+    }))
+    expect(vi.mocked(fuzzyMatchPdfEvidenceQuote)).toHaveBeenCalledWith(expect.objectContaining({
+      quote: query,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(getNativeSelectedHighlights(iframe)).toHaveLength(0)
@@ -1340,6 +1782,9 @@ describe('PdfViewer evidence navigation', () => {
     const onAnchorSelected = vi.fn()
     const unsubscribe = onPDFViewerEvidenceAnchorSelected(onAnchorSelected)
     const query = 'Exact quote from PDFX markdown'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, `${query} Results`, query),
+    )
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ anchorId: 'anchor-rerender' })} />)
 
@@ -1440,6 +1885,31 @@ describe('PdfViewer evidence navigation', () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const query = 'Exact quote from PDFX markdown'
+    const pageText = ['Header', query, 'gap', query, 'Results'].join('')
+    const firstMatchIndex = pageText.indexOf(query)
+    const secondMatchIndex = pageText.indexOf(query, firstMatchIndex + 1)
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 100,
+      matchedPage: 3,
+      matchedQuery: query,
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: secondMatchIndex,
+        rawEndExclusive: secondMatchIndex + query.length,
+        query,
+      },
+      fullQuery: query,
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: secondMatchIndex,
+        rawEndExclusive: secondMatchIndex + query.length,
+        query,
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+    })
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
 
@@ -1475,6 +1945,9 @@ describe('PdfViewer evidence navigation', () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const query = 'Exact quote from PDFX markdown'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, query, query),
+    )
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
 
@@ -1489,6 +1962,8 @@ describe('PdfViewer evidence navigation', () => {
         total: candidate === query ? 1 : 0,
         current: candidate === query ? 1 : 0,
         pageIdx: candidate === query ? 2 : null,
+        pageMatches: candidate === query ? [0] : [],
+        pageMatchesLength: candidate === query ? [query.length] : [],
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -1550,6 +2025,28 @@ describe('PdfViewer evidence navigation', () => {
       pageNumber: 3,
       sectionTitle: 'Results',
     })
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 82,
+      matchedPage: 3,
+      matchedQuery: query,
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: query.length,
+        query,
+      },
+      fullQuery: query,
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: query.length,
+        query,
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+    })
 
     render(
       <PdfViewer
@@ -1565,11 +2062,11 @@ describe('PdfViewer evidence navigation', () => {
     })
 
     const { iframe, eventBus } = installMockPdfViewer({
-      onFind: (candidate) => ({
-        state: candidate === query ? 0 : 1,
-        total: candidate === query ? 1 : 0,
-        current: candidate === query ? 1 : 0,
-        pageIdx: candidate === query ? 2 : null,
+      onFind: () => ({
+        state: 1,
+        total: 0,
+        current: 0,
+        pageIdx: null,
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -1601,7 +2098,7 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toContain(query)
+    expect(eventBus.findQueries).toEqual([query, 'Results'])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'page-fallback',
       locatorQuality: 'page_only',
@@ -1683,11 +2180,12 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findQueries).toContain(fragmentCandidate)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       locatorQuality: 'normalized_quote',
       degraded: false,
       matchedPage: 3,
       matchedQuery: fragmentCandidate,
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
     await waitFor(() => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
@@ -1778,15 +2276,15 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toEqual([expandedQuery])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       locatorQuality: 'normalized_quote',
       degraded: false,
       matchedPage: 3,
       matchedQuery: expect.stringContaining('proteins changed in the allele lacking the crb_C isoform'),
-      note: 'Recovered the best native quote highlight from PDF.js page text.',
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
     await waitFor(() => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
@@ -1876,15 +2374,16 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toHaveLength(1)
+    expect(eventBus.findQueries[0]).toContain('Higher abundance of Actin 5C')
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       locatorQuality: 'normalized_quote',
       degraded: false,
       matchedPage: 3,
-      matchedQuery: pageText,
-      note: 'Recovered the best native quote highlight from PDF.js page text.',
+      matchedQuery: expect.stringContaining('Higher abundance of Actin 5C'),
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
     await waitFor(() => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
@@ -1927,6 +2426,30 @@ describe('PdfViewer evidence navigation', () => {
     const secondMatchIndex = pageText.indexOf(fragmentCandidate ?? '', firstMatchIndex + 1)
     expect(firstMatchIndex).toBeGreaterThanOrEqual(0)
     expect(secondMatchIndex).toBeGreaterThan(firstMatchIndex)
+    const secondSpanIndex = pageText.indexOf(secondSpan)
+    expect(secondSpanIndex).toBeGreaterThanOrEqual(0)
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 96,
+      matchedPage: 3,
+      matchedQuery: secondSpan,
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: secondSpanIndex,
+        rawEndExclusive: secondSpanIndex + secondSpan.length,
+        query: secondSpan,
+      },
+      fullQuery: secondSpan,
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: secondSpanIndex,
+        rawEndExclusive: secondSpanIndex + secondSpan.length,
+        query: secondSpan,
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+    })
 
     const command = buildNavigationCommand({
       anchor: {
@@ -1985,13 +2508,13 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toEqual([secondSpan])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       matchedPage: 3,
       matchedQuery: secondSpan,
-      note: 'Recovered the best native quote highlight from PDF.js page text.',
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
   })
 
@@ -2017,6 +2540,30 @@ describe('PdfViewer evidence navigation', () => {
     const secondMatchIndex = pageText.indexOf(fragmentCandidate ?? '', firstMatchIndex + 1)
     expect(firstMatchIndex).toBeGreaterThanOrEqual(0)
     expect(secondMatchIndex).toBeGreaterThan(firstMatchIndex)
+    const secondQuoteIndex = pageText.indexOf(repeatedQuote, pageText.indexOf(repeatedQuote) + 1)
+    expect(secondQuoteIndex).toBeGreaterThanOrEqual(0)
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 96,
+      matchedPage: 3,
+      matchedQuery: repeatedQuote,
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: secondQuoteIndex,
+        rawEndExclusive: secondQuoteIndex + repeatedQuote.length,
+        query: repeatedQuote,
+      },
+      fullQuery: repeatedQuote,
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: secondQuoteIndex,
+        rawEndExclusive: secondQuoteIndex + repeatedQuote.length,
+        query: repeatedQuote,
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
+    })
 
     const command = buildNavigationCommand({
       anchor: {
@@ -2075,13 +2622,13 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toContain(repeatedQuote)
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-single-page',
       matchedPage: 3,
       matchedQuery: repeatedQuote,
-      note: 'Recovered the best native quote highlight from PDF.js page text.',
+      note: 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.',
     }))
     await waitFor(() => {
       expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
@@ -2278,7 +2825,7 @@ describe('PdfViewer evidence navigation', () => {
     expect(screen.getByText('Section fallback')).toBeInTheDocument()
   })
 
-  it('re-biases retries to the hinted page and degrades to a page banner when text-layer matching fails', async () => {
+  it('uses hinted pages for RapidFuzz localization and degrades to a page banner without quote retry loops', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
@@ -2299,6 +2846,28 @@ describe('PdfViewer evidence navigation', () => {
       searchText: 'Repeated   quote\nwith “smart” punctuation and enough extra words to keep the retry chain moving before page fallback.',
       pageNumber: 3,
       sectionTitle: null,
+    })
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 78,
+      matchedPage: 3,
+      matchedQuery: 'Repeated quote with "smart" punctuation',
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Repeated quote with "smart" punctuation'.length,
+        query: 'Repeated quote with "smart" punctuation',
+      },
+      fullQuery: 'Repeated quote with "smart" punctuation',
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Repeated quote with "smart" punctuation'.length,
+        query: 'Repeated quote with "smart" punctuation',
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
     })
 
     render(
@@ -2330,10 +2899,13 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findDispatches.length).toBeGreaterThan(1)
-    expect(eventBus.findDispatches.map((entry) => entry.pageBeforeDispatch)).toEqual(
-      eventBus.findDispatches.map(() => 3),
-    )
+    expect(fuzzyMatchPdfEvidenceQuote).toHaveBeenCalledWith(expect.objectContaining({
+      pageHints: [3],
+    }))
+    expect(eventBus.findDispatches).toEqual([{
+      query: 'Repeated quote with "smart" punctuation',
+      pageBeforeDispatch: 3,
+    }])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'page-fallback',
       locatorQuality: 'page_only',
@@ -2367,6 +2939,28 @@ describe('PdfViewer evidence navigation', () => {
       searchText: 'Raw quote with “smart” punctuation',
       pageNumber: 3,
       sectionTitle: null,
+    })
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      found: true,
+      strategy: 'rapidfuzz-single-page',
+      score: 90,
+      matchedPage: 3,
+      matchedQuery: 'Raw quote with “smart” punctuation',
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Raw quote with “smart” punctuation'.length,
+        query: 'Raw quote with “smart” punctuation',
+      },
+      fullQuery: 'Raw quote with “smart” punctuation',
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: 0,
+        rawEndExclusive: 'Raw quote with “smart” punctuation'.length,
+        query: 'Raw quote with “smart” punctuation',
+      }],
+      crossPage: false,
+      note: 'Localized quote text against PDF.js page text using RapidFuzz.',
     })
 
     render(
@@ -2409,10 +3003,7 @@ describe('PdfViewer evidence navigation', () => {
       matchedPage: 3,
     }))
 
-    expect(eventBus.findQueries).toEqual([
-      'Raw quote with “smart” punctuation',
-      'Raw quote with "smart" punctuation',
-    ])
+    expect(eventBus.findQueries).toEqual(['Raw quote with “smart” punctuation'])
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(
       screen.getAllByText('Evidence on this page. Quote text was not matched reliably enough to highlight.'),
@@ -2490,11 +3081,9 @@ describe('PdfViewer evidence navigation', () => {
     const pageThreeText = 'Cross-page quote start appears near the bottom of the anchor page and continues'
     const pageFourText = 'onto the next page where the remaining evidence text finishes cleanly.'
     const query = `${pageThreeText} ${pageFourText}`
-    const fragmentCandidate = buildEvidenceSpikeQuoteCandidates(query)
-      .find((candidate) => candidate.reason === 'window-fragment' && pageThreeText.includes(candidate.query))
-      ?.query
-
-    expect(fragmentCandidate).toBeTruthy()
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createCrossPageFuzzyMatchResult(3, pageThreeText, 4, pageFourText, query),
+    )
 
     const command = buildNavigationCommand({
       anchor: {
@@ -2529,10 +3118,12 @@ describe('PdfViewer evidence navigation', () => {
 
     const { iframe, eventBus } = installMockPdfViewer({
       onFind: (candidate) => ({
-        state: candidate === fragmentCandidate ? 0 : 1,
-        total: candidate === fragmentCandidate ? 1 : 0,
-        current: candidate === fragmentCandidate ? 1 : 0,
-        pageIdx: candidate === fragmentCandidate ? 2 : null,
+        state: candidate === pageThreeText ? 0 : 1,
+        total: candidate === pageThreeText ? 1 : 0,
+        current: candidate === pageThreeText ? 1 : 0,
+        pageIdx: candidate === pageThreeText ? 2 : null,
+        pageMatches: candidate === pageThreeText ? [0] : [],
+        pageMatchesLength: candidate === pageThreeText ? [pageThreeText.length] : [],
       }),
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
@@ -2548,15 +3139,15 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     }, { timeout: 4000 })
 
-    expect(eventBus.findQueries).toContain(fragmentCandidate)
+    expect(eventBus.findQueries).toEqual([pageThreeText])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
       status: 'matched',
-      strategy: 'window-fragment',
+      strategy: 'rapidfuzz-stitched-page',
       locatorQuality: 'normalized_quote',
       degraded: true,
       matchedPage: 3,
-      matchedQuery: fragmentCandidate,
-      note: 'Kept the best native anchor-page quote highlight because the recovered quote spans multiple PDF pages.',
+      matchedQuery: pageThreeText,
+      note: 'Localized the quote with RapidFuzz and kept the best native anchor-page PDF.js highlight because the recovered span crosses pages.',
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)

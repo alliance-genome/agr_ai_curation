@@ -62,3 +62,4 @@ black
 flake8
 mypy
 numpy>=2.0.0
+rapidfuzz>=3.14.3

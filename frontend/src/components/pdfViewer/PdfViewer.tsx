@@ -42,6 +42,12 @@ import {
 } from '@/components/pdfViewer/textAnchoring'
 import type { EvidenceAnchor, EvidenceLocatorQuality } from '@/features/curation/contracts'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import {
+  fuzzyMatchPdfEvidenceQuote,
+  type PdfEvidenceFuzzyMatchPage,
+  type PdfEvidenceFuzzyMatchResult,
+  type PdfEvidenceFuzzyMatchStrategy,
+} from '@/features/curation/services/pdfEvidenceMatcherService'
 
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
 const SESSION_STORAGE_KEY = 'pdf-viewer-session'
@@ -59,6 +65,7 @@ const EVIDENCE_SPIKE_RESULT_EVENT_NAME = 'pdf-viewer-evidence-spike-result'
 const PDF_EVIDENCE_DEBUG_STORAGE_KEY = 'pdf-evidence-debug'
 const PDF_EVIDENCE_DEBUG_URL_PARAM = 'pdfEvidenceDebug'
 const PDF_EVIDENCE_DEBUG_MAX_ENTRIES = 800
+const PDF_EVIDENCE_FUZZY_MATCH_MIN_SCORE = 70
 const EVIDENCE_SPIKE_WINDOW_FRAGMENT_MIN_WORDS = 8
 const EVIDENCE_SPIKE_WINDOW_FRAGMENT_TARGET_WORDS = 12
 const EVIDENCE_SPIKE_WINDOW_FRAGMENT_MAX_COUNT = 6
@@ -136,6 +143,7 @@ type PdfEvidenceSpikeStatus =
 
 type PdfEvidenceSpikeStrategy =
   | PdfEvidenceSpikeCandidateReason
+  | PdfEvidenceFuzzyMatchStrategy
   | 'page-hint'
   | 'document'
 
@@ -214,6 +222,12 @@ interface EvidenceTextLayerHighlight {
   rects: EvidenceTextLayerRect[] | null
   renderOverlay: boolean
   nativeTarget?: NativePdfJsQuoteTarget | null
+}
+
+interface PdfEvidencePageTextCorpusCache {
+  cacheKey: string | null
+  pages: PdfEvidenceFuzzyMatchPage[] | null
+  promise: Promise<PdfEvidenceFuzzyMatchPage[]> | null
 }
 
 export interface PdfViewerProps {
@@ -596,10 +610,42 @@ const getSelectedEvidenceSpikeMatchIndex = (pdfApp: any): number | null => {
   return typeof matchIdx === 'number' && matchIdx >= 0 ? matchIdx : null
 }
 
-const createPdfJsQuoteSearchAdapter = (pdfApp: any): PdfJsQuoteSearchAdapter => {
+const joinPdfJsTextContentItems = (
+  textContent: {
+    items?: Array<{
+      str?: string
+      hasEOL?: boolean
+    }>
+  } | null | undefined,
+): string => {
+  if (!Array.isArray(textContent?.items)) {
+    return ''
+  }
+
+  const parts: string[] = []
+  textContent.items.forEach((item) => {
+    parts.push(item?.str ?? '')
+    if (item?.hasEOL) {
+      parts.push('\n')
+    }
+  })
+  return parts.join('')
+}
+
+const createPdfJsQuoteSearchAdapter = (
+  pdfApp: any,
+  options?: {
+    getPageText?: (pageNumber: number) => string | null
+  },
+): PdfJsQuoteSearchAdapter => {
   const getPageContents = (pageNumber: number): string | null => {
     const pageContents = pdfApp?.findController?._pageContents?.[pageNumber - 1]
-    return typeof pageContents === 'string' && pageContents.length > 0 ? pageContents : null
+    if (typeof pageContents === 'string') {
+      return pageContents
+    }
+
+    const externalPageText = options?.getPageText?.(pageNumber)
+    return typeof externalPageText === 'string' ? externalPageText : null
   }
 
   const getPageOccurrences = (pageNumber: number): PdfJsQuoteMatchOccurrence[] => {
@@ -1652,10 +1698,13 @@ const synchronizeNativePdfJsQuoteHighlight = async (
   target: NativePdfJsQuoteTarget,
   options?: {
     assertCurrentRequest?: () => void
+    pageTextLookup?: (pageNumber: number) => string | null
     reason?: string
   },
 ): Promise<NativePdfJsQuoteSyncResult> => {
-  const adapter = createPdfJsQuoteSearchAdapter(pdfApp)
+  const adapter = createPdfJsQuoteSearchAdapter(pdfApp, {
+    getPageText: options?.pageTextLookup,
+  })
   const selectedOccurrence = adapter.getSelectedOccurrence()
   const alreadySelected = doesPdfJsOccurrenceMatchTarget(selectedOccurrence, target)
     && findPdfJsSelectedHighlightRects(iframeDoc, target.pageNumber).length > 0
@@ -1687,7 +1736,9 @@ const synchronizeNativePdfJsQuoteHighlight = async (
   })
   options?.assertCurrentRequest?.()
 
-  const selectedAfterFind = createPdfJsQuoteSearchAdapter(pdfApp).getSelectedOccurrence()
+  const selectedAfterFind = createPdfJsQuoteSearchAdapter(pdfApp, {
+    getPageText: options?.pageTextLookup,
+  }).getSelectedOccurrence()
   if (!doesPdfJsOccurrenceMatchTarget(selectedAfterFind, target)) {
     logPdfEvidenceDebug('Native PDF.js quote highlight did not verify the intended occurrence', {
       query: target.query,
@@ -1714,7 +1765,9 @@ const synchronizeNativePdfJsQuoteHighlight = async (
   )
   options?.assertCurrentRequest?.()
 
-  const verifiedOccurrence = createPdfJsQuoteSearchAdapter(pdfApp).getSelectedOccurrence()
+  const verifiedOccurrence = createPdfJsQuoteSearchAdapter(pdfApp, {
+    getPageText: options?.pageTextLookup,
+  }).getSelectedOccurrence()
   if (nativeRects.length === 0 || !doesPdfJsOccurrenceMatchTarget(verifiedOccurrence, target)) {
     logPdfEvidenceDebug('Native PDF.js quote highlight did not become visibly selected on the intended occurrence', {
       query: target.query,
@@ -2306,56 +2359,33 @@ const isDegradedLocatorQuality = (quality: EvidenceLocatorQuality): boolean => {
     || quality === 'unresolved'
 }
 
-const resolveQuoteMatchLocatorQuality = (
+const resolveFuzzyQuoteMatchLocatorQuality = (
   anchorQuality: EvidenceLocatorQuality,
-  candidateReason: PdfEvidenceSpikeCandidateReason,
+  requestedQuote: string,
+  matchedQuery: string,
 ): EvidenceLocatorQuality => {
-  // Quote fallback can degrade an exact anchor, but should not upgrade a
-  // normalized anchor just because the first attempted query happens to match.
   if (anchorQuality === 'normalized_quote') {
     return 'normalized_quote'
   }
 
-  return candidateReason === 'exact-quote' ? 'exact_quote' : 'normalized_quote'
+  return requestedQuote.trim() === matchedQuery.trim() ? 'exact_quote' : 'normalized_quote'
 }
 
-const buildQuoteMatchNavigationNote = (
-  candidateReason: PdfEvidenceSpikeCandidateReason,
+const buildRapidFuzzQuoteMatchNavigationNote = (
+  matchResult: PdfEvidenceFuzzyMatchResult,
   options?: {
-    upgradedFromPageContents?: boolean
-    keptFragment?: boolean
     crossPage?: boolean
   },
 ): string => {
-  if (options?.keptFragment && options?.crossPage) {
-    return 'Kept the best native anchor-page quote highlight because the recovered quote spans multiple PDF pages.'
+  if (options?.crossPage) {
+    return 'Localized the quote with RapidFuzz and kept the best native anchor-page PDF.js highlight because the recovered span crosses pages.'
   }
 
-  if (options?.keptFragment) {
-    return 'Kept the best native quote fragment because the longer PDF.js quote upgrade could not be verified.'
+  if (matchResult.strategy === 'rapidfuzz-stitched-page') {
+    return 'Localized the quote with RapidFuzz across adjacent PDF.js page text and highlighted the verified native anchor-page span.'
   }
 
-  if (options?.upgradedFromPageContents && options?.crossPage) {
-    return 'Recovered the best native anchor-page quote highlight from PDF.js page text, but the full quote spans multiple pages.'
-  }
-
-  if (options?.upgradedFromPageContents) {
-    return 'Recovered the best native quote highlight from PDF.js page text.'
-  }
-
-  if (candidateReason === 'normalized-quote') {
-    return 'Highlighted a normalized native PDF.js quote match.'
-  }
-
-  if (candidateReason === 'sanitized-quote') {
-    return 'Highlighted a formatting-normalized native PDF.js quote match.'
-  }
-
-  if (candidateReason.includes('fragment')) {
-    return 'Highlighted a native PDF.js quote fragment.'
-  }
-
-  return 'Highlighted the requested quote with native PDF.js selection.'
+  return 'Localized the quote with RapidFuzz and highlighted the verified native PDF.js span.'
 }
 
 const buildEvidenceSpikeAnchor = (input: PdfEvidenceSpikeInput): EvidenceAnchor => {
@@ -2876,6 +2906,11 @@ export function PdfViewer({
   const loadStartRef = useRef<number | null>(null)
   const handledNavigationKeyRef = useRef<string | null>(null)
   const navigationRequestIdRef = useRef(0)
+  const evidencePageTextCorpusRef = useRef<PdfEvidencePageTextCorpusCache>({
+    cacheKey: null,
+    pages: null,
+    promise: null,
+  })
 
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
@@ -2907,6 +2942,9 @@ export function PdfViewer({
   const [eventPendingNavigation, setEventPendingNavigation] =
     useState<EvidenceNavigationCommand | null>(null)
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
+  const evidencePageTextCacheKey = activeDocument
+    ? `${activeDocument.documentId}:${activeDocument.loadedAt}`
+    : null
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
     lastPdfEvidenceNavigationResult = result
@@ -2950,6 +2988,144 @@ export function PdfViewer({
     sessionStorage.removeItem('document-loading')
     window.dispatchEvent(new CustomEvent('document-load-complete'))
   }, [])
+
+  useEffect(() => {
+    evidencePageTextCorpusRef.current = {
+      cacheKey: evidencePageTextCacheKey,
+      pages: null,
+      promise: null,
+    }
+  }, [evidencePageTextCacheKey])
+
+  const getNativeEvidencePageText = useCallback((pdfApp: any, pageNumber: number): string | null => {
+    const pageContents = pdfApp?.findController?._pageContents?.[pageNumber - 1]
+    return typeof pageContents === 'string' ? pageContents : null
+  }, [])
+
+  const getNativeEvidencePageCorpus = useCallback((pdfApp: any): PdfEvidenceFuzzyMatchPage[] | null => {
+    const pageCount = pdfApp?.pdfDocument?.numPages
+      ?? pdfApp?.pdfViewer?.pdfDocument?.numPages
+      ?? activeDocument?.pageCount
+      ?? 0
+
+    if (!Number.isInteger(pageCount) || pageCount <= 0) {
+      return null
+    }
+
+    const pages: PdfEvidenceFuzzyMatchPage[] = []
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const pageText = getNativeEvidencePageText(pdfApp, pageNumber)
+      if (pageText === null) {
+        return null
+      }
+
+      pages.push({
+        pageNumber,
+        text: pageText,
+      })
+    }
+
+    return pages
+  }, [activeDocument?.pageCount, getNativeEvidencePageText])
+
+  const extractEvidencePageText = useCallback(async (
+    pdfApp: any,
+    pageNumber: number,
+  ): Promise<PdfEvidenceFuzzyMatchPage> => {
+    const nativePageText = getNativeEvidencePageText(pdfApp, pageNumber)
+    if (nativePageText !== null) {
+      return {
+        pageNumber,
+        text: nativePageText,
+      }
+    }
+
+    const pdfDocument = pdfApp?.pdfDocument ?? pdfApp?.pdfViewer?.pdfDocument ?? null
+    if (!pdfDocument?.getPage) {
+      throw new Error('PDF.js document is not ready for raw evidence page text extraction.')
+    }
+
+    const page = await pdfDocument.getPage(pageNumber)
+    const textContent = await page.getTextContent({ disableNormalization: true })
+    return {
+      pageNumber,
+      text: joinPdfJsTextContentItems(textContent),
+    }
+  }, [])
+
+  const ensureEvidencePageTextCorpus = useCallback(async (pdfApp: any): Promise<PdfEvidenceFuzzyMatchPage[]> => {
+    const cacheKey = evidencePageTextCacheKey
+    const cache = evidencePageTextCorpusRef.current
+    if (cache.cacheKey !== cacheKey) {
+      evidencePageTextCorpusRef.current = {
+        cacheKey,
+        pages: null,
+        promise: null,
+      }
+    }
+
+    const currentCache = evidencePageTextCorpusRef.current
+    if (currentCache.pages) {
+      return currentCache.pages
+    }
+
+    const nativeCorpus = getNativeEvidencePageCorpus(pdfApp)
+    if (nativeCorpus) {
+      currentCache.pages = nativeCorpus
+      return nativeCorpus
+    }
+
+    if (!currentCache.promise) {
+      currentCache.promise = (async () => {
+        const pageCount = pdfApp?.pdfDocument?.numPages
+          ?? pdfApp?.pdfViewer?.pdfDocument?.numPages
+          ?? activeDocument?.pageCount
+          ?? 0
+        if (!Number.isInteger(pageCount) || pageCount <= 0) {
+          throw new Error('PDF.js page count is unavailable for evidence page text extraction.')
+        }
+
+        try {
+          await dispatchEvidenceSpikeFind(pdfApp, {
+            query: '__pdf_evidence_warmup__',
+            reason: 'warm-search-corpus',
+          })
+        } catch (warmupError) {
+          logPdfEvidenceDebug('Unable to warm the native PDF.js search corpus before RapidFuzz localization', {
+            error: warmupError instanceof Error ? warmupError.message : String(warmupError),
+          })
+        } finally {
+          clearPdfJsFindHighlights(pdfApp)
+        }
+
+        const warmedNativeCorpus = getNativeEvidencePageCorpus(pdfApp)
+        const pages = warmedNativeCorpus ?? await Promise.all(
+          Array.from({ length: pageCount }, (_, pageIndex) => extractEvidencePageText(pdfApp, pageIndex + 1)),
+        )
+        if (evidencePageTextCorpusRef.current.cacheKey === cacheKey) {
+          evidencePageTextCorpusRef.current.pages = pages
+          evidencePageTextCorpusRef.current.promise = null
+        }
+        return pages
+      })().catch((error) => {
+        if (evidencePageTextCorpusRef.current.cacheKey === cacheKey) {
+          evidencePageTextCorpusRef.current.promise = null
+        }
+        throw error
+      })
+    }
+
+    return currentCache.promise
+  }, [activeDocument?.pageCount, evidencePageTextCacheKey, extractEvidencePageText, getNativeEvidencePageCorpus])
+
+  const getCachedEvidencePageText = useCallback((pageNumber: number): string | null => {
+    const cache = evidencePageTextCorpusRef.current
+    if (cache.cacheKey !== evidencePageTextCacheKey || !cache.pages) {
+      return null
+    }
+
+    return cache.pages.find((page) => page.pageNumber === pageNumber)?.text ?? null
+  }, [evidencePageTextCacheKey])
 
   const handleCloseUploadDialog = useCallback(() => {
     setUploadDialog((prev) => ({ ...prev, open: false, dismissedToBackground: true }))
@@ -3297,12 +3473,7 @@ export function PdfViewer({
     setEvidenceHighlight(null)
     clearPdfJsFindHighlights(pdfApp)
 
-    const quoteCandidates = searchText
-      ? buildEvidenceSpikeQuoteCandidates(quote || searchText, {
-          searchText,
-          normalizedText: anchor.normalized_text ?? null,
-        })
-      : []
+    const quoteSearchText = (searchText || quote).trim()
     const preferredPage = pageHints[0] ?? null
     let quoteMatchedPageContext: {
       currentMatch: number
@@ -3317,235 +3488,141 @@ export function PdfViewer({
       mode: command.mode,
       quote,
       searchText,
+      quoteSearchText,
       pageHints,
       preferredPage,
       sectionTitle,
       renderOverlay,
-      quoteCandidates: quoteCandidates.map((candidate) => ({
-        reason: candidate.reason,
-        query: candidate.query,
-      })),
     })
-
-    for (const candidate of quoteCandidates) {
+    if (quoteSearchText) {
       assertCurrentRequest()
-      if (preferredPage !== null) {
-        setEvidenceSpikePage(pdfApp, preferredPage)
+      attemptedQueries.push(quoteSearchText)
+      let fuzzyMatch: PdfEvidenceFuzzyMatchResult | null = null
+
+      try {
+        const pageCorpus = await ensureEvidencePageTextCorpus(pdfApp)
+        assertCurrentRequest()
+        fuzzyMatch = await fuzzyMatchPdfEvidenceQuote({
+          quote: quoteSearchText,
+          pageHints,
+          minScore: PDF_EVIDENCE_FUZZY_MATCH_MIN_SCORE,
+          pages: pageCorpus,
+        })
+        assertCurrentRequest()
+      } catch (quoteMatchError) {
+        logPdfEvidenceDebug('RapidFuzz quote localization request failed', {
+          anchorId: command.anchorId,
+          quoteSearchText,
+          pageHints,
+          error: quoteMatchError instanceof Error ? quoteMatchError.message : String(quoteMatchError),
+        })
       }
-      attemptedQueries.push(candidate.query)
-      const outcome = await dispatchEvidenceSpikeFind(pdfApp, candidate)
-      assertCurrentRequest()
-      logPdfEvidenceDebug('Quote candidate find result', {
-        anchorId: command.anchorId,
-        query: candidate.query,
-        reason: candidate.reason,
-        found: outcome.found,
-        matchState: outcome.matchState,
-        matchesTotal: outcome.matchesTotal,
-        currentMatch: outcome.currentMatch,
-        matchedPage: outcome.matchedPage,
-        pageMatchIndex: outcome.pageMatchIndex,
-        selectedPageAfterFind: getSelectedEvidenceSpikePage(pdfApp),
-      })
-      if (outcome.found || outcome.matchesTotal > 0) {
-        const locatorQuality = resolveQuoteMatchLocatorQuality(anchor.locator_quality, candidate.reason)
-        const selectedOccurrence = createPdfJsQuoteSearchAdapter(pdfApp).getSelectedOccurrence()
-        if (!selectedOccurrence || !iframeDoc) {
-          const latestMatchedPage = outcome.matchedPage
-            ?? getSelectedEvidenceSpikeMatchedPage(pdfApp)
-            ?? getSelectedEvidenceSpikePage(pdfApp)
-            ?? preferredPage
-          if (quoteMatchedPageContext === null && latestMatchedPage !== null) {
-            quoteMatchedPageContext = {
-              currentMatch: outcome.currentMatch,
-              matchedPage: latestMatchedPage,
-              matchedQuery: candidate.query,
-              matchesTotal: outcome.matchesTotal,
-            }
-          }
-          logPdfEvidenceDebug('Quote candidate matched without a concrete PDF.js occurrence to verify', {
-            anchorId: command.anchorId,
-            query: candidate.query,
-            reason: candidate.reason,
-            outcome,
-            selectedOccurrence,
-          })
-          clearPdfJsFindHighlights(pdfApp)
-          continue
-        }
 
-        const canonicalFragmentTarget: NativePdfJsQuoteTarget = {
-          query: selectedOccurrence.query,
-          pageNumber: selectedOccurrence.pageNumber,
+      logPdfEvidenceDebug('RapidFuzz quote localization result', {
+        anchorId: command.anchorId,
+        quoteSearchText,
+        pageHints,
+        result: fuzzyMatch,
+      })
+
+      if (fuzzyMatch?.matchedPage !== null) {
+        quoteMatchedPageContext = {
+          currentMatch: 0,
+          matchedPage: fuzzyMatch.matchedPage,
+          matchedQuery: fuzzyMatch.matchedQuery ?? quoteSearchText,
+          matchesTotal: 0,
+        }
+      }
+
+      if (
+        fuzzyMatch?.found
+        && fuzzyMatch.matchedPage !== null
+        && fuzzyMatch.matchedRange
+        && fuzzyMatch.matchedQuery
+        && iframeDoc
+      ) {
+        const matchedTarget: NativePdfJsQuoteTarget = {
+          query: fuzzyMatch.matchedQuery,
+          pageNumber: fuzzyMatch.matchedPage,
           expectedRange: {
-            rawStart: selectedOccurrence.rawStart,
-            rawEndExclusive: selectedOccurrence.rawEndExclusive,
+            rawStart: fuzzyMatch.matchedRange.rawStart,
+            rawEndExclusive: fuzzyMatch.matchedRange.rawEndExclusive,
           },
         }
-        const expandedQuote = (quote || searchText).trim().length > 0
-          ? expandNativeEvidenceQuoteFromPageContents(
-            pdfApp,
-            canonicalFragmentTarget.pageNumber,
-            canonicalFragmentTarget,
-            quote || searchText,
-          )
-          : null
-        const hasLongerAnchorPageUpgrade = Boolean(
-          expandedQuote
-          && expandedQuote.anchorPageQuery.trim() !== canonicalFragmentTarget.query.trim()
-          && (
-            countNormalizedEvidenceWords(expandedQuote.anchorPageQuery)
-              > countNormalizedEvidenceWords(canonicalFragmentTarget.query)
-            || expandedQuote.anchorPageRange.rawStart !== canonicalFragmentTarget.expectedRange.rawStart
-            || expandedQuote.anchorPageRange.rawEndExclusive !== canonicalFragmentTarget.expectedRange.rawEndExclusive
-          ),
+        if (matchedTarget.query.trim() !== quoteSearchText) {
+          attemptedQueries.push(matchedTarget.query)
+        }
+
+        const locatorQuality = resolveFuzzyQuoteMatchLocatorQuality(
+          anchor.locator_quality,
+          quoteSearchText,
+          matchedTarget.query,
         )
+        const matchedSync = await synchronizeNativePdfJsQuoteHighlight(
+          iframeDoc,
+          pdfApp,
+          matchedTarget,
+          {
+            assertCurrentRequest,
+            pageTextLookup: getCachedEvidencePageText,
+            reason: fuzzyMatch.crossPage ? 'rapidfuzz-cross-page' : 'rapidfuzz-quote-match',
+          },
+        )
+        assertCurrentRequest()
 
-        if (expandedQuote) {
-          logPdfEvidenceDebug('Recovered candidate quote span from PDF.js page contents', {
+        if (matchedSync.success) {
+          const matchedPage = matchedSync.matchedPage ?? matchedTarget.pageNumber
+          const degradedQuoteMatch = fuzzyMatch.crossPage
+          setEvidenceHighlight({
             anchorId: command.anchorId,
-            candidateQuery: candidate.query,
-            canonicalFragmentQuery: canonicalFragmentTarget.query,
-            anchorPageQuery: expandedQuote.anchorPageQuery,
-            fullQuery: truncateDebugText(expandedQuote.fullQuery, 260),
-            pageRanges: expandedQuote.pageRanges,
-            crossPage: expandedQuote.crossPage,
-            coverage: expandedQuote.coverage,
-            score: expandedQuote.score,
+            kind: 'quote',
+            mode: command.mode,
+            pageNumber: matchedPage,
+            query: matchedTarget.query,
+            pageMatchIndex: matchedSync.pageMatchIndex,
+            rects: null,
+            renderOverlay: false,
+            nativeTarget: matchedTarget,
           })
-        }
-
-        let matchedTarget = canonicalFragmentTarget
-        let matchedSync: NativePdfJsQuoteSyncResult | null = null
-        let upgradedFromPageContents = false
-        let degradedQuoteMatch = false
-        const crossPageQuote = expandedQuote?.crossPage ?? false
-
-        if (hasLongerAnchorPageUpgrade) {
-          const upgradedTarget: NativePdfJsQuoteTarget = {
-            query: expandedQuote!.anchorPageQuery,
-            pageNumber: canonicalFragmentTarget.pageNumber,
-            expectedRange: expandedQuote!.anchorPageRange,
-          }
-          attemptedQueries.push(upgradedTarget.query)
-          const upgradedSync = await synchronizeNativePdfJsQuoteHighlight(
-            iframeDoc,
-            pdfApp,
-            upgradedTarget,
-            {
-              assertCurrentRequest,
-              reason: expandedQuote?.crossPage ? 'cross-page-quote-upgrade' : 'quote-upgrade',
-            },
-          )
-          assertCurrentRequest()
-
-          if (upgradedSync.success) {
-            matchedTarget = upgradedTarget
-            matchedSync = upgradedSync
-            upgradedFromPageContents = true
-            degradedQuoteMatch = crossPageQuote
-          } else {
-            logPdfEvidenceDebug('Longer PDF.js-native quote upgrade failed verification; restoring native fragment highlight', {
-              anchorId: command.anchorId,
-              candidateQuery: candidate.query,
-              canonicalFragmentQuery: canonicalFragmentTarget.query,
-              upgradedQuery: upgradedTarget.query,
-              upgradedOutcome: upgradedSync,
-              crossPage: crossPageQuote,
-            })
-            matchedSync = await synchronizeNativePdfJsQuoteHighlight(
-              iframeDoc,
-              pdfApp,
-              canonicalFragmentTarget,
-              {
-                assertCurrentRequest,
-                reason: 'quote-fragment-restore',
-              },
-            )
-            assertCurrentRequest()
-            degradedQuoteMatch = true
-          }
-        } else {
-          matchedSync = await synchronizeNativePdfJsQuoteHighlight(
-            iframeDoc,
-            pdfApp,
-            canonicalFragmentTarget,
-            {
-              assertCurrentRequest,
-              reason: crossPageQuote ? 'cross-page-fragment' : 'quote-match',
-            },
-          )
-          assertCurrentRequest()
-          degradedQuoteMatch = crossPageQuote
-        }
-
-        if (!matchedSync?.success) {
-          const latestMatchedPage = canonicalFragmentTarget.pageNumber
-          if (quoteMatchedPageContext === null) {
-            quoteMatchedPageContext = {
-              currentMatch: matchedSync?.currentMatch ?? outcome.currentMatch,
-              matchedPage: latestMatchedPage,
-              matchedQuery: canonicalFragmentTarget.query,
-              matchesTotal: matchedSync?.matchesTotal ?? outcome.matchesTotal,
-            }
-          }
-          logPdfEvidenceDebug('Quote matched a PDF.js occurrence but native-only verification did not settle to a visible trusted highlight', {
+          maybeClearPdfJsFindHighlights(pdfApp, {
+            preserveNativeHighlight: true,
+            reason: 'rapidfuzz-quote-match',
+          })
+          logPdfEvidenceDebug('Evidence navigation matched successfully with RapidFuzz localization and native PDF.js highlighting', {
             anchorId: command.anchorId,
-            query: candidate.query,
-            reason: candidate.reason,
-            canonicalFragmentQuery: canonicalFragmentTarget.query,
-            matchedPage: latestMatchedPage,
-            outcome,
-            matchedSync,
+            quoteSearchText,
+            matchedTarget,
+            locatorQuality,
+            degradedQuoteMatch,
+            strategy: fuzzyMatch.strategy,
+            score: fuzzyMatch.score,
+            pageRanges: fuzzyMatch.pageRanges,
+            occurrence: matchedSync.occurrence,
           })
-          clearPdfJsFindHighlights(pdfApp)
-          continue
+          return {
+            ...baseResult,
+            status: 'matched',
+            strategy: fuzzyMatch.strategy,
+            locatorQuality,
+            degraded: degradedQuoteMatch,
+            matchedQuery: matchedTarget.query,
+            matchedPage,
+            matchesTotal: matchedSync.matchesTotal,
+            currentMatch: matchedSync.currentMatch,
+            note: buildRapidFuzzQuoteMatchNavigationNote(fuzzyMatch, {
+              crossPage: degradedQuoteMatch,
+            }),
+          }
         }
 
-        const matchedPage = matchedSync.matchedPage ?? matchedTarget.pageNumber
-        setEvidenceHighlight({
+        logPdfEvidenceDebug('RapidFuzz localized quote could not be verified as a visible native PDF.js occurrence', {
           anchorId: command.anchorId,
-          kind: 'quote',
-          mode: command.mode,
-          pageNumber: matchedPage,
-          query: matchedTarget.query,
-          pageMatchIndex: matchedSync.pageMatchIndex,
-          rects: null,
-          // Quote highlighting is native-only by design; overlays remain for section context.
-          renderOverlay: false,
-          nativeTarget: matchedTarget,
+          quoteSearchText,
+          matchedTarget,
+          result: fuzzyMatch,
+          matchedSync,
         })
-        maybeClearPdfJsFindHighlights(pdfApp, {
-          preserveNativeHighlight: true,
-          reason: 'quote-match',
-        })
-        logPdfEvidenceDebug('Evidence navigation matched successfully with native-only PDF.js quote highlighting', {
-          anchorId: command.anchorId,
-          query: matchedTarget.query,
-          reason: candidate.reason,
-          matchedPage,
-          locatorQuality,
-          degradedQuoteMatch,
-          upgradedFromPageContents,
-          crossPageQuote,
-          occurrence: matchedSync.occurrence,
-        })
-        return {
-          ...baseResult,
-          status: 'matched',
-          strategy: candidate.reason,
-          locatorQuality,
-          degraded: degradedQuoteMatch,
-          matchedQuery: matchedTarget.query,
-          matchedPage,
-          matchesTotal: matchedSync.matchesTotal,
-          currentMatch: matchedSync.currentMatch,
-          note: buildQuoteMatchNavigationNote(candidate.reason, {
-            upgradedFromPageContents,
-            keptFragment: degradedQuoteMatch && !upgradedFromPageContents,
-            crossPage: crossPageQuote,
-          }),
-        }
+        clearPdfJsFindHighlights(pdfApp)
       }
     }
 
@@ -3721,7 +3798,12 @@ export function PdfViewer({
       currentMatch: 0,
       note: 'The PDF viewer could not localize this evidence to quote, section, or page-level text in the current document.',
     }
-  }, [activeDocument?.documentId, activeDocument?.pageCount])
+  }, [
+    activeDocument?.documentId,
+    activeDocument?.pageCount,
+    ensureEvidencePageTextCorpus,
+    getCachedEvidencePageText,
+  ])
 
   const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
     const result = await executeEvidenceNavigation(
@@ -3857,6 +3939,9 @@ export function PdfViewer({
         if (highlightTermsRef.current.length) {
           applyHighlights()
         }
+        void ensureEvidencePageTextCorpus(pdfApp).catch((corpusError) => {
+          console.warn('Unable to warm raw PDF.js evidence page text corpus', corpusError)
+        })
         setOverlayRenderKey((prev) => prev + 1)
       }
 
@@ -3921,7 +4006,7 @@ export function PdfViewer({
 
       pdfAppRef.current = pdfApp
     },
-    [applyHighlights, updateViewerState, setOverlayRenderKey],
+    [applyHighlights, ensureEvidencePageTextCorpus, updateViewerState, setOverlayRenderKey],
   )
 
   const initialisePdfApplication = useCallback(() => {
@@ -4552,7 +4637,9 @@ export function PdfViewer({
       return
     }
 
-    const currentOccurrence = createPdfJsQuoteSearchAdapter(pdfApp).getSelectedOccurrence()
+    const currentOccurrence = createPdfJsQuoteSearchAdapter(pdfApp, {
+      getPageText: getCachedEvidencePageText,
+    }).getSelectedOccurrence()
     const nativeRects = findPdfJsSelectedHighlightRects(iframeDoc, evidenceHighlight.pageNumber)
     if (doesPdfJsOccurrenceMatchTarget(currentOccurrence, evidenceHighlight.nativeTarget) && nativeRects.length > 0) {
       return
@@ -4565,6 +4652,7 @@ export function PdfViewer({
       pdfApp,
       evidenceHighlight.nativeTarget,
       {
+        pageTextLookup: getCachedEvidencePageText,
         reason: 'quote-highlight-reconcile',
       },
     ).then((result) => {
@@ -4582,7 +4670,7 @@ export function PdfViewer({
     return () => {
       cancelled = true
     }
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status])
+  }, [activeDocument?.documentId, evidenceHighlight, getCachedEvidencePageText, overlayRenderKey, status])
 
   useEffect(() => {
     const iframeDoc = iframeRef.current?.contentWindow?.document

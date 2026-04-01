@@ -30,8 +30,33 @@ scripts/
     ├── check_services.sh               # Health check all Docker services
     ├── cleanup_orphaned_pdf_records.py # Clean PostgreSQL records missing from Weaviate
     ├── find_unused_files.py            # Static import analysis (AST-based)
+    ├── pdfjs_find_probe.mjs            # Inspect raw PDF text, real PDF.js find internals, and whitespace-boundary drift
+    ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
+    ├── pdf_text_matcher_bakeoff.py     # Compare Python fuzzy/local-alignment libraries against the same quote benchmark
     ├── validate_unused_files.py        # Multi-tool unused file detection
     └── generate_coverage.sh            # Generate coverage data for validation
+```
+
+### PDF Quote Matching Diagnostics
+
+These utilities are useful when comparing backend quote text against the live PDF.js search corpus:
+
+```bash
+# Build a realistic quote benchmark from live chunk data
+node scripts/utilities/pdfjs_quote_benchmark.mjs \
+  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --backend-url http://10.222.162.167:8900 \
+  --document-id 64fa682e-a074-446c-821e-c4a605d102f0 \
+  --sample-size 100 \
+  --max-quotes-per-chunk 8 \
+  --output /tmp/pdf-quote-benchmark-100.json
+
+# Compare Python fuzzy/local-alignment libraries against the same benchmark
+/tmp/pdf-match-bench-venv/bin/python scripts/utilities/pdf_text_matcher_bakeoff.py \
+  --benchmark-report /tmp/pdf-quote-benchmark-100.json \
+  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --page-corpus /tmp/pdf-page-corpus.json \
+  --output /tmp/pdf-text-matcher-bakeoff-100.json
 ```
 
 ## Agent Development Tools
