@@ -90,6 +90,12 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
      `incus file push .symphony/elixir/lib/symphony_elixir/config.ex symphony-main/<repo-path>/.symphony/elixir/lib/symphony_elixir/config.ex`
    - The `ensure_workspace_runtime.sh` hook then copies workflow/helper files from the local source root into per-issue workspaces; Elixir runtime changes are picked up after rebuild/restart in the VM source tree.
 
+### Local sandbox sync rule
+
+- For normal application code under `backend/`, `frontend/`, `config/`, or other tracked repo files, do **not** manually copy files into `~/.symphony/sandboxes/...`, `incus file push` app code into the VM, or hot-patch the running sandbox containers unless the user explicitly asks for that.
+- Preferred path for normal app changes: commit to the repo, push to Git, then use the Symphony UI sync/redeploy controls to update the local sandbox/worktree.
+- Reserve manual VM file pushing for true Symphony runtime/orchestration maintenance under `.symphony/` (or other cases where the user explicitly wants direct VM intervention).
+
 **Syncing the VM checkout** (required after pushing git-tracked changes):
 ```bash
 incus exec symphony-main -- sudo --login --user ctabone bash -lc \

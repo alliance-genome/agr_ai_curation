@@ -79,23 +79,29 @@ def _build_expected_evidence_record(
     return record
 
 
-def _tool_call_stream_event(name: str, arguments: str = '{"query":"test"}'):
+def _tool_call_stream_event(
+    name: str,
+    arguments: str = '{"query":"test"}',
+    *,
+    call_id: str | None = None,
+):
     return SimpleNamespace(
         type="run_item_stream_event",
         item=SimpleNamespace(
             type="tool_call_item",
             name=name,
-            raw_item=SimpleNamespace(arguments=arguments),
+            raw_item=SimpleNamespace(arguments=arguments, call_id=call_id),
         ),
     )
 
 
-def _tool_output_stream_event(output: str = '{"summary":"ok"}'):
+def _tool_output_stream_event(output: str = '{"summary":"ok"}', *, call_id: str | None = None):
     return SimpleNamespace(
         type="run_item_stream_event",
         item=SimpleNamespace(
             type="tool_call_output_item",
             output=output,
+            raw_item=SimpleNamespace(call_id=call_id),
         ),
     )
 
@@ -255,6 +261,98 @@ async def test_runner_emits_evidence_summary_for_record_evidence_tool_calls(monk
     assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
     assert "SUPERVISOR_COMPLETE" in event_types
     assert emitted_events[event_types.index("evidence_summary")]["evidence_records"] == [expected_record]
+
+
+@pytest.mark.asyncio
+async def test_runner_matches_concurrent_record_evidence_outputs_by_call_id(monkeypatch):
+    crumbs_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-crumbs-1",
+        verified_quote="Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+        page=1,
+        section="Results and Discussion",
+        subsection="Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+        figure_reference="Figure 5E",
+    )
+    ninae_record = _build_expected_evidence_record(
+        entity="ninaE",
+        chunk_id="chunk-ninae-1",
+        verified_quote="Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres.",
+        page=3,
+        section="Results and Discussion",
+        subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+    )
+    fake_events = [
+        _tool_call_stream_event(
+            "record_evidence",
+            arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+            call_id="call-crumbs",
+        ),
+        _tool_call_stream_event(
+            "record_evidence",
+            arguments='{"entity":"ninaE","chunk_id":"chunk-ninae-1","claimed_quote":"Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres."}',
+            call_id="call-ninae",
+        ),
+        _tool_output_stream_event(
+            json.dumps(
+                {
+                    "status": "verified",
+                    "verified_quote": crumbs_record["verified_quote"],
+                    "page": crumbs_record["page"],
+                    "section": crumbs_record["section"],
+                    "subsection": crumbs_record["subsection"],
+                    "figure_reference": crumbs_record["figure_reference"],
+                }
+            ),
+            call_id="call-crumbs",
+        ),
+        _tool_output_stream_event(
+            json.dumps(
+                {
+                    "status": "verified",
+                    "verified_quote": ninae_record["verified_quote"],
+                    "page": ninae_record["page"],
+                    "section": ninae_record["section"],
+                    "subsection": ninae_record["subsection"],
+                }
+            ),
+            call_id="call-ninae",
+        ),
+    ]
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(fake_events, final_output="done"),
+    )
+
+    agent = SimpleNamespace(
+        name="Query Supervisor",
+        tools=[SimpleNamespace(name="record_evidence", description="Ask the Evidence Recorder")],
+        model="gpt-4o",
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=agent,
+            input_items=[{"role": "user", "content": "review evidence"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="review evidence",
+            trace_id="trace-evidence-concurrent",
+        )
+    ]
+
+    evidence_event = next(event for event in emitted_events if event.get("type") == "evidence_summary")
+    assert evidence_event["evidence_records"] == [crumbs_record, ninae_record]
 
 
 @pytest.mark.asyncio
@@ -1080,6 +1178,136 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
     assert evidence_events[0]["evidence_records"] == [crumbs_record, crb_record]
+
+
+@pytest.mark.asyncio
+async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(monkeypatch):
+    captured_events = []
+    crumbs_record = _build_expected_evidence_record(
+        entity="crumbs",
+        chunk_id="chunk-crumbs-1",
+        verified_quote="Changes in molecular organization following abnormal PRC development in crumbs mutants.",
+        page=1,
+        section="Results and Discussion",
+        subsection="Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants",
+        figure_reference="Figure 5E",
+    )
+    ninae_record = _build_expected_evidence_record(
+        entity="ninaE",
+        chunk_id="chunk-ninae-1",
+        verified_quote="Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres.",
+        page=3,
+        section="Results and Discussion",
+        subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+    )
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+                    call_id="call-crumbs",
+                ),
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments='{"entity":"ninaE","chunk_id":"chunk-ninae-1","claimed_quote":"Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres."}',
+                    call_id="call-ninae",
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "verified",
+                            "verified_quote": crumbs_record["verified_quote"],
+                            "page": crumbs_record["page"],
+                            "section": crumbs_record["section"],
+                            "subsection": crumbs_record["subsection"],
+                            "figure_reference": crumbs_record["figure_reference"],
+                        }
+                    ),
+                    call_id="call-crumbs",
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "verified",
+                            "verified_quote": ninae_record["verified_quote"],
+                            "page": ninae_record["page"],
+                            "section": ninae_record["section"],
+                            "subsection": ninae_record["subsection"],
+                        }
+                    ),
+                    call_id="call-ninae",
+                ),
+            ],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Extracted focal genes with verified evidence.",
+                    "genes": [
+                        {
+                            "mention": "crumbs",
+                            "normalized_symbol": "crb",
+                            "normalized_id": "FB:FBgn0000368",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence_record_ids": [crumbs_record["evidence_record_id"]],
+                        },
+                        {
+                            "mention": "ninaE",
+                            "normalized_symbol": "ninaE",
+                            "normalized_id": "FB:FBgn0002940",
+                            "species": "Drosophila melanogaster",
+                            "confidence": "high",
+                            "evidence_record_ids": [ninae_record["evidence_record_id"]],
+                        },
+                    ],
+                    "items": [
+                        {
+                            "label": "crb",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000368",
+                            "source_mentions": ["crumbs"],
+                            "evidence_record_ids": [crumbs_record["evidence_record_id"]],
+                        },
+                        {
+                            "label": "ninaE",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0002940",
+                            "source_mentions": ["ninaE"],
+                            "evidence_record_ids": [ninae_record["evidence_record_id"]],
+                        },
+                    ],
+                    "evidence_records": [],
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Extraction Agent",
+        tools=[],
+        output_type=SimpleNamespace(__name__="GeneExtractionResultEnvelope"),
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract findings",
+        specialist_name="Gene Extraction Agent",
+        max_turns=3,
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    assert json.loads(result)["summary"] == "Extracted focal genes with verified evidence."
+    evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
+    assert len(evidence_events) == 1
+    assert evidence_events[0]["evidence_records"] == [crumbs_record, ninae_record]
 
 
 @pytest.mark.asyncio

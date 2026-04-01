@@ -71,6 +71,8 @@ from .streaming_tools import (
     set_live_event_list,
     reset_consecutive_call_tracker,
     SpecialistOutputError,
+    _extract_stream_tool_call_tracking_id,
+    _pop_matching_pending_tool_call,
 )
 
 # Prompt context tracking for execution logging
@@ -722,11 +724,7 @@ async def _run_agent_with_tracing(
                                     tool_args = json.loads(tool_args_str)
                                 except Exception:
                                     pass
-                        tool_id = (
-                            getattr(item, "id", None)
-                            or getattr(raw_item, "id", None)
-                            or getattr(raw_item, "tool_call_id", None)
-                        )
+                        tool_id = _extract_stream_tool_call_tracking_id(item)
                         tools_called.append(tool_name)
                         pending_tool_calls.append({
                             "tool_name": tool_name,
@@ -760,24 +758,11 @@ async def _run_agent_with_tracing(
 
                     elif item_type == "tool_call_output_item":
                         output = getattr(item, "output", "")
-                        output_tool_id = (
-                            getattr(item, "id", None)
-                            or getattr(item, "tool_id", None)
-                            or getattr(item, "tool_call_id", None)
+                        completed_tool = _pop_matching_pending_tool_call(
+                            pending_tool_calls,
+                            output_item=item,
                         )
-                        completed_tool = None
-
-                        if pending_tool_calls:
-                            if output_tool_id is not None:
-                                for candidate_tool in list(pending_tool_calls):
-                                    if str(candidate_tool.get("tool_id")) == str(output_tool_id):
-                                        completed_tool = candidate_tool
-                                        pending_tool_calls.remove(candidate_tool)
-                                        break
-
-                            if completed_tool is None:
-                                completed_tool = pending_tool_calls.popleft()
-                        else:
+                        if completed_tool is None:
                             completed_tool = {
                                 "tool_name": tools_called[-1] if tools_called else "tool",
                                 "tool_input": None,

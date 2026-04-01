@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import uuid
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,6 +43,55 @@ logger = logging.getLogger(__name__)
 
 _DOCUMENT_REQUIRED_TOOL_NAMES = {"search_document", "read_section", "read_subsection"}
 _AGR_DB_REQUIRED_TOOL_NAMES = {"agr_curation_query"}
+
+
+def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
+    """Best-effort stable tool call identifier across SDK item shapes."""
+
+    raw_item = getattr(item, "raw_item", None)
+    candidates = (
+        getattr(item, "id", None),
+        getattr(item, "tool_id", None),
+        getattr(item, "tool_call_id", None),
+        getattr(item, "call_id", None),
+        getattr(raw_item, "id", None),
+        getattr(raw_item, "tool_id", None),
+        getattr(raw_item, "tool_call_id", None),
+        getattr(raw_item, "call_id", None),
+    )
+
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+
+    return None
+
+
+def _pop_matching_pending_tool_call(
+    pending_tool_calls: "deque[Dict[str, Any]]",
+    *,
+    output_item: Any,
+) -> Optional[Dict[str, Any]]:
+    """Match a tool output to its originating tool call, preferring stable call IDs."""
+
+    if not pending_tool_calls:
+        return None
+
+    output_tool_id = _extract_stream_tool_call_tracking_id(output_item)
+    if output_tool_id:
+        for candidate_tool in list(pending_tool_calls):
+            if str(candidate_tool.get("tool_id") or "").strip() == output_tool_id:
+                pending_tool_calls.remove(candidate_tool)
+                return candidate_tool
+
+    if len(pending_tool_calls) > 1:
+        logger.warning(
+            "Ambiguous tool output without matching call_id; falling back to oldest pending tool call",
+            extra={"output_tool_id": output_tool_id, "pending_count": len(pending_tool_calls)},
+        )
+
+    return pending_tool_calls.popleft()
 
 
 # =============================================================================
@@ -879,8 +929,7 @@ async def run_specialist_with_events(
     start_time = datetime.now(timezone.utc)
     tool_calls: List[SpecialistToolCall] = []
     live_evidence_records: List[Dict[str, Any]] = []
-    current_tool_start: Optional[datetime] = None
-    current_tool_name: Optional[str] = None
+    pending_tool_calls: "deque[Dict[str, Any]]" = deque()
 
     # Track consecutive calls for batching nudge
     consecutive_count = 0
@@ -1215,8 +1264,7 @@ async def run_specialist_with_events(
                         # Reset is_generating flag - new tool call means a new generation phase after
                         is_generating = False
 
-                        # Track tool call start
-                        current_tool_start = datetime.now(timezone.utc)
+                        tool_started_at = datetime.now(timezone.utc)
                         current_tool_name = (
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
@@ -1246,7 +1294,7 @@ async def run_specialist_with_events(
                         # Use standard TOOL_START type so frontend can display it
                         add_specialist_event({
                             "type": "TOOL_START",
-                            "timestamp": current_tool_start.isoformat(),
+                            "timestamp": tool_started_at.isoformat(),
                             "details": {
                                 "toolName": current_tool_name,
                                 "friendlyName": build_specialist_internal_friendly_name(
@@ -1260,20 +1308,31 @@ async def run_specialist_with_events(
                         })
 
                         # Start building the tool call record
+                        tool_index = len(tool_calls)
                         tool_calls.append(SpecialistToolCall(
                             tool_name=current_tool_name,
                             tool_args=tool_args
                         ))
+                        pending_tool_calls.append({
+                            "tool_name": current_tool_name,
+                            "tool_args": tool_args,
+                            "tool_id": _extract_stream_tool_call_tracking_id(item),
+                            "tool_index": tool_index,
+                            "tool_started_at": tool_started_at,
+                        })
 
                     elif item_type == "tool_call_output_item":
-                        # Track tool call completion
-                        # Skip if we don't have a current tool (edge case - output without prior call)
-                        if current_tool_name is None:
+                        completed_tool = _pop_matching_pending_tool_call(
+                            pending_tool_calls,
+                            output_item=item,
+                        )
+                        if completed_tool is None:
                             logger.debug(
                                 "%s received tool output without prior tool call, skipping",
                                 specialist_name,
                             )
                             continue
+                        current_tool_name = str(completed_tool.get("tool_name") or "unknown_tool")
 
                         output = getattr(item, "output", "")
                         output_preview = str(output)[:200]
@@ -1281,8 +1340,9 @@ async def run_specialist_with_events(
                             output_preview += "..."
 
                         duration_ms = None
-                        if current_tool_start:
-                            duration = datetime.now(timezone.utc) - current_tool_start
+                        tool_started_at = completed_tool.get("tool_started_at")
+                        if isinstance(tool_started_at, datetime):
+                            duration = datetime.now(timezone.utc) - tool_started_at
                             duration_ms = int(duration.total_seconds() * 1000)
 
                         logger.info(
@@ -1299,13 +1359,14 @@ async def run_specialist_with_events(
                         )
 
                         # Update the last tool call with output info
-                        if tool_calls:
-                            tool_calls[-1].output_preview = output_preview
-                            tool_calls[-1].duration_ms = duration_ms
+                        tool_index = completed_tool.get("tool_index")
+                        if isinstance(tool_index, int) and 0 <= tool_index < len(tool_calls):
+                            tool_calls[tool_index].output_preview = output_preview
+                            tool_calls[tool_index].duration_ms = duration_ms
 
                         evidence_record = build_record_evidence_summary_record(
                             tool_name=current_tool_name,
-                            tool_input=tool_calls[-1].tool_args if tool_calls else None,
+                            tool_input=completed_tool.get("tool_args"),
                             tool_output=output,
                         )
                         if evidence_record is not None:
@@ -1368,9 +1429,6 @@ async def run_specialist_with_events(
                             except (json.JSONDecodeError, TypeError, AttributeError) as e:
                                 # Not JSON or not FileInfo - this is normal for most tools
                                 logger.debug("FileInfo detection skipped: %s", type(e).__name__)
-
-                        current_tool_start = None
-                        current_tool_name = None
 
         # Log comprehensive event summary for debugging
         logger.info(
