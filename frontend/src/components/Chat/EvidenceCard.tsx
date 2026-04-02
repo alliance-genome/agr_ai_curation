@@ -121,7 +121,6 @@ function buildEntityData(
 
 export default function EvidenceCard({
   evidenceRecords,
-  reviewAndCurateTarget,
   onReviewAndCurateClick,
 }: EvidenceCardProps) {
   const [activeEntity, setActiveEntity] = useState<string | null>(null)
@@ -212,7 +211,7 @@ export default function EvidenceCard({
       <EvidenceQuoteList
         activeEntity={activeEntity}
         groups={quoteGroups}
-        onReviewAndCurateClick={reviewAndCurateTarget ? onReviewAndCurateClick : null}
+        onReviewAndCurateClick={onReviewAndCurateClick}
       />
     </Box>
   )

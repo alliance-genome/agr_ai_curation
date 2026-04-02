@@ -461,6 +461,7 @@ def _required_tool_failure_message(
 def _emit_specialist_evidence_summary_or_raise(
     *,
     specialist_name: str,
+    tool_name: Optional[str],
     expected_output_type: Any,
     final_output: Any,
     live_evidence_records: List[Dict[str, Any]],
@@ -484,6 +485,7 @@ def _emit_specialist_evidence_summary_or_raise(
         add_specialist_event({
             "type": "evidence_summary",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool_name": tool_name,
             "evidence_records": evidence_records,
         })
         return
@@ -495,6 +497,7 @@ def _emit_specialist_evidence_summary_or_raise(
         add_specialist_event({
             "type": "evidence_summary",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool_name": tool_name,
             "evidence_records": live_evidence_records,
         })
         return
@@ -1964,6 +1967,7 @@ async def run_specialist_with_events(
 
     _emit_specialist_evidence_summary_or_raise(
         specialist_name=specialist_name,
+        tool_name=tool_name,
         expected_output_type=expected_output_type,
         final_output=final_output,
         live_evidence_records=live_evidence_records,

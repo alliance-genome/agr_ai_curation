@@ -29,27 +29,36 @@ class _FakeStructuredOutput:
 
 
 class _FakeRunResultWithLiveEvidence(_FakeRunResult):
-    def __init__(self, events, live_event_list_ref, final_output="ok"):
+    def __init__(
+        self,
+        events,
+        live_event_list_ref,
+        *,
+        tool_name: str | None = "ask_gene_specialist",
+        final_output="ok",
+    ):
         super().__init__(events, final_output=final_output)
         self._live_event_list_ref = live_event_list_ref
+        self._tool_name = tool_name
 
     async def stream_events(self):
         live_event_list = self._live_event_list_ref.get("value")
         if live_event_list is not None:
-            live_event_list.append(
-                {
-                    "type": "evidence_summary",
-                    "evidence_records": [
-                        {
-                            "entity": "crumb",
-                            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                            "page": 4,
-                            "section": "Results",
-                            "chunk_id": "chunk-live-1",
-                        }
-                    ],
-                }
-            )
+            payload = {
+                "type": "evidence_summary",
+                "evidence_records": [
+                    {
+                        "entity": "crumb",
+                        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+                        "page": 4,
+                        "section": "Results",
+                        "chunk_id": "chunk-live-1",
+                    }
+                ],
+            }
+            if self._tool_name:
+                payload["tool_name"] = self._tool_name
+            live_event_list.append(payload)
         async for event in super().stream_events():
             yield event
 
@@ -614,6 +623,9 @@ async def test_runner_buffers_live_specialist_evidence_until_completion(monkeypa
     event_types = [event.get("type") for event in emitted_events]
     assert event_types.count("evidence_summary") == 1
     assert event_types[-2:] == ["evidence_summary", "RUN_FINISHED"]
+    evidence_event = next(event for event in emitted_events if event.get("type") == "evidence_summary")
+    assert evidence_event["tool_name"] == "ask_gene_specialist"
+    assert evidence_event["tool_names"] == ["ask_gene_specialist"]
 
 
 @pytest.mark.asyncio
@@ -1177,6 +1189,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
     assert len(json.loads(result)["genes"]) == 1
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
+    assert evidence_events[0]["tool_name"] == "ask_gene_specialist"
     assert evidence_events[0]["evidence_records"] == [crumbs_record, crb_record]
 
 

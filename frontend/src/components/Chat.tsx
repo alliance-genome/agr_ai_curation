@@ -25,6 +25,15 @@ import { useNavigate } from 'react-router-dom'
 
 // localStorage key for chat messages (shared with HomePage)
 const CHAT_MESSAGES_KEY = 'chat-messages'
+const UNSUPPORTED_CURATION_REVIEW_MESSAGE =
+  "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category."
+const MIXED_CURATION_PREP_WARNING_MESSAGE =
+  "This chat also contains data types that are not supported for curation review yet. Prepare for Curation will include only findings from supported specialized agents in Agent Studio's PDF Extraction category."
+
+interface EvidenceCurationSupport {
+  supported: boolean
+  adapterKey: string | null
+}
 
 interface Message {
   role: 'user' | 'assistant'
@@ -36,6 +45,8 @@ interface Message {
   fileData?: FileInfo              // File info for file_download type
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
+  evidenceCurationSupported?: boolean | null
+  evidenceCurationAdapterKey?: string | null
 }
 
 // Type for serialized messages (timestamp as string)
@@ -49,6 +60,8 @@ interface SerializedMessage {
   fileData?: FileInfo
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
+  evidenceCurationSupported?: boolean | null
+  evidenceCurationAdapterKey?: string | null
 }
 
 interface ActiveDocument {
@@ -127,7 +140,8 @@ function withUpdatedReviewAndCurateSessionId(
 
 function buildEvidenceReviewAndCurateTarget(
   documentId?: string | null,
-  originSessionId?: string | null
+  originSessionId?: string | null,
+  adapterKeys?: string[] | null,
 ): CurationWorkspaceLaunchTarget | null {
   if (!documentId || !originSessionId) {
     return null
@@ -136,6 +150,28 @@ function buildEvidenceReviewAndCurateTarget(
   return {
     documentId,
     originSessionId,
+    adapterKeys: adapterKeys?.map((value) => value.trim()).filter(Boolean),
+  }
+}
+
+function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+  if (typeof record.curation_supported !== 'boolean') {
+    return null
+  }
+
+  const adapterKey = typeof record.curation_adapter_key === 'string'
+    && record.curation_adapter_key.trim().length > 0
+    ? record.curation_adapter_key.trim()
+    : null
+
+  return {
+    supported: record.curation_supported,
+    adapterKey,
   }
 }
 
@@ -210,12 +246,24 @@ function stripDuplicateEvidenceSections(content: string): string {
 
 function sanitizeStoredMessage(message: SerializedMessage): Message {
   const hasEvidenceRecords = (message.evidenceRecords?.length ?? 0) > 0
+  const hasExplicitEvidenceCurationMetadata =
+    typeof message.evidenceCurationSupported === 'boolean'
+    || Boolean(message.evidenceCurationAdapterKey)
+  const hasAdapterScopedReviewTarget =
+    Array.isArray(message.reviewAndCurateTarget?.adapterKeys)
+    && message.reviewAndCurateTarget.adapterKeys.length > 0
 
   return {
     ...message,
     content: hasEvidenceRecords
       ? stripDuplicateEvidenceSections(message.content)
       : message.content,
+    reviewAndCurateTarget:
+      hasEvidenceRecords
+      && !hasExplicitEvidenceCurationMetadata
+      && !hasAdapterScopedReviewTarget
+        ? null
+        : message.reviewAndCurateTarget,
     timestamp: new Date(message.timestamp),
   }
 }
@@ -223,7 +271,11 @@ function withEvidenceReviewAndCurateTarget(
   message: Message,
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
 ): Message {
-  if (message.reviewAndCurateTarget || !reviewAndCurateTarget) {
+  if (!reviewAndCurateTarget) {
+    return message
+  }
+
+  if (message.reviewAndCurateTarget?.sessionId) {
     return message
   }
 
@@ -236,7 +288,11 @@ function withEvidenceReviewAndCurateTarget(
 function withEvidenceRecords(
   messages: Message[],
   evidenceRecords: EvidenceRecord[],
-  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+  options?: {
+    reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+    evidenceCurationSupported?: boolean | null
+    evidenceCurationAdapterKey?: string | null
+  },
 ): Message[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
@@ -249,7 +305,9 @@ function withEvidenceRecords(
       ...message,
       content: stripDuplicateEvidenceSections(message.content),
       evidenceRecords,
-    }, reviewAndCurateTarget)
+      evidenceCurationSupported: options?.evidenceCurationSupported ?? message.evidenceCurationSupported ?? null,
+      evidenceCurationAdapterKey: options?.evidenceCurationAdapterKey ?? message.evidenceCurationAdapterKey ?? null,
+    }, options?.reviewAndCurateTarget)
     return nextMessages
   }
 
@@ -258,9 +316,10 @@ function withEvidenceRecords(
 
 function withMissingEvidenceReviewAndCurateTargets(
   messages: Message[],
-  reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
+  documentId?: string | null,
+  originSessionId?: string | null,
 ): Message[] {
-  if (!reviewAndCurateTarget) {
+  if (!documentId || !originSessionId) {
     return messages
   }
 
@@ -269,8 +328,19 @@ function withMissingEvidenceReviewAndCurateTargets(
     if (
       message.role !== 'assistant' ||
       (message.evidenceRecords?.length ?? 0) === 0 ||
-      message.reviewAndCurateTarget
+      message.reviewAndCurateTarget ||
+      message.evidenceCurationSupported !== true ||
+      !message.evidenceCurationAdapterKey
     ) {
+      return message
+    }
+
+    const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
+      documentId,
+      originSessionId,
+      [message.evidenceCurationAdapterKey],
+    )
+    if (!reviewAndCurateTarget) {
       return message
     }
 
@@ -855,12 +925,20 @@ function Chat({
           return
         }
 
-        const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
-          activeDocument?.id,
-          propSessionId,
-        )
+        const curationSupport = extractEvidenceCurationSupport(parsed)
+        const reviewAndCurateTarget = curationSupport?.supported
+          ? buildEvidenceReviewAndCurateTarget(
+              activeDocument?.id,
+              propSessionId,
+              curationSupport.adapterKey ? [curationSupport.adapterKey] : undefined,
+            )
+          : null
 
-        setMessages(prev => withEvidenceRecords(prev, evidenceRecords, reviewAndCurateTarget))
+        setMessages(prev => withEvidenceRecords(prev, evidenceRecords, {
+          reviewAndCurateTarget,
+          evidenceCurationSupported: curationSupport?.supported ?? null,
+          evidenceCurationAdapterKey: curationSupport?.adapterKey ?? null,
+        }))
       }
     })
 
@@ -869,16 +947,15 @@ function Chat({
   }, [events, activeDocument, propSessionId, updateProgressMessage])
 
   useEffect(() => {
-    const reviewAndCurateTarget = buildEvidenceReviewAndCurateTarget(
-      activeDocument?.id,
-      propSessionId,
-    )
-
-    if (!reviewAndCurateTarget) {
+    if (!activeDocument?.id || !propSessionId) {
       return
     }
 
-    setMessages(prev => withMissingEvidenceReviewAndCurateTargets(prev, reviewAndCurateTarget))
+    setMessages(prev => withMissingEvidenceReviewAndCurateTargets(
+      prev,
+      activeDocument.id,
+      propSessionId,
+    ))
   }, [activeDocument?.id, propSessionId])
 
   // Update conversation status when messages change (to update memory counter)
@@ -1488,6 +1565,33 @@ function Chat({
     setRefineText('')
   }
 
+  const hasUnsupportedEvidenceMessages = messages.some(
+    (message) =>
+      message.role === 'assistant'
+      && (message.evidenceRecords?.length ?? 0) > 0
+      && message.evidenceCurationSupported === false,
+  )
+  const unsupportedOnlyPrep =
+    Boolean(prepPreview)
+    && !prepPreview?.ready
+    && hasUnsupportedEvidenceMessages
+    && prepPreview.candidate_count === 0
+    && prepPreview.extraction_result_count === 0
+  const effectivePrepPreview = prepPreview
+    ? {
+        ...prepPreview,
+        summary_text: unsupportedOnlyPrep
+          ? UNSUPPORTED_CURATION_REVIEW_MESSAGE
+          : prepPreview.summary_text,
+        blocking_reasons: unsupportedOnlyPrep
+          ? [UNSUPPORTED_CURATION_REVIEW_MESSAGE]
+          : prepPreview.blocking_reasons,
+      }
+    : null
+  const prepSupplementalNotice = prepPreview?.ready && hasUnsupportedEvidenceMessages
+    ? MIXED_CURATION_PREP_WARNING_MESSAGE
+    : null
+
   const prepButtonLabel = isPreparingCuration
     ? 'Preparing...'
     : isLoadingPrepPreview
@@ -1784,6 +1888,22 @@ function Chat({
         ) : (
           messages.map((message, index) => {
             const hasEvidenceCard = (message.evidenceRecords?.length ?? 0) > 0
+            const handleEvidenceReviewAndCurateClick = message.reviewAndCurateTarget
+              ? () => {
+                  const messageId = message.id
+                  void handleOpenCurationWorkspace(
+                    message.reviewAndCurateTarget!,
+                    messageId ? { messageId } : undefined,
+                  )
+                }
+              : message.evidenceCurationSupported === false
+                ? () => {
+                    emitGlobalToast({
+                      message: UNSUPPORTED_CURATION_REVIEW_MESSAGE,
+                      severity: 'warning',
+                    })
+                  }
+                : null
 
             if (message.role === 'assistant') {
               return (
@@ -1834,13 +1954,7 @@ function Chat({
                     <EvidenceCard
                       evidenceRecords={message.evidenceRecords ?? []}
                       reviewAndCurateTarget={message.reviewAndCurateTarget}
-                      onReviewAndCurateClick={message.reviewAndCurateTarget ? () => {
-                        const messageId = message.id
-                        void handleOpenCurationWorkspace(
-                          message.reviewAndCurateTarget!,
-                          messageId ? { messageId } : undefined,
-                        )
-                      } : null}
+                      onReviewAndCurateClick={handleEvidenceReviewAndCurateClick}
                     />
                   ) : null}
                 </div>
@@ -1912,7 +2026,8 @@ function Chat({
 
       <PrepScopeConfirmationDialog
         open={prepDialogOpen}
-        preview={prepPreview}
+        preview={effectivePrepPreview}
+        supplementalNotice={prepSupplementalNotice}
         loading={isLoadingPrepPreview}
         submitting={isPreparingCuration}
         error={prepDialogError}

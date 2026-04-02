@@ -29,6 +29,7 @@ from ..lib.curation_workspace import (
     build_extraction_envelope_candidate,
     persist_extraction_results,
 )
+from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.weaviate_client.documents import get_document
 from ..lib.conversation_manager import conversation_manager, SessionAccessError
 from ..lib.openai_agents import run_agent_streamed
@@ -193,6 +194,114 @@ def _build_evidence_record_from_tool_event(event: Dict[str, Any]) -> Optional[Di
         tool_input=internal_payload.get("tool_input"),
         tool_output=internal_payload.get("tool_output"),
     )
+
+
+def _build_evidence_curation_metadata(
+    *,
+    event: Dict[str, Any],
+    tool_agent_map: Dict[str, str],
+) -> Dict[str, Any]:
+    """Describe whether one evidence summary is launchable in Review & Curate."""
+
+    if isinstance(event.get("curation_supported"), bool):
+        payload = {
+            "curation_supported": event.get("curation_supported"),
+            "curation_agent_key": event.get("curation_agent_key"),
+            "curation_adapter_key": event.get("curation_adapter_key"),
+        }
+        resolved_tool_name = str(event.get("tool_name") or "").strip()
+        if resolved_tool_name:
+            payload["tool_name"] = resolved_tool_name
+        resolved_tool_names = [
+            str(value).strip()
+            for value in (event.get("tool_names") or [])
+            if str(value).strip()
+        ]
+        if resolved_tool_names:
+            payload["tool_names"] = resolved_tool_names
+        return payload
+
+    tool_names: List[str] = []
+    seen_tool_names: set[str] = set()
+    for value in [event.get("tool_name"), *(event.get("tool_names") or [])]:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen_tool_names:
+            continue
+        seen_tool_names.add(normalized)
+        tool_names.append(normalized)
+
+    if not tool_names:
+        return {}
+
+    resolved: List[tuple[str, str, Optional[str], bool]] = []
+    for tool_name in tool_names:
+        agent_key = tool_agent_map.get(tool_name)
+        if not agent_key:
+            return {}
+        curation = get_agent_curation_metadata(agent_key)
+        adapter_key = str((curation or {}).get("adapter_key") or "").strip() or None
+        launchable = bool((curation or {}).get("launchable")) and adapter_key is not None
+        resolved.append((tool_name, agent_key, adapter_key, launchable))
+
+    launchable_entries = [
+        (tool_name, agent_key, adapter_key)
+        for tool_name, agent_key, adapter_key, launchable in resolved
+        if launchable and adapter_key is not None
+    ]
+    if len(launchable_entries) == len(resolved):
+        agent_keys = {agent_key for _, agent_key, _ in launchable_entries}
+        adapter_keys = {adapter_key for _, _, adapter_key in launchable_entries}
+        if len(agent_keys) == 1 and len(adapter_keys) == 1:
+            payload = {
+                "curation_supported": True,
+                "curation_agent_key": next(iter(agent_keys)),
+                "curation_adapter_key": next(iter(adapter_keys)),
+            }
+            if len(tool_names) == 1:
+                payload["tool_name"] = tool_names[0]
+            payload["tool_names"] = tool_names
+            return payload
+
+    payload = {
+        "curation_supported": False,
+        "curation_agent_key": None,
+        "curation_adapter_key": None,
+    }
+    if len(tool_names) == 1:
+        payload["tool_name"] = tool_names[0]
+    payload["tool_names"] = tool_names
+    return payload
+
+
+def _build_candidate_evidence_curation_metadata(
+    candidates: List[ExtractionEnvelopeCandidate],
+) -> Dict[str, Any]:
+    """Best-effort launchability metadata when evidence summary lacks tool context."""
+
+    if not candidates:
+        return {}
+
+    agent_keys = {
+        str(candidate.agent_key).strip()
+        for candidate in candidates
+        if str(candidate.agent_key).strip()
+    }
+    if len(agent_keys) != 1:
+        return {}
+
+    agent_key = next(iter(agent_keys))
+    adapter_keys = {
+        str(candidate.adapter_key).strip()
+        for candidate in candidates
+        if str(candidate.adapter_key or "").strip()
+    }
+    adapter_key = next(iter(adapter_keys)) if len(adapter_keys) == 1 else None
+
+    return {
+        "curation_supported": adapter_key is not None,
+        "curation_agent_key": agent_key,
+        "curation_adapter_key": adapter_key,
+    }
 
 
 def _persist_extraction_candidates(
@@ -838,6 +947,10 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                         event_evidence_records = _extract_evidence_records(
                             (event.get("details") or {}).get("evidence_records", [])
                         )
+                    evidence_curation_metadata = _build_evidence_curation_metadata(
+                        event=event,
+                        tool_agent_map=tool_agent_map,
+                    )
                     if event_evidence_records:
                         evidence_records = event_evidence_records
                         evidence_summary_event_received = True
@@ -848,6 +961,8 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                             flat_event["evidence_records"] = event["evidence_records"]
                         elif "evidence_records" in (event.get("details") or {}):
                             flat_event["evidence_records"] = event["details"]["evidence_records"]
+                    for key, value in evidence_curation_metadata.items():
+                        flat_event[key] = value
                     yield f"data: {json.dumps(flat_event, default=str)}\n\n"
                     continue
 
@@ -877,9 +992,12 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
             # Save to conversation history
             if run_finished:
                 if evidence_records and not evidence_summary_event_received:
+                    evidence_curation_metadata = _build_candidate_evidence_curation_metadata(
+                        extraction_candidates,
+                    )
                     yield (
                         "data: "
-                        f"{json.dumps({'type': 'evidence_summary', 'timestamp': datetime.now(timezone.utc).isoformat(), 'session_id': current_session_id, 'sessionId': current_session_id, 'evidence_records': evidence_records}, default=str)}\n\n"
+                        f"{json.dumps({'type': 'evidence_summary', 'timestamp': datetime.now(timezone.utc).isoformat(), 'session_id': current_session_id, 'sessionId': current_session_id, 'evidence_records': evidence_records, **evidence_curation_metadata}, default=str)}\n\n"
                     )
                 _persist_extraction_candidates(
                     candidates=extraction_candidates,

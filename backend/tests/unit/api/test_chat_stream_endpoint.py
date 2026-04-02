@@ -336,7 +336,14 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
+    monkeypatch.setattr(
+        chat,
+        "get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True}
+        if agent_key == "gene_extractor"
+        else None,
+    )
 
     async def _register_active_stream(
         session_id: str,
@@ -384,6 +391,7 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
         yield {
             "type": "evidence_summary",
             "timestamp": "2026-03-28T12:00:00Z",
+            "tool_name": "ask_gene_extractor_specialist",
             "evidence_records": [expected_record],
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
@@ -417,6 +425,9 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     )
     assert evidence_summary_event is not None
     assert evidence_summary_event["evidence_records"] == [expected_record]
+    assert evidence_summary_event["curation_supported"] is True
+    assert evidence_summary_event["curation_agent_key"] == "gene_extractor"
+    assert evidence_summary_event["curation_adapter_key"] == "gene"
 
 
 def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):

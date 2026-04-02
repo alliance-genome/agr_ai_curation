@@ -6,6 +6,7 @@ import Chat from '../../components/Chat'
 
 const mockNavigate = vi.fn()
 const openCurationWorkspaceMock = vi.fn()
+const emitGlobalToastMock = vi.fn()
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -17,6 +18,10 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('@/features/curation/navigation/openCurationWorkspace', () => ({
   openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+}))
+
+vi.mock('@/lib/globalNotifications', () => ({
+  emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
 }))
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -162,6 +167,7 @@ describe('Chat persistence', () => {
     Element.prototype.scrollIntoView = vi.fn()
     mockNavigate.mockReset()
     openCurationWorkspaceMock.mockReset()
+    emitGlobalToastMock.mockReset()
     mockChatFetch()
   })
 
@@ -217,6 +223,51 @@ describe('Chat persistence', () => {
     renderChat({ sessionId: 'session-2' })
 
     expect(localStorage.getItem('chat-messages')).not.toBeNull()
+  })
+
+  it('clears legacy generic review targets for restored evidence messages without curation metadata', async () => {
+    localStorage.setItem('chat-session-id', 'session-1')
+    localStorage.setItem(
+      'chat-messages',
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Legacy extraction output',
+            timestamp: new Date().toISOString(),
+            reviewAndCurateTarget: {
+              documentId: 'doc-7',
+              originSessionId: 'session-1',
+            },
+            evidenceRecords: [
+              {
+                entity: 'crb 11A22',
+                verified_quote: 'Legacy unsupported evidence.',
+                page: 1,
+                section: 'Results and Discussion',
+                chunk_id: 'chunk-legacy-1',
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-7',
+        filename: 'doc-7.pdf',
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'crb 11A22 1' }))
+
+    expect(
+      await screen.findByText('Full evidence review with PDF highlighting →'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Review & Curate')).not.toBeInTheDocument()
   })
 
   it('dispatches pdf overlay updates for chunk provenance events', async () => {
@@ -281,6 +332,8 @@ describe('Chat persistence', () => {
         },
         {
           type: 'evidence_summary',
+          curation_supported: true,
+          curation_adapter_key: 'gene',
           evidence_records: [
             {
               entity: 'crumb',
@@ -367,6 +420,8 @@ describe('Chat persistence', () => {
         },
         {
           type: 'evidence_summary',
+          curation_supported: true,
+          curation_adapter_key: 'gene',
           evidence_records: [
             {
               entity: 'crumb',
@@ -394,9 +449,44 @@ describe('Chat persistence', () => {
         expect.objectContaining({
           documentId: 'doc-7',
           originSessionId: 'session-1',
+          adapterKeys: ['gene'],
           navigate: mockNavigate,
         })
       )
+    })
+  })
+
+  it('shows the unsupported curation message for evidence-only generic extraction results', async () => {
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'The publication mentions three transgenic fly lines central to the experiments.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: false,
+          evidence_records: [
+            {
+              entity: 'crb 11A22',
+              verified_quote: 'crb 11A22 and crb p13A9.',
+              page: 1,
+              section: 'Results and Discussion',
+              chunk_id: 'chunk-unsupported-1',
+            },
+          ],
+        },
+      ],
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'crb 11A22 1' }))
+    fireEvent.click(screen.getByText('Review & Curate'))
+
+    expect(openCurationWorkspaceMock).not.toHaveBeenCalled()
+    expect(emitGlobalToastMock).toHaveBeenCalledWith({
+      message:
+        "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category.",
+      severity: 'warning',
     })
   })
 
@@ -499,6 +589,118 @@ describe('Chat persistence', () => {
 
     expect(
       await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
+    ).toBeInTheDocument()
+  })
+
+  it('warns when prep can continue but the chat also contains unsupported evidence-only findings', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 4 candidate annotations. Prepare all for curation review?',
+        candidate_count: 4,
+        extraction_result_count: 2,
+        conversation_message_count: 6,
+        adapter_keys: ['disease'],
+        blocking_reasons: [],
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Supported findings are ready.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: true,
+          curation_adapter_key: 'disease',
+          evidence_records: [
+            {
+              entity: 'disease example',
+              verified_quote: 'Supported disease evidence.',
+              page: 2,
+              section: 'Results',
+              chunk_id: 'chunk-supported-1',
+            },
+          ],
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Generic PDF extraction also found unsupported data.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: false,
+          evidence_records: [
+            {
+              entity: 'transgenic line',
+              verified_quote: 'Unsupported transgenic line evidence.',
+              page: 3,
+              section: 'Methods',
+              chunk_id: 'chunk-unsupported-2',
+            },
+          ],
+        },
+      ],
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+
+    expect(
+      await screen.findByText(
+        "This chat also contains data types that are not supported for curation review yet. Prepare for Curation will include only findings from supported specialized agents in Agent Studio's PDF Extraction category.",
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('You discussed 4 candidate annotations. Prepare all for curation review?'),
+    ).toBeInTheDocument()
+  })
+
+  it('replaces the empty prep message when the chat only contains unsupported evidence-only findings', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: false,
+        summary_text: 'No candidate annotations are available from this chat yet.',
+        candidate_count: 0,
+        extraction_result_count: 0,
+        conversation_message_count: 0,
+        adapter_keys: [],
+        blocking_reasons: ['No candidate annotations are available from this chat yet.'],
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Generic PDF extraction found unsupported content.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: false,
+          evidence_records: [
+            {
+              entity: 'transgenic line',
+              verified_quote: 'Unsupported transgenic line evidence.',
+              page: 3,
+              section: 'Methods',
+              chunk_id: 'chunk-unsupported-3',
+            },
+          ],
+        },
+      ],
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+
+    expect(
+      await screen.findByText(
+        "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category.",
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Extraction runs')
     ).toBeInTheDocument()
   })
 

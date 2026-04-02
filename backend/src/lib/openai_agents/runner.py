@@ -219,6 +219,21 @@ def _merge_evidence_records(
     return merged
 
 
+def _merge_evidence_tool_names(existing: List[str], incoming: Any) -> List[str]:
+    """Merge specialist tool names while preserving first-seen order."""
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for tool_name in [*existing, *(incoming or [])]:
+        normalized = str(tool_name or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+
+    return merged
+
+
 def _close_langfuse_context(
     context_manager: Any,
     *,
@@ -517,6 +532,7 @@ async def _run_agent_with_tracing(
         extra={"trace_id": trace_id, "user_id": user_id},
     )
     evidence_records: List[Dict[str, Any]] = []
+    evidence_summary_tool_names: List[str] = []
 
     # max_turns from config gives agents more time to think and process complex queries
     max_turns = get_max_turns()
@@ -638,6 +654,13 @@ async def _run_agent_with_tracing(
                     evidence_records = _merge_evidence_records(
                         evidence_records,
                         event.get("evidence_records"),
+                    )
+                    evidence_summary_tool_names = _merge_evidence_tool_names(
+                        evidence_summary_tool_names,
+                        [
+                            event.get("tool_name"),
+                            *(event.get("tool_names") or []),
+                        ],
                     )
                     continue
                 yield event
@@ -804,6 +827,13 @@ async def _run_agent_with_tracing(
                                     evidence_records = _merge_evidence_records(
                                         evidence_records,
                                         specialist_event.get("evidence_records"),
+                                    )
+                                    evidence_summary_tool_names = _merge_evidence_tool_names(
+                                        evidence_summary_tool_names,
+                                        [
+                                            specialist_event.get("tool_name"),
+                                            *(specialist_event.get("tool_names") or []),
+                                        ],
                                     )
                                     continue
                                 yield specialist_event
@@ -1081,11 +1111,16 @@ async def _run_agent_with_tracing(
 
     # Emit consolidated evidence summary for verified extraction records.
     if evidence_records:
-        yield {
+        evidence_summary_event = {
             "type": "evidence_summary",
             "timestamp": _now_iso(),
             "evidence_records": evidence_records,
         }
+        if evidence_summary_tool_names:
+            evidence_summary_event["tool_names"] = evidence_summary_tool_names
+            if len(evidence_summary_tool_names) == 1:
+                evidence_summary_event["tool_name"] = evidence_summary_tool_names[0]
+        yield evidence_summary_event
 
     # Emit completion event with summary for updating the span
     yield {

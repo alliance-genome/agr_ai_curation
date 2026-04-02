@@ -15,6 +15,7 @@ import type { CurationPrepPreview } from '@/features/curation/services/curationP
 interface PrepScopeConfirmationDialogProps {
   open: boolean
   preview: CurationPrepPreview | null
+  supplementalNotice?: string | null
   loading: boolean
   submitting: boolean
   error: string | null
@@ -68,6 +69,7 @@ function ScopePill({ label, values }: { label: string; values: string[] }) {
 function PrepScopeConfirmationDialog({
   open,
   preview,
+  supplementalNotice = null,
   loading,
   submitting,
   error,
@@ -140,8 +142,14 @@ function PrepScopeConfirmationDialog({
                 <ScopePill label="Adapters" values={preview.adapter_keys} />
               </Box>
 
+              {supplementalNotice ? (
+                <Alert severity="warning">{supplementalNotice}</Alert>
+              ) : null}
+
               {!preview.ready && preview.blocking_reasons.length > 0 && (
-                <Alert severity="warning">{preview.blocking_reasons[0]}</Alert>
+                preview.blocking_reasons[0] !== preview.summary_text
+                  ? <Alert severity="warning">{preview.blocking_reasons[0]}</Alert>
+                  : null
               )}
             </>
           ) : (

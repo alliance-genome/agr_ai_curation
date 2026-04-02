@@ -284,7 +284,7 @@ def _is_extraction_envelope_payload(payload: Any) -> bool:
     return any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS)
 
 
-def _get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
+def get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
     from src.lib.agent_studio.catalog_service import get_agent_metadata
 
     try:
@@ -302,6 +302,10 @@ def _get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
         "adapter_key": adapter_key,
         "launchable": launchable,
     }
+
+
+def _get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
+    return get_agent_curation_metadata(agent_key)
 
 
 def _record_to_schema(
@@ -386,6 +390,7 @@ __all__ = [
     "ExtractionEnvelopeCandidate",
     "build_extraction_envelope_candidate",
     "build_safe_agent_key_map",
+    "get_agent_curation_metadata",
     "list_extraction_results",
     "persist_extraction_result",
     "persist_extraction_results",
