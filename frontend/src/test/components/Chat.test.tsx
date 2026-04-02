@@ -323,6 +323,39 @@ describe('Chat persistence', () => {
     window.removeEventListener('pdf-overlay-update', listener as EventListener)
   })
 
+  it('copies user messages with the shared clipboard fallback helper path', async () => {
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('blocked'))
+    const originalExecCommand = (document as Document & { execCommand?: typeof document.execCommand }).execCommand
+    const execCommandSpy = vi.fn(() => true)
+    Object.assign(document, { execCommand: execCommandSpy })
+
+    const { sendMessage } = renderChat({ sessionId: 'session-1' })
+
+    const input = screen.getByPlaceholderText('Type your message...')
+    fireEvent.change(input, { target: { value: 'Copy this user message' } })
+    fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 })
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith('Copy this user message', 'session-1')
+    })
+
+    expect(await screen.findByText('Copy this user message')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTitle('Copy to clipboard'))
+
+    await waitFor(() => {
+      expect(writeTextSpy).toHaveBeenCalledWith('Copy this user message')
+      expect(execCommandSpy).toHaveBeenCalledWith('copy')
+    })
+
+    writeTextSpy.mockRestore()
+    if (originalExecCommand) {
+      Object.assign(document, { execCommand: originalExecCommand })
+    } else {
+      delete (document as Document & { execCommand?: typeof document.execCommand }).execCommand
+    }
+  })
+
   it('attaches evidence summaries to the latest assistant message', async () => {
     renderChat({
       events: [

@@ -59,7 +59,12 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
-_INLINE_PACKAGE_TOOL_IDS = frozenset({"record_evidence"})
+_INLINE_PACKAGE_TOOL_IDS = frozenset({
+    "record_evidence",
+    "search_document",
+    "read_section",
+    "read_subsection",
+})
 
 
 def _is_thread_exhaustion_error(exc: BaseException) -> bool:

@@ -6,6 +6,7 @@ import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
 import FileDownloadCard, { FileInfo } from '@/components/Chat/FileDownloadCard'
 import EvidenceCard from '@/components/Chat/EvidenceCard'
+import { copyText } from '@/components/Chat/copyText'
 import PrepScopeConfirmationDialog from '@/features/curation/components/PrepScopeConfirmationDialog'
 import {
   fetchCurationPrepPreview,
@@ -1169,7 +1170,7 @@ function Chat({
   }, [onSessionChange])
 
   const handleCopyMessage = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
+    copyText(text).then(() => {
       // Optional: You could show a toast notification here
       debug.log('Message copied to clipboard')
     }).catch(err => {

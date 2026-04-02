@@ -450,10 +450,10 @@ async def test_resolve_package_tool_executes_through_package_runner(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_resolve_package_tool_raises_for_runner_failure(monkeypatch):
-    fake_tool = _FakeFunctionTool(name="search_document", on_invoke_tool=None)
+    fake_tool = _FakeFunctionTool(name="agr_curation_query", on_invoke_tool=None)
     binding = SimpleNamespace(
-        tool_id="search_document",
-        required_context=("document_id", "user_id"),
+        tool_id="agr_curation_query",
+        required_context=(),
     )
     runner = SimpleNamespace(
         execute_tool=lambda tool_id, **kwargs: SimpleNamespace(
@@ -471,12 +471,12 @@ async def test_resolve_package_tool_raises_for_runner_failure(monkeypatch):
     monkeypatch.setattr(catalog_service, "_get_package_tool_runner", lambda: runner)
 
     resolved = catalog_service._resolve_package_tool(
-        "search_document",
+        "agr_curation_query",
         catalog_service.ToolExecutionContext(document_id="doc-1", user_id="user-1"),
     )
 
-    with pytest.raises(RuntimeError, match="search_document failed"):
-        await resolved.on_invoke_tool(None, '{"query":"genes"}')
+    with pytest.raises(RuntimeError, match="agr_curation_query failed"):
+        await resolved.on_invoke_tool(None, '{"method":"search_genes"}')
 
 
 @pytest.mark.asyncio
@@ -536,3 +536,65 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
         "input": '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}',
     }
     assert calls == [("track", "record_evidence")]
+
+
+@pytest.mark.asyncio
+async def test_resolve_package_tool_executes_document_tools_inline(monkeypatch):
+    calls = []
+
+    class _Tracker:
+        def record_call(self, tool_name):
+            calls.append(("track", tool_name))
+
+    async def _inline_on_invoke(_ctx, input_str):
+        calls.append(("invoke", input_str))
+        return {
+            "summary": "Found 1 chunks",
+            "input": input_str,
+        }
+
+    fake_tool = _FakeFunctionTool(
+        name="search_document",
+        on_invoke_tool=_inline_on_invoke,
+    )
+    binding = SimpleNamespace(
+        tool_id="search_document",
+        required_context=("document_id", "user_id"),
+    )
+
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda _binding, execution_context=None: fake_tool,
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_package_tool_runner",
+        lambda: (_ for _ in ()).throw(AssertionError("runner should not be used")),
+    )
+
+    async def _explode_to_thread(*args, **kwargs):
+        raise AssertionError("to_thread should not be used")
+
+    monkeypatch.setattr(asyncio, "to_thread", _explode_to_thread)
+
+    resolved = catalog_service._resolve_package_tool(
+        "search_document",
+        catalog_service.ToolExecutionContext(
+            document_id="doc-1",
+            user_id="user-1",
+            tool_tracker=_Tracker(),
+        ),
+    )
+
+    result = await resolved.on_invoke_tool(None, '{"query":"genes"}')
+
+    assert result == {
+        "summary": "Found 1 chunks",
+        "input": '{"query":"genes"}',
+    }
+    assert calls == [
+        ("track", "search_document"),
+        ("invoke", '{"query":"genes"}'),
+    ]
