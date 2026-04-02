@@ -1,4 +1,5 @@
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import { buildQuoteCentricEvidenceNavigationCommand } from '@/features/curation/evidence/navigationCommandBuilder'
 import type { EvidenceRecord } from '@/features/curation/types'
 
 function buildAnchorToken(value: string, fallback: string): string {
@@ -27,16 +28,12 @@ export function buildChatEvidenceNavigationCommand(
 ): EvidenceNavigationCommand {
   const quote = evidenceRecord.verified_quote.trim()
 
-  return {
+  return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: buildChatEvidenceAnchorId(evidenceRecord),
     anchor: {
       anchor_kind: 'snippet',
       locator_quality: 'exact_quote',
       supports_decision: 'supports',
-      snippet_text: quote || null,
-      sentence_text: quote || null,
-      normalized_text: quote || null,
-      viewer_search_text: quote || null,
       viewer_highlightable: true,
       page_number: evidenceRecord.page,
       section_title: evidenceRecord.section,
@@ -44,9 +41,9 @@ export function buildChatEvidenceNavigationCommand(
       figure_reference: evidenceRecord.figure_reference ?? null,
       chunk_ids: [evidenceRecord.chunk_id],
     },
-    searchText: quote || null,
+    quote,
     pageNumber: evidenceRecord.page,
     sectionTitle: evidenceRecord.section,
     mode: 'select',
-  }
+  })
 }

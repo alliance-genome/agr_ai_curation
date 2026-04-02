@@ -92,4 +92,33 @@ describe('buildEntityTagNavigationCommand', () => {
     expect(command?.sectionTitle).toBe('Detailed Results')
     expect(command?.anchor.chunk_ids).toEqual(['chunk-7'])
   })
+
+  it('uses the displayed sentence quote for navigation even when persisted anchor search text is noisier', () => {
+    const command = buildEntityTagNavigationCommand(
+      makeTag(),
+      makeEvidenceRecord({
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'normalized_quote',
+          supports_decision: 'supports',
+          sentence_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+          snippet_text: '2.3. crb accumulated to a higher molar abundance in mutant fly eyes.',
+          normalized_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+          viewer_search_text: '2.3. crb accumulated to a higher molar abundance in mutant fly eyes.',
+          viewer_highlightable: true,
+          page_number: 6,
+          section_title: 'Results',
+          subsection_title: 'The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes',
+          chunk_ids: ['chunk-6'],
+        },
+      }),
+    )
+
+    expect(command?.searchText).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
+    expect(command?.anchor.snippet_text).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
+    expect(command?.anchor.sentence_text).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
+    expect(command?.anchor.viewer_search_text).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
+    expect(command?.anchor.subsection_title).toBe('The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes')
+    expect(command?.anchor.locator_quality).toBe('normalized_quote')
+  })
 })
