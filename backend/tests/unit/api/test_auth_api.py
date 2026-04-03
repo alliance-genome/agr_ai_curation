@@ -1,5 +1,6 @@
 """Unit tests for auth API helper behavior."""
 
+import importlib
 import sys
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ sys.modules.setdefault(
     ),
 )
 
-from src.api import auth as auth_api
+auth_api = importlib.import_module("src.api.auth")
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/"):

@@ -1,5 +1,6 @@
 """Unit tests for auth API endpoint handlers and edge paths."""
 
+import importlib
 import sys
 from types import SimpleNamespace
 
@@ -21,8 +22,8 @@ sys.modules.setdefault(
     ),
 )
 
-from src.api import auth as auth_api
-from src.auth.base import TokenSet
+auth_api = importlib.import_module("src.api.auth")
+TokenSet = importlib.import_module("src.auth.base").TokenSet
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/"):
