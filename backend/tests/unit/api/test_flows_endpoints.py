@@ -113,8 +113,6 @@ async def test_get_flow_uses_verify_ownership(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
-    created = _flow(name="Created")
-
     class _DB:
         def __init__(self):
             self.added = None
