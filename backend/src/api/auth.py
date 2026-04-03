@@ -280,12 +280,8 @@ def _build_logout_redirect_uri(request: Request, provider: AuthProvider) -> str:
 async def logout(
     request: Request,
     response: Response,
-    user: dict = get_auth_dependency(),
 ):
     """Logout endpoint - clears auth cookie and returns provider logout URL."""
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
     secure_cookies = get_secure_cookies()
     response.delete_cookie(key="auth_token", secure=secure_cookies, samesite="lax")
     # Transitional cleanup for old cookie name

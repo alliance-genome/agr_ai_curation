@@ -1,10 +1,25 @@
 """Unit tests for auth API endpoint handlers and edge paths."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.security import SecurityScopes
+from fastapi.testclient import TestClient
+
+sys.modules.setdefault(
+    "rapidfuzz",
+    SimpleNamespace(
+        fuzz=SimpleNamespace(
+            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                dest_start=0,
+                dest_end=0,
+                score=0.0,
+            )
+        )
+    ),
+)
 
 from src.api import auth as auth_api
 from src.auth.base import TokenSet
@@ -267,13 +282,6 @@ async def test_get_user_from_cookie_impl_rejects_principal_missing_subject(monke
 
 
 @pytest.mark.asyncio
-async def test_logout_requires_user():
-    with pytest.raises(HTTPException) as exc:
-        await auth_api.logout(request=_request(), response=Response(), user=None)
-    assert exc.value.status_code == 401
-
-
-@pytest.mark.asyncio
 async def test_logout_success_clears_cookies_and_returns_provider_logout_url(monkeypatch):
     class _Provider:
         redirect_uri = "https://issuer.example.org/callback"
@@ -292,11 +300,40 @@ async def test_logout_success_clears_cookies_and_returns_provider_logout_url(mon
     result = await auth_api.logout(
         request=_request(base_url="https://app.example.org/"),
         response=response,
-        user={"sub": "user-123"},
     )
     assert result["status"] == "logged_out"
     assert "issuer.example.org/logout" in result["logout_url"]
     set_cookie_headers = response.headers.getlist("set-cookie")
+    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
+    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+
+
+def test_logout_endpoint_allows_missing_auth_cookie(monkeypatch):
+    class _Provider:
+        redirect_uri = "https://issuer.example.org/callback"
+
+        def get_logout_url(self, redirect_uri):
+            return f"https://issuer.example.org/logout?redirect={redirect_uri}"
+
+    async def _direct_threadpool(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    monkeypatch.setattr(auth_api, "run_in_threadpool", _direct_threadpool)
+
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    client = TestClient(app)
+
+    response = client.post("/api/auth/logout")
+    assert response.status_code == 200
+    assert response.json()["status"] == "logged_out"
+    assert "issuer.example.org/logout" in response.json()["logout_url"]
+    set_cookie_headers = response.headers.get_list("set-cookie")
     assert any(header.startswith("auth_token=") for header in set_cookie_headers)
     assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
 
