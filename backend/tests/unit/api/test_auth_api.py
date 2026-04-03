@@ -1,12 +1,27 @@
 """Unit tests for auth API helper behavior."""
 
+import importlib
+import sys
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.security import SecurityScopes
 
-from src.api import auth as auth_api
+sys.modules.setdefault(
+    "rapidfuzz",
+    SimpleNamespace(
+        fuzz=SimpleNamespace(
+            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                dest_start=0,
+                dest_end=0,
+                score=0.0,
+            )
+        )
+    ),
+)
+
+auth_api = importlib.import_module("src.api.auth")
 
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/"):

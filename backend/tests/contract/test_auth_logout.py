@@ -2,7 +2,6 @@
 
 import asyncio
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -65,17 +64,24 @@ class TestLogoutEndpoint:
         response = client.post(LOGOUT_PATH)
         assert response.status_code != 404
 
-    def test_logout_requires_authentication(self, client):
+    def test_logout_without_authentication_still_clears_session(self, client):
         response = client.post(LOGOUT_PATH)
-        assert response.status_code == 401
-        assert "detail" in response.json()
+        assert response.status_code == 200
+        assert response.json()["status"] == "logged_out"
+        set_cookie_headers = response.headers.get_list("set-cookie")
+        assert any(header.startswith("auth_token=") for header in set_cookie_headers)
+        assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
 
-    def test_logout_invalid_authorization_header_still_unauthorized(self, client):
+    def test_logout_invalid_authorization_header_is_ignored(self, client):
         response = client.post(
             LOGOUT_PATH,
             headers={"Authorization": "Bearer invalid_malformed_token"},
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
+        assert response.json()["status"] == "logged_out"
+        set_cookie_headers = response.headers.get_list("set-cookie")
+        assert any(header.startswith("auth_token=") for header in set_cookie_headers)
+        assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
 
     def test_logout_success_response_schema(self, client):
         _override_authenticated_user()
