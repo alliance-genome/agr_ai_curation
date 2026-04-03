@@ -223,19 +223,28 @@ function extractFlowStepEvidenceDetails(event: SSEEvent): FlowStepEvidenceDetail
     const step = typeof candidate.step === 'number' && Number.isFinite(candidate.step)
       ? candidate.step
       : null
+    const evidenceCount =
+      typeof candidate.evidence_count === 'number' && Number.isFinite(candidate.evidence_count)
+        ? candidate.evidence_count
+        : null
+    const totalEvidenceRecords =
+      typeof candidate.total_evidence_records === 'number'
+      && Number.isFinite(candidate.total_evidence_records)
+        ? candidate.total_evidence_records
+        : null
 
-    if (!flowId || !flowName || !flowRunId || step === null) {
+    if (
+      !flowId
+      || !flowName
+      || !flowRunId
+      || step === null
+      || evidenceCount === null
+      || totalEvidenceRecords === null
+    ) {
       continue
     }
 
     const evidenceRecords = extractEvidenceRecords(candidate.evidence_records)
-    const evidenceCount = typeof candidate.evidence_count === 'number' && Number.isFinite(candidate.evidence_count)
-      ? candidate.evidence_count
-      : evidenceRecords.length
-    const totalEvidenceRecords =
-      typeof candidate.total_evidence_records === 'number' && Number.isFinite(candidate.total_evidence_records)
-        ? candidate.total_evidence_records
-        : evidenceCount
 
     return {
       flow_id: flowId,
@@ -252,6 +261,15 @@ function extractFlowStepEvidenceDetails(event: SSEEvent): FlowStepEvidenceDetail
   }
 
   return null
+}
+
+function extractEventTimestamp(event: SSEEvent): Date | null {
+  if (typeof event.timestamp !== 'string') {
+    return null
+  }
+
+  const timestamp = new Date(event.timestamp)
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp
 }
 
 function withFlowStepEvidenceMessage(
@@ -1009,12 +1027,15 @@ function Chat({
       if (parsed.type === 'FLOW_STEP_EVIDENCE') {
         const flowStepEvidence = extractFlowStepEvidenceDetails(parsed)
         if (!flowStepEvidence) {
+          console.warn('[Chat] Ignoring malformed FLOW_STEP_EVIDENCE event payload', parsed)
           return
         }
 
-        const messageTimestamp = typeof parsed.timestamp === 'string'
-          ? new Date(parsed.timestamp)
-          : new Date()
+        const messageTimestamp = extractEventTimestamp(parsed)
+        if (!messageTimestamp) {
+          console.warn('[Chat] Ignoring FLOW_STEP_EVIDENCE event without a valid timestamp', parsed)
+          return
+        }
 
         setMessages(prev => withFlowStepEvidenceMessage(
           prev,

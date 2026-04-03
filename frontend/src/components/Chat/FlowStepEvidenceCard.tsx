@@ -15,7 +15,7 @@ function formatEvidenceQuoteCount(count: number): string {
 export default function FlowStepEvidenceCard({
   details,
 }: FlowStepEvidenceCardProps) {
-  const evidenceRecords = details.evidence_records ?? []
+  const evidenceRecords = details.evidence_records
   const agentLabel = details.agent_name?.trim() || null
   const toolLabel = details.tool_name?.trim() || null
   const sourceParts = [`Step ${details.step}`]
