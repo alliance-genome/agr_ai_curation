@@ -52,6 +52,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     devMode ? { uid: 'dev-user-123', email: 'dev@localhost', name: 'Dev User' } : null
   );
   const [isLoading, setIsLoading] = useState<boolean>(!devMode); // Skip loading in dev mode
+  const setJustLoggedOutFlag = (): void => {
+    sessionStorage.setItem('justLoggedOut', 'true');
+  };
 
   /**
    * Check authentication status by fetching user info from backend
@@ -261,9 +264,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const data = await response.json();
 
-      // Set this before auth state flips so ProtectedRoutes can suppress auto-login
-      // throughout the logout-triggered render sequence.
-      sessionStorage.setItem('justLoggedOut', 'true');
+      // Set this before auth state flips so ProtectedRoutes can suppress auto-login.
+      setJustLoggedOutFlag();
 
       // Clear client-side state
       setUser(null);
@@ -294,7 +296,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         action: 'logout',
       });
 
-      sessionStorage.setItem('justLoggedOut', 'true');
+      setJustLoggedOutFlag();
 
       // Even if logout fails, clear local state and redirect to home
       setUser(null);

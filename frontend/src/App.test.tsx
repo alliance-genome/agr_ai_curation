@@ -358,6 +358,51 @@ describe('ProtectedRoutes logout suppression', () => {
     expect(sessionStorage.getItem('intendedPath')).toBe('/agent-studio?tab=queued');
   });
 
+  it('keeps logout suppression when auth flips from authenticated to unauthenticated', async () => {
+    const login = vi.fn();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+    sessionStorage.setItem('justLoggedOut', 'true');
+
+    const view = renderProtectedRoutes('/agent-studio?tab=queued');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('justLoggedOut')).toBeNull();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+
+    await act(async () => {
+      view.rerender(
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
+            <ProtectedRoutes>
+              <div>Protected content</div>
+            </ProtectedRoutes>
+          </MemoryRouter>
+        </ThemeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+  });
+
   it('still redirects unauthenticated users to login when no logout suppression is active', async () => {
     const login = vi.fn();
 

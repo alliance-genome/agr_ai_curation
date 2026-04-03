@@ -82,7 +82,6 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
     }
 
     if (isAuthenticated) {
-      pendingLogoutSuppressionRef.current = false;
       return;
     }
 
