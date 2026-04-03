@@ -150,6 +150,41 @@ describe('AuditPanel - Event Display (T018)', () => {
       randomUuidSpy.mockRestore()
     }
   })
+
+  it('renders FLOW_STEP_EVIDENCE SSE events in the audit list', async () => {
+    render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'FLOW_STEP_EVIDENCE',
+            timestamp: '2026-02-26T00:00:01.000Z',
+            sessionId: 'session123',
+            details: {
+              flow_id: 'flow-1',
+              flow_name: 'Flow Evidence',
+              flow_run_id: 'run-1',
+              step: 2,
+              tool_name: 'ask_gene_specialist',
+              agent_id: 'gene',
+              agent_name: 'Gene Agent',
+              evidence_records: [],
+              evidence_count: 1,
+              total_evidence_records: 3,
+            },
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          '[EVIDENCE] Flow step 2 captured 1 evidence quote (3 total so far) from Gene Agent via ask_gene_specialist'
+        )
+      ).toBeInTheDocument()
+    })
+  })
 })
 
 // ===================================================================
