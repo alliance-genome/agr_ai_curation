@@ -379,38 +379,34 @@ function PromptWorkshop({
   )
 
   const groupRuleSourceAgent = useMemo(() => {
-    const templateId = selectedCustomAgent?.template_source
-      || selectedCloneSource?.template_source
-      || (gettingStartedMode === 'template' ? parentAgentId : undefined)
-    if (!templateId) return null
-    return parentAgents.find((agent) => agent.agent_id === templateId) || null
+    if (selectedCustomAgent) {
+      if (!selectedCustomAgent.template_source) return null
+      return parentAgents.find((agent) => agent.agent_id === selectedCustomAgent.template_source) || null
+    }
+
+    if (gettingStartedMode === 'clone') {
+      if (!selectedCloneSource?.template_source) return null
+      return parentAgents.find((agent) => agent.agent_id === selectedCloneSource.template_source) || null
+    }
+
+    if (gettingStartedMode === 'template') {
+      if (!parentAgentId) return null
+      return parentAgents.find((agent) => agent.agent_id === parentAgentId) || null
+    }
+
+    return null
   }, [
     gettingStartedMode,
     parentAgentId,
     parentAgents,
     selectedCloneSource?.template_source,
-    selectedCustomAgent?.template_source,
+    selectedCustomAgent,
   ])
 
-  const availableGroupIds = useMemo(() => {
-    if (!groupRuleSourceAgent) return []
-
-    const orderedGroupIds: string[] = []
-    const seen = new Set<string>()
-
-    for (const groupId of Object.keys(groupRuleSourceAgent.group_rules || {}).sort()) {
-      seen.add(groupId)
-      orderedGroupIds.push(groupId)
-    }
-
-    for (const groupId of catalog.available_groups.map((value) => value.trim().toUpperCase()).sort()) {
-      if (!groupId || seen.has(groupId)) continue
-      seen.add(groupId)
-      orderedGroupIds.push(groupId)
-    }
-
-    return orderedGroupIds
-  }, [catalog.available_groups, groupRuleSourceAgent])
+  const availableGroupIds = useMemo(
+    () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
+    [groupRuleSourceAgent]
+  )
 
   const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
 
@@ -1716,9 +1712,7 @@ function PromptWorkshop({
                         <Typography variant="caption" color="text.secondary">
                           {hasSelectedGroupOverride
                             ? `Custom override active for ${selectedGroupId}.`
-                            : selectedGroupBasePrompt.trim()
-                              ? `Using template ${selectedGroupId} prompt content.`
-                              : `No template ${selectedGroupId} prompt content is loaded yet; saving here will create a custom override.`}
+                            : `Using template ${selectedGroupId} prompt content.`}
                           {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
                         </Typography>
                       </Stack>
