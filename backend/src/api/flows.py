@@ -21,6 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from .auth import get_auth_dependency
 from ..lib.flows.evidence_export import (
     FlowEvidenceExportFormat,
+    FlowRunEvidenceExportDataError,
     FlowRunEvidenceExportNotFoundError,
     FlowRunEvidenceExportPermissionError,
     build_flow_evidence_export_artifact,
@@ -192,16 +193,18 @@ async def export_flow_evidence(
             flow_run_id=flow_run_id,
             user_id=auth_user_id,
         )
+        artifact = build_flow_evidence_export_artifact(
+            flow_run_id=flow_run_id,
+            extraction_results=extraction_results,
+            export_format=export_format,
+        )
     except FlowRunEvidenceExportNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FlowRunEvidenceExportPermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except FlowRunEvidenceExportDataError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    artifact = build_flow_evidence_export_artifact(
-        flow_run_id=flow_run_id,
-        extraction_results=extraction_results,
-        export_format=export_format,
-    )
     safe_filename = _safe_attachment_filename(artifact.filename)
 
     logger.info(

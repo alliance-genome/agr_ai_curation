@@ -10,6 +10,7 @@ import pytest
 from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
+    build_extraction_envelope_candidate_with_evidence,
     list_extraction_results,
     persist_extraction_result,
     persist_extraction_results,
@@ -258,6 +259,38 @@ def test_build_extraction_envelope_candidate_prefers_explicit_adapter_key_over_a
 
     assert candidate is not None
     assert candidate.adapter_key == "caller_adapter"
+
+
+def test_build_extraction_envelope_candidate_with_evidence_prefers_candidate_payload_for_evidence(
+    monkeypatch,
+):
+    observed_payloads = []
+
+    monkeypatch.setattr(
+        module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "extract_evidence_records_from_structured_result",
+        lambda payload: observed_payloads.append(payload) or [{"entity": "notch"}],
+    )
+
+    raw_output = json.dumps(_sample_envelope_payload())
+    candidate, evidence_metadata = build_extraction_envelope_candidate_with_evidence(
+        raw_output,
+        agent_key="gene-expression",
+        conversation_summary="Extract gene expression findings",
+    )
+
+    assert candidate is not None
+    assert observed_payloads == [candidate.payload_json]
+    assert evidence_metadata["evidence_count"] == 1
+    assert evidence_metadata["evidence_records"] == [{"entity": "notch"}]
 
 
 def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one(

@@ -15,13 +15,18 @@ import {
   Typography,
 } from '@mui/material'
 
+import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
+
 export type FlowEvidenceExportFormat = 'csv' | 'tsv' | 'json'
 
 export interface FlowRunCompletionSummary {
+  adapterKeys: string[]
+  documentId: string | null
   failureReason: string | null
   flowId: string | null
   flowName: string
   flowRunId: string
+  originSessionId: string | null
   status: string
   totalEvidenceRecords: number
 }
@@ -85,6 +90,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
+  const reviewReady = run.status === 'completed' && Boolean(run.documentId)
   const statusChip = useMemo(() => {
     if (run.status === 'completed') {
       return {
@@ -218,39 +224,83 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           </Typography>
         </Box>
 
-        <Button
-          variant="contained"
-          size="small"
-          onClick={handleOpenMenu}
-          disabled={!exportReady || isDownloading}
-          startIcon={
-            isDownloading
-              ? <CircularProgress size={14} sx={{ color: 'inherit' }} />
-              : <DownloadRoundedIcon />
-          }
-          endIcon={!isDownloading ? <ExpandMoreRoundedIcon /> : undefined}
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+          <ReviewAndCurateButton
+            documentId={run.documentId}
+            flowRunId={run.flowRunId}
+            originSessionId={run.originSessionId}
+            adapterKeys={run.adapterKeys}
+            disabled={!reviewReady}
+            size="small"
+            variant="outlined"
+            color="primary"
+            label="Review & Curate"
+            sx={{
+              whiteSpace: 'nowrap',
+              borderColor: 'rgba(76, 175, 80, 0.5)',
+              color: '#8bc34a',
+              '&:hover': {
+                borderColor: '#8bc34a',
+                backgroundColor: 'rgba(139, 195, 74, 0.12)',
+              },
+              '&:disabled': {
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+                color: 'rgba(255, 255, 255, 0.32)',
+              },
+            }}
+          />
+
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleOpenMenu}
+            disabled={!exportReady || isDownloading}
+            startIcon={
+              isDownloading
+                ? <CircularProgress size={14} sx={{ color: 'inherit' }} />
+                : <DownloadRoundedIcon />
+            }
+            endIcon={!isDownloading ? <ExpandMoreRoundedIcon /> : undefined}
+            sx={{
+              minWidth: 'auto',
+              px: 1.5,
+              py: 0.75,
+              textTransform: 'none',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              boxShadow: 'none',
+              backgroundColor: 'rgba(33, 150, 243, 0.92)',
+              whiteSpace: 'nowrap',
+              '&:hover': {
+                backgroundColor: '#2196f3',
+                boxShadow: '0 2px 8px rgba(33, 150, 243, 0.28)',
+              },
+              '&:disabled': {
+                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                color: 'rgba(255, 255, 255, 0.32)',
+              },
+            }}
+          >
+            Export Evidence
+          </Button>
+        </Stack>
+      </Stack>
+
+      {!reviewReady && run.status === 'completed' && (
+        <Alert
+          severity="info"
           sx={{
-            minWidth: 'auto',
-            px: 1.5,
-            py: 0.75,
-            textTransform: 'none',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            boxShadow: 'none',
-            backgroundColor: 'rgba(33, 150, 243, 0.92)',
-            '&:hover': {
-              backgroundColor: '#2196f3',
-              boxShadow: '0 2px 8px rgba(33, 150, 243, 0.28)',
-            },
-            '&:disabled': {
-              backgroundColor: 'rgba(255, 255, 255, 0.08)',
-              color: 'rgba(255, 255, 255, 0.32)',
+            mt: 1.5,
+            backgroundColor: 'rgba(139, 195, 74, 0.08)',
+            color: 'rgba(255, 255, 255, 0.78)',
+            '& .MuiAlert-icon': {
+              color: '#8bc34a',
             },
           }}
         >
-          Export Evidence
-        </Button>
-      </Stack>
+          This run can be exported, but it does not have enough document scope metadata to open the curation workspace directly.
+        </Alert>
+      )}
 
       {!exportReady && run.status === 'completed' && (
         <Alert

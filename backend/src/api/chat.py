@@ -1316,6 +1316,7 @@ async def execute_flow_endpoint(
                             "tool_name",
                             "agent_id",
                             "agent_name",
+                            "evidence_preview",
                             "evidence_records",
                             "evidence_count",
                             "total_evidence_records",

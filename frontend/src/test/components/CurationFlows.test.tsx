@@ -6,6 +6,18 @@ import { MemoryRouter } from 'react-router-dom'
 import CurationFlows from '../../components/RightPanel/Tools/CurationFlows'
 import type { SSEEvent } from '../../hooks/useChatStream'
 
+const openCurationWorkspaceMock = vi.fn()
+vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
+    '@/features/curation/navigation/openCurationWorkspace',
+  )
+
+  return {
+    ...actual,
+    openCurationWorkspace: (options: unknown) => openCurationWorkspaceMock(options),
+  }
+})
+
 const mockFetch = vi.fn()
 global.fetch = mockFetch
 
@@ -50,6 +62,9 @@ function completedRunEvent(overrides: Partial<SSEEvent> = {}): SSEEvent {
     flow_id: 'flow-1',
     flow_name: 'Evidence Flow',
     flow_run_id: 'flow-run-123',
+    document_id: 'document-123',
+    origin_session_id: 'session-123',
+    adapter_keys: ['gene'],
     status: 'completed',
     total_evidence_records: 4,
     ...overrides,
@@ -74,6 +89,7 @@ describe('CurationFlows', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    openCurationWorkspaceMock.mockResolvedValue('curation-session-1')
     mockFetch.mockResolvedValue(flowListResponse())
 
     mockLink = originalCreateElement('a')
@@ -100,7 +116,44 @@ describe('CurationFlows', () => {
     expect(screen.getByText('Latest flow run')).toBeInTheDocument()
     expect(screen.getByText('Evidence Flow')).toBeInTheDocument()
     expect(screen.getByText(/4 evidence records ready/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: /Export Evidence/i })).toBeEnabled()
+  })
+
+  it('reuses the curation workspace launcher for the completion card', async () => {
+    const user = userEvent.setup()
+
+    renderComponent([completedRunEvent()])
+
+    const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
+    await user.click(reviewButton)
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'document-123',
+          flowRunId: 'flow-run-123',
+          originSessionId: 'session-123',
+          adapterKeys: ['gene'],
+          navigate: expect.any(Function),
+        }),
+      )
+    })
+  })
+
+  it('does not infer missing curation scope from ambient component state', async () => {
+    renderComponent([
+      completedRunEvent({
+        document_id: undefined,
+        origin_session_id: undefined,
+      }),
+    ])
+
+    const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
+    expect(reviewButton).toBeDisabled()
+    expect(
+      screen.getByText(/does not have enough document scope metadata/i),
+    ).toBeInTheDocument()
   })
 
   it('downloads evidence export from the flow evidence endpoint', async () => {
@@ -140,6 +193,7 @@ describe('CurationFlows', () => {
   it('ignores malformed flow finished events that cannot drive completion state', async () => {
     renderComponent([
       completedRunEvent({ status: '' }),
+      completedRunEvent({ flow_name: '' }),
       completedRunEvent({ total_evidence_records: 'not-a-number' as unknown as number }),
     ])
 

@@ -241,6 +241,8 @@ MOCK_REGISTRY = {
     "gene": {
         "name": "Gene Specialist",
         "description": "Curate genes",
+        "category": "Extraction",
+        "subcategory": "Entity Extraction",
         "factory": lambda: None,
         "requires_document": False,
         "curation": {
@@ -251,6 +253,8 @@ MOCK_REGISTRY = {
     "disease": {
         "name": "Disease Specialist",
         "description": "Curate diseases",
+        "category": "Validation",
+        "subcategory": "Data Validation",
         "factory": lambda: None,
         "requires_document": False,
         "curation": {
@@ -261,6 +265,8 @@ MOCK_REGISTRY = {
     "gene-expression": {
         "name": "Gene Expression Specialist",
         "description": "Curate gene expression findings",
+        "category": "Extraction",
+        "subcategory": "Entity Extraction",
         "factory": lambda: None,
         "requires_document": False,
         "curation": {
@@ -268,9 +274,23 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
+    "chat_output_formatter": {
+        "name": "Chat Output Formatter",
+        "description": "Format the final response",
+        "category": "Output",
+        "subcategory": "Formatter",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    },
     "curation_prep": {
         "name": "Curation Prep Agent",
         "description": "Prepare curation candidates",
+        "category": "Curation",
+        "subcategory": "Prep",
         "factory": lambda: None,
         "requires_document": True,
     },
@@ -290,6 +310,8 @@ def _metadata_from_registry(
         "agent_id": agent_id,
         "display_name": entry.get("name", agent_id),
         "description": entry.get("description", ""),
+        "category": entry.get("category", ""),
+        "subcategory": entry.get("subcategory", ""),
         "requires_document": requires_document,
         "required_params": ["document_id", "user_id"] if requires_document else [],
         "curation": entry.get("curation"),
@@ -467,7 +489,7 @@ class TestGetAllAgentToolsCustomInstructions:
         mock_streaming.return_value = MagicMock()
 
         flow = _make_flow([
-            _agent_node("n1", "gene", include_evidence=True),
+            _agent_node("n1", "chat_output_formatter", include_evidence=True),
         ])
 
         get_all_agent_tools(flow)
@@ -489,7 +511,7 @@ class TestGetAllAgentToolsCustomInstructions:
         flow = _make_flow([
             _agent_node(
                 "n1",
-                "gene",
+                "chat_output_formatter",
                 custom_instructions="Group results by species.",
                 include_evidence=True,
             ),
@@ -501,6 +523,45 @@ class TestGetAllAgentToolsCustomInstructions:
         assert "Group results by species." in mock_agent.instructions
         assert "## OUTPUT EVIDENCE REQUIREMENT" in mock_agent.instructions
         assert mock_agent.instructions.index("## OUTPUT EVIDENCE REQUIREMENT") < mock_agent.instructions.index(base_prompt)
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_output_formatter_defaults_include_evidence_when_flag_missing(self, mock_get_agent, mock_streaming):
+        """Output/formatter steps should include evidence by default when the flag is absent."""
+        base_prompt = "You are the output specialist."
+        mock_agent = MagicMock(spec=Agent)
+        mock_agent.instructions = base_prompt
+        mock_get_agent.return_value = mock_agent
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([
+            _agent_node("n1", "chat_output_formatter"),
+        ])
+
+        get_all_agent_tools(flow)
+
+        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE REQUIREMENT")
+        assert base_prompt in mock_agent.instructions
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_output_formatter_false_flag_excludes_evidence(self, mock_get_agent, mock_streaming):
+        """Explicit false should prepend exclusion guidance for output/formatter steps."""
+        base_prompt = "You are the output specialist."
+        mock_agent = MagicMock(spec=Agent)
+        mock_agent.instructions = base_prompt
+        mock_get_agent.return_value = mock_agent
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([
+            _agent_node("n1", "chat_output_formatter", include_evidence=False),
+        ])
+
+        get_all_agent_tools(flow)
+
+        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE EXCLUSION")
+        assert "do NOT include supporting evidence" in mock_agent.instructions
+        assert base_prompt in mock_agent.instructions
 
 
 # ===========================================================================
@@ -916,10 +977,26 @@ class TestBuildSupervisorCustomInstructions:
     def test_step_with_include_evidence_annotated(self):
         flow = _make_flow([
             _task_input_node(),
-            _agent_node("n1", "gene", step_goal="Format output", include_evidence=True),
+            _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=True),
         ])
         result = build_supervisor_instructions(flow)
         assert "[includes evidence in output]" in result
+
+    def test_output_formatter_without_flag_defaults_to_include_evidence_annotation(self):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "chat_output_formatter", step_goal="Format output"),
+        ])
+        result = build_supervisor_instructions(flow)
+        assert "[includes evidence in output]" in result
+
+    def test_output_formatter_false_flag_annotated_as_excluding_evidence(self):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "chat_output_formatter", step_goal="Format output", include_evidence=False),
+        ])
+        result = build_supervisor_instructions(flow)
+        assert "[excludes evidence from output]" in result
 
 
 class TestBuildSupervisorDuplicateAgentRefs:
@@ -1255,7 +1332,7 @@ class TestFlowEvidenceAccumulation:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_completed_steps_store_only_new_deduplicated_evidence(
+    def test_completed_steps_preserve_raw_per_step_evidence_counts(
         self, mock_get_agent, mock_streaming
     ):
         mock_get_agent.side_effect = lambda *_args, **_kwargs: MagicMock(
@@ -1322,8 +1399,11 @@ class TestFlowEvidenceAccumulation:
         assert len(completed_steps) == 2
         assert completed_steps[0]["evidence_count"] == 1
         assert completed_steps[0]["evidence_records"][0]["entity"] == "TP53"
-        assert completed_steps[1]["evidence_count"] == 1
-        assert completed_steps[1]["evidence_records"][0]["entity"] == "BRCA1"
+        assert completed_steps[1]["evidence_count"] == 2
+        assert [record["entity"] for record in completed_steps[1]["evidence_records"]] == [
+            "TP53",
+            "BRCA1",
+        ]
         assert len(execution_state["evidence_registry"].records()) == 2
 
 
@@ -1662,11 +1742,93 @@ class TestExecuteFlowTermination:
         assert flow_step_evidence["data"]["evidence_count"] == 1
         assert flow_step_evidence["data"]["total_evidence_records"] == 1
         assert flow_step_evidence["data"]["evidence_records"][0]["entity"] == "TP53"
+        assert flow_step_evidence["data"]["evidence_preview"][0]["entity"] == "TP53"
         assert flow_finished["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
+        assert flow_finished["data"]["document_id"] == "doc-1"
+        assert flow_finished["data"]["origin_session_id"] == "flow-session-1"
         assert flow_finished["data"]["total_evidence_records"] == 1
         assert flow_finished["data"]["step_evidence_counts"] == {"1": 1}
+        assert flow_finished["data"]["adapter_keys"] == ["gene_expression"]
         assert len(persisted_requests) == 1
         assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
+
+    @pytest.mark.asyncio
+    async def test_flow_step_evidence_event_caps_preview_but_preserves_raw_count(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        evidence_records = [
+            _make_evidence_record(
+                f"GENE-{index}",
+                verified_quote=f"Quote {index}",
+                chunk_id=f"chunk-{index}",
+            )
+            for index in range(12)
+        ]
+        payload = _structured_step_output(
+            "GENE-0",
+            evidence_records=evidence_records,
+        )
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+            evidence_records=evidence_records,
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda requests: requests,
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_step_evidence = next(e for e in events if e.get("type") == "FLOW_STEP_EVIDENCE")
+
+        assert flow_step_evidence["data"]["evidence_count"] == 12
+        assert len(flow_step_evidence["data"]["evidence_preview"]) == 10
+        assert len(flow_step_evidence["data"]["evidence_records"]) == 10
 
     @pytest.mark.asyncio
     async def test_persists_extraction_envelopes_after_success(self, monkeypatch):

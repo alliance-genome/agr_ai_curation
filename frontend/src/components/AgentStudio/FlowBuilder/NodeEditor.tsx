@@ -31,7 +31,10 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 
 import type { NodeEditorProps, InputSource } from './types'
-import { isOutputFormatterAgentFromMetadata } from './agentMetadataUtils'
+import {
+  isOutputFormatterAgentFromMetadata,
+  resolveOutputFormatterIncludeEvidence,
+} from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import { useAgentIcon } from '@/hooks/useAgentIcon'
 
@@ -139,17 +142,27 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         setInputSource(node.data.input_source || (hasIncomingEdge ? 'previous_output' : 'custom'))
       }
       setCustomInput(node.data.custom_input || '')
-      setIncludeEvidence(Boolean(node.data.include_evidence))
+      setIncludeEvidence(
+        resolveOutputFormatterIncludeEvidence(
+          node.data.agent_id,
+          agentMetadata,
+          node.data.include_evidence,
+        ) ?? false
+      )
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
     }
-  }, [node, isPdfAgent, hasIncomingEdge])
+  }, [node, isPdfAgent, hasIncomingEdge, agentMetadata])
 
   // Handle save
   const handleSave = () => {
     if (!node) return
 
     const nextIncludeEvidence = agentMetadataEntry
-      ? (supportsOutputFormatting ? includeEvidence : undefined)
+      ? resolveOutputFormatterIncludeEvidence(
+          node.data.agent_id,
+          agentMetadata,
+          includeEvidence,
+        )
       : node.data.include_evidence
 
     onSave(node.id, {

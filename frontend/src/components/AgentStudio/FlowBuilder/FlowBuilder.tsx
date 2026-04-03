@@ -84,6 +84,7 @@ import {
 } from './smartDefaultUtils'
 import {
   isExtractionAgentFromMetadata,
+  resolveOutputFormatterIncludeEvidence,
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
@@ -829,6 +830,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             custom_instructions: '',
             input_source: inputSource,
             custom_input: customInput,
+            include_evidence: isTaskInput
+              ? undefined
+              : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
             output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
           },
         }
@@ -846,7 +850,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         logger.error('Failed to parse drag data', err as Error, { component: 'FlowBuilder' })
       }
     },
-    [reactFlowInstance, setNodes, getNodeId, nodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic]
+    [reactFlowInstance, setNodes, getNodeId, nodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic, agentMetadata]
   )
 
   // Handle node data update from editor

@@ -123,19 +123,29 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       const flowRunId = typeof event.flow_run_id === 'string'
         ? event.flow_run_id.trim()
         : ''
+      const flowName = typeof event.flow_name === 'string'
+        ? event.flow_name.trim()
+        : ''
       const status = typeof event.status === 'string' ? event.status.trim() : ''
       const totalEvidenceRecords = Number(event.total_evidence_records)
 
-      if (!flowRunId || !status || !Number.isFinite(totalEvidenceRecords)) {
+      if (!flowRunId || !flowName || !status || !Number.isFinite(totalEvidenceRecords)) {
         continue
       }
 
       return {
+        adapterKeys: Array.isArray(event.adapter_keys)
+          ? event.adapter_keys.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [],
+        documentId: typeof event.document_id === 'string' && event.document_id.trim()
+          ? event.document_id
+          : null,
         flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
-        flowName: typeof event.flow_name === 'string' && event.flow_name.trim()
-          ? event.flow_name
-          : 'Completed flow run',
+        flowName,
         flowRunId,
+        originSessionId: typeof event.origin_session_id === 'string' && event.origin_session_id.trim()
+          ? event.origin_session_id
+          : null,
         status,
         failureReason: typeof event.failure_reason === 'string' && event.failure_reason.trim()
           ? event.failure_reason

@@ -6,6 +6,7 @@ import {
   isExtractionAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   isValidationAgentFromMetadata,
+  resolveOutputFormatterIncludeEvidence,
 } from './agentMetadataUtils'
 
 const metadata: Record<string, AgentMetadata> = {
@@ -46,5 +47,12 @@ describe('agentMetadataUtils', () => {
     expect(isOutputFormatterAgentFromMetadata('custom_output', metadata)).toBe(true)
     expect(isOutputFormatterAgentFromMetadata('custom_extractor', metadata)).toBe(false)
     expect(isOutputFormatterAgentFromMetadata('missing_agent', metadata)).toBe(false)
+  })
+
+  it('defaults include_evidence to true for output formatter agents', () => {
+    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, undefined)).toBe(true)
+    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, null)).toBe(true)
+    expect(resolveOutputFormatterIncludeEvidence('custom_output', metadata, false)).toBe(false)
+    expect(resolveOutputFormatterIncludeEvidence('custom_extractor', metadata, undefined)).toBeUndefined()
   })
 })
