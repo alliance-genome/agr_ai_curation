@@ -32,6 +32,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
+import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
 
 /**
  * Flow summary from API response
@@ -189,6 +190,12 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
   // Fetch flows on mount
   useEffect(() => {
     void fetchFlows()
+  }, [fetchFlows])
+
+  useEffect(() => {
+    return subscribeToFlowListInvalidation(() => {
+      void fetchFlows()
+    })
   }, [fetchFlows])
 
   /**

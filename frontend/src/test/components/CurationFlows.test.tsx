@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
 import CurationFlows from '../../components/RightPanel/Tools/CurationFlows'
 import type { SSEEvent } from '../../hooks/useChatStream'
+import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 
 const openCurationWorkspaceMock = vi.fn()
 vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
@@ -26,23 +27,35 @@ const mockRevokeObjectURL = vi.fn()
 global.URL.createObjectURL = mockCreateObjectURL
 global.URL.revokeObjectURL = mockRevokeObjectURL
 
-function flowListResponse() {
+function flowListResponse(
+  flows: Array<{
+    id: string
+    user_id: number
+    name: string
+    description: string | null
+    step_count: number
+    execution_count: number
+    last_executed_at: string | null
+    created_at: string
+    updated_at: string
+  }> = [
+    {
+      id: 'flow-1',
+      user_id: 7,
+      name: 'Evidence Flow',
+      description: 'Collects structured evidence',
+      step_count: 2,
+      execution_count: 3,
+      last_executed_at: '2026-04-03T00:00:00Z',
+      created_at: '2026-04-02T00:00:00Z',
+      updated_at: '2026-04-03T00:00:00Z',
+    },
+  ],
+) {
   return new Response(
     JSON.stringify({
-      flows: [
-        {
-          id: 'flow-1',
-          user_id: 7,
-          name: 'Evidence Flow',
-          description: 'Collects structured evidence',
-          step_count: 2,
-          execution_count: 3,
-          last_executed_at: '2026-04-03T00:00:00Z',
-          created_at: '2026-04-02T00:00:00Z',
-          updated_at: '2026-04-03T00:00:00Z',
-        },
-      ],
-      total: 1,
+      flows,
+      total: flows.length,
       page: 1,
       page_size: 50,
     }),
@@ -232,5 +245,50 @@ describe('CurationFlows', () => {
     expect(mockLink.click).not.toHaveBeenCalled()
     expect(mockCreateObjectURL).not.toHaveBeenCalled()
     expect(mockRevokeObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('refreshes the flow list when flow invalidation is broadcast', async () => {
+    mockFetch
+      .mockResolvedValueOnce(flowListResponse())
+      .mockResolvedValueOnce(
+        flowListResponse([
+          {
+            id: 'flow-1',
+            user_id: 7,
+            name: 'Evidence Flow',
+            description: 'Collects structured evidence',
+            step_count: 2,
+            execution_count: 3,
+            last_executed_at: '2026-04-03T00:00:00Z',
+            created_at: '2026-04-02T00:00:00Z',
+            updated_at: '2026-04-03T00:00:00Z',
+          },
+          {
+            id: 'flow-2',
+            user_id: 7,
+            name: 'Fresh Flow',
+            description: 'Saved from Agent Studio',
+            step_count: 3,
+            execution_count: 0,
+            last_executed_at: null,
+            created_at: '2026-04-03T01:00:00Z',
+            updated_at: '2026-04-03T01:00:00Z',
+          },
+        ]),
+      )
+
+    renderComponent([])
+
+    await screen.findByText(/Evidence Flow/)
+
+    act(() => {
+      notifyFlowListInvalidated({ flowId: 'flow-2', reason: 'created' })
+    })
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+    })
+
+    expect(await screen.findByText(/Fresh Flow/)).toBeInTheDocument()
   })
 })

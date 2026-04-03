@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   cloneAgentToWorkshop,
+  createFlow,
   createCustomAgent,
   listCustomAgents,
   listToolIdeaRequests,
   setCustomAgentVisibility,
   submitToolIdeaRequest,
+  updateFlow,
 } from './agentStudioService'
 
 const mockFetch = vi.fn()
@@ -229,5 +231,83 @@ describe('agentStudioService', () => {
     await listToolIdeaRequests()
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/tool-ideas')
+  })
+
+  it('createFlow returns the created flow object for immediate UI updates', async () => {
+    const createdFlow = {
+      id: 'flow-123',
+      user_id: 1,
+      name: 'Fresh Flow',
+      description: 'Saved from builder',
+      execution_count: 0,
+      last_executed_at: null,
+      created_at: '2026-04-03T00:00:00Z',
+      updated_at: '2026-04-03T00:00:00Z',
+      flow_definition: {
+        version: '1.0' as const,
+        entry_node_id: 'node_0',
+        nodes: [],
+        edges: [],
+      },
+    }
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => createdFlow,
+    })
+
+    const result = await createFlow({
+      name: 'Fresh Flow',
+      description: 'Saved from builder',
+      flow_definition: createdFlow.flow_definition,
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/flows',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+    expect(result).toEqual(createdFlow)
+  })
+
+  it('updateFlow returns the updated flow object after saving changes', async () => {
+    const updatedFlow = {
+      id: 'flow-123',
+      user_id: 1,
+      name: 'Updated Flow',
+      description: 'Updated from builder',
+      execution_count: 2,
+      last_executed_at: null,
+      created_at: '2026-04-03T00:00:00Z',
+      updated_at: '2026-04-03T01:00:00Z',
+      flow_definition: {
+        version: '1.0' as const,
+        entry_node_id: 'node_0',
+        nodes: [],
+        edges: [],
+      },
+    }
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => updatedFlow,
+    })
+
+    const result = await updateFlow('flow-123', {
+      name: 'Updated Flow',
+      description: 'Updated from builder',
+      flow_definition: updatedFlow.flow_definition,
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/flows/flow-123',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+    expect(result).toEqual(updatedFlow)
   })
 })
