@@ -77,6 +77,10 @@ class FlowRunEvidenceExportPermissionError(PermissionError):
     """Raised when the caller cannot export a requested flow run."""
 
 
+class FlowRunEvidenceExportDataError(ValueError):
+    """Raised when persisted flow-run data is missing required export metadata."""
+
+
 @dataclass(frozen=True)
 class FlowEvidenceExportStep:
     """Evidence-export view for one persisted flow step."""
@@ -185,11 +189,8 @@ def build_flow_evidence_steps(
 
     steps: list[FlowEvidenceExportStep] = []
 
-    for index, extraction_result in enumerate(
-        sorted(extraction_results, key=_sort_extraction_result_for_export),
-        start=1,
-    ):
-        step_number = _resolve_step_number(extraction_result, fallback=index)
+    for extraction_result in sorted(extraction_results, key=_sort_extraction_result_for_export):
+        step_number = _resolve_step_number(extraction_result)
         local_registry = _EvidenceRegistry()
         local_registry.add_many(
             extract_evidence_records_from_structured_result(
@@ -200,7 +201,7 @@ def build_flow_evidence_steps(
         steps.append(
             FlowEvidenceExportStep(
                 step=step_number,
-                agent_id=str(extraction_result.agent_key or "").strip() or "unknown_agent",
+                agent_id=_resolve_agent_id(extraction_result),
                 agent_name=_optional_text(metadata.get("agent_name")),
                 tool_name=_optional_text(metadata.get("tool_name")),
                 evidence_records=local_registry.records(),
@@ -279,20 +280,43 @@ def _resolve_flow_name(
         flow_name = _optional_text((extraction_result.metadata or {}).get("flow_name"))
         if flow_name is not None:
             return flow_name
-    return "Flow run evidence export"
+    raise FlowRunEvidenceExportDataError(
+        "Persisted flow extraction results are missing required flow_name metadata."
+    )
 
 
 def _resolve_step_number(
     extraction_result: CurationExtractionResultRecord,
-    *,
-    fallback: int,
 ) -> int:
     raw_step = (extraction_result.metadata or {}).get("step")
+    extraction_result_id = str(extraction_result.extraction_result_id or "").strip() or "<unknown>"
     try:
         step_number = int(raw_step)
     except (TypeError, ValueError):
-        return fallback
-    return step_number if step_number > 0 else fallback
+        raise FlowRunEvidenceExportDataError(
+            "Persisted flow extraction result "
+            f"{extraction_result_id} is missing a valid integer step metadata value."
+        ) from None
+    if step_number <= 0:
+        raise FlowRunEvidenceExportDataError(
+            "Persisted flow extraction result "
+            f"{extraction_result_id} has a non-positive step metadata value."
+        )
+    return step_number
+
+
+def _resolve_agent_id(
+    extraction_result: CurationExtractionResultRecord,
+) -> str:
+    agent_id = str(extraction_result.agent_key or "").strip()
+    if agent_id:
+        return agent_id
+
+    extraction_result_id = str(extraction_result.extraction_result_id or "").strip() or "<unknown>"
+    raise FlowRunEvidenceExportDataError(
+        "Persisted flow extraction result "
+        f"{extraction_result_id} is missing required agent_key metadata."
+    )
 
 
 def _sort_extraction_result_for_export(
@@ -301,7 +325,7 @@ def _sort_extraction_result_for_export(
     created_at = extraction_result.created_at.isoformat()
     extraction_result_id = str(extraction_result.extraction_result_id or "")
     return (
-        _resolve_step_number(extraction_result, fallback=10**9),
+        _resolve_step_number(extraction_result),
         created_at,
         extraction_result_id,
     )
@@ -338,6 +362,7 @@ def _safe_filename_fragment(value: str) -> str:
 __all__ = [
     "FlowEvidenceExportArtifact",
     "FlowEvidenceExportFormat",
+    "FlowRunEvidenceExportDataError",
     "FlowRunEvidenceExportNotFoundError",
     "FlowRunEvidenceExportPermissionError",
     "build_flow_evidence_export_artifact",

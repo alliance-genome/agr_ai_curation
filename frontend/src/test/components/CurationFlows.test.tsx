@@ -141,6 +141,21 @@ describe('CurationFlows', () => {
     })
   })
 
+  it('does not infer missing curation scope from ambient component state', async () => {
+    renderComponent([
+      completedRunEvent({
+        document_id: undefined,
+        origin_session_id: undefined,
+      }),
+    ])
+
+    const reviewButton = await screen.findByRole('button', { name: /Review & Curate/i })
+    expect(reviewButton).toBeDisabled()
+    expect(
+      screen.getByText(/does not have enough document scope metadata/i),
+    ).toBeInTheDocument()
+  })
+
   it('downloads evidence export from the flow evidence endpoint', async () => {
     const user = userEvent.setup()
 
@@ -178,6 +193,7 @@ describe('CurationFlows', () => {
   it('ignores malformed flow finished events that cannot drive completion state', async () => {
     renderComponent([
       completedRunEvent({ status: '' }),
+      completedRunEvent({ flow_name: '' }),
       completedRunEvent({ total_evidence_records: 'not-a-number' as unknown as number }),
     ])
 

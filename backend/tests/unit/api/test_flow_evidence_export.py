@@ -271,6 +271,30 @@ def test_build_flow_evidence_export_artifact_rejects_empty_flow_run_id_in_filena
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        ({"metadata": {"agent_name": "Gene Specialist", "flow_name": "Flow Evidence", "tool_name": "ask_gene_specialist"}}, "missing a valid integer step metadata value"),
+        ({"agent_key": "", "metadata": {"agent_name": "Gene Specialist", "flow_name": "Flow Evidence", "step": 1, "tool_name": "ask_gene_specialist"}}, "missing required agent_key metadata"),
+        ({"metadata": {"agent_name": "Gene Specialist", "step": 1, "tool_name": "ask_gene_specialist"}}, "missing required flow_name metadata"),
+    ],
+)
+def test_build_flow_evidence_export_artifact_rejects_missing_required_metadata(
+    overrides,
+    expected_message,
+):
+    payload = _extraction_result(extraction_result_id="result-1").model_dump()
+    payload.update(overrides)
+    record = CurationExtractionResultRecord.model_validate(payload)
+
+    with pytest.raises(evidence_export.FlowRunEvidenceExportDataError, match=expected_message):
+        evidence_export.build_flow_evidence_export_artifact(
+            flow_run_id="flow-run-123",
+            extraction_results=[record],
+            export_format=evidence_export.FlowEvidenceExportFormat.JSON,
+        )
+
+
 def test_resolve_authorized_flow_run_extraction_results_enforces_ownership(monkeypatch):
     owned_record = _extraction_result(extraction_result_id="result-1", user_id="user-123")
 
@@ -345,14 +369,27 @@ async def test_export_flow_evidence_route_returns_attachment_response(monkeypatc
     [
         (evidence_export.FlowRunEvidenceExportNotFoundError("missing"), 404),
         (evidence_export.FlowRunEvidenceExportPermissionError("forbidden"), 403),
+        (evidence_export.FlowRunEvidenceExportDataError("bad data"), 500),
     ],
 )
 def test_export_flow_evidence_route_maps_service_errors(monkeypatch, error, expected_status):
-    monkeypatch.setattr(
-        flows,
-        "resolve_authorized_flow_run_extraction_results",
-        lambda **_kwargs: (_ for _ in ()).throw(error),
-    )
+    if isinstance(error, evidence_export.FlowRunEvidenceExportDataError):
+        monkeypatch.setattr(
+            flows,
+            "resolve_authorized_flow_run_extraction_results",
+            lambda **_kwargs: [_extraction_result(extraction_result_id="result-1")],
+        )
+        monkeypatch.setattr(
+            flows,
+            "build_flow_evidence_export_artifact",
+            lambda **_kwargs: (_ for _ in ()).throw(error),
+        )
+    else:
+        monkeypatch.setattr(
+            flows,
+            "resolve_authorized_flow_run_extraction_results",
+            lambda **_kwargs: (_ for _ in ()).throw(error),
+        )
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
