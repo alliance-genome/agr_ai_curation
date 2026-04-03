@@ -5,7 +5,7 @@
  * Allows viewing flow details, executing flows, and creating new flows.
  */
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -30,6 +30,8 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
+import type { SSEEvent } from '@/hooks/useChatStream'
+import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
 
 /**
  * Flow summary from API response
@@ -62,6 +64,8 @@ interface FlowListResponse {
 export interface CurationFlowsProps {
   /** Current chat session ID */
   sessionId: string | null
+  /** Shared SSE event stream for reacting to flow completion */
+  sseEvents: SSEEvent[]
   /** Callback to execute a flow */
   onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
   /** Callback to stop currently executing flow/chat stream */
@@ -82,6 +86,7 @@ export interface CurationFlowsProps {
  */
 const CurationFlows: React.FC<CurationFlowsProps> = ({
   sessionId,
+  sseEvents,
   onExecuteFlow,
   onStopFlow,
   isExecuting = false,
@@ -97,6 +102,50 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [flowToDelete, setFlowToDelete] = useState<FlowSummaryResponse | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  const latestCompletedRun = useMemo<FlowRunCompletionSummary | null>(() => {
+    for (let index = sseEvents.length - 1; index >= 0; index -= 1) {
+      const event = sseEvents[index]
+      if (event.type !== 'FLOW_FINISHED') {
+        continue
+      }
+
+      const eventSessionId = typeof event.session_id === 'string'
+        ? event.session_id
+        : typeof event.sessionId === 'string'
+          ? event.sessionId
+          : null
+
+      if (sessionId && eventSessionId && eventSessionId !== sessionId) {
+        continue
+      }
+
+      const flowRunId = typeof event.flow_run_id === 'string'
+        ? event.flow_run_id.trim()
+        : ''
+      const status = typeof event.status === 'string' ? event.status.trim() : ''
+      const totalEvidenceRecords = Number(event.total_evidence_records)
+
+      if (!flowRunId || !status || !Number.isFinite(totalEvidenceRecords)) {
+        continue
+      }
+
+      return {
+        flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
+        flowName: typeof event.flow_name === 'string' && event.flow_name.trim()
+          ? event.flow_name
+          : 'Completed flow run',
+        flowRunId,
+        status,
+        failureReason: typeof event.failure_reason === 'string' && event.failure_reason.trim()
+          ? event.failure_reason
+          : null,
+        totalEvidenceRecords,
+      }
+    }
+
+    return null
+  }, [sessionId, sseEvents])
 
   /**
    * Fetch flows from API
@@ -362,6 +411,10 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
           >
             New Flow
           </Button>
+
+          {latestCompletedRun && (
+            <FlowRunCompletionCard run={latestCompletedRun} />
+          )}
 
           {/* Loading State */}
           {isLoading && (

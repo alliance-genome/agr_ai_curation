@@ -1,6 +1,8 @@
 """Unit tests for flow CRUD endpoint handlers."""
 
 from datetime import datetime, timezone
+import importlib
+import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -8,8 +10,23 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from src.api import flows
 from src.schemas.flows import CreateFlowRequest, UpdateFlowRequest
+
+
+sys.modules.setdefault(
+    "rapidfuzz",
+    SimpleNamespace(
+        fuzz=SimpleNamespace(
+            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                dest_start=0,
+                dest_end=0,
+                score=0.0,
+            )
+        )
+    ),
+)
+
+flows = importlib.import_module("src.api.flows")
 
 
 def _flow_definition():
@@ -96,8 +113,6 @@ async def test_get_flow_uses_verify_ownership(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
-    created = _flow(name="Created")
-
     class _DB:
         def __init__(self):
             self.added = None
