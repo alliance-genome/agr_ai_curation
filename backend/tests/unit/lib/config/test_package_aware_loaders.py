@@ -154,6 +154,46 @@ def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yam
         agent_loader.load_agent_definitions(packages_dir, force_reload=True)
 
 
+def test_resolve_agent_sources_warns_when_package_agent_dir_is_missing_from_agent_bundles(
+    tmp_path, caplog
+):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "demo_core"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "demo.core",
+            "display_name": "Demo Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/demo_core",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "gene"}],
+        },
+    )
+    for agent_name in ("gene", "missing_manifest"):
+        agent_dir = package_dir / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(
+            f"agent_id: {agent_name}\nname: {agent_name.title()}\n",
+            encoding="utf-8",
+        )
+        (agent_dir / "prompt.yaml").write_text(
+            "content: Demo prompt\n",
+            encoding="utf-8",
+        )
+
+    with caplog.at_level(logging.WARNING):
+        sources = agent_sources.resolve_agent_config_sources(packages_dir)
+
+    assert sources == ()
+    assert "Skipping runtime package 'demo_core'" in caplog.text
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in caplog.text
+    assert "agents/missing_manifest" in caplog.text
+
+
 def test_resolve_agent_sources_rejects_package_prompt_exports_without_agent_bundle(tmp_path):
     packages_dir = tmp_path / "packages"
     package_dir = packages_dir / "demo_core"

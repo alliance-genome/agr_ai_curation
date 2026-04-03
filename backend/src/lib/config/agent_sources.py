@@ -11,6 +11,7 @@ from src.lib.packages import ExportKind, LoadedPackage, PackageExport, load_pack
 from src.lib.packages.paths import get_runtime_config_dir, get_runtime_packages_dir
 
 logger = logging.getLogger(__name__)
+_warned_package_failures: set[tuple[str, str]] = set()
 
 
 def _find_project_root() -> Path | None:
@@ -157,6 +158,21 @@ def _looks_like_agent_directory(path: Path) -> bool:
         child.is_dir() and (child / "agent.yaml").exists()
         for child in path.iterdir()
     )
+
+
+def _warn_failed_packages_once(registry) -> None:
+    """Emit actionable warnings for packages that were discovered but not loaded."""
+    for failure in registry.failed_packages:
+        warning_key = (str(failure.manifest_path), failure.reason)
+        if warning_key in _warned_package_failures:
+            continue
+        _warned_package_failures.add(warning_key)
+        logger.warning(
+            "Skipping runtime package '%s' at %s: %s",
+            failure.package_id,
+            failure.manifest_path,
+            failure.reason,
+        )
 
 
 def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigSource, ...]:
@@ -306,6 +322,7 @@ def _resolve_agent_config_sources_for_path(
             resolved_path.parent,
             fail_on_validation_error=True,
         )
+        _warn_failed_packages_once(registry)
         package = next(
             (
                 item
@@ -315,6 +332,16 @@ def _resolve_agent_config_sources_for_path(
             None,
         )
         if package is None:
+            failed_package = next(
+                (
+                    item
+                    for item in registry.failed_packages
+                    if item.package_path == resolved_path
+                ),
+                None,
+            )
+            if failed_package is not None:
+                raise ValueError(failed_package.reason)
             raise FileNotFoundError(
                 f"Package directory is not a loaded runtime package: {resolved_path}"
             )
@@ -324,6 +351,7 @@ def _resolve_agent_config_sources_for_path(
             resolved_path,
             fail_on_validation_error=True,
         )
+        _warn_failed_packages_once(registry)
         sources = tuple(
             source
             for package in registry.loaded_packages

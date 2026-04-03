@@ -15,6 +15,9 @@ exports:
     name: default
     path: python/src/agr_ai_curation_alliance/curation_adapters.py
     description: Package-owned curation adapter registrations
+# MAINTAINER NOTE: Adding a directory under packages/alliance/agents/ is not enough
+# to activate a specialist. Every bundle with agents/<name>/agent.yaml must also be
+# listed in agent_bundles below or startup will warn and skip that on-disk bundle.
 agent_bundles:
   - name: allele
     has_schema: true

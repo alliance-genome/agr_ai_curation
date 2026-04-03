@@ -8,7 +8,7 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .models import PackageManifest, RuntimeOverrides, ToolBindingsManifest
+from .models import AgentBundleSpec, PackageManifest, RuntimeOverrides, ToolBindingsManifest
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -66,9 +66,57 @@ def _load_contract_model(path: Path, model_type: type[T], error_type: type[Packa
         raise error_type(str(exc)) from exc
 
 
+def _validate_agent_bundle_directory_registration(path: Path, raw_data: dict) -> None:
+    """Fail clearly when package-owned agent bundles exist on disk but not in the manifest."""
+    bundle_payloads = raw_data.get("agent_bundles")
+    if not bundle_payloads:
+        return
+
+    package_dir = path.parent
+    declared_bundle_paths: set[tuple[str, str]] = set()
+    agent_roots: dict[str, Path] = {}
+
+    for raw_bundle in bundle_payloads:
+        bundle = AgentBundleSpec.model_validate(raw_bundle)
+        declared_bundle_paths.add((bundle.agents_dir, bundle.name))
+        agent_roots.setdefault(bundle.agents_dir, package_dir / bundle.agents_dir)
+
+    missing_bundle_dirs: list[str] = []
+    for agents_dir, agents_root in sorted(agent_roots.items()):
+        if not agents_root.exists() or not agents_root.is_dir():
+            continue
+
+        for child in sorted(agents_root.iterdir(), key=lambda item: item.name):
+            if not child.is_dir() or child.name.startswith(("_", ".")):
+                continue
+            if not (child / "agent.yaml").exists():
+                continue
+            if (agents_dir, child.name) in declared_bundle_paths:
+                continue
+            missing_bundle_dirs.append(f"{agents_dir}/{child.name}")
+
+    if not missing_bundle_dirs:
+        return
+
+    missing_list = ", ".join(missing_bundle_dirs)
+    raise PackageContractError(
+        f"Invalid {path.name} at {path}: agent_bundles is missing package-owned "
+        f"agent directories with agent.yaml: {missing_list}. Add each bundle name "
+        "to agent_bundles to activate it."
+    )
+
+
 def load_package_manifest(path: Path) -> PackageManifest:
     """Load and validate a package manifest file."""
-    return _load_contract_model(path, PackageManifest, PackageManifestError)
+    try:
+        raw_data = _load_yaml_mapping(path)
+        _validate_agent_bundle_directory_registration(path, raw_data)
+        return PackageManifest.model_validate(raw_data)
+    except ValidationError as exc:
+        details = _format_validation_error(exc)
+        raise PackageManifestError(f"Invalid {path.name} at {path}: {details}") from exc
+    except PackageContractError as exc:
+        raise PackageManifestError(str(exc)) from exc
 
 
 def load_tool_bindings(path: Path) -> ToolBindingsManifest:
