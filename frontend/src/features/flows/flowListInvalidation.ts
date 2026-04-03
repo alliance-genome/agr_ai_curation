@@ -1,3 +1,5 @@
+import logger from '@/services/logger'
+
 export type FlowListInvalidationReason = 'created' | 'updated' | 'deleted'
 
 export interface FlowListInvalidationDetail {
@@ -32,8 +34,15 @@ export function notifyFlowListInvalidated(
       FLOW_LIST_INVALIDATED_STORAGE_KEY,
       JSON.stringify(eventDetail)
     )
-  } catch {
-    // Ignore storage write failures so the active tab still receives the event.
+  } catch (error) {
+    logger.warn('Failed to persist flow list invalidation event', {
+      component: 'flowListInvalidation',
+      metadata: {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        flowId: eventDetail.flowId,
+        reason: eventDetail.reason,
+      },
+    })
   }
 }
 

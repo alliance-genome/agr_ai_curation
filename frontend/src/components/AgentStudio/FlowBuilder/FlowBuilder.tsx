@@ -64,7 +64,6 @@ import type {
   FlowState,
   AgentNode,
   AgentNodeData,
-  FlowResponse,
   FlowDefinition,
 } from './types'
 import {
@@ -77,7 +76,6 @@ import {
 import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
-import { upsertFlowSummary } from '@/features/flows/flowListSummaries'
 import {
   isExtractionAgent,
   isValidationAgent,
@@ -556,27 +554,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     return response.flows
   }, [])
 
-  const syncFlowListsAfterMutation = useCallback(
-    async (savedFlow: FlowResponse, reason: 'created' | 'updated') => {
-      setSavedFlows((flows) => upsertFlowSummary(flows, savedFlow, 20))
-      setManageFlows((flows) => upsertFlowSummary(flows, savedFlow, 20))
-
-      try {
-        await refreshFlowLists()
-      } catch (err) {
-        logger.warn('Failed to refresh flow lists after flow mutation', {
-          component: 'FlowBuilder',
-          metadata: {
-            flowId: savedFlow.id,
-            reason,
-            error: err instanceof Error ? err.message : 'Unknown error',
-          },
-        })
-      }
-    },
-    [refreshFlowLists]
-  )
-
   // Stable key for edge topology - triggers revalidation when edges are rewired (not just added/removed)
   // Includes handles to catch rewires between different connection points on the same nodes
   const edgeTopologyKey = useMemo(
@@ -697,7 +674,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       }
 
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
-      await syncFlowListsAfterMutation(savedFlow, flowMutationReason)
+      await refreshFlowLists()
 
       // Update flowName state to match saved name
       setFlowName(savedFlow.name)
@@ -1097,7 +1074,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         description: fullFlow.description || undefined,
         flow_definition: fullFlow.flow_definition,
       })
-      await syncFlowListsAfterMutation(updatedFlow, 'updated')
+      await refreshFlowLists()
       notifyFlowListInvalidated({
         flowId: updatedFlow.id,
         reason: 'updated',
@@ -1117,7 +1094,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     } finally {
       setRenamingFlow(false)
     }
-  }, [editingFlowId, editingFlowName, currentFlowId, syncFlowListsAfterMutation])
+  }, [editingFlowId, editingFlowName, currentFlowId, refreshFlowLists])
 
   // Delete flow from Manage dialog
   const handleDeleteFromManageClick = useCallback((flow: FlowSummaryResponse) => {
