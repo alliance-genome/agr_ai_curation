@@ -9,6 +9,7 @@ import React from 'react'
 import { Box, Stack } from '@mui/material'
 import CurationFlows from './CurationFlows'
 import PdfHighlightTester from '../../pdfViewer/PdfHighlightTester'
+import type { SSEEvent } from '@/hooks/useChatStream'
 
 /**
  * Props for ToolsPanel component
@@ -16,6 +17,8 @@ import PdfHighlightTester from '../../pdfViewer/PdfHighlightTester'
 export interface ToolsPanelProps {
   /** Current chat session ID */
   sessionId: string | null
+  /** Shared SSE events from the chat stream */
+  sseEvents: SSEEvent[]
   /** Callback to execute a flow */
   onExecuteFlow: (flowId: string, documentId?: string, userQuery?: string) => Promise<void>
   /** Callback to stop currently executing flow/chat stream */
@@ -35,6 +38,7 @@ export interface ToolsPanelProps {
  */
 const ToolsPanel: React.FC<ToolsPanelProps> = ({
   sessionId,
+  sseEvents,
   onExecuteFlow,
   onStopFlow,
   isExecuting = false,
@@ -78,6 +82,7 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
           {/* Curation Flows Section */}
           <CurationFlows
             sessionId={sessionId}
+            sseEvents={sseEvents}
             onExecuteFlow={onExecuteFlow}
             onStopFlow={onStopFlow}
             isExecuting={isExecuting}

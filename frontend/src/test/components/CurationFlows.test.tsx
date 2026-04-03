@@ -1,0 +1,139 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
+
+import CurationFlows from '../../components/RightPanel/Tools/CurationFlows'
+import type { SSEEvent } from '../../hooks/useChatStream'
+
+const mockFetch = vi.fn()
+global.fetch = mockFetch
+
+const mockCreateObjectURL = vi.fn(() => 'blob:flow-evidence')
+const mockRevokeObjectURL = vi.fn()
+global.URL.createObjectURL = mockCreateObjectURL
+global.URL.revokeObjectURL = mockRevokeObjectURL
+
+function flowListResponse() {
+  return new Response(
+    JSON.stringify({
+      flows: [
+        {
+          id: 'flow-1',
+          user_id: 7,
+          name: 'Evidence Flow',
+          description: 'Collects structured evidence',
+          step_count: 2,
+          execution_count: 3,
+          last_executed_at: '2026-04-03T00:00:00Z',
+          created_at: '2026-04-02T00:00:00Z',
+          updated_at: '2026-04-03T00:00:00Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    },
+  )
+}
+
+function completedRunEvent(overrides: Partial<SSEEvent> = {}): SSEEvent {
+  return {
+    type: 'FLOW_FINISHED',
+    session_id: 'session-123',
+    flow_id: 'flow-1',
+    flow_name: 'Evidence Flow',
+    flow_run_id: 'flow-run-123',
+    status: 'completed',
+    total_evidence_records: 4,
+    ...overrides,
+  }
+}
+
+const renderComponent = (sseEvents: SSEEvent[]) => render(
+  <MemoryRouter>
+    <CurationFlows
+      sessionId="session-123"
+      sseEvents={sseEvents}
+      onExecuteFlow={vi.fn(async () => {})}
+      isExecuting={false}
+      currentDocumentId="document-123"
+    />
+  </MemoryRouter>,
+)
+
+describe('CurationFlows', () => {
+  const originalCreateElement = document.createElement.bind(document)
+  let mockLink: HTMLAnchorElement
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue(flowListResponse())
+
+    mockLink = originalCreateElement('a')
+    vi.spyOn(mockLink, 'click').mockImplementation(() => {})
+    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
+      if (tagName.toLowerCase() === 'a') {
+        return mockLink
+      }
+      return originalCreateElement(tagName)
+    }) as typeof document.createElement)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders the latest completed flow run surface from shared SSE events', async () => {
+    renderComponent([completedRunEvent()])
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+    })
+
+    expect(screen.getByText('Latest flow run')).toBeInTheDocument()
+    expect(screen.getByText('Evidence Flow')).toBeInTheDocument()
+    expect(screen.getByText(/4 evidence records ready/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Export Evidence/i })).toBeEnabled()
+  })
+
+  it('downloads evidence export from the flow evidence endpoint', async () => {
+    const user = userEvent.setup()
+
+    mockFetch
+      .mockResolvedValueOnce(flowListResponse())
+      .mockResolvedValueOnce(
+        new Response('evidence_record_id,entity\nrecord-1,gene-1\n', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/csv',
+            'Content-Disposition': 'attachment; filename="flow-flow-run-123-evidence.csv"',
+          },
+        }),
+      )
+
+    renderComponent([completedRunEvent()])
+
+    const exportButton = await screen.findByRole('button', { name: /Export Evidence/i })
+    await user.click(exportButton)
+    await user.click(await screen.findByRole('menuitem', { name: /Download CSV/i }))
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/flows/runs/flow-run-123/evidence/export?format=csv',
+        { credentials: 'include' },
+      )
+    })
+
+    expect(mockLink.download).toBe('flow-flow-run-123-evidence.csv')
+    expect(mockLink.click).toHaveBeenCalled()
+    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1)
+    expect(mockRevokeObjectURL).toHaveBeenCalledWith('blob:flow-evidence')
+  })
+})

@@ -230,6 +230,7 @@ def list_extraction_results(
     *,
     db: Optional[Session] = None,
     document_id: str | None = None,
+    flow_run_id: str | None = None,
     origin_session_id: str | None = None,
     user_id: str | None = None,
     source_kind: Any | None = None,
@@ -255,6 +256,10 @@ def list_extraction_results(
                 )
                 return []
             statement = statement.where(CurationExtractionResultRecordModel.document_id == document_uuid)
+        if flow_run_id:
+            statement = statement.where(
+                CurationExtractionResultRecordModel.flow_run_id == str(flow_run_id).strip()
+            )
         if origin_session_id:
             statement = statement.where(
                 CurationExtractionResultRecordModel.origin_session_id == origin_session_id
