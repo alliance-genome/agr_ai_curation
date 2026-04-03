@@ -802,18 +802,38 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         ],
     },
     "curation_prep": {
-        "summary": "Transforms conversation and extraction context into structured curation-prep candidates for the deterministic workspace pipeline.",
+        "summary": "Collects upstream extraction envelopes, creates a curator review session, carries verified evidence into deterministic anchor resolution, and performs structural validation before curator review.",
         "capabilities": [
             {
-                "name": "Candidate proposal synthesis",
-                "description": "Combines conversation scope, extraction envelopes, evidence records, and adapter metadata into structured candidate payloads",
-                "example_query": "Prepare the confirmed disease findings for curation workspace review",
-                "example_result": "Returns one or more structured curation-prep candidates with extracted fields, evidence references, and ambiguity notes",
+                "name": "Upstream extraction intake",
+                "description": "Collects prior extraction envelopes, scope confirmations, and evidence records into a single curation-prep request",
+                "example_query": "Prepare the confirmed extraction findings for curator review",
+                "example_result": "Creates a curation review session seeded from upstream extraction output instead of re-reading the paper from scratch",
+            },
+            {
+                "name": "Evidence-backed review session prep",
+                "description": "Carries verified evidence references forward so the deterministic anchor-resolution pipeline starts from the same evidence the extractor kept",
+                "example_query": "Create curation prep candidates with the supporting quotes attached",
+                "example_result": "Returns structured candidates whose field values stay linked to upstream evidence records and ambiguity notes",
+            },
+            {
+                "name": "Structural validation before handoff",
+                "description": "Checks adapter/profile structure and flags incomplete or uncertain payloads before the curator sees the review session",
+                "example_query": "Validate the candidate structure before opening the curation workspace",
+                "example_result": "Returns only in-scope candidates plus warnings when fields still need curator attention",
+            },
+            {
+                "name": "Flow-final curation handoff",
+                "description": "Works best as the last step after extraction/validation agents have already gathered the evidence that should enter curation review",
+                "example_query": "Use this as the final step after gene extraction and validation",
+                "example_result": "Hands the curator a review-ready session rather than acting like a standalone extractor or summarizer",
             },
         ],
         "limitations": [
-            "Runs only when explicitly invoked by downstream curation workspace actions",
-            "Does not validate, normalize, or submit candidates; downstream deterministic services own those steps",
+            "Requires upstream extraction output and evidence records; it does not discover new evidence on its own",
+            "Should not be used as a standalone extraction, PDF reading, or summarization step",
+            "Does not replace curator review or approval; it prepares the review session but does not submit final curation",
+            "Downstream deterministic services still own anchor resolution, normalization, and persistence",
         ],
     },
     "csv_output_formatter": {

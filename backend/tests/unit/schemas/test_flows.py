@@ -24,18 +24,27 @@ def make_task_input_node(node_id: str = "task_input_1", task_instructions: str =
     }
 
 
-def make_agent_node(node_id: str, agent_id: str = "pdf_extraction", output_key: str = None) -> dict:
+def make_agent_node(
+    node_id: str,
+    agent_id: str = "pdf_extraction",
+    output_key: str = None,
+    include_evidence: bool | None = None,
+) -> dict:
     """Helper to create a valid agent node dict."""
+    data = {
+        "agent_id": agent_id,
+        "agent_display_name": agent_id.replace("_", " ").title(),
+        "input_source": "previous_output",
+        "output_key": output_key or f"{agent_id}_output",
+    }
+    if include_evidence is not None:
+        data["include_evidence"] = include_evidence
+
     return {
         "id": node_id,
         "type": "agent",
         "position": {"x": 100, "y": 100},
-        "data": {
-            "agent_id": agent_id,
-            "agent_display_name": agent_id.replace("_", " ").title(),
-            "input_source": "previous_output",
-            "output_key": output_key or f"{agent_id}_output",
-        }
+        "data": data,
     }
 
 
@@ -226,6 +235,21 @@ class TestFlowDefinitionTaskInputRequirement:
 
 class TestFlowDefinitionOtherValidations:
     """Tests for other FlowDefinition validations (to ensure they still work)."""
+
+    def test_include_evidence_round_trips_on_agent_nodes(self):
+        """Agent node configuration should preserve optional include_evidence."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Format the extracted genes"),
+                make_agent_node("n1", "chat_output_formatter", "formatted_output", include_evidence=True),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+        assert flow.nodes[1].data.include_evidence is True
 
     def test_unique_node_ids(self):
         """Node IDs must be unique."""

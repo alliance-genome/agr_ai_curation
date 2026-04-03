@@ -12,6 +12,7 @@ import {
   TextField,
   Paper,
   IconButton,
+  Checkbox,
   Radio,
   RadioGroup,
   FormControlLabel,
@@ -30,6 +31,8 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 
 import type { NodeEditorProps, InputSource } from './types'
+import { isOutputFormatterAgentFromMetadata } from './agentMetadataUtils'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import { useAgentIcon } from '@/hooks/useAgentIcon'
 
 const EditorContainer = styled(Paper)(({ theme }) => ({
@@ -108,14 +111,21 @@ const VariableChip = styled(Box)(({ theme }) => ({
 }))
 
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
+  const { agents: agentMetadata } = useAgentMetadata()
+
   // Form state
   const [customInstructions, setCustomInstructions] = useState('')
   const [inputSource, setInputSource] = useState<InputSource>('previous_output')
   const [customInput, setCustomInput] = useState('')
+  const [includeEvidence, setIncludeEvidence] = useState(false)
   const [outputKey, setOutputKey] = useState('')
 
   // Check if this is a PDF agent (input source is hardcoded to PDF document)
   const isPdfAgent = node?.data.agent_id === 'pdf_extraction'
+  const agentMetadataEntry = node ? agentMetadata[node.data.agent_id] : undefined
+  const supportsOutputFormatting = node
+    ? isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
+    : false
 
   // Initialize form when node changes
   useEffect(() => {
@@ -129,6 +139,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         setInputSource(node.data.input_source || (hasIncomingEdge ? 'previous_output' : 'custom'))
       }
       setCustomInput(node.data.custom_input || '')
+      setIncludeEvidence(Boolean(node.data.include_evidence))
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
     }
   }, [node, isPdfAgent, hasIncomingEdge])
@@ -137,10 +148,15 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const handleSave = () => {
     if (!node) return
 
+    const nextIncludeEvidence = agentMetadataEntry
+      ? (supportsOutputFormatting ? includeEvidence : undefined)
+      : node.data.include_evidence
+
     onSave(node.id, {
       custom_instructions: customInstructions || undefined,
       input_source: inputSource,
       custom_input: inputSource === 'custom' ? customInput : undefined,
+      include_evidence: nextIncludeEvidence,
       output_key: outputKey,
     })
 
@@ -355,7 +371,46 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           </Box>
         )}
 
-        <Divider />
+        {supportsOutputFormatting ? (
+          <>
+            <Divider />
+
+            <Box>
+              <FieldLabel>
+                <Typography variant="caption" fontWeight={600}>
+                  Output Options
+                </Typography>
+                <Tooltip title="When enabled, this formatter should carry supporting evidence from earlier steps into the final output whenever that evidence is available.">
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
+                </Tooltip>
+              </FieldLabel>
+              <FormControlLabel
+                sx={{ alignItems: 'flex-start', m: 0 }}
+                control={(
+                  <Checkbox
+                    size="small"
+                    checked={includeEvidence}
+                    onChange={(e) => setIncludeEvidence(e.target.checked)}
+                  />
+                )}
+                label={(
+                  <Box>
+                    <Typography variant="body2" fontSize="0.75rem">
+                      Include evidence in output
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                      Surface upstream evidence alongside the final chat or exported result.
+                    </Typography>
+                  </Box>
+                )}
+              />
+            </Box>
+
+            <Divider />
+          </>
+        ) : (
+          <Divider />
+        )}
 
         {/* Output Variable */}
         <Box>

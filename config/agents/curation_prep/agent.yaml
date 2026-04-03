@@ -11,9 +11,10 @@ agent_id: curation_prep
 name: "Curation Prep Agent"
 
 description: >
-  Reads conversation context, extraction envelopes, evidence records, and
-  adapter metadata to propose structured curation prep candidates for the
-  deterministic curation workspace pipeline.
+  Collects upstream extraction envelopes, creates a curator review session,
+  carries verified evidence into deterministic anchor resolution, and runs
+  structural validation before curator review. Requires prior extraction
+  output and does not replace curator approval.
 
 category: "Curation"
 subcategory: "Preparation"

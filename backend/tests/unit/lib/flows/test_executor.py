@@ -52,7 +52,14 @@ def _make_flow(nodes):
     return flow
 
 
-def _agent_node(node_id, agent_id, custom_instructions=None, step_goal=None, display_name=None):
+def _agent_node(
+    node_id,
+    agent_id,
+    custom_instructions=None,
+    step_goal=None,
+    display_name=None,
+    include_evidence=None,
+):
     """Build a minimal agent node dict."""
     data = {
         "agent_id": agent_id,
@@ -63,6 +70,8 @@ def _agent_node(node_id, agent_id, custom_instructions=None, step_goal=None, dis
         data["custom_instructions"] = custom_instructions
     if step_goal is not None:
         data["step_goal"] = step_goal
+    if include_evidence is not None:
+        data["include_evidence"] = include_evidence
     return {
         "id": node_id,
         "type": "agent",
@@ -446,6 +455,52 @@ class TestGetAllAgentToolsCustomInstructions:
         get_all_agent_tools(flow)
 
         assert mock_agent.instructions == base_prompt
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_include_evidence_guidance_prepended(self, mock_get_agent, mock_streaming):
+        """include_evidence should reuse the existing step-local instruction prefix."""
+        base_prompt = "You are the output specialist."
+        mock_agent = MagicMock(spec=Agent)
+        mock_agent.instructions = base_prompt
+        mock_get_agent.return_value = mock_agent
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", include_evidence=True),
+        ])
+
+        get_all_agent_tools(flow)
+
+        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE REQUIREMENT")
+        assert "include supporting evidence from earlier steps" in mock_agent.instructions
+        assert base_prompt in mock_agent.instructions
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_custom_instructions_and_include_evidence_share_prefix(self, mock_get_agent, mock_streaming):
+        """Custom instructions and evidence guidance should both prepend before the base prompt."""
+        base_prompt = "You are the output specialist."
+        mock_agent = MagicMock(spec=Agent)
+        mock_agent.instructions = base_prompt
+        mock_get_agent.return_value = mock_agent
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([
+            _agent_node(
+                "n1",
+                "gene",
+                custom_instructions="Group results by species.",
+                include_evidence=True,
+            ),
+        ])
+
+        get_all_agent_tools(flow)
+
+        assert mock_agent.instructions.startswith("## CUSTOM INSTRUCTIONS")
+        assert "Group results by species." in mock_agent.instructions
+        assert "## OUTPUT EVIDENCE REQUIREMENT" in mock_agent.instructions
+        assert mock_agent.instructions.index("## OUTPUT EVIDENCE REQUIREMENT") < mock_agent.instructions.index(base_prompt)
 
 
 # ===========================================================================
@@ -857,6 +912,14 @@ class TestBuildSupervisorCustomInstructions:
         disease_line = next(line for line in lines if "Disease" in line)
         assert "[has custom instructions]" in gene_line
         assert "[has custom instructions]" not in disease_line
+
+    def test_step_with_include_evidence_annotated(self):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Format output", include_evidence=True),
+        ])
+        result = build_supervisor_instructions(flow)
+        assert "[includes evidence in output]" in result
 
 
 class TestBuildSupervisorDuplicateAgentRefs:
