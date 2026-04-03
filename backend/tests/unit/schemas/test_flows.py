@@ -5,7 +5,7 @@ Tests the task_input node requirement and related validation.
 import pytest
 from pydantic import ValidationError
 
-from src.schemas.flows import FlowDefinition, FlowNode, FlowNodeData, FlowNodePosition
+from src.schemas.flows import FlowDefinition
 
 
 def make_task_input_node(node_id: str = "task_input_1", task_instructions: str = "Test task") -> dict:
