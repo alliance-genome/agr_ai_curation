@@ -392,10 +392,25 @@ function PromptWorkshop({
     selectedCustomAgent?.template_source,
   ])
 
-  const availableGroupIds = useMemo(
-    () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
-    [groupRuleSourceAgent]
-  )
+  const availableGroupIds = useMemo(() => {
+    if (!groupRuleSourceAgent) return []
+
+    const orderedGroupIds: string[] = []
+    const seen = new Set<string>()
+
+    for (const groupId of Object.keys(groupRuleSourceAgent.group_rules || {}).sort()) {
+      seen.add(groupId)
+      orderedGroupIds.push(groupId)
+    }
+
+    for (const groupId of catalog.available_groups.map((value) => value.trim().toUpperCase()).sort()) {
+      if (!groupId || seen.has(groupId)) continue
+      seen.add(groupId)
+      orderedGroupIds.push(groupId)
+    }
+
+    return orderedGroupIds
+  }, [catalog.available_groups, groupRuleSourceAgent])
 
   const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
 
@@ -1701,7 +1716,9 @@ function PromptWorkshop({
                         <Typography variant="caption" color="text.secondary">
                           {hasSelectedGroupOverride
                             ? `Custom override active for ${selectedGroupId}.`
-                            : `Using template ${selectedGroupId} prompt content.`}
+                            : selectedGroupBasePrompt.trim()
+                              ? `Using template ${selectedGroupId} prompt content.`
+                              : `No template ${selectedGroupId} prompt content is loaded yet; saving here will create a custom override.`}
                           {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
                         </Typography>
                       </Stack>

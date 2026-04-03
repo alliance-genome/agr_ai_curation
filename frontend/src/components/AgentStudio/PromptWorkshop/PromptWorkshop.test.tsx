@@ -89,6 +89,53 @@ function buildCatalogWithGroupRule(): PromptCatalog {
   }
 }
 
+function buildCatalogWithAvailableGroupsAcrossTemplates(): PromptCatalog {
+  return {
+    categories: [
+      {
+        category: 'Validation',
+        agents: [
+          {
+            agent_id: 'gene',
+            agent_name: 'Gene Specialist',
+            description: 'Gene validation',
+            base_prompt: 'Gene base prompt',
+            source_file: 'database',
+            has_group_rules: true,
+            group_rules: {
+              WB: {
+                group_id: 'WB',
+                content: 'WB template prompt',
+                source_file: 'database',
+              },
+            },
+            tools: ['agr_curation_query'],
+          },
+          {
+            agent_id: 'disease',
+            agent_name: 'Disease Specialist',
+            description: 'Disease validation',
+            base_prompt: 'Disease base prompt',
+            source_file: 'database',
+            has_group_rules: true,
+            group_rules: {
+              FB: {
+                group_id: 'FB',
+                content: 'FB template prompt',
+                source_file: 'database',
+              },
+            },
+            tools: ['agr_curation_query'],
+          },
+        ],
+      },
+    ],
+    total_agents: 2,
+    available_groups: ['WB', 'FB'],
+    last_updated: '2026-02-23T00:00:00Z',
+  }
+}
+
 function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
   return {
     id: '11111111-1111-1111-1111-111111111111',
@@ -642,5 +689,67 @@ describe('PromptWorkshop', () => {
         })
       )
     }, { timeout: 10000 })
+  }, 15000)
+
+  it('shows all catalog group options for prompt overrides when switching templates', async () => {
+    serviceMocks.fetchAgentTemplates.mockResolvedValue([
+      {
+        agent_id: 'gene',
+        name: 'Gene Specialist',
+        description: 'Gene validation',
+        icon: '🧬',
+        category: 'Validation',
+        model_id: 'gpt-4o',
+        tool_ids: ['search_document'],
+        output_schema_key: undefined,
+      },
+      {
+        agent_id: 'disease',
+        name: 'Disease Specialist',
+        description: 'Disease validation',
+        icon: '🦠',
+        category: 'Validation',
+        model_id: 'gpt-4o',
+        tool_ids: ['search_document'],
+        output_schema_key: undefined,
+      },
+    ])
+
+    render(<PromptWorkshop catalog={buildCatalogWithAvailableGroupsAcrossTemplates()} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Gene Specialist (Custom)')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Group Prompt Overrides/ }))
+
+    const groupOverridesAccordion = screen
+      .getByRole('button', { name: /Group Prompt Overrides/ })
+      .closest('.MuiAccordion-root') as HTMLElement | null
+    expect(groupOverridesAccordion).toBeTruthy()
+
+    fireEvent.mouseDown(within(groupOverridesAccordion!).getByRole('combobox'))
+    expect(await screen.findByRole('option', { name: 'WB' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'FB' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'FB' }))
+
+    const templateLabel = screen
+      .getAllByText('Template')
+      .find((node) => node.tagName.toLowerCase() === 'label')
+    expect(templateLabel).toBeTruthy()
+    const templateControl = templateLabel!.closest('.MuiFormControl-root') as HTMLElement | null
+    expect(templateControl).toBeTruthy()
+
+    fireEvent.mouseDown(within(templateControl!).getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Disease Specialist' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Specialist (Custom)')
+      expect(within(groupOverridesAccordion!).getByRole('combobox')).toHaveTextContent('FB')
+    })
+
+    fireEvent.mouseDown(within(groupOverridesAccordion!).getByRole('combobox'))
+    expect(await screen.findByRole('option', { name: 'WB' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'FB' })).toBeInTheDocument()
   }, 15000)
 })
