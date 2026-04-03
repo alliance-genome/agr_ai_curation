@@ -277,7 +277,7 @@ def _build_logout_redirect_uri(request: Request, provider: AuthProvider) -> str:
 
 
 def _build_app_root_url(request: Request) -> str:
-    """Build the application root URL for browser redirect fallbacks."""
+    """Build the browser destination when the provider has no logout page."""
     return str(request.base_url).rstrip("/") + "/"
 
 
@@ -318,7 +318,13 @@ async def logout_redirect(request: Request) -> RedirectResponse:
     redirect_uri = _build_logout_redirect_uri(request, provider)
     logout_url = await run_in_threadpool(provider.get_logout_url, redirect_uri)
     app_root_url = _build_app_root_url(request)
-    redirect_response = RedirectResponse(url=logout_url or app_root_url, status_code=302)
+    redirect_target = logout_url
+    if not redirect_target:
+        # If the provider has no logout page, finish on the app origin so the
+        # browser still handles cookie deletion on a first-party navigation.
+        redirect_target = app_root_url
+
+    redirect_response = RedirectResponse(url=redirect_target, status_code=302)
     _clear_logout_cookies(redirect_response)
     return redirect_response
 

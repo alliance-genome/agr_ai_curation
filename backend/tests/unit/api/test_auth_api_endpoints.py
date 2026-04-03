@@ -367,11 +367,14 @@ async def test_logout_redirect_clears_cookies_and_redirects_to_provider_logout_u
 
 
 @pytest.mark.asyncio
-async def test_logout_redirect_falls_back_to_app_root_when_provider_has_no_logout_url(monkeypatch):
+async def test_logout_redirect_uses_app_root_when_provider_has_no_logout_url(monkeypatch):
+    captured = {}
+
     class _Provider:
         redirect_uri = "https://login.example.org/callback"
 
-        def get_logout_url(self, _redirect_uri):
+        def get_logout_url(self, redirect_uri):
+            captured["redirect_uri"] = redirect_uri
             return None
 
     async def _direct_threadpool(func, *args, **kwargs):
@@ -383,6 +386,7 @@ async def test_logout_redirect_falls_back_to_app_root_when_provider_has_no_logou
 
     response = await auth_api.logout_redirect(_request(base_url="https://app.example.org/"))
     assert response.status_code == 302
+    assert captured["redirect_uri"] == "https://login.example.org/"
     assert str(response.headers["location"]) == "https://app.example.org/"
     set_cookie_headers = response.headers.getlist("set-cookie")
     assert any(header.startswith("auth_token=") for header in set_cookie_headers)
