@@ -292,11 +292,8 @@ def _clear_logout_cookies(response: Response) -> None:
 @router.post("/logout")
 async def logout(
     request: Request,
-    response: Response,
 ) -> JSONResponse:
     """Logout endpoint - clears auth cookie and returns provider logout URL."""
-    _ = response  # FastAPI injects this, kept for backward-compatible signature.
-
     provider = _get_provider_or_503()
     redirect_uri = _build_logout_redirect_uri(request, provider)
     logout_url = await run_in_threadpool(provider.get_logout_url, redirect_uri)

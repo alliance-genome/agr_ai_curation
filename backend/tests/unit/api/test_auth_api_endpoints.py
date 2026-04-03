@@ -300,7 +300,6 @@ async def test_logout_success_clears_cookies_and_returns_provider_logout_url(mon
 
     result = await auth_api.logout(
         request=_request(base_url="https://app.example.org/"),
-        response=Response(),
     )
     payload = json.loads(result.body)
     assert payload["status"] == "logged_out"
