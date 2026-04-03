@@ -82,6 +82,10 @@ import {
   findNearestExtractor,
   validatorNeedsConfiguration,
 } from './smartDefaultUtils'
+import {
+  isExtractionAgentFromMetadata,
+  isValidationAgentFromMetadata,
+} from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 
 /**
@@ -309,23 +313,15 @@ const edgeTypes = {
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
-  const isExtractionAgentDynamic = useCallback((agentId: string): boolean => {
-    if (isExtractionAgent(agentId)) return true
-    const metadata = agentMetadata[agentId]
-    if (!metadata) return false
-    const category = (metadata.category || '').toLowerCase()
-    const subcategory = (metadata.subcategory || '').toLowerCase()
-    return category.includes('extract') || subcategory.includes('pdf extraction')
-  }, [agentMetadata])
+  const isExtractionAgentDynamic = useCallback(
+    (agentId: string): boolean => isExtractionAgentFromMetadata(agentId, agentMetadata),
+    [agentMetadata]
+  )
 
-  const isValidationAgentDynamic = useCallback((agentId: string): boolean => {
-    if (isValidationAgent(agentId)) return true
-    const metadata = agentMetadata[agentId]
-    if (!metadata) return false
-    const category = (metadata.category || '').toLowerCase()
-    const subcategory = (metadata.subcategory || '').toLowerCase()
-    return category.includes('validation') || subcategory.includes('data validation')
-  }, [agentMetadata])
+  const isValidationAgentDynamic = useCallback(
+    (agentId: string): boolean => isValidationAgentFromMetadata(agentId, agentMetadata),
+    [agentMetadata]
+  )
 
   // React Flow state
   const reactFlowWrapper = useRef<HTMLDivElement>(null)

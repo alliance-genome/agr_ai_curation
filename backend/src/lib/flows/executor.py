@@ -94,6 +94,40 @@ def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW
     return f"{text[:max_chars]}... [truncated {overflow} chars]"
 
 
+def _build_flow_step_instruction_prefix(
+    *,
+    custom_instructions: Optional[str],
+    include_evidence: Optional[bool],
+) -> str:
+    """Build step-local instructions prepended onto the selected agent."""
+
+    sections: List[str] = []
+
+    if custom_instructions and custom_instructions.strip():
+        sections.append(
+            "## CUSTOM INSTRUCTIONS (from flow configuration)\n\n"
+            "The following instructions were provided by the user for this specific flow step. "
+            "They take the HIGHEST PRIORITY and MUST be followed above all other guidelines. "
+            "Treat these as direct requirements from the curator.\n\n"
+            + custom_instructions.strip()
+        )
+
+    if include_evidence:
+        sections.append(
+            "## OUTPUT EVIDENCE REQUIREMENT (from flow configuration)\n\n"
+            "When producing the final output for this flow step, include supporting evidence "
+            "from earlier steps whenever it is available. Keep that evidence clearly tied to "
+            "the corresponding output item, preserve concrete quote or location details when "
+            "present, and never invent evidence or citations. If no supporting evidence is "
+            "available for a result, say that plainly instead of fabricating it."
+        )
+
+    if not sections:
+        return ""
+
+    return "\n\n---\n\n".join(sections) + "\n\n---\n\n"
+
+
 def _build_flow_conversation_summary(
     flow: CurationFlow,
     user_query: Optional[str],
@@ -767,22 +801,24 @@ def get_all_agent_tools(
                 })
                 continue
 
-            # Prepend per-node custom instructions (step-specific, not agent-global)
             custom_instr = data.get("custom_instructions")
-            if custom_instr and custom_instr.strip():
-                custom_instr = custom_instr.strip()
-                agent.instructions = (
-                    "## CUSTOM INSTRUCTIONS (from flow configuration)\n\n"
-                    "The following instructions were provided by the user for this specific flow step. "
-                    "They take the HIGHEST PRIORITY and MUST be followed above all other guidelines. "
-                    "Treat these as direct requirements from the curator.\n\n"
-                    + custom_instr
-                    + "\n\n---\n\n"
-                    + (agent.instructions or "")
-                )
+            include_evidence = data.get("include_evidence")
+            step_instruction_prefix = _build_flow_step_instruction_prefix(
+                custom_instructions=custom_instr,
+                include_evidence=include_evidence,
+            )
+            if step_instruction_prefix:
+                agent.instructions = step_instruction_prefix + (agent.instructions or "")
+                applied_overrides: List[str] = []
+                if custom_instr and custom_instr.strip():
+                    applied_overrides.append("custom_instructions")
+                if include_evidence:
+                    applied_overrides.append("include_evidence")
                 logger.info(
-                    f"[Flow Executor] Prepended custom instructions to agent '{agent_id}' "
-                    f"step {step_num} ({len(custom_instr)} chars)"
+                    "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
+                    agent_id,
+                    step_num,
+                    ", ".join(applied_overrides),
                 )
 
             raw_streaming_tool = _create_streaming_tool(
@@ -892,6 +928,8 @@ def build_supervisor_instructions(
         custom_instr = data.get("custom_instructions")
         if custom_instr and custom_instr.strip():
             step_desc += " [has custom instructions]"
+        if data.get("include_evidence"):
+            step_desc += " [includes evidence in output]"
         step_descriptions.append(step_desc)
 
     # Build document guidance if a document is loaded

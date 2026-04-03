@@ -75,6 +75,10 @@ class FlowNodeData(BaseModel):
         max_length=2000,
         description="Template with {{variable}} placeholders"
     )
+    include_evidence: Optional[bool] = Field(
+        None,
+        description="Whether output/formatter steps should include supporting evidence in formatted output"
+    )
     # IMPORTANT: output_key pattern ensures valid Python identifier
     output_key: str = Field(
         ...,

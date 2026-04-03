@@ -48,6 +48,8 @@ export interface FlowNodeData {
   prompt_version?: number
   input_source: InputSource
   custom_input?: string
+  /** Whether output/formatter steps should include supporting evidence in the formatted result */
+  include_evidence?: boolean
   output_key: string
 }
 
