@@ -13,6 +13,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.lib.openai_agents.evidence_summary import (
+    extract_evidence_records_from_structured_result,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as CurationExtractionResultRecordModel,
 )
@@ -130,6 +133,33 @@ def build_extraction_envelope_candidate(
         else None,
         metadata=envelope_metadata,
     )
+
+
+def build_extraction_envelope_candidate_with_evidence(
+    raw_output: Any,
+    *,
+    agent_key: Optional[str],
+    conversation_summary: Optional[str] = None,
+    adapter_key: Optional[str] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> tuple[Optional[ExtractionEnvelopeCandidate], dict[str, Any]]:
+    """Build one extraction candidate plus normalized evidence metadata."""
+
+    candidate = build_extraction_envelope_candidate(
+        raw_output,
+        agent_key=agent_key,
+        conversation_summary=conversation_summary,
+        adapter_key=adapter_key,
+        metadata=metadata,
+    )
+    evidence_records = extract_evidence_records_from_structured_result(raw_output)
+
+    return candidate, {
+        "evidence_records": evidence_records,
+        "evidence_count": len(evidence_records),
+    }
+
+
 def persist_extraction_result(
     request: CurationExtractionPersistenceRequest,
     *,
@@ -389,6 +419,7 @@ def _sanitize_persisted_json_value(value: Any) -> Any:
 __all__ = [
     "ExtractionEnvelopeCandidate",
     "build_extraction_envelope_candidate",
+    "build_extraction_envelope_candidate_with_evidence",
     "build_safe_agent_key_map",
     "get_agent_curation_metadata",
     "list_extraction_results",

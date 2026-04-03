@@ -1306,6 +1306,23 @@ async def execute_flow_endpoint(
                 if "details" in event:
                     flat_event["details"] = event["details"]
 
+                if event_type == "FLOW_STEP_EVIDENCE":
+                    for source in (event, event_details):
+                        for key in (
+                            "flow_id",
+                            "flow_name",
+                            "flow_run_id",
+                            "step",
+                            "tool_name",
+                            "agent_id",
+                            "agent_name",
+                            "evidence_records",
+                            "evidence_count",
+                            "total_evidence_records",
+                        ):
+                            if key in source and key not in flat_event:
+                                flat_event[key] = source[key]
+
                 yield f"data: {json.dumps(flat_event, default=str)}\n\n"
 
             if flow_status:

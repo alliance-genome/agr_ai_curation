@@ -7,6 +7,7 @@ from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
+    build_extraction_envelope_candidate_with_evidence,
     build_safe_agent_key_map,
     list_extraction_results,
     persist_extraction_result,
@@ -92,6 +93,7 @@ __all__ = [
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
     "AsyncioPipelineTaskScheduler",
     "build_extraction_envelope_candidate",
+    "build_extraction_envelope_candidate_with_evidence",
     "build_safe_agent_key_map",
     "DeterministicEvidenceAnchorResolver",
     "list_extraction_results",

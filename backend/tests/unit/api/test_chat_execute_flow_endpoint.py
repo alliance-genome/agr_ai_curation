@@ -1,7 +1,9 @@
 """Unit tests for /api/chat/execute-flow endpoint streaming behavior."""
 
 import asyncio
+import importlib
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import ANY
 from uuid import uuid4
@@ -9,7 +11,20 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
-from src.api import chat
+sys.modules.setdefault(
+    "rapidfuzz",
+    SimpleNamespace(
+        fuzz=SimpleNamespace(
+            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                dest_start=0,
+                dest_end=0,
+                score=0.0,
+            )
+        )
+    ),
+)
+
+chat = importlib.import_module("src.api.chat")
 
 
 @pytest.fixture(autouse=True)
@@ -251,6 +266,74 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
     assert calls["register"] == [("session-flow-domain-warning", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-domain-warning", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-domain-warning"]
+
+
+def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-evidence")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Evidence",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_STEP_EVIDENCE",
+            "timestamp": "2026-02-26T00:00:01+00:00",
+            "details": {
+                "flow_id": str(flow_id),
+                "flow_name": "Flow Evidence",
+                "flow_run_id": "flow-run-123",
+                "step": 2,
+                "tool_name": "ask_gene_specialist",
+                "agent_id": "gene",
+                "agent_name": "Gene Agent",
+                "evidence_records": [
+                    {
+                        "entity": "TP53",
+                        "verified_quote": "TP53 increased.",
+                        "page": 2,
+                        "section": "Results",
+                        "chunk_id": "chunk-1",
+                    }
+                ],
+                "evidence_count": 1,
+                "total_evidence_records": 3,
+            },
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+
+    assert len(events) == 1
+    flow_step_event = events[0]
+    assert flow_step_event["type"] == "FLOW_STEP_EVIDENCE"
+    assert flow_step_event["flow_run_id"] == "flow-run-123"
+    assert flow_step_event["step"] == 2
+    assert flow_step_event["tool_name"] == "ask_gene_specialist"
+    assert flow_step_event["evidence_count"] == 1
+    assert flow_step_event["total_evidence_records"] == 3
+    assert flow_step_event["evidence_records"][0]["entity"] == "TP53"
+    assert flow_step_event["session_id"] == "session-flow-evidence"
+    assert flow_step_event["details"]["agent_name"] == "Gene Agent"
+    assert calls["register"] == [("session-flow-evidence", "auth-sub", ANY)]
+    assert calls["unregister"] == [("session-flow-evidence", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-flow-evidence"]
 
 
 def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_payload(monkeypatch):
