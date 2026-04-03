@@ -72,10 +72,6 @@ def _validate_agent_bundle_directory_registration(
     raw_data: dict,
 ) -> None:
     """Fail clearly when package-owned agent bundles exist on disk but not in the manifest."""
-    bundle_payloads = raw_data.get("agent_bundles")
-    if not bundle_payloads:
-        return
-
     package_dir = path.parent
     declared_bundle_paths: set[tuple[str, str]] = set()
     for export in manifest.exports:
@@ -85,10 +81,14 @@ def _validate_agent_bundle_directory_registration(
         agents_dir = export_path.parent.as_posix()
         declared_bundle_paths.add((agents_dir, export_path.name))
 
+    bundle_payloads = raw_data.get("agent_bundles") or []
     agent_roots: dict[str, Path] = {}
-    for bundle in bundle_payloads:
-        agents_dir = str(PurePosixPath(str(bundle.get("agents_dir", "agents"))))
-        agent_roots.setdefault(agents_dir, package_dir / agents_dir)
+    if bundle_payloads:
+        for bundle in bundle_payloads:
+            agents_dir = str(PurePosixPath(str(bundle.get("agents_dir", "agents"))))
+            agent_roots.setdefault(agents_dir, package_dir / agents_dir)
+    else:
+        agent_roots["agents"] = package_dir / "agents"
 
     missing_bundle_dirs: list[str] = []
     for agents_dir, agents_root in sorted(agent_roots.items()):
