@@ -24,8 +24,8 @@ const matchesMetadataClassification = (
 
   const category = normalizeMetadataValue(metadata.category)
   const subcategory = normalizeMetadataValue(metadata.subcategory)
-  const categoryIncludes = classification.categoryIncludes || []
-  const subcategoryIncludes = classification.subcategoryIncludes || []
+  const categoryIncludes = classification.categoryIncludes ?? []
+  const subcategoryIncludes = classification.subcategoryIncludes ?? []
 
   return (
     matchesAnyClassification(category, categoryIncludes) ||
