@@ -369,7 +369,7 @@ async def test_logout_redirect_clears_cookies_and_redirects_to_provider_logout_u
 @pytest.mark.asyncio
 async def test_logout_redirect_falls_back_to_app_root_when_provider_has_no_logout_url(monkeypatch):
     class _Provider:
-        redirect_uri = None
+        redirect_uri = "https://login.example.org/callback"
 
         def get_logout_url(self, _redirect_uri):
             return None
