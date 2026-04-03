@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import json
 from types import SimpleNamespace
+from uuid import UUID
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -82,6 +83,106 @@ def _task_input_node(task_instructions="Do the thing"):
             "output_key": "task_out",
             "task_instructions": task_instructions,
         },
+    }
+
+
+def _make_evidence_record(
+    entity: str,
+    *,
+    verified_quote: str,
+    page: int = 1,
+    section: str = "Results",
+    chunk_id: str = "chunk-1",
+):
+    """Build a normalized evidence-record fixture."""
+
+    return {
+        "entity": entity,
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "chunk_id": chunk_id,
+    }
+
+
+def _structured_step_output(
+    label: str,
+    *,
+    actor: str = "gene_expression_specialist",
+    destination: str = "gene_expression",
+    evidence_records=None,
+):
+    """Build a minimal structured extraction payload with optional evidence."""
+
+    return {
+        "actor": actor,
+        "destination": destination,
+        "confidence": 0.9,
+        "reasoning": "done",
+        "items": [{"label": label}],
+        "raw_mentions": [],
+        "exclusions": [],
+        "ambiguities": [],
+        "evidence_records": list(evidence_records or []),
+        "run_summary": {
+            "candidate_count": 1,
+            "kept_count": 1,
+            "excluded_count": 0,
+            "ambiguous_count": 0,
+            "warnings": [],
+        },
+    }
+
+
+def _make_completed_step(
+    *,
+    agent_id: str,
+    agent_name: str,
+    tool_name: str,
+    step: int,
+    adapter_key: str,
+    payload: dict,
+    conversation_summary: str = "Extract findings",
+    evidence_records=None,
+):
+    """Build one completed-step entry matching flow executor state."""
+
+    step_evidence_records = list(evidence_records or [])
+    return {
+        "step": step,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "tool_name": tool_name,
+        "output": json.dumps(payload),
+        "output_preview": json.dumps(payload),
+        "candidate": _executor_module().ExtractionEnvelopeCandidate(
+            agent_key=agent_id,
+            payload_json=payload,
+            candidate_count=payload.get("run_summary", {}).get("candidate_count", 0),
+            adapter_key=adapter_key,
+            conversation_summary=conversation_summary,
+            metadata={
+                "tool_name": tool_name,
+                "flow_id": "11111111-1111-1111-1111-111111111111",
+                "flow_name": "Test Flow",
+                "step": step,
+                "agent_name": agent_name,
+            },
+        ),
+        "evidence_records": step_evidence_records,
+        "evidence_count": len(step_evidence_records),
+    }
+
+
+def _make_flow_execution_state(*completed_steps):
+    """Build executor flow state with evidence registry populated from steps."""
+
+    registry = _executor_module()._EvidenceRegistry()
+    for step in completed_steps:
+        registry.add_many(step.get("evidence_records") or [])
+    return {
+        "completed_steps": list(completed_steps),
+        "evidence_registry": registry,
     }
 
 
@@ -1082,6 +1183,88 @@ class TestBuildSupervisorUnavailableSteps:
 
 
 # ===========================================================================
+# Flow evidence accumulation
+# ===========================================================================
+
+
+class TestFlowEvidenceAccumulation:
+    """Tests flow-step evidence normalization and accumulation state."""
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_completed_steps_store_only_new_deduplicated_evidence(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.side_effect = lambda *_args, **_kwargs: MagicMock(
+            spec=Agent,
+            instructions="Base",
+        )
+        evidence_a = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 was elevated.",
+            chunk_id="chunk-a",
+        )
+        evidence_b = _make_evidence_record(
+            "BRCA1",
+            verified_quote="BRCA1 was elevated.",
+            chunk_id="chunk-b",
+        )
+        outputs = iter(
+            [
+                json.dumps(
+                    _structured_step_output(
+                        "TP53",
+                        evidence_records=[evidence_a, dict(evidence_a)],
+                    )
+                ),
+                json.dumps(
+                    _structured_step_output(
+                        "BRCA1",
+                        evidence_records=[dict(evidence_a), evidence_b],
+                    )
+                ),
+            ]
+        )
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return next(outputs)
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract gene matches"),
+            _agent_node("n2", "gene", step_goal="Extract confirmation matches"),
+        ])
+
+        tools, created_names, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+        )
+
+        assert created_names == {
+            "ask_gene_step1_specialist",
+            "ask_gene_step2_specialist",
+        }
+
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "step one"})))
+        asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "step two"})))
+
+        completed_steps = execution_state["completed_steps"]
+        assert len(completed_steps) == 2
+        assert completed_steps[0]["evidence_count"] == 1
+        assert completed_steps[0]["evidence_records"][0]["entity"] == "TP53"
+        assert completed_steps[1]["evidence_count"] == 1
+        assert completed_steps[1]["evidence_records"][0]["entity"] == "BRCA1"
+        assert len(execution_state["evidence_registry"].records()) == 2
+
+
+# ===========================================================================
 # Backward compatibility
 # ===========================================================================
 
@@ -1333,22 +1516,115 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
+    async def test_emits_flow_step_evidence_and_generates_flow_run_id(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        persisted_requests = []
+        evidence_record = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 expression increased.",
+            chunk_id="chunk-tp53",
+        )
+        payload = _structured_step_output(
+            "TP53",
+            evidence_records=[evidence_record],
+        )
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+            evidence_records=[evidence_record],
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda requests: persisted_requests.extend(requests),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.uuid4",
+            lambda: UUID("00000000-0000-0000-0000-000000000123"),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_started = next(e for e in events if e.get("type") == "FLOW_STARTED")
+        flow_step_evidence = next(e for e in events if e.get("type") == "FLOW_STEP_EVIDENCE")
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+
+        assert flow_started["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
+        assert flow_step_evidence["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
+        assert flow_step_evidence["data"]["step"] == 1
+        assert flow_step_evidence["data"]["evidence_count"] == 1
+        assert flow_step_evidence["data"]["total_evidence_records"] == 1
+        assert flow_step_evidence["data"]["evidence_records"][0]["entity"] == "TP53"
+        assert flow_finished["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
+        assert flow_finished["data"]["total_evidence_records"] == 1
+        assert flow_finished["data"]["step_evidence_counts"] == {"1": 1}
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
+
+    @pytest.mark.asyncio
     async def test_persists_extraction_envelopes_after_success(self, monkeypatch):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
         persisted_requests = []
+        payload = _structured_step_output("notch")
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+        )
 
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
-        supervisor._flow_tool_metadata = {
-            "ask_gene_expression_specialist": {
-                "agent_id": "gene-expression",
-                "agent_name": "Gene Expression",
-                "step": 1,
-            }
-        }
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
@@ -1372,27 +1648,6 @@ class TestExecuteFlowTermination:
             yield {
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
-                "internal": {
-                    "tool_output": json.dumps(
-                        {
-                            "actor": "gene_expression_specialist",
-                            "destination": "gene_expression",
-                            "confidence": 0.9,
-                            "reasoning": "done",
-                            "items": [{"label": "notch"}],
-                            "raw_mentions": [],
-                            "exclusions": [],
-                            "ambiguities": [],
-                            "run_summary": {
-                                "candidate_count": 1,
-                                "kept_count": 1,
-                                "excluded_count": 0,
-                                "ambiguous_count": 0,
-                                "warnings": [],
-                            },
-                        }
-                    )
-                },
             }
             yield {"type": "CHAT_OUTPUT_READY", "data": {}}
 
@@ -1422,7 +1677,7 @@ class TestExecuteFlowTermination:
         assert persisted_request.agent_key == "gene-expression"
         assert persisted_request.source_kind is _executor_module().CurationExtractionSourceKind.FLOW
         assert persisted_request.origin_session_id == "flow-session-1"
-        assert persisted_request.flow_run_id is None
+        assert persisted_request.flow_run_id is not None
         assert persisted_request.trace_id == "trace-1"
         assert persisted_request.user_id == "u1"
         assert persisted_request.candidate_count == 1
@@ -1436,16 +1691,19 @@ class TestExecuteFlowTermination:
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
         persisted_requests = []
+        payload = _structured_step_output("notch")
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+        )
 
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
-        supervisor._flow_tool_metadata = {
-            "ask_gene_expression_specialist": {
-                "agent_id": "gene-expression",
-                "agent_name": "Gene Expression",
-                "step": 1,
-            }
-        }
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
@@ -1469,28 +1727,6 @@ class TestExecuteFlowTermination:
             yield {
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
-                "internal": {
-                    "tool_output": json.dumps(
-                        {
-                            "adapter_key": "reference_adapter",
-                            "actor": "gene_expression_specialist",
-                            "destination": "gene_expression",
-                            "confidence": 0.9,
-                            "reasoning": "done",
-                            "items": [{"label": "notch"}],
-                            "raw_mentions": [],
-                            "exclusions": [],
-                            "ambiguities": [],
-                            "run_summary": {
-                                "candidate_count": 1,
-                                "kept_count": 1,
-                                "excluded_count": 0,
-                                "ambiguous_count": 0,
-                                "warnings": [],
-                            },
-                        }
-                    )
-                },
             }
             yield {"type": "CHAT_OUTPUT_READY", "data": {}}
 
@@ -1521,16 +1757,19 @@ class TestExecuteFlowTermination:
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
+        payload = _structured_step_output("notch")
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+        )
 
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
-        supervisor._flow_tool_metadata = {
-            "ask_gene_expression_specialist": {
-                "agent_id": "gene-expression",
-                "agent_name": "Gene Expression",
-                "step": 1,
-            }
-        }
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
 
         monkeypatch.setattr(
             "src.lib.flows.executor.create_flow_supervisor",
@@ -1558,28 +1797,6 @@ class TestExecuteFlowTermination:
             yield {
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
-                "internal": {
-                    "tool_output": json.dumps(
-                        {
-                            "adapter_key": "reference_adapter",
-                            "actor": "gene_expression_specialist",
-                            "destination": "gene_expression",
-                            "confidence": 0.9,
-                            "reasoning": "done",
-                            "items": [{"label": "notch"}],
-                            "raw_mentions": [],
-                            "exclusions": [],
-                            "ambiguities": [],
-                            "run_summary": {
-                                "candidate_count": 1,
-                                "kept_count": 1,
-                                "excluded_count": 0,
-                                "ambiguous_count": 0,
-                                "warnings": [],
-                            },
-                        }
-                    )
-                },
             }
             yield {"type": "CHAT_OUTPUT_READY", "data": {}}
 

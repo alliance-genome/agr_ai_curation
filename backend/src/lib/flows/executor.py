@@ -23,6 +23,7 @@ import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from uuid import uuid4
 
 from agents import Agent, function_tool
 
@@ -30,7 +31,7 @@ from src.lib.context import get_current_trace_id
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
-    build_extraction_envelope_candidate,
+    build_extraction_envelope_candidate_with_evidence,
     persist_extraction_results,
     run_curation_prep,
 )
@@ -48,6 +49,7 @@ from src.lib.openai_agents.config import (
     build_model_settings,
     resolve_model_provider,
 )
+from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
 from src.schemas.curation_workspace import (
@@ -191,6 +193,97 @@ def _build_flow_scope_confirmation(
         adapter_keys=adapter_keys,
         notes=[f"Confirmed from flow '{flow_name}' execution context."],
     )
+
+
+def _accumulate_step_evidence(
+    registry: _EvidenceRegistry,
+    evidence_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Merge one step's evidence into the flow registry and return new records."""
+
+    if not evidence_records:
+        return {"evidence_records": [], "evidence_count": 0}
+
+    existing_ids = {
+        str(record.get("evidence_record_id") or "").strip()
+        for record in registry.records()
+        if str(record.get("evidence_record_id") or "").strip()
+    }
+    assigned_ids = registry.add_many(evidence_records)
+    records_by_id = {
+        str(record.get("evidence_record_id") or "").strip(): record
+        for record in registry.records()
+        if str(record.get("evidence_record_id") or "").strip()
+    }
+
+    step_records: list[dict[str, Any]] = []
+    seen_step_ids: set[str] = set()
+    for evidence_record_id in assigned_ids:
+        normalized_id = str(evidence_record_id or "").strip()
+        if (
+            not normalized_id
+            or normalized_id in existing_ids
+            or normalized_id in seen_step_ids
+        ):
+            continue
+        record = records_by_id.get(normalized_id)
+        if record is None:
+            continue
+        seen_step_ids.add(normalized_id)
+        step_records.append(record)
+
+    return {
+        "evidence_records": step_records,
+        "evidence_count": len(step_records),
+    }
+
+
+def _find_completed_step_by_tool_name(
+    completed_steps: list[dict[str, Any]],
+    tool_name: str,
+) -> Optional[dict[str, Any]]:
+    """Return the completed-step entry for a tool invocation."""
+
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name:
+        return None
+
+    for step in reversed(completed_steps):
+        if str(step.get("tool_name") or "").strip() == normalized_tool_name:
+            return step
+    return None
+
+
+def _collect_completed_step_candidates(
+    completed_steps: list[dict[str, Any]],
+) -> list[ExtractionEnvelopeCandidate]:
+    """Collect persistable extraction candidates from completed flow steps."""
+
+    candidates: list[ExtractionEnvelopeCandidate] = []
+    for step in completed_steps:
+        candidate = step.get("candidate")
+        if isinstance(candidate, ExtractionEnvelopeCandidate):
+            candidates.append(candidate)
+    return candidates
+
+
+def _build_step_evidence_counts(
+    completed_steps: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Derive step evidence counts from completed-step entries."""
+
+    step_counts: dict[str, int] = {}
+    for step in completed_steps:
+        try:
+            step_number = int(step.get("step"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            evidence_count = int(step.get("evidence_count") or 0)
+        except (TypeError, ValueError):
+            evidence_count = 0
+        step_counts[str(step_number)] = max(evidence_count, 0)
+    return step_counts
 
 
 def _resolve_flow_agent_entry(
@@ -429,8 +522,8 @@ def get_all_agent_tools(
     Returns:
         By default returns (tools, created_tool_names).
         When include_unavailable=True, returns
-        (tools, created_tool_names, unavailable_steps) where unavailable_steps
-        contains skipped steps with reasons for UI warnings.
+        (tools, created_tool_names, unavailable_steps, execution_state) where
+        unavailable_steps contains skipped steps with reasons for UI warnings.
     """
     nodes = _get_ordered_executable_nodes(flow)
     agent_id_counts = _count_agent_ids(flow)
@@ -467,7 +560,11 @@ def get_all_agent_tools(
     # This ensures each step gets its own agent instance with its own custom_instructions
     step_num = 0
     ordered_tool_names: List[str] = []
-    execution_state = {"next_tool_index": 0, "completed_steps": []}
+    execution_state = {
+        "next_tool_index": 0,
+        "completed_steps": [],
+        "evidence_registry": _EvidenceRegistry(),
+    }
     flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
     def _wrap_with_step_order(
@@ -517,19 +614,25 @@ def get_all_agent_tools(
                 result = await tool_callable(query=query)
 
             result_text = _stringify_tool_output(result)
-            candidate = build_extraction_envelope_candidate(
-                result_text,
-                agent_key=agent_id,
-                conversation_summary=flow_conversation_summary,
-                adapter_key=curation_adapter_key,
-                metadata={
-                    "tool_name": tool_name,
-                    "flow_id": str(flow.id),
-                    "flow_name": flow.name,
-                    "step": step_number,
-                    "agent_name": agent_name,
-                    **({"document_name": document_name} if document_name else {}),
-                },
+            candidate, step_evidence_metadata = (
+                build_extraction_envelope_candidate_with_evidence(
+                    result,
+                    agent_key=agent_id,
+                    conversation_summary=flow_conversation_summary,
+                    adapter_key=curation_adapter_key,
+                    metadata={
+                        "tool_name": tool_name,
+                        "flow_id": str(flow.id),
+                        "flow_name": flow.name,
+                        "step": step_number,
+                        "agent_name": agent_name,
+                        **({"document_name": document_name} if document_name else {}),
+                    },
+                )
+            )
+            step_evidence = _accumulate_step_evidence(
+                execution_state["evidence_registry"],
+                step_evidence_metadata.get("evidence_records", []),
             )
             execution_state["completed_steps"].append(
                 {
@@ -540,6 +643,7 @@ def get_all_agent_tools(
                     "output": result_text,
                     "output_preview": _truncate_tool_output(result_text),
                     "candidate": candidate,
+                    **step_evidence,
                 }
             )
             execution_state["next_tool_index"] = next_idx + 1
@@ -709,7 +813,7 @@ def get_all_agent_tools(
 
     logger.info('[Flow Executor] Created %s streaming tools for flow', len(all_tools))
     if include_unavailable:
-        return all_tools, created_tool_names, unavailable_steps
+        return all_tools, created_tool_names, unavailable_steps, execution_state
     return all_tools, created_tool_names
 
 
@@ -979,7 +1083,7 @@ def create_flow_supervisor(
     # Pass through pre-fetched doc_context to avoid redundant Weaviate queries
     # Returns (tools, created_tool_names) so supervisor instructions only
     # reference tools that were actually created
-    tools, created_tool_names, unavailable_steps = get_all_agent_tools(
+    tools, created_tool_names, unavailable_steps, execution_state = get_all_agent_tools(
         flow=flow,
         document_id=document_id,
         user_id=user_id,
@@ -1035,6 +1139,7 @@ def create_flow_supervisor(
         "_flow_tool_metadata",
         _build_flow_tool_metadata(flow, available_tools=created_tool_names),
     )
+    setattr(supervisor, "_flow_execution_state", execution_state)
 
     logger.info(
         f"[Flow Executor] Created flow supervisor for '{flow.name}': "
@@ -1164,6 +1269,7 @@ async def execute_flow(
         f"[Flow Executor] Starting flow: '{flow.name}', "
         f"user_id={user_id}, session_id={session_id}"
     )
+    flow_run_id = flow_run_id or str(uuid4())
 
     # Pre-fetch document context BEFORE creating supervisor (optimization)
     # This matches how chat pre-fetches and passes through to avoid redundant Weaviate queries
@@ -1211,7 +1317,7 @@ async def execute_flow(
             "flow_id": str(flow.id),
             "flow_name": flow.name,
             "total_steps": total_steps,
-            **({"flow_run_id": flow_run_id} if flow_run_id else {}),
+            "flow_run_id": flow_run_id,
         }
     }
 
@@ -1246,9 +1352,20 @@ async def execute_flow(
     failure_reason: Optional[str] = None
     trace_id: Optional[str] = None
     extraction_persisted = False
-    flow_tool_metadata = getattr(supervisor, "_flow_tool_metadata", {}) or {}
-    extraction_candidates: List[ExtractionEnvelopeCandidate] = []
-    conversation_summary = _build_flow_conversation_summary(flow, user_query)
+    flow_execution_state = getattr(supervisor, "_flow_execution_state", None)
+    if not isinstance(flow_execution_state, dict):
+        flow_execution_state = {
+            "completed_steps": [],
+            "evidence_registry": _EvidenceRegistry(),
+        }
+
+    completed_steps = flow_execution_state.get("completed_steps", [])
+    if not isinstance(completed_steps, list):
+        completed_steps = []
+
+    evidence_registry = flow_execution_state.get("evidence_registry")
+    if not isinstance(evidence_registry, _EvidenceRegistry):
+        evidence_registry = _EvidenceRegistry()
 
     async for event in run_agent_streamed(
         user_message=prompt,
@@ -1267,35 +1384,28 @@ async def execute_flow(
         if event_type == "RUN_STARTED" and "trace_id" in event_data:
             trace_id = event_data.get("trace_id")
 
+        flow_step_evidence_event: Optional[dict[str, Any]] = None
         if event_type == "TOOL_COMPLETE":
             details = event.get("details", {}) or {}
-            internal_payload = event.get("internal", {}) or {}
             tool_name = str(details.get("toolName") or "").strip()
-            tool_meta = flow_tool_metadata.get(tool_name, {})
-            curation = tool_meta.get("curation")
-            if not isinstance(curation, dict):
-                resolved_entry = _resolve_flow_agent_entry(str(tool_meta.get("agent_id") or ""))
-                curation = resolved_entry.get("curation") if resolved_entry is not None else None
-            adapter_key = None
-            if isinstance(curation, dict):
-                adapter_key = str(curation.get("adapter_key") or "").strip() or None
-            if isinstance(internal_payload, dict):
-                candidate = build_extraction_envelope_candidate(
-                    internal_payload.get("tool_output"),
-                    agent_key=tool_meta.get("agent_id"),
-                    conversation_summary=conversation_summary,
-                    adapter_key=adapter_key,
-                    metadata={
-                        "tool_name": tool_name,
+            completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
+            if completed_step is not None:
+                flow_step_evidence_event = {
+                    "type": "FLOW_STEP_EVIDENCE",
+                    "timestamp": _now_iso(),
+                    "data": {
                         "flow_id": str(flow.id),
                         "flow_name": flow.name,
-                        "step": tool_meta.get("step"),
-                        "agent_name": tool_meta.get("agent_name"),
-                        **({"document_name": document_name} if document_name else {}),
+                        "flow_run_id": flow_run_id,
+                        "step": completed_step.get("step"),
+                        "tool_name": completed_step.get("tool_name"),
+                        "agent_id": completed_step.get("agent_id"),
+                        "agent_name": completed_step.get("agent_name"),
+                        "evidence_records": list(completed_step.get("evidence_records") or []),
+                        "evidence_count": int(completed_step.get("evidence_count") or 0),
+                        "total_evidence_records": len(evidence_registry.records()),
                     },
-                )
-                if candidate:
-                    extraction_candidates.append(candidate)
+                }
 
         # Terminate flow after output is produced
         # FILE_READY indicates a file output agent (CSV, TSV, JSON) completed
@@ -1355,7 +1465,7 @@ async def execute_flow(
             persisted, failure_reason, flow_error_event = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
-                    candidates=extraction_candidates,
+                    candidates=_collect_completed_step_candidates(completed_steps),
                     document_id=document_id,
                     user_id=str(user_id),
                     session_id=session_id,
@@ -1378,12 +1488,14 @@ async def execute_flow(
             )
             break
         yield event
+        if flow_step_evidence_event is not None:
+            yield flow_step_evidence_event
 
     if flow_status != "failed" and not extraction_persisted:
         persisted, failure_reason, flow_error_event = (
             _persist_flow_extraction_candidates_or_build_error(
                 flow_name=flow.name,
-                candidates=extraction_candidates,
+                candidates=_collect_completed_step_candidates(completed_steps),
                 document_id=document_id,
                 user_id=str(user_id),
                 session_id=session_id,
@@ -1403,8 +1515,11 @@ async def execute_flow(
         "data": {
             "flow_id": str(flow.id),
             "flow_name": flow.name,
+            "flow_run_id": flow_run_id,
             "status": flow_status,
             "failure_reason": failure_reason,
+            "total_evidence_records": len(evidence_registry.records()),
+            "step_evidence_counts": _build_step_evidence_counts(completed_steps),
         }
     }
 
