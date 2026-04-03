@@ -72,21 +72,27 @@ function renderLazyRoute(element: React.ReactNode) {
 export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, login } = useAuth();
   const location = useLocation();
-  const suppressAutoLoginRef = React.useRef(false);
+  const pendingLogoutSuppressionRef = React.useRef(false);
 
   useEffect(() => {
     // Latch logout suppression in a ref so it survives the auth-state render sequence.
     if (sessionStorage.getItem('justLoggedOut') === 'true') {
-      suppressAutoLoginRef.current = true;
+      pendingLogoutSuppressionRef.current = true;
       sessionStorage.removeItem('justLoggedOut');
     }
 
     if (isAuthenticated) {
-      suppressAutoLoginRef.current = false;
+      pendingLogoutSuppressionRef.current = false;
       return;
     }
 
-    if (isLoading || suppressAutoLoginRef.current) {
+    if (isLoading) {
+      return;
+    }
+
+    // Consume the logout suppression exactly once after loading settles.
+    if (pendingLogoutSuppressionRef.current) {
+      pendingLogoutSuppressionRef.current = false;
       return;
     }
 
