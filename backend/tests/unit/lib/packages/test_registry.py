@@ -1,5 +1,6 @@
 """Unit tests for runtime package discovery and registry building."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -191,3 +192,18 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         ExportKind.SCHEMA,
         ExportKind.TOOL_BINDING,
     }
+
+
+def test_alliance_runtime_requirements_include_noctua_distribution():
+    requirements_path = (
+        REPO_ROOT / "packages" / "alliance" / "requirements" / "runtime.txt"
+    )
+    requirement_lines = requirements_path.read_text(encoding="utf-8").splitlines()
+
+    requirement_names = [
+        re.split(r"[<>=!~\\[]", line.split("#", 1)[0].strip().lower(), 1)[0]
+        for line in requirement_lines
+        if line.split("#", 1)[0].strip()
+    ]
+
+    assert "noctua" in requirement_names
