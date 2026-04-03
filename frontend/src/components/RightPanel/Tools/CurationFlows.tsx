@@ -131,11 +131,20 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       }
 
       return {
+        adapterKeys: Array.isArray(event.adapter_keys)
+          ? event.adapter_keys.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [],
+        documentId: typeof event.document_id === 'string' && event.document_id.trim()
+          ? event.document_id
+          : currentDocumentId ?? null,
         flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
         flowName: typeof event.flow_name === 'string' && event.flow_name.trim()
           ? event.flow_name
           : 'Completed flow run',
         flowRunId,
+        originSessionId: typeof event.origin_session_id === 'string' && event.origin_session_id.trim()
+          ? event.origin_session_id
+          : eventSessionId,
         status,
         failureReason: typeof event.failure_reason === 'string' && event.failure_reason.trim()
           ? event.failure_reason
@@ -145,7 +154,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
     }
 
     return null
-  }, [sessionId, sseEvents])
+  }, [currentDocumentId, sessionId, sseEvents])
 
   /**
    * Fetch flows from API

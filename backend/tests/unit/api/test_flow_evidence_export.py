@@ -68,13 +68,18 @@ def _extraction_result(
     flow_run_id: str = "flow-run-123",
     user_id: str | None = "user-123",
     evidence_records: list[dict[str, object]] | None = None,
+    agent_key: str = "gene_specialist",
+    agent_name: str = "Gene Specialist",
+    tool_name: str = "ask_gene_specialist",
+    step: int = 1,
+    flow_name: str = "Flow Evidence",
 ) -> CurationExtractionResultRecord:
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": extraction_result_id,
             "document_id": str(uuid4()),
             "adapter_key": "reference",
-            "agent_key": "gene_specialist",
+            "agent_key": agent_key,
             "source_kind": CurationExtractionSourceKind.FLOW,
             "origin_session_id": "session-123",
             "trace_id": "trace-123",
@@ -95,7 +100,12 @@ def _extraction_result(
                 "run_summary": {"kept_count": 1},
             },
             "created_at": datetime.now(timezone.utc),
-            "metadata": {},
+            "metadata": {
+                "agent_name": agent_name,
+                "flow_name": flow_name,
+                "step": step,
+                "tool_name": tool_name,
+            },
         }
     )
 
@@ -126,10 +136,18 @@ def test_build_flow_evidence_export_artifact_dedupes_and_formats_csv():
             _extraction_result(
                 extraction_result_id="result-1",
                 evidence_records=[shared_record],
+                agent_key="pdf_extraction",
+                agent_name="PDF Specialist",
+                tool_name="ask_pdf_extraction_specialist",
+                step=1,
             ),
             _extraction_result(
                 extraction_result_id="result-2",
                 evidence_records=[shared_record, unique_record],
+                agent_key="gene_specialist",
+                agent_name="Gene Specialist",
+                tool_name="ask_gene_specialist",
+                step=2,
             ),
         ],
         export_format=evidence_export.FlowEvidenceExportFormat.CSV,
@@ -142,7 +160,6 @@ def test_build_flow_evidence_export_artifact_dedupes_and_formats_csv():
     rows = list(csv.DictReader(io.StringIO(artifact.payload_text)))
     assert rows == [
         {
-            "evidence_record_id": "evidence-shared",
             "entity": "act-5c",
             "verified_quote": "Shared evidence quote.",
             "page": "3",
@@ -150,9 +167,23 @@ def test_build_flow_evidence_export_artifact_dedupes_and_formats_csv():
             "subsection": "Expression",
             "chunk_id": "chunk-1",
             "figure_reference": "",
+            "agent_id": "pdf_extraction",
+            "step_number": "1",
+            "evidence_record_id": "evidence-shared",
         },
         {
-            "evidence_record_id": "evidence-unique",
+            "entity": "act-5c",
+            "verified_quote": "Shared evidence quote.",
+            "page": "3",
+            "section": "Results",
+            "subsection": "Expression",
+            "chunk_id": "chunk-1",
+            "figure_reference": "",
+            "agent_id": "gene_specialist",
+            "step_number": "2",
+            "evidence_record_id": "evidence-shared",
+        },
+        {
             "entity": "unc-54",
             "verified_quote": "Unique evidence quote.",
             "page": "5",
@@ -160,6 +191,9 @@ def test_build_flow_evidence_export_artifact_dedupes_and_formats_csv():
             "subsection": "",
             "chunk_id": "chunk-2",
             "figure_reference": "Figure 2",
+            "agent_id": "gene_specialist",
+            "step_number": "2",
+            "evidence_record_id": "evidence-unique",
         },
     ]
 
@@ -201,18 +235,28 @@ def test_build_flow_evidence_export_artifact_supports_tsv_and_json(
 
     payload = json.loads(artifact.payload_text)
     assert payload == {
-        "evidence_records": [
+        "flow_name": "Flow Evidence",
+        "flow_run_id": "flow-run-123",
+        "steps": [
             {
-                "chunk_id": "chunk-7",
-                "entity": "pax-6",
-                "evidence_record_id": "evidence-a",
-                "page": 7,
-                "section": "Methods",
-                "verified_quote": "Evidence quote.",
+                "agent_id": "gene_specialist",
+                "agent_name": "Gene Specialist",
+                "evidence_count": 1,
+                "evidence_records": [
+                    {
+                        "chunk_id": "chunk-7",
+                        "entity": "pax-6",
+                        "evidence_record_id": "evidence-a",
+                        "page": 7,
+                        "section": "Methods",
+                        "verified_quote": "Evidence quote.",
+                    }
+                ],
+                "step": 1,
+                "tool_name": "ask_gene_specialist",
             }
         ],
-        "flow_run_id": "flow-run-123",
-        "record_count": 1,
+        "total_evidence_records": 1,
     }
 
 
@@ -293,7 +337,7 @@ async def test_export_flow_evidence_route_returns_attachment_response(monkeypatc
     assert response.headers["content-disposition"] == (
         'attachment; filename="flow-flow-run-123-evidence.csv"'
     )
-    assert b"evidence_record_id,entity,verified_quote,page,section,subsection,chunk_id,figure_reference" in response.body
+    assert b"entity,verified_quote,page,section,subsection,chunk_id,figure_reference,agent_id,step_number,evidence_record_id" in response.body
 
 
 @pytest.mark.parametrize(

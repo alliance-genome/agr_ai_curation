@@ -62,6 +62,7 @@ from src.schemas.curation_prep import CurationPrepScopeConfirmation
 logger = logging.getLogger(__name__)
 
 _FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
+_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = 10
 
 
 def _now_iso() -> str:
@@ -72,6 +73,44 @@ def _now_iso() -> str:
 def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     return agent_id.replace("-", "_")
+
+
+def _normalize_metadata_value(value: Any) -> str:
+    """Normalize freeform catalog metadata for case-insensitive matching."""
+
+    return str(value or "").strip().lower()
+
+
+def _matches_metadata_classification(value: str, candidates: list[str]) -> bool:
+    """Return True when a normalized metadata value matches any classifier token."""
+
+    return any(candidate in value for candidate in candidates)
+
+
+def _is_output_formatter_entry(entry: Optional[dict[str, Any]]) -> bool:
+    """Return whether an agent entry represents an output/formatter step."""
+
+    if not isinstance(entry, dict):
+        return False
+
+    category = _normalize_metadata_value(entry.get("category"))
+    subcategory = _normalize_metadata_value(entry.get("subcategory"))
+    return (
+        _matches_metadata_classification(category, ["output"])
+        or _matches_metadata_classification(subcategory, ["output", "format"])
+    )
+
+
+def _resolve_flow_step_include_evidence(
+    *,
+    entry: Optional[dict[str, Any]],
+    raw_include_evidence: Any,
+) -> Optional[bool]:
+    """Resolve effective include_evidence semantics for one flow step."""
+
+    if not _is_output_formatter_entry(entry):
+        return None
+    return raw_include_evidence is not False
 
 
 def _stringify_tool_output(value: Any) -> str:
@@ -112,7 +151,7 @@ def _build_flow_step_instruction_prefix(
             + custom_instructions.strip()
         )
 
-    if include_evidence:
+    if include_evidence is True:
         sections.append(
             "## OUTPUT EVIDENCE REQUIREMENT (from flow configuration)\n\n"
             "When producing the final output for this flow step, include supporting evidence "
@@ -120,6 +159,14 @@ def _build_flow_step_instruction_prefix(
             "the corresponding output item, preserve concrete quote or location details when "
             "present, and never invent evidence or citations. If no supporting evidence is "
             "available for a result, say that plainly instead of fabricating it."
+        )
+    elif include_evidence is False:
+        sections.append(
+            "## OUTPUT EVIDENCE EXCLUSION (from flow configuration)\n\n"
+            "When producing the final output for this flow step, do NOT include supporting "
+            "evidence, quote columns, citation fields, or source-location details in the "
+            "formatted result. Keep the output focused on the extracted entities or summaries "
+            "only, and do not invent placeholder evidence text."
         )
 
     if not sections:
@@ -233,38 +280,16 @@ def _accumulate_step_evidence(
     registry: _EvidenceRegistry,
     evidence_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Merge one step's evidence into the flow registry and return new records."""
+    """Merge one step's evidence into the flow registry and preserve raw per-step counts."""
 
     if not evidence_records:
         return {"evidence_records": [], "evidence_count": 0}
 
-    existing_ids = {
-        str(record.get("evidence_record_id") or "").strip()
-        for record in registry.records()
-        if str(record.get("evidence_record_id") or "").strip()
-    }
-    assigned_ids = registry.add_many(evidence_records)
-    records_by_id = {
-        str(record.get("evidence_record_id") or "").strip(): record
-        for record in registry.records()
-        if str(record.get("evidence_record_id") or "").strip()
-    }
+    step_registry = _EvidenceRegistry()
+    step_registry.add_many(evidence_records)
+    step_records = step_registry.records()
 
-    step_records: list[dict[str, Any]] = []
-    seen_step_ids: set[str] = set()
-    for evidence_record_id in assigned_ids:
-        normalized_id = str(evidence_record_id or "").strip()
-        if (
-            not normalized_id
-            or normalized_id in existing_ids
-            or normalized_id in seen_step_ids
-        ):
-            continue
-        record = records_by_id.get(normalized_id)
-        if record is None:
-            continue
-        seen_step_ids.add(normalized_id)
-        step_records.append(record)
+    registry.add_many(step_records)
 
     return {
         "evidence_records": step_records,
@@ -320,6 +345,27 @@ def _build_step_evidence_counts(
     return step_counts
 
 
+def _build_step_evidence_preview(
+    evidence_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the bounded step-evidence preview included in SSE events."""
+
+    return list(evidence_records[:_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT])
+
+
+def _build_completed_step_adapter_keys(
+    completed_steps: list[dict[str, Any]],
+) -> list[str]:
+    """Return distinct adapter keys represented by persisted flow candidates."""
+
+    adapter_keys: list[Optional[str]] = []
+    for step in completed_steps:
+        candidate = step.get("candidate")
+        if isinstance(candidate, ExtractionEnvelopeCandidate):
+            adapter_keys.append(_resolve_flow_candidate_adapter_key(candidate))
+    return _unique_non_empty_scope_values(adapter_keys)
+
+
 def _resolve_flow_agent_entry(
     agent_id: str,
     *,
@@ -337,6 +383,8 @@ def _resolve_flow_agent_entry(
     return {
         "name": metadata.get("display_name", agent_id),
         "description": metadata.get("description") or "",
+        "category": metadata.get("category") or "",
+        "subcategory": metadata.get("subcategory") or "",
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
         "curation": metadata.get("curation"),
@@ -802,7 +850,10 @@ def get_all_agent_tools(
                 continue
 
             custom_instr = data.get("custom_instructions")
-            include_evidence = data.get("include_evidence")
+            include_evidence = _resolve_flow_step_include_evidence(
+                entry=entry,
+                raw_include_evidence=data.get("include_evidence"),
+            )
             step_instruction_prefix = _build_flow_step_instruction_prefix(
                 custom_instructions=custom_instr,
                 include_evidence=include_evidence,
@@ -812,7 +863,7 @@ def get_all_agent_tools(
                 applied_overrides: List[str] = []
                 if custom_instr and custom_instr.strip():
                     applied_overrides.append("custom_instructions")
-                if include_evidence:
+                if include_evidence is not None:
                     applied_overrides.append("include_evidence")
                 logger.info(
                     "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
@@ -894,9 +945,9 @@ def build_supervisor_instructions(
         agent_id = data.get("agent_id")
 
         step_num += 1
+        resolved_entry = _resolve_flow_agent_entry(agent_id) if agent_id else None
         agent_name = data.get("agent_display_name")
         if not agent_name and agent_id:
-            resolved_entry = _resolve_flow_agent_entry(agent_id)
             agent_name = resolved_entry.get("name") if resolved_entry else None
         agent_name = agent_name or agent_id or "Unknown"
         step_goal = data.get("step_goal", "")
@@ -928,8 +979,14 @@ def build_supervisor_instructions(
         custom_instr = data.get("custom_instructions")
         if custom_instr and custom_instr.strip():
             step_desc += " [has custom instructions]"
-        if data.get("include_evidence"):
+        include_evidence = _resolve_flow_step_include_evidence(
+            entry=resolved_entry,
+            raw_include_evidence=data.get("include_evidence"),
+        )
+        if include_evidence is True:
             step_desc += " [includes evidence in output]"
+        elif include_evidence is False:
+            step_desc += " [excludes evidence from output]"
         step_descriptions.append(step_desc)
 
     # Build document guidance if a document is loaded
@@ -1361,6 +1418,8 @@ async def execute_flow(
             tool_name = str(details.get("toolName") or "").strip()
             completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
             if completed_step is not None:
+                step_evidence_records = list(completed_step.get("evidence_records") or [])
+                step_evidence_preview = _build_step_evidence_preview(step_evidence_records)
                 flow_step_evidence_event = {
                     "type": "FLOW_STEP_EVIDENCE",
                     "timestamp": _now_iso(),
@@ -1372,7 +1431,8 @@ async def execute_flow(
                         "tool_name": completed_step.get("tool_name"),
                         "agent_id": completed_step.get("agent_id"),
                         "agent_name": completed_step.get("agent_name"),
-                        "evidence_records": list(completed_step.get("evidence_records") or []),
+                        "evidence_records": step_evidence_preview,
+                        "evidence_preview": step_evidence_preview,
                         "evidence_count": int(completed_step.get("evidence_count") or 0),
                         "total_evidence_records": len(evidence_registry.records()),
                     },
@@ -1487,10 +1547,13 @@ async def execute_flow(
             "flow_id": str(flow.id),
             "flow_name": flow.name,
             "flow_run_id": flow_run_id,
+            "document_id": document_id,
+            "origin_session_id": session_id,
             "status": flow_status,
             "failure_reason": failure_reason,
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),
+            "adapter_keys": _build_completed_step_adapter_keys(completed_steps),
         }
     }
 

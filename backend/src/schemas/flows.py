@@ -77,7 +77,11 @@ class FlowNodeData(BaseModel):
     )
     include_evidence: Optional[bool] = Field(
         None,
-        description="Whether output/formatter steps should include supporting evidence in formatted output"
+        description=(
+            "For output/formatter nodes only. When true, include supporting evidence in "
+            "formatted output. When false, omit supporting evidence. Defaults to true "
+            "for output/formatter agents and is ignored for other step types."
+        ),
     )
     # IMPORTANT: output_key pattern ensures valid Python identifier
     output_key: str = Field(

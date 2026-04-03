@@ -65,3 +65,15 @@ export const isOutputFormatterAgentFromMetadata = (
     categoryIncludes: ['output'],
     subcategoryIncludes: ['output', 'format'],
   })
+
+export const resolveOutputFormatterIncludeEvidence = (
+  agentId: string,
+  agentMetadata: AgentMetadataLookup,
+  includeEvidence?: boolean | null
+): boolean | undefined => {
+  if (!isOutputFormatterAgentFromMetadata(agentId, agentMetadata)) {
+    return undefined
+  }
+
+  return includeEvidence !== false
+}

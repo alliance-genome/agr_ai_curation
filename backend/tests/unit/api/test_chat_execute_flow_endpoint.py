@@ -294,6 +294,15 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
                 "tool_name": "ask_gene_specialist",
                 "agent_id": "gene",
                 "agent_name": "Gene Agent",
+                "evidence_preview": [
+                    {
+                        "entity": "TP53",
+                        "verified_quote": "TP53 increased.",
+                        "page": 2,
+                        "section": "Results",
+                        "chunk_id": "chunk-1",
+                    }
+                ],
                 "evidence_records": [
                     {
                         "entity": "TP53",
@@ -328,6 +337,7 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
     assert flow_step_event["tool_name"] == "ask_gene_specialist"
     assert flow_step_event["evidence_count"] == 1
     assert flow_step_event["total_evidence_records"] == 3
+    assert flow_step_event["evidence_preview"][0]["entity"] == "TP53"
     assert flow_step_event["evidence_records"][0]["entity"] == "TP53"
     assert flow_step_event["session_id"] == "session-flow-evidence"
     assert flow_step_event["details"]["agent_name"] == "Gene Agent"
