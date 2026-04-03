@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AppContent } from './App';
+import { AppContent, ProtectedRoutes } from './App';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { LATEST_CHANGELOG_ENTRY } from './content/changelog';
 
@@ -62,6 +62,17 @@ const renderAppContent = (path = '/') =>
     </ThemeProvider>
   );
 
+const renderProtectedRoutes = (path = '/') =>
+  render(
+    <ThemeProvider theme={theme}>
+      <MemoryRouter initialEntries={[path]}>
+        <ProtectedRoutes>
+          <div>Protected content</div>
+        </ProtectedRoutes>
+      </MemoryRouter>
+    </ThemeProvider>
+  );
+
 const jsonResponse = (payload: unknown): Response =>
   new Response(JSON.stringify(payload), {
     status: 200,
@@ -71,6 +82,8 @@ const jsonResponse = (payload: unknown): Response =>
 describe('AppContent global notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
     localStorage.setItem(`changelog:last-seen:user-1`, LATEST_CHANGELOG_ENTRY.id);
     mockUseAuth.mockReturnValue({
       user: { uid: 'user-1', name: 'Test User' },
@@ -261,5 +274,151 @@ describe('AppContent global notifications', () => {
 
     expect(await screen.findByText('Curation Inventory Page')).toBeInTheDocument();
     expect(screen.getByText('Curation')).toBeInTheDocument();
+  });
+});
+
+describe('ProtectedRoutes logout suppression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it('does not re-trigger login after logout state propagates across renders', async () => {
+    const login = vi.fn();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: true,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+    sessionStorage.setItem('justLoggedOut', 'true');
+
+    const view = renderProtectedRoutes('/agent-studio?tab=queued');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('justLoggedOut')).toBeNull();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+
+    await act(async () => {
+      view.rerender(
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
+            <ProtectedRoutes>
+              <div>Protected content</div>
+            </ProtectedRoutes>
+          </MemoryRouter>
+        </ThemeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('intendedPath')).toBeNull();
+
+    const resumedLogin = vi.fn();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login: resumedLogin,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+
+    await act(async () => {
+      view.rerender(
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
+            <ProtectedRoutes>
+              <div>Protected content</div>
+            </ProtectedRoutes>
+          </MemoryRouter>
+        </ThemeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(resumedLogin).toHaveBeenCalledTimes(1);
+    });
+    expect(sessionStorage.getItem('intendedPath')).toBe('/agent-studio?tab=queued');
+  });
+
+  it('keeps logout suppression when auth flips from authenticated to unauthenticated', async () => {
+    const login = vi.fn();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+    sessionStorage.setItem('justLoggedOut', 'true');
+
+    const view = renderProtectedRoutes('/agent-studio?tab=queued');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('justLoggedOut')).toBeNull();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+
+    await act(async () => {
+      view.rerender(
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
+            <ProtectedRoutes>
+              <div>Protected content</div>
+            </ProtectedRoutes>
+          </MemoryRouter>
+        </ThemeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it('still redirects unauthenticated users to login when no logout suppression is active', async () => {
+    const login = vi.fn();
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login,
+      logout: vi.fn().mockResolvedValue(undefined),
+      user: null,
+    });
+
+    renderProtectedRoutes('/curation?view=mine');
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledTimes(1);
+    });
+    expect(sessionStorage.getItem('intendedPath')).toBe('/curation?view=mine');
   });
 });

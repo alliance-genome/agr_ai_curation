@@ -69,27 +69,36 @@ function renderLazyRoute(element: React.ReactNode) {
  * ProtectedRoutes: Wrapper component that checks authentication before rendering routes
  * If not authenticated, redirects to login
  */
-function ProtectedRoutes({ children }: { children: React.ReactNode }) {
+export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, login } = useAuth();
   const location = useLocation();
+  const pendingLogoutSuppressionRef = React.useRef(false);
 
   useEffect(() => {
-    // Check if user just logged out (flag set in AuthContext before Cognito redirect)
-    const justLoggedOut = sessionStorage.getItem('justLoggedOut') === 'true';
-
-    if (justLoggedOut) {
-      // Clear the flag now that we've checked it
+    // Latch logout suppression in a ref so it survives the auth-state render sequence.
+    if (sessionStorage.getItem('justLoggedOut') === 'true') {
+      pendingLogoutSuppressionRef.current = true;
       sessionStorage.removeItem('justLoggedOut');
     }
 
-    // If not loading and not authenticated, redirect to login
-    // UNLESS the user just logged out (in which case show logged out state)
-    if (!isLoading && !isAuthenticated && !justLoggedOut) {
-      // Save intended destination for redirect after login (future enhancement)
-      sessionStorage.setItem('intendedPath', location.pathname + location.search);
-      login();
+    if (isAuthenticated) {
+      return;
     }
-  }, [isLoading, isAuthenticated, login, location]);
+
+    if (isLoading) {
+      return;
+    }
+
+    // Consume the logout suppression exactly once after loading settles.
+    if (pendingLogoutSuppressionRef.current) {
+      pendingLogoutSuppressionRef.current = false;
+      return;
+    }
+
+    // Save intended destination for redirect after login (future enhancement)
+    sessionStorage.setItem('intendedPath', location.pathname + location.search);
+    login();
+  }, [isLoading, isAuthenticated, login, location.pathname, location.search]);
 
   // Show loading spinner while checking auth
   if (isLoading) {
