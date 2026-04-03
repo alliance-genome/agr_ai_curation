@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypeVar
 
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .models import AgentBundleSpec, PackageManifest, RuntimeOverrides, ToolBindingsManifest
+from .models import ExportKind, PackageManifest, RuntimeOverrides, ToolBindingsManifest
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -66,7 +66,11 @@ def _load_contract_model(path: Path, model_type: type[T], error_type: type[Packa
         raise error_type(str(exc)) from exc
 
 
-def _validate_agent_bundle_directory_registration(path: Path, raw_data: dict) -> None:
+def _validate_agent_bundle_directory_registration(
+    path: Path,
+    manifest: PackageManifest,
+    raw_data: dict,
+) -> None:
     """Fail clearly when package-owned agent bundles exist on disk but not in the manifest."""
     bundle_payloads = raw_data.get("agent_bundles")
     if not bundle_payloads:
@@ -74,12 +78,17 @@ def _validate_agent_bundle_directory_registration(path: Path, raw_data: dict) ->
 
     package_dir = path.parent
     declared_bundle_paths: set[tuple[str, str]] = set()
-    agent_roots: dict[str, Path] = {}
+    for export in manifest.exports:
+        if export.kind is not ExportKind.AGENT:
+            continue
+        export_path = PurePosixPath(export.path)
+        agents_dir = export_path.parent.as_posix()
+        declared_bundle_paths.add((agents_dir, export_path.name))
 
-    for raw_bundle in bundle_payloads:
-        bundle = AgentBundleSpec.model_validate(raw_bundle)
-        declared_bundle_paths.add((bundle.agents_dir, bundle.name))
-        agent_roots.setdefault(bundle.agents_dir, package_dir / bundle.agents_dir)
+    agent_roots: dict[str, Path] = {}
+    for bundle in bundle_payloads:
+        agents_dir = str(PurePosixPath(str(bundle.get("agents_dir", "agents"))))
+        agent_roots.setdefault(agents_dir, package_dir / agents_dir)
 
     missing_bundle_dirs: list[str] = []
     for agents_dir, agents_root in sorted(agent_roots.items()):
@@ -93,7 +102,9 @@ def _validate_agent_bundle_directory_registration(path: Path, raw_data: dict) ->
                 continue
             if (agents_dir, child.name) in declared_bundle_paths:
                 continue
-            missing_bundle_dirs.append(f"{agents_dir}/{child.name}")
+            missing_bundle_dirs.append(
+                child.name if agents_dir == "." else f"{agents_dir}/{child.name}"
+            )
 
     if not missing_bundle_dirs:
         return
@@ -110,8 +121,9 @@ def load_package_manifest(path: Path) -> PackageManifest:
     """Load and validate a package manifest file."""
     try:
         raw_data = _load_yaml_mapping(path)
-        _validate_agent_bundle_directory_registration(path, raw_data)
-        return PackageManifest.model_validate(raw_data)
+        manifest = PackageManifest.model_validate(dict(raw_data))
+        _validate_agent_bundle_directory_registration(path, manifest, raw_data)
+        return manifest
     except ValidationError as exc:
         details = _format_validation_error(exc)
         raise PackageManifestError(f"Invalid {path.name} at {path}: {details}") from exc

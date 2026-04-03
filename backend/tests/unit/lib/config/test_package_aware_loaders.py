@@ -193,6 +193,16 @@ def test_resolve_agent_sources_warns_when_package_agent_dir_is_missing_from_agen
     assert "agent_bundles is missing package-owned agent directories with agent.yaml" in caplog.text
     assert "agents/missing_manifest" in caplog.text
 
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        repeated_sources = agent_sources.resolve_agent_config_sources(packages_dir)
+
+    assert repeated_sources == ()
+    assert "Skipping runtime package 'demo_core'" in caplog.text
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in caplog.text
+    assert "agents/missing_manifest" in caplog.text
+
 
 def test_resolve_agent_sources_rejects_package_prompt_exports_without_agent_bundle(tmp_path):
     packages_dir = tmp_path / "packages"
