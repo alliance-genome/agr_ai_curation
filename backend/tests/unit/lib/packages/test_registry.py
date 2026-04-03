@@ -73,6 +73,82 @@ def test_load_package_registry_reports_manifest_load_failures(tmp_path):
     assert "version" in failure.reason
 
 
+def test_load_package_registry_reports_missing_agent_bundle_manifest_registration(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = _write_package(
+        packages_dir,
+        "demo.core",
+        "\n".join(
+            [
+                "package_id: demo.core",
+                "display_name: Demo Core",
+                "version: 1.0.0",
+                "package_api_version: 1.0.0",
+                "min_runtime_version: 1.0.0",
+                "max_runtime_version: 2.0.0",
+                "python_package_root: python/src/demo_core",
+                "requirements_file: requirements/runtime.txt",
+                "agent_bundles:",
+                "  - name: gene",
+            ]
+        )
+        + "\n",
+    )
+    for agent_name in ("gene", "missing_manifest"):
+        agent_dir = package_dir / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(f"agent_id: {agent_name}\n", encoding="utf-8")
+
+    registry = load_package_registry(packages_dir, fail_on_validation_error=False)
+
+    assert registry.loaded_packages == ()
+    assert len(registry.failed_packages) == 1
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in (
+        registry.failed_packages[0].reason
+    )
+    assert "agents/missing_manifest" in registry.failed_packages[0].reason
+
+
+def test_load_package_registry_reports_missing_agent_bundle_manifest_registration_when_key_omitted(
+    tmp_path,
+):
+    packages_dir = tmp_path / "packages"
+    package_dir = _write_package(
+        packages_dir,
+        "demo.core",
+        "\n".join(
+            [
+                "package_id: demo.core",
+                "display_name: Demo Core",
+                "version: 1.0.0",
+                "package_api_version: 1.0.0",
+                "min_runtime_version: 1.0.0",
+                "max_runtime_version: 2.0.0",
+                "python_package_root: python/src/demo_core",
+                "requirements_file: requirements/runtime.txt",
+                "exports:",
+                "  - kind: tool_binding",
+                "    name: default",
+                "    path: tools/bindings.yaml",
+                "    description: Default bindings",
+            ]
+        )
+        + "\n",
+    )
+    agent_dir = package_dir / "agents" / "missing_manifest"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.yaml").write_text("agent_id: missing_manifest\n", encoding="utf-8")
+
+    registry = load_package_registry(packages_dir, fail_on_validation_error=False)
+
+    assert registry.loaded_packages == ()
+    assert len(registry.failed_packages) == 1
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in (
+        registry.failed_packages[0].reason
+    )
+    assert "agents/missing_manifest" in registry.failed_packages[0].reason
+
+
 def test_load_package_registry_reports_runtime_incompatibility(tmp_path):
     packages_dir = tmp_path / "packages"
     _write_package(packages_dir, "agr.base", _fixture_text("valid_package.yaml"))

@@ -159,6 +159,24 @@ def _looks_like_agent_directory(path: Path) -> bool:
     )
 
 
+def _warn_failed_packages_once(
+    registry,
+    warned_package_failures: set[tuple[str, str]],
+) -> None:
+    """Emit actionable warnings for packages that were discovered but not loaded."""
+    for failure in registry.failed_packages:
+        warning_key = (str(failure.manifest_path), failure.reason)
+        if warning_key in warned_package_failures:
+            continue
+        warned_package_failures.add(warning_key)
+        logger.warning(
+            "Skipping runtime package '%s' at %s: %s",
+            failure.package_id,
+            failure.manifest_path,
+            failure.reason,
+        )
+
+
 def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigSource, ...]:
     """Resolve agent-owned config assets exported by one runtime package.
 
@@ -296,6 +314,7 @@ def _resolve_agent_config_sources_for_path(
     resolved_path: Path,
     *,
     used_default_search_path: bool,
+    warned_package_failures: set[tuple[str, str]],
 ) -> tuple[AgentConfigSource, ...]:
     """Resolve agent config bundles from one packages root, package dir, or legacy agents dir."""
     if not resolved_path.exists():
@@ -306,6 +325,7 @@ def _resolve_agent_config_sources_for_path(
             resolved_path.parent,
             fail_on_validation_error=True,
         )
+        _warn_failed_packages_once(registry, warned_package_failures)
         package = next(
             (
                 item
@@ -315,6 +335,16 @@ def _resolve_agent_config_sources_for_path(
             None,
         )
         if package is None:
+            failed_package = next(
+                (
+                    item
+                    for item in registry.failed_packages
+                    if item.package_path == resolved_path
+                ),
+                None,
+            )
+            if failed_package is not None:
+                raise ValueError(failed_package.reason)
             raise FileNotFoundError(
                 f"Package directory is not a loaded runtime package: {resolved_path}"
             )
@@ -324,6 +354,7 @@ def _resolve_agent_config_sources_for_path(
             resolved_path,
             fail_on_validation_error=True,
         )
+        _warn_failed_packages_once(registry, warned_package_failures)
         sources = tuple(
             source
             for package in registry.loaded_packages
@@ -367,10 +398,12 @@ def resolve_agent_config_sources(
     resolved_paths, used_default_search_paths = _resolve_search_paths(search_path)
 
     owners: dict[str, AgentConfigSource] = {}
+    warned_package_failures: set[tuple[str, str]] = set()
     for index, resolved_path in enumerate(resolved_paths):
         sources = _resolve_agent_config_sources_for_path(
             resolved_path,
             used_default_search_path=bool(used_default_search_paths and index == 0),
+            warned_package_failures=warned_package_failures,
         )
         for source in sources:
             existing = owners.get(source.folder_name)

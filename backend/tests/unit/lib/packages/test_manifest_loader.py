@@ -76,6 +76,108 @@ agent_bundles:
     }
 
 
+def test_load_package_manifest_rejects_package_agent_dir_missing_from_agent_bundles(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: agr.core
+display_name: AGR Core Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_core
+requirements_file: requirements/runtime.txt
+agent_bundles:
+  - name: gene
+""".strip(),
+        encoding="utf-8",
+    )
+    for agent_name in ("gene", "missing_manifest"):
+        agent_dir = tmp_path / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(f"agent_id: {agent_name}\n", encoding="utf-8")
+
+    with pytest.raises(PackageManifestError) as exc_info:
+        load_package_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in message
+    assert "agents/missing_manifest" in message
+    assert "Add each bundle name to agent_bundles to activate it." in message
+
+
+def test_load_package_manifest_rejects_default_agent_dir_when_agent_bundles_omitted(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: agr.core
+display_name: AGR Core Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default bindings
+""".strip(),
+        encoding="utf-8",
+    )
+    agent_dir = tmp_path / "agents" / "missing_manifest"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.yaml").write_text("agent_id: missing_manifest\n", encoding="utf-8")
+
+    with pytest.raises(PackageManifestError) as exc_info:
+        load_package_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in message
+    assert "agents/missing_manifest" in message
+
+
+def test_load_package_manifest_allows_explicit_agent_export_outside_agent_bundles(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: agr.core
+display_name: AGR Core Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/agr_ai_curation_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: agent
+    name: explicit_export
+    path: agents/explicit_export
+    description: Explicit agent export
+agent_bundles:
+  - name: gene
+""".strip(),
+        encoding="utf-8",
+    )
+    for agent_name in ("gene", "explicit_export"):
+        agent_dir = tmp_path / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(f"agent_id: {agent_name}\n", encoding="utf-8")
+
+    manifest = load_package_manifest(manifest_path)
+
+    assert {
+        (export.kind, export.name, export.path)
+        for export in manifest.exports
+        if export.kind is ExportKind.AGENT
+    } == {
+        (ExportKind.AGENT, "explicit_export", "agents/explicit_export"),
+        (ExportKind.AGENT, "gene", "agents/gene"),
+    }
+
+
 def test_load_tool_bindings_parses_representative_fixture():
     bindings = load_tool_bindings(FIXTURES_DIR / "valid_bindings.yaml")
 
