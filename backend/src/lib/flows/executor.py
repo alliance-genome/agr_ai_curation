@@ -815,57 +815,6 @@ def get_all_agent_tools(
     if include_unavailable:
         return all_tools, created_tool_names, unavailable_steps, execution_state
     return all_tools, created_tool_names
-
-
-def _build_flow_tool_metadata(
-    flow: CurationFlow,
-    *,
-    available_tools: Optional[Set[str]] = None,
-) -> Dict[str, Dict[str, Any]]:
-    """Build exact flow tool-name metadata for backend-only bookkeeping."""
-
-    tool_metadata: Dict[str, Dict[str, Any]] = {}
-    agent_id_counts = _count_agent_ids(flow)
-    step_num = 0
-
-    for node in _get_ordered_executable_nodes(flow):
-        data = node.get("data", {})
-        agent_id = data.get("agent_id")
-        step_num += 1
-
-        if not agent_id:
-            continue
-
-        is_duplicate = agent_id_counts.get(agent_id, 0) > 1
-        tool_agent_segment = _tool_safe_agent_id(agent_id)
-        if is_duplicate:
-            tool_name = f"ask_{tool_agent_segment}_step{step_num}_specialist"
-        else:
-            tool_name = f"ask_{tool_agent_segment}_specialist"
-
-        if available_tools is not None and tool_name not in available_tools:
-            continue
-
-        resolved_entry = None
-        agent_name = data.get("agent_display_name")
-        if not agent_name:
-            resolved_entry = _resolve_flow_agent_entry(agent_id)
-            agent_name = resolved_entry.get("name") if resolved_entry else None
-
-        tool_metadata[tool_name] = {
-            "agent_id": agent_id,
-            "agent_name": agent_name or agent_id,
-            "step": step_num,
-            "curation": (
-                resolved_entry.get("curation")
-                if resolved_entry is not None
-                else None
-            ),
-        }
-
-    return tool_metadata
-
-
 def build_supervisor_instructions(
     flow: CurationFlow,
     has_document: bool = False,
@@ -1134,11 +1083,6 @@ def create_flow_supervisor(
         model_settings=model_settings,
     )
     setattr(supervisor, "_flow_unavailable_steps", unavailable_steps)
-    setattr(
-        supervisor,
-        "_flow_tool_metadata",
-        _build_flow_tool_metadata(flow, available_tools=created_tool_names),
-    )
     setattr(supervisor, "_flow_execution_state", execution_state)
 
     logger.info(
@@ -1352,20 +1296,9 @@ async def execute_flow(
     failure_reason: Optional[str] = None
     trace_id: Optional[str] = None
     extraction_persisted = False
-    flow_execution_state = getattr(supervisor, "_flow_execution_state", None)
-    if not isinstance(flow_execution_state, dict):
-        flow_execution_state = {
-            "completed_steps": [],
-            "evidence_registry": _EvidenceRegistry(),
-        }
-
-    completed_steps = flow_execution_state.get("completed_steps", [])
-    if not isinstance(completed_steps, list):
-        completed_steps = []
-
-    evidence_registry = flow_execution_state.get("evidence_registry")
-    if not isinstance(evidence_registry, _EvidenceRegistry):
-        evidence_registry = _EvidenceRegistry()
+    flow_execution_state = supervisor._flow_execution_state
+    completed_steps = flow_execution_state["completed_steps"]
+    evidence_registry = flow_execution_state["evidence_registry"]
 
     async for event in run_agent_streamed(
         user_message=prompt,

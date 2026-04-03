@@ -1,6 +1,7 @@
 """Unit tests for /api/chat/execute-flow endpoint streaming behavior."""
 
 import asyncio
+import importlib
 import json
 import sys
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ sys.modules.setdefault(
     ),
 )
 
-from src.api import chat
+chat = importlib.import_module("src.api.chat")
 
 
 @pytest.fixture(autouse=True)
