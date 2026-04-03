@@ -89,6 +89,58 @@ function buildCatalogWithGroupRule(): PromptCatalog {
   }
 }
 
+function buildCatalogWithTemplateSpecificGroupRules(): PromptCatalog {
+  return {
+    categories: [
+      {
+        category: 'Validation',
+        agents: [
+          {
+            agent_id: 'gene',
+            agent_name: 'Gene Specialist',
+            description: 'Gene validation',
+            base_prompt: 'Gene base prompt',
+            source_file: 'database',
+            has_group_rules: true,
+            group_rules: {
+              FB: {
+                group_id: 'FB',
+                content: 'FB template prompt',
+                source_file: 'database',
+              },
+              WB: {
+                group_id: 'WB',
+                content: 'WB template prompt',
+                source_file: 'database',
+              },
+            },
+            tools: ['agr_curation_query'],
+          },
+          {
+            agent_id: 'disease',
+            agent_name: 'Disease Specialist',
+            description: 'Disease validation',
+            base_prompt: 'Disease base prompt',
+            source_file: 'database',
+            has_group_rules: true,
+            group_rules: {
+              WB: {
+                group_id: 'WB',
+                content: 'Disease WB template prompt',
+                source_file: 'database',
+              },
+            },
+            tools: ['agr_curation_query'],
+          },
+        ],
+      },
+    ],
+    total_agents: 2,
+    available_groups: ['WB', 'FB', 'MGI'],
+    last_updated: '2026-02-23T00:00:00Z',
+  }
+}
+
 function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
   return {
     id: '11111111-1111-1111-1111-111111111111',
@@ -117,6 +169,45 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     updated_at: '2026-02-23T00:00:00Z',
     ...overrides,
   }
+}
+
+function getLabeledControl(label: string): HTMLElement {
+  const labelNode = screen
+    .getAllByText(label)
+    .find((node) => node.tagName.toLowerCase() === 'label')
+  expect(labelNode).toBeTruthy()
+
+  const control = labelNode!.closest('.MuiFormControl-root') as HTMLElement | null
+  expect(control).toBeTruthy()
+  return control!
+}
+
+async function getGroupOverrideSelect(): Promise<HTMLElement> {
+  const accordionButton = screen.getByRole('button', { name: /Group Prompt Overrides/ })
+  if (accordionButton.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(accordionButton)
+  }
+
+  const accordion = accordionButton.closest('.MuiAccordion-root') as HTMLElement | null
+  expect(accordion).toBeTruthy()
+  return within(accordion!).getByRole('combobox')
+}
+
+async function assertGroupOptions(expected: string[], absent: string[] = []): Promise<void> {
+  const groupSelect = await getGroupOverrideSelect()
+  fireEvent.mouseDown(groupSelect)
+
+  await waitFor(() => {
+    expected.forEach((option) => {
+      expect(screen.getByRole('option', { name: option })).toBeInTheDocument()
+    })
+  })
+
+  absent.forEach((option) => {
+    expect(screen.queryByRole('option', { name: option })).not.toBeInTheDocument()
+  })
+
+  fireEvent.click(screen.getByRole('option', { name: expected[0] }))
 }
 
 describe('PromptWorkshop', () => {
@@ -196,6 +287,29 @@ describe('PromptWorkshop', () => {
       name: 'Gene Specialist',
       description: 'Gene validation',
       icon: '🧬',
+      category: 'Validation',
+      model_id: 'gpt-4o',
+      tool_ids: ['search_document'],
+      output_schema_key: undefined,
+    },
+  ]
+
+  const multiTemplateOptions: AgentTemplate[] = [
+    {
+      agent_id: 'gene',
+      name: 'Gene Specialist',
+      description: 'Gene validation',
+      icon: '🧬',
+      category: 'Validation',
+      model_id: 'gpt-4o',
+      tool_ids: ['search_document'],
+      output_schema_key: undefined,
+    },
+    {
+      agent_id: 'disease',
+      name: 'Disease Specialist',
+      description: 'Disease validation',
+      icon: '🦠',
       category: 'Validation',
       model_id: 'gpt-4o',
       tool_ids: ['search_document'],
@@ -642,5 +756,131 @@ describe('PromptWorkshop', () => {
         })
       )
     }, { timeout: 10000 })
+  }, 15000)
+
+  it('shows only the selected template group options and resets invalid selections when switching templates', async () => {
+    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+
+    render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Gene Specialist (Custom)')
+    })
+
+    await assertGroupOptions(['FB', 'WB'], ['MGI'])
+
+    const templateControl = getLabeledControl('Template')
+    fireEvent.mouseDown(within(templateControl).getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Disease Specialist' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Specialist (Custom)')
+    })
+    expect(await getGroupOverrideSelect()).toHaveTextContent('WB')
+
+    await assertGroupOptions(['WB'], ['FB', 'MGI'])
+  }, 15000)
+
+  it('uses template group rules in template mode and clone-source group rules in clone mode', async () => {
+    const existingCloneSource = buildCustomAgent({
+      id: '22222222-2222-2222-2222-222222222222',
+      agent_id: 'ca_22222222-2222-2222-2222-222222222222',
+      name: 'Disease Agent',
+      template_source: 'disease',
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existingCloneSource], total: 1 })
+
+    render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Gene Specialist (Custom)')
+    })
+
+    await assertGroupOptions(['FB', 'WB'], ['MGI'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Agent (Copy)')
+    })
+
+    await assertGroupOptions(['WB'], ['FB', 'MGI'])
+  }, 15000)
+
+  it('uses the selected custom agent template group rules when editing an existing agent', async () => {
+    const templateAlignedCloneSource = buildCustomAgent({
+      name: 'Gene Agent',
+      template_source: 'gene',
+    })
+    const selectedExistingAgent = buildCustomAgent({
+      id: '33333333-3333-3333-3333-333333333333',
+      agent_id: 'ca_33333333-3333-3333-3333-333333333333',
+      name: 'Disease Override Agent',
+      template_source: 'disease',
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.listCustomAgents.mockResolvedValue({
+      custom_agents: [templateAlignedCloneSource, selectedExistingAgent],
+      total: 2,
+    })
+
+    render(
+      <PromptWorkshop
+        catalog={buildCatalogWithTemplateSpecificGroupRules()}
+        initialCustomAgentId={selectedExistingAgent.id}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Editing: Disease Override Agent/)).toBeInTheDocument()
+    })
+
+    await assertGroupOptions(['WB'], ['FB', 'MGI'])
+  }, 15000)
+
+  it('switches from editing to clone mode using the selected clone source template group rules', async () => {
+    const existingGeneAgent = buildCustomAgent({
+      id: '44444444-4444-4444-4444-444444444444',
+      agent_id: 'ca_44444444-4444-4444-4444-444444444444',
+      name: 'Gene Agent',
+      template_source: 'gene',
+    })
+    const diseaseCloneSource = buildCustomAgent({
+      id: '55555555-5555-5555-5555-555555555555',
+      agent_id: 'ca_55555555-5555-5555-5555-555555555555',
+      name: 'Disease Agent',
+      template_source: 'disease',
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.listCustomAgents.mockResolvedValue({
+      custom_agents: [existingGeneAgent, diseaseCloneSource],
+      total: 2,
+    })
+
+    render(
+      <PromptWorkshop
+        catalog={buildCatalogWithTemplateSpecificGroupRules()}
+        initialCustomAgentId={existingGeneAgent.id}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Editing: Gene Agent/)).toBeInTheDocument()
+    })
+
+    await assertGroupOptions(['FB', 'WB'], ['MGI'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+
+    const cloneSourceControl = getLabeledControl('Clone Source')
+    fireEvent.mouseDown(within(cloneSourceControl).getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Disease Agent' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Agent (Copy)')
+    })
+
+    await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 15000)
 })

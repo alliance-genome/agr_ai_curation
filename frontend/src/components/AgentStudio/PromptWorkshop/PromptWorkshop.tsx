@@ -379,17 +379,28 @@ function PromptWorkshop({
   )
 
   const groupRuleSourceAgent = useMemo(() => {
-    const templateId = selectedCustomAgent?.template_source
-      || selectedCloneSource?.template_source
-      || (gettingStartedMode === 'template' ? parentAgentId : undefined)
-    if (!templateId) return null
-    return parentAgents.find((agent) => agent.agent_id === templateId) || null
+    if (selectedCustomAgent) {
+      if (!selectedCustomAgent.template_source) return null
+      return parentAgents.find((agent) => agent.agent_id === selectedCustomAgent.template_source) || null
+    }
+
+    if (gettingStartedMode === 'clone') {
+      if (!selectedCloneSource?.template_source) return null
+      return parentAgents.find((agent) => agent.agent_id === selectedCloneSource.template_source) || null
+    }
+
+    if (gettingStartedMode === 'template') {
+      if (!parentAgentId) return null
+      return parentAgents.find((agent) => agent.agent_id === parentAgentId) || null
+    }
+
+    return null
   }, [
     gettingStartedMode,
     parentAgentId,
     parentAgents,
     selectedCloneSource?.template_source,
-    selectedCustomAgent?.template_source,
+    selectedCustomAgent,
   ])
 
   const availableGroupIds = useMemo(
