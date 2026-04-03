@@ -838,4 +838,49 @@ describe('PromptWorkshop', () => {
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 15000)
+
+  it('switches from editing to clone mode using the selected clone source template group rules', async () => {
+    const existingGeneAgent = buildCustomAgent({
+      id: '44444444-4444-4444-4444-444444444444',
+      agent_id: 'ca_44444444-4444-4444-4444-444444444444',
+      name: 'Gene Agent',
+      template_source: 'gene',
+    })
+    const diseaseCloneSource = buildCustomAgent({
+      id: '55555555-5555-5555-5555-555555555555',
+      agent_id: 'ca_55555555-5555-5555-5555-555555555555',
+      name: 'Disease Agent',
+      template_source: 'disease',
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue(multiTemplateOptions)
+    serviceMocks.listCustomAgents.mockResolvedValue({
+      custom_agents: [existingGeneAgent, diseaseCloneSource],
+      total: 2,
+    })
+
+    render(
+      <PromptWorkshop
+        catalog={buildCatalogWithTemplateSpecificGroupRules()}
+        initialCustomAgentId={existingGeneAgent.id}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Editing: Gene Agent/)).toBeInTheDocument()
+    })
+
+    await assertGroupOptions(['FB', 'WB'], ['MGI'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+
+    const cloneSourceControl = getLabeledControl('Clone Source')
+    fireEvent.mouseDown(within(cloneSourceControl).getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Disease Agent' }))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Agent (Copy)')
+    })
+
+    await assertGroupOptions(['WB'], ['FB', 'MGI'])
+  }, 15000)
 })
