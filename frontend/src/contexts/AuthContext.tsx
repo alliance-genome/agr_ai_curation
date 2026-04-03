@@ -261,6 +261,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const data = await response.json();
 
+      // Set this before auth state flips so ProtectedRoutes can suppress auto-login
+      // throughout the logout-triggered render sequence.
+      sessionStorage.setItem('justLoggedOut', 'true');
+
       // Clear client-side state
       setUser(null);
       setIsAuthenticated(false);
@@ -272,9 +276,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       localStorage.removeItem('chat-session-id');
       localStorage.removeItem('chat-active-document');
       localStorage.removeItem('chat-user-id');
-
-      // Set flag to prevent immediate auto-login loops after provider redirect.
-      sessionStorage.setItem('justLoggedOut', 'true');
 
       logger.info('Logout successful', {
         component: 'AuthContext',
@@ -292,6 +293,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         component: 'AuthContext',
         action: 'logout',
       });
+
+      sessionStorage.setItem('justLoggedOut', 'true');
 
       // Even if logout fails, clear local state and redirect to home
       setUser(null);
