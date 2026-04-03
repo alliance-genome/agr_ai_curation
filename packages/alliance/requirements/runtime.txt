@@ -12,3 +12,6 @@ grpcio>=1.72.0
 # Keep this aligned with the backend dependency so isolated package tools and
 # the main backend normalize against the same published client surface.
 agr-curation-api-client
+# GO/Noctua package tools need the PyPI `noctua` distribution in-package;
+# upstream docs/repo brand this client as `noctua-py`.
+noctua
