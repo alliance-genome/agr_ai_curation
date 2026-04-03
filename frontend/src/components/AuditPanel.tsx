@@ -195,6 +195,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       'DOMAIN_COMPLETED',
       'DOMAIN_CATEGORY_ERROR',
       'DOMAIN_SKIPPED',
+      'FLOW_STEP_EVIDENCE',
       'FILE_READY',
     ]
     return auditEventTypes.includes(eventType as AuditEventType)

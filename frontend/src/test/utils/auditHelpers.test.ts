@@ -110,7 +110,8 @@ describe('parseSSEEvent (T012)', () => {
       'LLM_CALL',
       'SUPERVISOR_RESULT',
       'SUPERVISOR_COMPLETE',
-      'SUPERVISOR_ERROR'
+      'SUPERVISOR_ERROR',
+      'FLOW_STEP_EVIDENCE',
     ]
 
     eventTypes.forEach(type => {
@@ -237,6 +238,22 @@ describe('formatAuditEvent (T013)', () => {
         type: 'SUPERVISOR_ERROR',
         details: { error: 'Test error' },
         expectedPattern: /^\[SUPERVISOR ERROR\] Supervisor error:/
+      },
+      {
+        type: 'FLOW_STEP_EVIDENCE',
+        details: {
+          flow_id: 'flow-1',
+          flow_name: 'Flow 1',
+          flow_run_id: 'run-1',
+          step: 2,
+          tool_name: 'ask_gene_specialist',
+          agent_id: 'gene-agent',
+          agent_name: 'Gene Agent',
+          evidence_records: [],
+          evidence_count: 1,
+          total_evidence_records: 3,
+        },
+        expectedPattern: /^\[EVIDENCE\] Flow step 2 captured 1 evidence quote \(3 total so far\) from Gene Agent via ask_gene_specialist$/
       }
     ]
 
@@ -350,6 +367,10 @@ describe('getEventPrefix (T014)', () => {
     expect(getEventPrefix('LLM_CALL')).toBe('[LLM]')
   })
 
+  it('returns [EVIDENCE] for flow step evidence events', () => {
+    expect(getEventPrefix('FLOW_STEP_EVIDENCE')).toBe('[EVIDENCE]')
+  })
+
   it('handles all 10 event types', () => {
     const eventTypes: AuditEventType[] = [
       'SUPERVISOR_START',
@@ -367,7 +388,8 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_EXECUTION_START',
       'DOMAIN_COMPLETED',
       'DOMAIN_CATEGORY_ERROR',
-      'DOMAIN_SKIPPED'
+      'DOMAIN_SKIPPED',
+      'FLOW_STEP_EVIDENCE',
     ]
 
     const expectedPrefixes: Record<AuditEventType, string> = {
@@ -386,7 +408,8 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_EXECUTION_START': '[DOMAIN]',
       'DOMAIN_COMPLETED': '[DOMAIN]',
       'DOMAIN_CATEGORY_ERROR': '[DOMAIN ERROR]',
-      'DOMAIN_SKIPPED': '[DOMAIN]'
+      'DOMAIN_SKIPPED': '[DOMAIN]',
+      'FLOW_STEP_EVIDENCE': '[EVIDENCE]',
     }
 
     eventTypes.forEach(type => {
@@ -428,6 +451,31 @@ describe('getEventLabel (T015)', () => {
 
     expect(label).toContain('Dispatching domain: Database Search')
     expect(label).toContain('step 1/2')
+  })
+
+  it('formats FLOW_STEP_EVIDENCE with counts and source context', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'FLOW_STEP_EVIDENCE',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        flow_id: 'flow-1',
+        flow_name: 'Flow 1',
+        flow_run_id: 'run-1',
+        step: 2,
+        tool_name: 'ask_gene_specialist',
+        agent_id: 'gene-agent',
+        agent_name: 'Gene Agent',
+        evidence_records: [],
+        evidence_count: 2,
+        total_evidence_records: 5,
+      },
+    }
+
+    expect(getEventLabel(event)).toBe(
+      'Flow step 2 captured 2 evidence quotes (5 total so far) from Gene Agent via ask_gene_specialist'
+    )
   })
 
   it('formats SUPERVISOR_DISPATCH with parallel execution flag', () => {
@@ -881,6 +929,14 @@ describe('getEventSeverity (T016)', () => {
     expect(getEventSeverity('SUPERVISOR_RESULT')).toBe('success')
   })
 
+  it('returns "success" for flow evidence when the step captured quotes', () => {
+    expect(getEventSeverity('FLOW_STEP_EVIDENCE', { evidence_count: 2 })).toBe('success')
+  })
+
+  it('returns "info" for flow evidence when no quotes were captured', () => {
+    expect(getEventSeverity('FLOW_STEP_EVIDENCE', { evidence_count: 0 })).toBe('info')
+  })
+
   it('handles all event types', () => {
     const expectedSeverities: Record<AuditEventType, AuditSeverity> = {
       'SUPERVISOR_START': 'info',
@@ -898,7 +954,8 @@ describe('getEventSeverity (T016)', () => {
       'DOMAIN_EXECUTION_START': 'info',
       'DOMAIN_COMPLETED': 'success',
       'DOMAIN_CATEGORY_ERROR': 'error',
-      'DOMAIN_SKIPPED': 'info'
+      'DOMAIN_SKIPPED': 'info',
+      'FLOW_STEP_EVIDENCE': 'info',
     }
 
     Object.entries(expectedSeverities).forEach(([type, severity]) => {

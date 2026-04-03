@@ -6,6 +6,7 @@ import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
 import FileDownloadCard, { FileInfo } from '@/components/Chat/FileDownloadCard'
 import EvidenceCard from '@/components/Chat/EvidenceCard'
+import FlowStepEvidenceCard from '@/components/Chat/FlowStepEvidenceCard'
 import { copyText } from '@/components/Chat/copyText'
 import PrepScopeConfirmationDialog from '@/features/curation/components/PrepScopeConfirmationDialog'
 import {
@@ -22,6 +23,7 @@ import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
 
 // localStorage key for chat messages (shared with HomePage)
@@ -36,14 +38,17 @@ interface EvidenceCurationSupport {
   adapterKey: string | null
 }
 
+type MessageRole = 'user' | 'assistant' | 'flow'
+
 interface Message {
-  role: 'user' | 'assistant'
+  role: MessageRole
   content: string
   timestamp: Date
   id?: string
   traceIds?: string[]
   type?: 'text' | 'file_download'  // Message type for special rendering
   fileData?: FileInfo              // File info for file_download type
+  flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
   evidenceCurationSupported?: boolean | null
@@ -52,13 +57,14 @@ interface Message {
 
 // Type for serialized messages (timestamp as string)
 interface SerializedMessage {
-  role: 'user' | 'assistant'
+  role: MessageRole
   content: string
   timestamp: string
   id?: string
   traceIds?: string[]
   type?: 'text' | 'file_download'
   fileData?: FileInfo
+  flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
   evidenceCurationSupported?: boolean | null
@@ -199,6 +205,104 @@ function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
   }
 
   return value.filter(isEvidenceRecord)
+}
+
+function extractFlowStepEvidenceDetails(event: SSEEvent): FlowStepEvidenceDetails | null {
+  const candidates: Array<Record<string, unknown>> = []
+
+  if (event.details && typeof event.details === 'object') {
+    candidates.push(event.details as Record<string, unknown>)
+  }
+
+  candidates.push(event as Record<string, unknown>)
+
+  for (const candidate of candidates) {
+    const flowId = typeof candidate.flow_id === 'string' ? candidate.flow_id : null
+    const flowName = typeof candidate.flow_name === 'string' ? candidate.flow_name : null
+    const flowRunId = typeof candidate.flow_run_id === 'string' ? candidate.flow_run_id : null
+    const step = typeof candidate.step === 'number' && Number.isFinite(candidate.step)
+      ? candidate.step
+      : null
+    const evidenceCount =
+      typeof candidate.evidence_count === 'number' && Number.isFinite(candidate.evidence_count)
+        ? candidate.evidence_count
+        : null
+    const totalEvidenceRecords =
+      typeof candidate.total_evidence_records === 'number'
+      && Number.isFinite(candidate.total_evidence_records)
+        ? candidate.total_evidence_records
+        : null
+
+    if (
+      !flowId
+      || !flowName
+      || !flowRunId
+      || step === null
+      || evidenceCount === null
+      || totalEvidenceRecords === null
+    ) {
+      continue
+    }
+
+    const evidenceRecords = extractEvidenceRecords(candidate.evidence_records)
+
+    return {
+      flow_id: flowId,
+      flow_name: flowName,
+      flow_run_id: flowRunId,
+      step,
+      tool_name: typeof candidate.tool_name === 'string' ? candidate.tool_name : null,
+      agent_id: typeof candidate.agent_id === 'string' ? candidate.agent_id : null,
+      agent_name: typeof candidate.agent_name === 'string' ? candidate.agent_name : null,
+      evidence_records: evidenceRecords,
+      evidence_count: evidenceCount,
+      total_evidence_records: totalEvidenceRecords,
+    }
+  }
+
+  return null
+}
+
+function extractEventTimestamp(event: SSEEvent): Date | null {
+  if (typeof event.timestamp !== 'string') {
+    return null
+  }
+
+  const timestamp = new Date(event.timestamp)
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp
+}
+
+function withFlowStepEvidenceMessage(
+  messages: Message[],
+  flowStepEvidence: FlowStepEvidenceDetails,
+  timestamp: Date,
+): Message[] {
+  const existingIndex = messages.findIndex((message) =>
+    message.role === 'flow'
+    && message.flowStepEvidence?.flow_run_id === flowStepEvidence.flow_run_id
+    && message.flowStepEvidence?.step === flowStepEvidence.step
+    && message.flowStepEvidence?.tool_name === flowStepEvidence.tool_name
+  )
+
+  const nextMessage: Message = {
+    role: 'flow',
+    content: '',
+    timestamp,
+    id: `flow-evidence-${flowStepEvidence.flow_run_id}-${flowStepEvidence.step}-${flowStepEvidence.tool_name ?? flowStepEvidence.agent_id ?? 'step'}`,
+    flowStepEvidence,
+    evidenceRecords: flowStepEvidence.evidence_records,
+  }
+
+  if (existingIndex === -1) {
+    return [...messages, nextMessage]
+  }
+
+  const nextMessages = [...messages]
+  nextMessages[existingIndex] = {
+    ...nextMessages[existingIndex],
+    ...nextMessage,
+  }
+  return nextMessages
 }
 
 const DUPLICATE_EVIDENCE_LABEL_RE = /^(?:[-*]\s+)?\*{0,2}(evidence|citations|sources)\*{0,2}:/i
@@ -917,6 +1021,27 @@ function Chat({
             traceIds: [...sessionTraceIds.current]
           }
         ])
+        return
+      }
+
+      if (parsed.type === 'FLOW_STEP_EVIDENCE') {
+        const flowStepEvidence = extractFlowStepEvidenceDetails(parsed)
+        if (!flowStepEvidence) {
+          console.warn('[Chat] Ignoring malformed FLOW_STEP_EVIDENCE event payload', parsed)
+          return
+        }
+
+        const messageTimestamp = extractEventTimestamp(parsed)
+        if (!messageTimestamp) {
+          console.warn('[Chat] Ignoring FLOW_STEP_EVIDENCE event without a valid timestamp', parsed)
+          return
+        }
+
+        setMessages(prev => withFlowStepEvidenceMessage(
+          prev,
+          flowStepEvidence,
+          messageTimestamp,
+        ))
         return
       }
 
@@ -1905,6 +2030,15 @@ function Chat({
                     })
                   }
                 : null
+
+            if (message.role === 'flow' && message.flowStepEvidence) {
+              return (
+                <FlowStepEvidenceCard
+                  details={message.flowStepEvidence}
+                  key={message.id || index}
+                />
+              )
+            }
 
             if (message.role === 'assistant') {
               return (

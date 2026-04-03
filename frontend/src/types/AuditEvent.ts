@@ -5,6 +5,8 @@
  * Represents a single auditable action during AI agent processing.
  */
 
+import type { EvidenceRecord } from '@/features/curation/types'
+
 export type AuditEventType =
   | 'SUPERVISOR_START'      // Supervisor begins processing user request
   | 'SUPERVISOR_DISPATCH'   // Supervisor dispatches a domain
@@ -28,6 +30,7 @@ export type AuditEventType =
   | 'DOMAIN_COMPLETED'      // Domain finishes execution
   | 'DOMAIN_CATEGORY_ERROR' // Domain task failure
   | 'DOMAIN_SKIPPED'        // Domain skipped due to missing requirements
+  | 'FLOW_STEP_EVIDENCE'    // Flow step emitted evidence records/counts
   | 'FILE_READY'            // File output is ready for download
 
 export interface AuditEvent {
@@ -87,6 +90,7 @@ export type AuditEventDetails =
   | DomainCompletedDetails
   | DomainCategoryErrorDetails
   | DomainSkippedDetails
+  | FlowStepEvidenceDetails
   | FileReadyDetails
 
 export interface SupervisorStartDetails {
@@ -221,6 +225,19 @@ export interface DomainCategoryErrorDetails {
 export interface DomainSkippedDetails {
   domain: string        // Domain skipped
   reason: string        // Reason code / description
+}
+
+export interface FlowStepEvidenceDetails {
+  flow_id: string
+  flow_name: string
+  flow_run_id: string
+  step: number
+  tool_name?: string | null
+  agent_id?: string | null
+  agent_name?: string | null
+  evidence_records: EvidenceRecord[]
+  evidence_count: number
+  total_evidence_records: number
 }
 
 export interface FileReadyDetails {

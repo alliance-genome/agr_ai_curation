@@ -31,6 +31,7 @@ import type {
   DomainCompletedDetails,
   DomainCategoryErrorDetails,
   DomainSkippedDetails,
+  FlowStepEvidenceDetails,
   FileReadyDetails,
 } from '../types/AuditEvent'
 
@@ -205,6 +206,7 @@ export function getEventPrefix(type: AuditEventType, details?: any): string {
     DOMAIN_COMPLETED: '[DOMAIN]',
     DOMAIN_CATEGORY_ERROR: '[DOMAIN ERROR]',
     DOMAIN_SKIPPED: '[DOMAIN]',
+    FLOW_STEP_EVIDENCE: '[EVIDENCE]',
     FILE_READY: '[FILE]'
   }
   return prefixes[type]
@@ -276,6 +278,9 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
 
   // File ready is a success event
   if (type === 'FILE_READY') return 'success'
+  if (type === 'FLOW_STEP_EVIDENCE') {
+    return details?.evidence_count > 0 ? 'success' : 'info'
+  }
 
   return 'info'
 }
@@ -445,6 +450,31 @@ export function getEventLabel(event: AuditEvent): string {
     case 'DOMAIN_SKIPPED': {
       const skipped = event.details as DomainSkippedDetails
       return `${formatDomainName(skipped.domain)} domain skipped (${skipped.reason})`
+    }
+
+    case 'FLOW_STEP_EVIDENCE': {
+      const flowEvidence = event.details as FlowStepEvidenceDetails
+      const quoteCount = flowEvidence.evidence_count === 1
+        ? '1 evidence quote'
+        : `${flowEvidence.evidence_count} evidence quotes`
+      const totalCountText = flowEvidence.total_evidence_records > flowEvidence.evidence_count
+        ? ` (${flowEvidence.total_evidence_records} total so far)`
+        : ''
+      const agentLabel = typeof flowEvidence.agent_name === 'string' && flowEvidence.agent_name.trim().length > 0
+        ? flowEvidence.agent_name.trim()
+        : null
+      const toolLabel = typeof flowEvidence.tool_name === 'string' && flowEvidence.tool_name.trim().length > 0
+        ? flowEvidence.tool_name.trim()
+        : null
+      const sourceText = agentLabel && toolLabel
+        ? ` from ${agentLabel} via ${toolLabel}`
+        : agentLabel
+          ? ` from ${agentLabel}`
+          : toolLabel
+            ? ` via ${toolLabel}`
+            : ''
+
+      return `Flow step ${flowEvidence.step} captured ${quoteCount}${totalCountText}${sourceText}`
     }
 
     case 'SPECIALIST_RETRY': {

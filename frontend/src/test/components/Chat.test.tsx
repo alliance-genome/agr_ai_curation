@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import Chat from '../../components/Chat'
 
@@ -854,5 +855,146 @@ describe('Chat persistence', () => {
         })
       )
     })
+  })
+})
+
+describe('Chat flow evidence rendering', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
+    mockNavigate.mockReset()
+    openCurationWorkspaceMock.mockReset()
+    emitGlobalToastMock.mockReset()
+    mockChatFetch()
+  })
+
+  it('renders FLOW_STEP_EVIDENCE independently from assistant text events', async () => {
+    const user = userEvent.setup()
+
+    renderChat({
+      sessionId: 'session-flow-evidence',
+      events: [
+        {
+          type: 'FLOW_STEP_EVIDENCE',
+          timestamp: '2026-02-26T00:00:01.000Z',
+          sessionId: 'session-flow-evidence',
+          details: {
+            flow_id: 'flow-1',
+            flow_name: 'Flow Evidence',
+            flow_run_id: 'run-1',
+            step: 2,
+            tool_name: 'ask_gene_specialist',
+            agent_id: 'gene',
+            agent_name: 'Gene Agent',
+            evidence_records: [
+              {
+                entity: 'TP53',
+                verified_quote: 'TP53 increased in the treated samples.',
+                page: 2,
+                section: 'Results',
+                chunk_id: 'chunk-1',
+              },
+            ],
+            evidence_count: 1,
+            total_evidence_records: 3,
+          },
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Found TP53 support.',
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-step-evidence-card')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Step 2 / Gene Agent / ask_gene_specialist')).toBeInTheDocument()
+    expect(screen.getByText('1 evidence quote captured in this step.')).toBeInTheDocument()
+    expect(screen.getByText('3 evidence quotes collected so far in this run.')).toBeInTheDocument()
+    expect(screen.getByText('Found TP53 support.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'TP53 1' }))
+
+    expect(screen.getByText('"TP53 increased in the treated samples."')).toBeInTheDocument()
+  })
+
+  it('ignores malformed FLOW_STEP_EVIDENCE events that omit required evidence counts', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      renderChat({
+        sessionId: 'session-flow-evidence',
+        events: [
+          {
+            type: 'FLOW_STEP_EVIDENCE',
+            timestamp: '2026-02-26T00:00:01.000Z',
+            sessionId: 'session-flow-evidence',
+            details: {
+              flow_id: 'flow-1',
+              flow_name: 'Flow Evidence',
+              flow_run_id: 'run-1',
+              step: 2,
+              tool_name: 'ask_gene_specialist',
+              agent_id: 'gene',
+              agent_name: 'Gene Agent',
+              evidence_records: [],
+              total_evidence_records: 3,
+            },
+          },
+        ],
+      })
+
+      await waitFor(() => {
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[Chat] Ignoring malformed FLOW_STEP_EVIDENCE event payload',
+          expect.objectContaining({ type: 'FLOW_STEP_EVIDENCE' }),
+        )
+      })
+
+      expect(screen.queryByTestId('flow-step-evidence-card')).not.toBeInTheDocument()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('ignores FLOW_STEP_EVIDENCE events without a valid timestamp', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      renderChat({
+        sessionId: 'session-flow-evidence',
+        events: [
+          {
+            type: 'FLOW_STEP_EVIDENCE',
+            sessionId: 'session-flow-evidence',
+            details: {
+              flow_id: 'flow-1',
+              flow_name: 'Flow Evidence',
+              flow_run_id: 'run-1',
+              step: 2,
+              tool_name: 'ask_gene_specialist',
+              agent_id: 'gene',
+              agent_name: 'Gene Agent',
+              evidence_records: [],
+              evidence_count: 0,
+              total_evidence_records: 3,
+            },
+          },
+        ],
+      })
+
+      await waitFor(() => {
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[Chat] Ignoring FLOW_STEP_EVIDENCE event without a valid timestamp',
+          expect.objectContaining({ type: 'FLOW_STEP_EVIDENCE' }),
+        )
+      })
+
+      expect(screen.queryByTestId('flow-step-evidence-card')).not.toBeInTheDocument()
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 })
