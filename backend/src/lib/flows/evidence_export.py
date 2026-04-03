@@ -212,7 +212,9 @@ def _serialize_tabular_value(value: Any) -> str | int:
 
 def _safe_filename_fragment(value: str) -> str:
     normalized = _SAFE_FILENAME_PATTERN.sub("-", str(value or "").strip()).strip("-")
-    return normalized or "flow-run"
+    if not normalized:
+        raise ValueError("Flow run identifier cannot be empty after normalization")
+    return normalized
 
 
 __all__ = [

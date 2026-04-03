@@ -120,12 +120,15 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         continue
       }
 
-      const flowRunId = typeof event.flow_run_id === 'string' ? event.flow_run_id.trim() : ''
-      if (!flowRunId) {
+      const flowRunId = typeof event.flow_run_id === 'string'
+        ? event.flow_run_id.trim()
+        : ''
+      const status = typeof event.status === 'string' ? event.status.trim() : ''
+      const totalEvidenceRecords = Number(event.total_evidence_records)
+
+      if (!flowRunId || !status || !Number.isFinite(totalEvidenceRecords)) {
         continue
       }
-
-      const totalEvidenceRecords = Number(event.total_evidence_records)
 
       return {
         flowId: typeof event.flow_id === 'string' ? event.flow_id : null,
@@ -133,15 +136,11 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
           ? event.flow_name
           : 'Completed flow run',
         flowRunId,
-        status: typeof event.status === 'string' && event.status.trim()
-          ? event.status
-          : 'completed',
+        status,
         failureReason: typeof event.failure_reason === 'string' && event.failure_reason.trim()
           ? event.failure_reason
           : null,
-        totalEvidenceRecords: Number.isFinite(totalEvidenceRecords)
-          ? Math.max(0, totalEvidenceRecords)
-          : 0,
+        totalEvidenceRecords,
       }
     }
 

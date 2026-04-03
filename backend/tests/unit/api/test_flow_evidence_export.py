@@ -216,6 +216,17 @@ def test_build_flow_evidence_export_artifact_supports_tsv_and_json(
     }
 
 
+def test_build_flow_evidence_export_artifact_rejects_empty_flow_run_id_in_filename():
+    record = _extraction_result(extraction_result_id="result-1")
+
+    with pytest.raises(ValueError, match="Flow run identifier cannot be empty"):
+        evidence_export.build_flow_evidence_export_artifact(
+            flow_run_id="   ",
+            extraction_results=[record],
+            export_format=evidence_export.FlowEvidenceExportFormat.CSV,
+        )
+
+
 def test_resolve_authorized_flow_run_extraction_results_enforces_ownership(monkeypatch):
     owned_record = _extraction_result(extraction_result_id="result-1", user_id="user-123")
 

@@ -52,9 +52,9 @@ const EXPORT_FORMAT_OPTIONS: Array<{
   },
 ]
 
-function parseAttachmentFilename(headerValue: string | null, fallback: string): string {
+function parseAttachmentFilename(headerValue: string | null): string {
   if (!headerValue) {
-    return fallback
+    throw new Error('Download response is missing Content-Disposition header.')
   }
 
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(headerValue)
@@ -76,11 +76,7 @@ function parseAttachmentFilename(headerValue: string | null, fallback: string): 
     return plainMatch[1].trim()
   }
 
-  return fallback
-}
-
-function fallbackFilename(run: FlowRunCompletionSummary, format: FlowEvidenceExportFormat): string {
-  return `flow-${run.flowRunId}-evidence.${format}`
+  throw new Error('Could not parse attachment filename from download response.')
 }
 
 export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProps) {
@@ -134,20 +130,22 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         )
       }
 
+      const filename = parseAttachmentFilename(response.headers.get('Content-Disposition'))
       const blob = await response.blob()
       const objectUrl = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
-      const filename = parseAttachmentFilename(
-        response.headers.get('Content-Disposition'),
-        fallbackFilename(run, format),
-      )
 
-      link.href = objectUrl
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(objectUrl)
+      try {
+        link.href = objectUrl
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+      } finally {
+        window.URL.revokeObjectURL(objectUrl)
+        if (document.body.contains(link)) {
+          document.body.removeChild(link)
+        }
+      }
     } catch (downloadError) {
       setError(
         downloadError instanceof Error

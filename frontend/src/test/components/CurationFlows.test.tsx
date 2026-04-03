@@ -136,4 +136,47 @@ describe('CurationFlows', () => {
     expect(mockCreateObjectURL).toHaveBeenCalledTimes(1)
     expect(mockRevokeObjectURL).toHaveBeenCalledWith('blob:flow-evidence')
   })
+
+  it('ignores malformed flow finished events that cannot drive completion state', async () => {
+    renderComponent([
+      completedRunEvent({ status: '' }),
+      completedRunEvent({ total_evidence_records: 'not-a-number' as unknown as number }),
+    ])
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+    })
+
+    expect(screen.queryByText('Latest flow run')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Export Evidence/i })).not.toBeInTheDocument()
+  })
+
+  it('surfaces an error when the export response omits attachment filename', async () => {
+    const user = userEvent.setup()
+
+    mockFetch
+      .mockResolvedValueOnce(flowListResponse())
+      .mockResolvedValueOnce(
+        new Response('evidence_record_id,entity\nrecord-1,gene-1\n', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/csv',
+          },
+        }),
+      )
+
+    renderComponent([completedRunEvent()])
+
+    const exportButton = await screen.findByRole('button', { name: /Export Evidence/i })
+    await user.click(exportButton)
+    await user.click(await screen.findByRole('menuitem', { name: /Download CSV/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Download response is missing Content-Disposition header.')).toBeInTheDocument()
+    })
+
+    expect(mockLink.click).not.toHaveBeenCalled()
+    expect(mockCreateObjectURL).not.toHaveBeenCalled()
+    expect(mockRevokeObjectURL).not.toHaveBeenCalled()
+  })
 })
