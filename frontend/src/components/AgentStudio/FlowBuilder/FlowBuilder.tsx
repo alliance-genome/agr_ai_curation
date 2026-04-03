@@ -76,6 +76,7 @@ import {
 } from '@/services/agentStudioService'
 import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
+import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
   isExtractionAgent,
   isValidationAgent,
@@ -547,6 +548,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     revalidateValidatorsRef.current = revalidateValidators
   }, [revalidateValidators])
 
+  const refreshFlowLists = useCallback(async () => {
+    const response = await listFlows()
+    setSavedFlows(response.flows)
+    setManageFlows(response.flows)
+    return response.flows
+  }, [])
+
   // Stable key for edge topology - triggers revalidation when edges are rewired (not just added/removed)
   // Includes handles to catch rewires between different connection points on the same nodes
   const edgeTopologyKey = useMemo(
@@ -666,8 +674,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         setCurrentFlowId(savedFlow.id)
       }
 
+      await refreshFlowLists()
+
       // Update flowName state to match saved name
-      setFlowName(nameToUse)
+      setFlowName(savedFlow.name)
+      setFlowDescription(savedFlow.description || '')
+      notifyFlowListInvalidated({
+        flowId: savedFlow.id,
+        reason: currentFlowId && !forceCreate ? 'updated' : 'created',
+      })
       setSnackbar({
         message: forceCreate ? 'Flow saved as new flow' : 'Flow saved successfully',
         severity: 'success'
@@ -938,14 +953,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setFlowSearchTerm('')
     // Load flows
     setLoadingFlows(true)
-    listFlows()
-      .then((response) => setSavedFlows(response.flows))
+    refreshFlowLists()
       .catch((err) => {
         logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
         setSnackbar({ message: 'Failed to load flows', severity: 'error' })
       })
       .finally(() => setLoadingFlows(false))
-  }, [])
+  }, [refreshFlowLists])
 
   const handleOpenDialogClose = useCallback(() => {
     setOpenDialogOpen(false)
@@ -1020,14 +1034,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setEditingFlowName('')
     // Load flows
     setLoadingManageFlows(true)
-    listFlows()
-      .then((response) => setManageFlows(response.flows))
+    refreshFlowLists()
       .catch((err) => {
         logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
         setSnackbar({ message: 'Failed to load flows', severity: 'error' })
       })
       .finally(() => setLoadingManageFlows(false))
-  }, [])
+  }, [refreshFlowLists])
 
   const handleManageDialogClose = useCallback(() => {
     setManageDialogOpen(false)
@@ -1056,18 +1069,20 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       // First fetch the full flow to get its definition
       const fullFlow = await getFlow(editingFlowId)
       // Update with new name
-      await updateFlow(editingFlowId, {
+      const updatedFlow = await updateFlow(editingFlowId, {
         name: editingFlowName.trim(),
         description: fullFlow.description || undefined,
         flow_definition: fullFlow.flow_definition,
       })
-      // Update local list
-      setManageFlows((flows) =>
-        flows.map((f) => (f.id === editingFlowId ? { ...f, name: editingFlowName.trim() } : f))
-      )
+      await refreshFlowLists()
+      notifyFlowListInvalidated({
+        flowId: updatedFlow.id,
+        reason: 'updated',
+      })
       // If this is the currently loaded flow, update the flowName state too
       if (editingFlowId === currentFlowId) {
-        setFlowName(editingFlowName.trim())
+        setFlowName(updatedFlow.name)
+        setFlowDescription(updatedFlow.description || '')
       }
       setEditingFlowId(null)
       setEditingFlowName('')
@@ -1079,7 +1094,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     } finally {
       setRenamingFlow(false)
     }
-  }, [editingFlowId, editingFlowName, currentFlowId])
+  }, [editingFlowId, editingFlowName, currentFlowId, refreshFlowLists])
 
   // Delete flow from Manage dialog
   const handleDeleteFromManageClick = useCallback((flow: FlowSummaryResponse) => {
@@ -1100,6 +1115,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       await deleteFlow(flowToDeleteFromManage.id)
       // Remove from local list
       setManageFlows((flows) => flows.filter((f) => f.id !== flowToDeleteFromManage.id))
+      setSavedFlows((flows) => flows.filter((f) => f.id !== flowToDeleteFromManage.id))
+      notifyFlowListInvalidated({
+        flowId: flowToDeleteFromManage.id,
+        reason: 'deleted',
+      })
       // If this was the currently loaded flow, clear it
       if (flowToDeleteFromManage.id === currentFlowId) {
         handleNewFlow()
