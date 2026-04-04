@@ -24,3 +24,18 @@ content: |
   - "Knockout" or "KO" alleles are targeted null alleles (tm notation).
   - "Knockin" or "KI" alleles are targeted replacement alleles.
   - Conditional knockouts require Cre-mediated recombination — note the Cre driver separately from the floxed allele.
+
+  ### Lab-code and attribution fallback during normalization
+  - MGI engineered allele superscripts often end with a creator or institution lab code:
+    `tm1.1Hko` -> Haruhiko Koseki, `em1Cya` -> Cyagen Biosciences, `em1Gpt` -> GemPharmatech.
+  - During normalization, first validate the exact allele symbol when the paper provides it.
+  - If direct validation fails, or the paper only gives a gene plus knockout/conditional wording, switch to `search_alleles` substring matching.
+  - Start with the gene discussed in the paper and the allele type described there (null, floxed, knockin, endonuclease-mediated, etc.).
+  - Use author lists, acknowledgements, methods, repositories, and company/institution mentions to infer the likely source lab code when the paper omits the full allele symbol.
+  - Use the existing `fullname_attribution` field already returned by `search_alleles` results when available; treat it as a strong clue for creator/institution matching, not a separate lookup step.
+  - Matching can use the full author name, surname-only match, institution/company name, or a recognizable abbreviation when the paper context is clear.
+  - If the gene-based search is still ambiguous, try the likely lab-code token, surname, or institution/company substring (for example `Hko`, `Koseki`, `Cya`, `Cyagen`, `Gpt`, `GemPharmatech`) and intersect those hits with the paper's gene context.
+  - Suffix-only searches are discovery aids, not final answers: they often return alleles from many genes.
+  - Before surfacing any candidate to the curator, cross-check that the candidate's gene matches the experimental gene(s) discussed in the current paper.
+  - Do not surface unrelated-gene matches just because they share the same lab-code suffix or attribution text.
+  - If multiple same-gene candidates still remain after using `fullname_attribution`, lab-code reasoning, and allele-type matching, keep the allele in ambiguities[] rather than guessing.
