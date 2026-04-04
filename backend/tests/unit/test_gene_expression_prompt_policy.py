@@ -32,6 +32,8 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "mutant_background_only" in content
     assert "structural_label_or_fusion_only" in content
     assert "Capture reagent genotype strings exactly as written" in content
+    assert "midbrain-hindbrain boundary at 18 hpf" in content
+    assert "Tg(kdrl:EGFP)" in content
 
 
 def test_gene_expression_wb_overlay_includes_wormbase_examples():
@@ -49,3 +51,20 @@ def test_gene_expression_wb_overlay_includes_wormbase_examples():
     assert "TIAM-1::GFP" in content
     assert "tagRFP::TBA-1" in content
     assert "UtrCH" in content
+
+
+def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():
+    zfin_path = next(
+        path
+        for path in _load_gene_expression_source().group_rule_files
+        if path.stem == "zfin"
+    )
+    data = yaml.safe_load(zfin_path.read_text(encoding="utf-8"))
+    content = str(data.get("content") or "")
+
+    assert "ZFA-compatible anatomy label" in content
+    assert "ZFS-compatible stage labels" in content
+    assert "fgf8a" in content
+    assert "Tg(kdrl:EGFP)" in content
+    assert "morpholino" in content
+    assert "rescue_experiment_not_expression" in content
