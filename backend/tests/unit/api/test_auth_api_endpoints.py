@@ -1,6 +1,7 @@
 """Unit tests for auth API endpoint handlers and edge paths."""
 
 import importlib
+import json
 import sys
 from types import SimpleNamespace
 
@@ -297,14 +298,13 @@ async def test_logout_success_clears_cookies_and_returns_provider_logout_url(mon
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
     monkeypatch.setattr(auth_api, "run_in_threadpool", _direct_threadpool)
 
-    response = Response()
     result = await auth_api.logout(
         request=_request(base_url="https://app.example.org/"),
-        response=response,
     )
-    assert result["status"] == "logged_out"
-    assert "issuer.example.org/logout" in result["logout_url"]
-    set_cookie_headers = response.headers.getlist("set-cookie")
+    payload = json.loads(result.body)
+    assert payload["status"] == "logged_out"
+    assert "issuer.example.org/logout" in payload["logout_url"]
+    set_cookie_headers = result.headers.getlist("set-cookie")
     assert any(header.startswith("auth_token=") for header in set_cookie_headers)
     assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
 
@@ -335,6 +335,59 @@ def test_logout_endpoint_allows_missing_auth_cookie(monkeypatch):
     assert response.json()["status"] == "logged_out"
     assert "issuer.example.org/logout" in response.json()["logout_url"]
     set_cookie_headers = response.headers.get_list("set-cookie")
+    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
+    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+
+
+@pytest.mark.asyncio
+async def test_logout_redirect_clears_cookies_and_redirects_to_provider_logout_url(monkeypatch):
+    class _Provider:
+        redirect_uri = "https://issuer.example.org/callback"
+
+        def get_logout_url(self, redirect_uri):
+            return f"https://issuer.example.org/logout?redirect={redirect_uri}"
+
+    async def _direct_threadpool(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    monkeypatch.setattr(auth_api, "run_in_threadpool", _direct_threadpool)
+
+    response = await auth_api.logout_redirect(_request(base_url="https://app.example.org/"))
+    assert response.status_code == 302
+    assert (
+        str(response.headers["location"])
+        == "https://issuer.example.org/logout?redirect=https://issuer.example.org/"
+    )
+    set_cookie_headers = response.headers.getlist("set-cookie")
+    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
+    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+
+
+@pytest.mark.asyncio
+async def test_logout_redirect_uses_app_root_when_provider_has_no_logout_url(monkeypatch):
+    captured = {}
+
+    class _Provider:
+        redirect_uri = "https://login.example.org/callback"
+
+        def get_logout_url(self, redirect_uri):
+            captured["redirect_uri"] = redirect_uri
+            return None
+
+    async def _direct_threadpool(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    monkeypatch.setattr(auth_api, "run_in_threadpool", _direct_threadpool)
+
+    response = await auth_api.logout_redirect(_request(base_url="https://app.example.org/"))
+    assert response.status_code == 302
+    assert captured["redirect_uri"] == "https://login.example.org/"
+    assert str(response.headers["location"]) == "https://app.example.org/"
+    set_cookie_headers = response.headers.getlist("set-cookie")
     assert any(header.startswith("auth_token=") for header in set_cookie_headers)
     assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
 

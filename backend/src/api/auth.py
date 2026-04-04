@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import SecurityScopes
 from jose import JWTError
 from jwt.exceptions import PyJWTError
@@ -276,26 +276,54 @@ def _build_logout_redirect_uri(request: Request, provider: AuthProvider) -> str:
     return str(request.base_url).rstrip("/") + "/"
 
 
-@router.post("/logout")
-async def logout(
-    request: Request,
-    response: Response,
-):
-    """Logout endpoint - clears auth cookie and returns provider logout URL."""
+def _build_app_root_url(request: Request) -> str:
+    """Build the browser destination when the provider has no logout page."""
+    return str(request.base_url).rstrip("/") + "/"
+
+
+def _clear_logout_cookies(response: Response) -> None:
+    """Delete current and legacy auth cookies on the outgoing response."""
     secure_cookies = get_secure_cookies()
     response.delete_cookie(key="auth_token", secure=secure_cookies, samesite="lax")
     # Transitional cleanup for old cookie name
     response.delete_cookie(key="cognito_token", secure=secure_cookies, samesite="lax")
 
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+) -> JSONResponse:
+    """Logout endpoint - clears auth cookie and returns provider logout URL."""
     provider = _get_provider_or_503()
     redirect_uri = _build_logout_redirect_uri(request, provider)
-
     logout_url = await run_in_threadpool(provider.get_logout_url, redirect_uri)
-    return {
-        "status": "logged_out",
-        "message": "User session terminated successfully",
-        "logout_url": logout_url,
-    }
+    logout_response = JSONResponse(
+        content={
+            "status": "logged_out",
+            "message": "User session terminated successfully",
+            "logout_url": logout_url,
+        }
+    )
+    _clear_logout_cookies(logout_response)
+    return logout_response
+
+
+@router.get("/logout/redirect")
+async def logout_redirect(request: Request) -> RedirectResponse:
+    """Logout endpoint for browser navigation flows that must process Set-Cookie."""
+    provider = _get_provider_or_503()
+    redirect_uri = _build_logout_redirect_uri(request, provider)
+    logout_url = await run_in_threadpool(provider.get_logout_url, redirect_uri)
+    app_root_url = _build_app_root_url(request)
+    redirect_target = logout_url
+    if not redirect_target:
+        # If the provider has no logout page, finish on the app origin so the
+        # browser still handles cookie deletion on a first-party navigation.
+        redirect_target = app_root_url
+
+    redirect_response = RedirectResponse(url=redirect_target, status_code=302)
+    _clear_logout_cookies(redirect_response)
+    return redirect_response
 
 
 class _AuthCompat:
