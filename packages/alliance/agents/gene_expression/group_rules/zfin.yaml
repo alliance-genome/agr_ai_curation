@@ -1,0 +1,50 @@
+group_id: ZFIN
+content: |
+  ## ZFIN-SPECIFIC RULES (Zebrafish Gene Expression Curation)
+
+  These rules apply for ZFIN group curation and refine the base extractor policy.
+
+  ### Anatomy specificity
+  - Prefer the most specific supported ZFA-compatible anatomy label.
+  - Use zebrafish structures as stated in the paper (for example `midbrain-hindbrain boundary`, `otic vesicle`, `caudal fin fold`, `Kupffer's vesicle`) instead of broader labels such as `brain`, `ear`, `fin`, or `tail`.
+  - Retain embryo-region descriptors such as `neural plate`, `presomitic mesoderm`, or `pharyngeal arches` when that is the supported granularity.
+  - Do not infer finer cell-type or tissue specificity beyond the evidence.
+
+  ### Life stage conventions
+  - Capture developmental timing exactly as written and prefer ZFS-compatible stage labels.
+  - Zebrafish papers commonly report named stages and elapsed time such as `shield stage`, `10-somite stage`, `24 hpf`, `48 hpf`, `5 dpf`, `juvenile`, and `adult`.
+  - When both a named stage and elapsed time are provided, retain both signals in the evidence and use the explicit stage label for the annotation when possible.
+  - If a paper gives only a broad stage such as `embryo` or `larva`, keep that broad label rather than inferring a narrower stage.
+
+  ### Gene nomenclature and reagent capture
+  - Zebrafish gene symbols are lowercase italicized words such as `fgf8a`, `shha`, `sox10`, and `tp53`.
+  - Duplicate paralogs are often distinguished by suffix letters (`a`, `b`); preserve the exact symbol from the paper.
+  - Reporter lines and transgenes such as `Tg(kdrl:EGFP)` are reagents, not gene symbols. Capture them in reagent fields exactly as written.
+  - Capture stable line designations, construct names, and strain/background strings verbatim when they support a retained finding.
+
+  ### Zebrafish assay guidance
+  - Whole-mount in situ hybridization (WISH), ISH/FISH, and gene-specific immunohistochemistry are strong expression assays when they directly report the focal gene's transcript or protein pattern.
+  - Reporter lines can support expression annotations when the paper uses the reporter as evidence for the focal gene's expression pattern.
+  - Exclude enhancer traps or reporter lines used only to mark anatomy, vasculature, or neurons without a new focal-gene expression finding (reason_code: `promoter_driven_marker_localization` or `marker_only_visualization`).
+  - Distinguish endogenous transcript/protein detection from transgene-driven expression used only as an experimental tool.
+
+  ### Previously reported / non-experimental exclusions
+  - Exclude statements attributed only to prior ZFIN records or cited literature (reason_code: `previously_reported`).
+  - Exclude review/background/mechanistic statements that do not report a new experiment in this paper (reason_code: `non_experimental_claim`).
+
+  ### Perturbation-only exclusions
+  - Exclude observations made only in morpholino, CRISPR perturbation, chemical-treatment, or mutant backgrounds when the paper does not directly establish the wild-type expression finding (reason_code: `mutant_background_only`).
+  - Distinguish endogenous expression assays from perturbation outcomes such as "expression was reduced after morpholino injection"; retain only when the paper is explicitly making a supported expression finding.
+
+  ### Rescue / ectopic expression exclusions
+  - Exclude rescue or ectopic misexpression statements where "expression" refers to injected mRNA or promoter-driven rescue rather than endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
+  - Cue patterns include heat-shock constructs, Gal4/UAS drivers, tissue-specific rescue, or statements that a transgene "rescued" or "restored" a phenotype.
+
+  ### Positive inclusion reminder
+  - Retain directly supported zebrafish expression findings from this paper, including summary statements that clearly describe the paper's own results.
+  - Negative expression results are valid annotations with `is_negative: true` when the paper explicitly reports absence of signal in a tissue or stage.
+  - When anatomy or stage is incomplete but expression is clearly reported, keep the annotation with the available fields and add an `ambiguities[]` note for curator follow-up.
+
+  ### Output discipline
+  - Every excluded zebrafish candidate must land in `exclusions[]` with a canonical reason_code and evidence.
+  - Keep only experimentally supported ZFIN-curation-relevant annotations in `annotations[]`.

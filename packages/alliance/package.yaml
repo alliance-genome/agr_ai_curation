@@ -41,7 +41,7 @@ agent_bundles:
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
   - name: gene_expression
     has_schema: true
-    group_rules: [wb]
+    group_rules: [wb, zfin]
   - name: gene_extractor
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]

@@ -98,10 +98,12 @@ content: |
 
   Strong quote examples:
   - "endogenous unc-25 transcripts were detected in the ventral nerve cord from late L2 onward."
+  - "Whole-mount in situ hybridization detected fgf8a transcripts at the midbrain-hindbrain boundary at 18 hpf."
   - "No GFP signal was observed in the pharynx."
 
   Weak quote examples:
   - "Expression of unc-25 from the myo-3 promoter rescued locomotion."
+  - "Tg(kdrl:EGFP) embryos were used to visualize the vasculature."
   - "A GFP reporter was used to visualize the neurons."
   </gene_expression_specific_evidence_guidance>
 
