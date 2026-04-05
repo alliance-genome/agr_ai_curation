@@ -779,7 +779,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       if (!data) return
 
       try {
-        const { type, agentId, agentName, agentDescription } = JSON.parse(data)
+        const { type, agentId, agentName, agentDescription, promptVersion } = JSON.parse(data) as {
+          type: 'agent' | 'task_input'
+          agentId: string
+          agentName: string
+          agentDescription: string
+          promptVersion?: number
+        }
         if (type !== 'agent' && type !== 'task_input') return
 
         // Check if dropping task_input and one already exists
@@ -843,6 +849,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             agent_description: agentDescription,
             task_instructions: isTaskInput ? '' : undefined,
             custom_instructions: '',
+            prompt_version: promptVersion,
             input_source: inputSource,
             custom_input: customInput,
             include_evidence: isTaskInput

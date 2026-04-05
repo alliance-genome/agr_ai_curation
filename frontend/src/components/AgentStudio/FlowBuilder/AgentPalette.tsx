@@ -180,6 +180,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
                 has_group_rules: agent.has_group_rules,
                 tools: agent.tools,
                 show_in_palette: agent.show_in_palette,
+                prompt_version: agent.prompt_version,
               }))
           )
 
@@ -299,6 +300,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
       agentId: agent.agent_id,
       agentName: agent.agent_name,
       agentDescription: agent.description,
+      promptVersion: agent.prompt_version,
     }))
     event.dataTransfer.effectAllowed = 'move'
   }

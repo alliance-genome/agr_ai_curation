@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -77,12 +77,16 @@ vi.mock('reactflow', async () => {
     default: ({
       children,
       onInit,
+      onDrop,
+      onDragOver,
     }: {
       children?: React.ReactNode
       onInit?: (instance: {
         fitView: typeof reactFlowMocks.fitView
         screenToFlowPosition: typeof reactFlowMocks.screenToFlowPosition
       }) => void
+      onDrop?: (event: React.DragEvent<HTMLDivElement>) => void
+      onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void
     }) => {
       react.useEffect(() => {
         onInit?.({
@@ -91,7 +95,11 @@ vi.mock('reactflow', async () => {
         })
       }, [onInit])
 
-      return <div data-testid="react-flow">{children}</div>
+      return (
+        <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
+          {children}
+        </div>
+      )
     },
     ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     Controls: () => null,
@@ -207,6 +215,65 @@ function buildFlowListResponse(name: string) {
 describe('FlowBuilder', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('preserves prompt_version when creating a node from catalog drag data', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Versioned Flow' }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Versioned Flow'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const dataTransfer = {
+      getData: vi.fn((format: string) => (
+        format === 'application/reactflow'
+          ? JSON.stringify({
+            type: 'agent',
+            agentId: 'gene_summary',
+            agentName: 'Gene Summary',
+            agentDescription: 'Summarize the selected gene',
+            promptVersion: 7,
+          })
+          : ''
+      )),
+    }
+
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer,
+    })
+
+    await user.click(screen.getByText('File'))
+
+    const fileMenu = await screen.findByRole('menu')
+    await user.click(within(fileMenu).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Versioned Flow')
+    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Versioned Flow',
+          flow_definition: expect.objectContaining({
+            nodes: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'agent',
+                data: expect.objectContaining({
+                  agent_id: 'gene_summary',
+                  prompt_version: 7,
+                }),
+              }),
+            ]),
+          }),
+        })
+      )
+    })
   })
 
   it('refreshes the flow list after creating a new flow and after saving an existing flow', async () => {
