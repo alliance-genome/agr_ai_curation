@@ -341,6 +341,15 @@ def _is_groq_runtime_model(model: Any) -> bool:
     return False
 
 
+def _build_user_query_preview(user_message: str) -> str:
+    """Create a short, log-safe preview string for one user turn."""
+    normalized = " ".join((user_message or "").split()).strip()
+    if not normalized:
+        return "[multimodal input]"
+
+    return normalized
+
+
 async def _run_agent_with_groq_retry(
     *,
     agent: Agent,
@@ -1141,10 +1150,11 @@ async def run_agent_streamed(
     session_id: Optional[str] = None,
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
     active_groups: Optional[List[str]] = None,
     agent: Optional[Agent] = None,
     doc_context: Optional["DocumentContext"] = None,
+    user_input_content: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -1162,7 +1172,7 @@ async def run_agent_streamed(
         nest all LLM calls under this parent span, creating a proper hierarchy.
 
     Args:
-        user_message: The user's question
+        user_message: Text summary of the user's turn, used for traces and logs
         user_id: The user's user ID for tenant isolation
         session_id: Optional chat session UUID for Langfuse trace grouping
         document_id: Optional UUID of the PDF document (enables PDF specialist)
@@ -1175,6 +1185,9 @@ async def run_agent_streamed(
                If None, creates the standard supervisor agent.
         doc_context: Optional pre-fetched DocumentContext. If provided, avoids
                      redundant Weaviate queries. Used by flow executor for optimization.
+        user_input_content: Optional structured content items for the current user turn.
+                            When provided, these replace the plain-text `user_message`
+                            in the current input item sent to the OpenAI runner.
 
     Yields:
         SSE-compatible event dictionaries with types:
@@ -1187,10 +1200,11 @@ async def run_agent_streamed(
         - ERROR: Error occurred during execution
     """
     doc_info = f"document {document_id[:8]}..." if document_id else "no document"
+    query_preview = _build_user_query_preview(user_message)
     logger.info(
         "Starting streamed run for %s",
         doc_info,
-        extra={"user_id": user_id, "session_id": session_id, "query_preview": user_message[:50]},
+        extra={"user_id": user_id, "session_id": session_id, "query_preview": query_preview[:50]},
     )
 
     # Clear any leftover data from previous runs
@@ -1253,7 +1267,10 @@ async def run_agent_streamed(
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
-    input_items.append({"role": "user", "content": user_message})
+    input_items.append({
+        "role": "user",
+        "content": user_input_content if user_input_content is not None else user_message,
+    })
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"
@@ -1305,8 +1322,10 @@ async def run_agent_streamed(
             # can be suspended across yield statements. The context manager sets up
             # the OTEL span context on __enter__ and cleans it up on __exit__.
             # Create a short query preview for trace naming (first 50 chars)
-            query_preview = user_message[:50] + "..." if len(user_message) > 50 else user_message
-            trace_name = f"chat: {query_preview}"
+            trace_name_preview = (
+                query_preview[:50] + "..." if len(query_preview) > 50 else query_preview
+            )
+            trace_name = f"chat: {trace_name_preview}"
 
             logger.info(
                 "Creating trace: name=%s",

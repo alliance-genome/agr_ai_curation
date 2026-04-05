@@ -14,11 +14,11 @@ import logging
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
@@ -97,7 +97,8 @@ class ChatMessage(BaseModel):
     - Reasoning effort for GPT-5 models (extended thinking)
     - Conversation history for multi-turn context
     """
-    message: str
+    message: str = Field(default="")
+    image: Optional["ChatImageInput"] = None
     session_id: Optional[str] = None
     model: Optional[str] = "gpt-4o"
     specialist_model: Optional[str] = "gpt-4o-mini"
@@ -110,6 +111,32 @@ class ChatMessage(BaseModel):
     # Only applies when using gpt-5 family models
     supervisor_reasoning: Optional[str] = "medium"  # Thinking time for routing decisions
     specialist_reasoning: Optional[str] = "low"  # Less thinking for direct answers
+
+    @model_validator(mode="after")
+    def validate_message_or_image(self) -> "ChatMessage":
+        if self.message.strip() or self.image:
+            return self
+
+        raise ValueError("message or image is required")
+
+
+class ChatImageInput(BaseModel):
+    """Base64-encoded image attachment for one chat turn."""
+
+    filename: str
+    media_type: Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+    data_url: str
+
+    @model_validator(mode="after")
+    def validate_data_url(self) -> "ChatImageInput":
+        expected_prefix = f"data:{self.media_type};base64,"
+        if self.data_url.startswith(expected_prefix):
+            return self
+
+        raise ValueError("image data_url must match media_type and use a base64 data URL")
+
+
+ChatMessage.model_rebuild()
 
 
 def _get_conversation_history_for_session(user_id: str, session_id: str) -> List[Dict[str, str]]:
@@ -139,6 +166,40 @@ def _get_conversation_history_for_session(user_id: str, session_id: str) -> List
             messages.append({'role': 'assistant', 'content': exchange['assistant']})
 
     return messages
+
+
+def _build_chat_history_message(chat_message: ChatMessage) -> str:
+    """Format one chat turn for logs and text-only history storage."""
+    message_text = chat_message.message.strip()
+    if not chat_message.image:
+        return message_text
+
+    image_note = f"[Attached image: {chat_message.image.filename}]"
+    if message_text:
+        return f"{message_text}\n\n{image_note}"
+
+    return image_note
+
+
+def _build_chat_user_input_content(chat_message: ChatMessage) -> Optional[List[Dict[str, Any]]]:
+    """Build OpenAI Responses API-style content items for one user turn."""
+    if not chat_message.image:
+        return None
+
+    content_items: List[Dict[str, Any]] = []
+    message_text = chat_message.message.strip()
+    if message_text:
+        content_items.append({
+            "type": "input_text",
+            "text": message_text,
+        })
+
+    content_items.append({
+        "type": "input_image",
+        "image_url": chat_message.image.data_url,
+        "detail": "auto",
+    })
+    return content_items
 
 
 def _build_extraction_candidate_from_tool_event(
@@ -671,6 +732,8 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
     """Process a chat message and return a response (non-streaming)."""
     session_id = chat_message.session_id or str(uuid.uuid4())
     user_id = user.get("sub")
+    conversation_user_message = _build_chat_history_message(chat_message)
+    user_input_content = _build_chat_user_input_content(chat_message)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in token")
@@ -727,13 +790,14 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
 
         async for event in run_agent_streamed(
-            user_message=chat_message.message,
+            user_message=conversation_user_message,
             user_id=user_id,
             session_id=session_id,
             document_id=document_id,
             document_name=document_name,
             conversation_history=conversation_history,
             active_groups=active_groups,
+            user_input_content=user_input_content,
         ):
             event_type = event.get("type")
             event_data = event.get("data", {}) or {}
@@ -744,7 +808,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             candidate = _build_extraction_candidate_from_tool_event(
                 event,
                 tool_agent_map=tool_agent_map,
-                conversation_summary=chat_message.message,
+                conversation_summary=conversation_user_message,
                 metadata={"document_name": document_name} if document_name else None,
             )
             if candidate:
@@ -779,7 +843,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             )
 
         # Save to conversation history
-        conversation_manager.add_exchange(user_id, session_id, chat_message.message, full_response)
+        conversation_manager.add_exchange(user_id, session_id, conversation_user_message, full_response)
 
         return ChatResponse(response=full_response, session_id=session_id)
 
@@ -800,6 +864,8 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
     """Stream a chat response using Server-Sent Events."""
     session_id = chat_message.session_id or str(uuid.uuid4())
     user_id = user.get("sub")
+    conversation_user_message = _build_chat_history_message(chat_message)
+    user_input_content = _build_chat_user_input_content(chat_message)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in token")
@@ -816,7 +882,12 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
     doc_info = f"{document_id[:8]}..." if document_id else "none"
     logger.info(
         "Chat stream request received",
-        extra={"session_id": session_id, "user_id": user_id, "document_id": doc_info},
+        extra={
+            "session_id": session_id,
+            "user_id": user_id,
+            "document_id": doc_info,
+            "has_image": bool(chat_message.image),
+        },
     )
 
     # Extract active groups from user's Cognito groups for prompt injection
@@ -897,13 +968,14 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
 
         try:
             async for event in run_agent_streamed(
-                user_message=chat_message.message,
+                user_message=conversation_user_message,
                 user_id=user_id,
                 session_id=current_session_id,
                 document_id=document_id,
                 document_name=document_name,
                 conversation_history=conversation_history,
                 active_groups=active_groups,
+                user_input_content=user_input_content,
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
@@ -969,7 +1041,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
-                    conversation_summary=chat_message.message,
+                    conversation_summary=conversation_user_message,
                     metadata={"document_name": document_name} if document_name else None,
                 )
                 if candidate:
@@ -1012,7 +1084,7 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                         f"data: {json.dumps(pending_run_finished_event, default=str)}\n\n"
                     )
             if full_response:
-                conversation_manager.add_exchange(user_id, current_session_id, chat_message.message, full_response)
+                conversation_manager.add_exchange(user_id, current_session_id, conversation_user_message, full_response)
 
         except asyncio.CancelledError:
             logger.warning(

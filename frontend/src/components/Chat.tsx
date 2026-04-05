@@ -21,7 +21,12 @@ import {
 import type { EvidenceRecord } from '@/features/curation/types'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
-import type { SSEEvent } from '@/hooks/useChatStream'
+import type {
+  ChatImageData,
+  ChatSendInput,
+  SSEEvent,
+  SupportedChatImageType,
+} from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +37,14 @@ const UNSUPPORTED_CURATION_REVIEW_MESSAGE =
   "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category."
 const MIXED_CURATION_PREP_WARNING_MESSAGE =
   "This chat also contains data types that are not supported for curation review yet. Prepare for Curation will include only findings from supported specialized agents in Agent Studio's PDF Extraction category."
+const CHAT_IMAGE_MAX_SIZE_BYTES = 2 * 1024 * 1024
+const CHAT_IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
+const CHAT_IMAGE_ALLOWED_TYPES: readonly SupportedChatImageType[] = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]
 
 interface EvidenceCurationSupport {
   supported: boolean
@@ -46,8 +59,9 @@ interface Message {
   timestamp: Date
   id?: string
   traceIds?: string[]
-  type?: 'text' | 'file_download'  // Message type for special rendering
-  fileData?: FileInfo              // File info for file_download type
+  type?: 'text' | 'file_download' | 'image'
+  fileData?: FileInfo
+  imageData?: ChatImageData
   flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
@@ -62,8 +76,9 @@ interface SerializedMessage {
   timestamp: string
   id?: string
   traceIds?: string[]
-  type?: 'text' | 'file_download'
+  type?: 'text' | 'file_download' | 'image'
   fileData?: FileInfo
+  imageData?: ChatImageData
   flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   evidenceRecords?: EvidenceRecord[]
@@ -116,7 +131,7 @@ interface ChatProps {
   /**
    * Send message function from useChatStream hook
    */
-  sendMessage: (message: string, sessionId: string) => Promise<void>
+  sendMessage: (input: ChatSendInput, sessionId: string) => Promise<void>
 }
 
 // Storage data structure with session validation
@@ -372,6 +387,31 @@ function sanitizeStoredMessage(message: SerializedMessage): Message {
     timestamp: new Date(message.timestamp),
   }
 }
+
+function formatChatImageSize(sizeBytes: number): string {
+  if (sizeBytes >= 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+
+      reject(new Error('Unable to read image preview'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image preview'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function withEvidenceReviewAndCurateTarget(
   message: Message,
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
@@ -524,6 +564,7 @@ function Chat({
   // Initialize messages from localStorage if available
   const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(propSessionId))
   const [inputMessage, setInputMessage] = useState('')
+  const [attachedImage, setAttachedImage] = useState<ChatImageData | null>(null)
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
   const [weaviateConnected, setWeaviateConnected] = useState(true)
@@ -553,6 +594,7 @@ function Chat({
   // Get authenticated user for feedback submissions
   const { user } = useAuth()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const assistantMessageIdRef = useRef<string | null>(null)
   const progressMessageQueueRef = useRef<string[]>([])
   const progressMessageTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -1565,8 +1607,57 @@ function Chat({
     }
   }
 
+  const clearAttachedImage = () => {
+    setAttachedImage(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleImageSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    if (!CHAT_IMAGE_ALLOWED_TYPES.includes(file.type as SupportedChatImageType)) {
+      emitGlobalToast({
+        severity: 'warning',
+        message: 'Chat images must be PNG, JPG, GIF, or WebP files.',
+      })
+      event.target.value = ''
+      return
+    }
+
+    if (file.size > CHAT_IMAGE_MAX_SIZE_BYTES) {
+      emitGlobalToast({
+        severity: 'warning',
+        message: `Chat images must be ${formatChatImageSize(CHAT_IMAGE_MAX_SIZE_BYTES)} or smaller.`,
+      })
+      event.target.value = ''
+      return
+    }
+
+    try {
+      const imageUrl = await readFileAsDataUrl(file)
+      setAttachedImage({
+        url: imageUrl,
+        filename: file.name,
+        mediaType: file.type as SupportedChatImageType,
+        sizeBytes: file.size,
+      })
+    } catch (error) {
+      console.error('Error preparing chat image upload:', error)
+      emitGlobalToast({
+        severity: 'error',
+        message: 'Unable to load that image. Please try another file.',
+      })
+      event.target.value = ''
+    }
+  }
+
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return
+    if (!inputMessage.trim() && !attachedImage) return
     if (!propSessionId) {
       console.error('No session ID available')
       return
@@ -1577,21 +1668,29 @@ function Chat({
     assistantMessageIdRef.current = null
     assistantMessageRef.current = '' // Reset assistant message accumulator
 
-    const messageToSend = inputMessage
+    const messageToSend = inputMessage.trim()
+    const imageToSend = attachedImage
+    const sendInput: ChatSendInput = {
+      message: messageToSend,
+      image: imageToSend,
+    }
 
     const userMessage: Message = {
       role: 'user',
       content: messageToSend,
       timestamp: new Date(),
-      id: `msg-${Date.now()}`
+      id: `msg-${Date.now()}`,
+      type: imageToSend ? 'image' : 'text',
+      imageData: imageToSend ?? undefined,
     }
 
     setMessages(prev => [...prev, userMessage])
     setInputMessage('')
+    clearAttachedImage()
 
     try {
       // Use hook's sendMessage function
-      await sendMessage(messageToSend, propSessionId)
+      await sendMessage(sendInput, propSessionId)
       setRefinePrompt(null)
       setRefineText('')
     } catch (err) {
@@ -1633,13 +1732,14 @@ function Chat({
       role: 'user',
       content: text,
       timestamp: new Date(),
-      id: `msg-${Date.now()}`
+      id: `msg-${Date.now()}`,
+      type: 'text',
     }
 
     setMessages(prev => [...prev, userMessage])
 
     try {
-      await sendMessage(text, propSessionId)
+      await sendMessage({ message: text }, propSessionId)
       setRefinePrompt(null)
     } catch (err) {
       console.error('Error sending quick message:', err)
@@ -1741,6 +1841,33 @@ function Chat({
           background: 'rgba(33, 150, 243, 0.08)',
           color: '#0d6efd',
         }
+
+  const renderMessageContent = (message: Message) => {
+    if (message.type === 'file_download' && message.fileData) {
+      return <FileDownloadCard file={message.fileData} />
+    }
+
+    if (message.type === 'image' && message.imageData) {
+      return (
+        <div className="chat-image-content">
+          <img
+            src={message.imageData.url}
+            alt={message.imageData.filename}
+            className="chat-inline-image"
+          />
+          <div className="chat-inline-image-meta">
+            <span>{message.imageData.filename}</span>
+            <span>{formatChatImageSize(message.imageData.sizeBytes)}</span>
+          </div>
+          {message.content ? (
+            <div className="chat-inline-image-caption">{message.content}</div>
+          ) : null}
+        </div>
+      )
+    }
+
+    return message.content
+  }
 
   return (
     <div
@@ -2063,11 +2190,7 @@ function Chat({
                       AI Assistant
                     </div>
                     <div className="message-content">
-                      {message.type === 'file_download' && message.fileData ? (
-                        <FileDownloadCard file={message.fileData} />
-                      ) : (
-                        message.content
-                      )}
+                      {renderMessageContent(message)}
                     </div>
                     <MessageActions
                       messageContent={message.content}
@@ -2105,17 +2228,19 @@ function Chat({
                   You
                 </div>
                 <div className="message-content">
-                  {message.content}
+                  {renderMessageContent(message)}
                 </div>
-                <button
-                  className="copy-button"
-                  onClick={() => handleCopyMessage(message.content)}
-                  title="Copy to clipboard"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-                  </svg>
-                </button>
+                {message.content ? (
+                  <button
+                    className="copy-button"
+                    onClick={() => handleCopyMessage(message.content)}
+                    title="Copy to clipboard"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                    </svg>
+                  </button>
+                ) : null}
               </div>
             )
           })
@@ -2129,19 +2254,63 @@ function Chat({
       </div>
 
       <div className="input-container">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={CHAT_IMAGE_ACCEPT}
+          onChange={handleImageSelection}
+          style={{ display: 'none' }}
+          aria-label="Upload image"
+        />
+        <button
+          type="button"
+          className="attachment-button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isLoading}
+          title="Attach image"
+          aria-label="Attach image"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M16.5 6.5v9a4.5 4.5 0 1 1-9 0v-10a3 3 0 0 1 6 0v9a1.5 1.5 0 0 1-3 0V7h-2v7.5a3.5 3.5 0 1 0 7 0v-9a5 5 0 0 0-10 0v10a6 6 0 1 0 12 0v-9h-2z"/>
+          </svg>
+        </button>
+        <div className="message-input-stack">
+          {attachedImage ? (
+            <div className="chat-image-preview" role="status">
+              <img
+                src={attachedImage.url}
+                alt={attachedImage.filename}
+                className="chat-image-preview-thumb"
+              />
+              <div className="chat-image-preview-meta">
+                <span>{attachedImage.filename}</span>
+                <span>{formatChatImageSize(attachedImage.sizeBytes)}</span>
+              </div>
+              <button
+                type="button"
+                className="chat-image-remove-button"
+                onClick={clearAttachedImage}
+                aria-label="Remove attached image"
+              >
+                Remove
+              </button>
+            </div>
+          ) : null}
         <textarea
           ref={textareaRef}
           className="message-input"
-          placeholder="Type your message..."
+          placeholder={attachedImage ? 'Add an optional note...' : 'Type your message...'}
           value={inputMessage}
           onChange={handleInputChange}
           onKeyPress={handleKeyPress}
           rows={1}
         />
+        </div>
         <button
           className="send-button"
           onClick={handleSendMessage}
-          disabled={isLoading || !inputMessage.trim()}
+          disabled={isLoading || (!inputMessage.trim() && !attachedImage)}
+          aria-label="Send message"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>

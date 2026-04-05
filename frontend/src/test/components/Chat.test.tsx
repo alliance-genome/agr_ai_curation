@@ -162,6 +162,28 @@ function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
   }
 }
 
+function installFileReaderMock(dataUrl: string) {
+  const originalFileReader = global.FileReader
+
+  class MockFileReader {
+    result: string | ArrayBuffer | null = null
+    error: DOMException | null = null
+    onload: ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null = null
+    onerror: ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null = null
+
+    readAsDataURL(_file: Blob) {
+      this.result = dataUrl
+      this.onload?.call(this as unknown as FileReader, new ProgressEvent('load'))
+    }
+  }
+
+  vi.stubGlobal('FileReader', MockFileReader as unknown as typeof FileReader)
+
+  return () => {
+    vi.stubGlobal('FileReader', originalFileReader)
+  }
+}
+
 describe('Chat persistence', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -181,7 +203,7 @@ describe('Chat persistence', () => {
     fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 })
 
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('Persist me across navigation', 'session-1')
+      expect(sendMessage).toHaveBeenCalledWith({ message: 'Persist me across navigation', image: null }, 'session-1')
     })
 
     // Simulate navigating away from Home before debounce timer naturally fires.
@@ -337,7 +359,7 @@ describe('Chat persistence', () => {
     fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 })
 
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('Copy this user message', 'session-1')
+      expect(sendMessage).toHaveBeenCalledWith({ message: 'Copy this user message', image: null }, 'session-1')
     })
 
     expect(await screen.findByText('Copy this user message')).toBeInTheDocument()
@@ -355,6 +377,66 @@ describe('Chat persistence', () => {
     } else {
       delete (document as Document & { execCommand?: typeof document.execCommand }).execCommand
     }
+  })
+
+  it('uploads, previews, and sends an attached image', async () => {
+    const restoreFileReader = installFileReaderMock('data:image/png;base64,ZmFrZS1pbWFnZQ==')
+    const user = userEvent.setup()
+    const { sendMessage } = renderChat({ sessionId: 'session-1' })
+    const uploadInput = screen.getByLabelText('Upload image')
+    const imageFile = new File(['fake-image'], 'figure.png', { type: 'image/png' })
+
+    await user.upload(uploadInput, imageFile)
+
+    expect(await screen.findByText('figure.png')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove attached image' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        message: '',
+        image: {
+          url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==',
+          filename: 'figure.png',
+          mediaType: 'image/png',
+          sizeBytes: imageFile.size,
+        },
+      }, 'session-1')
+    })
+
+    expect(await screen.findByAltText('figure.png')).toBeInTheDocument()
+    restoreFileReader()
+  })
+
+  it('rejects oversized chat image uploads before send', async () => {
+    const user = userEvent.setup()
+    renderChat({ sessionId: 'session-1' })
+    const uploadInput = screen.getByLabelText('Upload image')
+    const oversizedImage = new File(['x'.repeat(2 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' })
+
+    await user.upload(uploadInput, oversizedImage)
+
+    expect(emitGlobalToastMock).toHaveBeenCalledWith({
+      severity: 'warning',
+      message: 'Chat images must be 2.0 MB or smaller.',
+    })
+    expect(screen.queryByText('large.png')).not.toBeInTheDocument()
+  })
+
+  it('rejects unsupported chat image types before preview', async () => {
+    const user = userEvent.setup({ applyAccept: false })
+    renderChat({ sessionId: 'session-1' })
+    const uploadInput = screen.getByLabelText('Upload image')
+    const invalidFile = new File(['not-an-image'], 'notes.txt', { type: 'text/plain' })
+
+    await user.upload(uploadInput, invalidFile)
+
+    expect(emitGlobalToastMock).toHaveBeenCalledWith({
+      severity: 'warning',
+      message: 'Chat images must be PNG, JPG, GIF, or WebP files.',
+    })
+    expect(screen.queryByText('notes.txt')).not.toBeInTheDocument()
   })
 
   it('attaches evidence summaries to the latest assistant message', async () => {

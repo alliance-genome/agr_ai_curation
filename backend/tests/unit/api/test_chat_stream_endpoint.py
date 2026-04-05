@@ -134,6 +134,95 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
 
 
+def test_chat_stream_endpoint_passes_image_input_to_runner(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    add_calls = []
+    runner_calls = {}
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        SimpleNamespace(add_exchange=lambda *args, **kwargs: add_calls.append((args, kwargs))),
+    )
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**kwargs):
+        runner_calls.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-image"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "Vision answer"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                image=chat.ChatImageInput(
+                    filename="figure.png",
+                    media_type="image/png",
+                    data_url="data:image/png;base64,ZmFrZQ==",
+                ),
+                session_id="session-chat-image",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert runner_calls["user_message"] == "[Attached image: figure.png]"
+    assert runner_calls["user_input_content"] == [
+        {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,ZmFrZQ==",
+            "detail": "auto",
+        }
+    ]
+    assert add_calls == [
+        (
+            (
+                "auth-sub",
+                "session-chat-image",
+                "[Attached image: figure.png]",
+                "Vision answer",
+            ),
+            {},
+        )
+    ]
+
+
 def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
