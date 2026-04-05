@@ -20,6 +20,24 @@ export interface SSEEvent {
   [key: string]: any
 }
 
+export type SupportedChatImageType =
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/gif'
+  | 'image/webp'
+
+export interface ChatImageData {
+  url: string
+  filename: string
+  mediaType: SupportedChatImageType
+  sizeBytes: number
+}
+
+export interface ChatSendInput {
+  message: string
+  image?: ChatImageData | null
+}
+
 export interface UseChatStreamReturn {
   /**
    * All SSE events received in this session
@@ -34,7 +52,7 @@ export interface UseChatStreamReturn {
   /**
    * Send a message and start receiving SSE events
    */
-  sendMessage: (message: string, sessionId: string) => Promise<void>
+  sendMessage: (input: ChatSendInput, sessionId: string) => Promise<void>
 
   /**
    * Execute a curation flow with streaming response
@@ -105,8 +123,11 @@ export function useChatStream(): UseChatStreamReturn {
     }
   }, [])
 
-  const sendMessage = useCallback(async (message: string, sessionId: string) => {
-    if (!message.trim()) {
+  const sendMessage = useCallback(async (input: ChatSendInput, sessionId: string) => {
+    const normalizedMessage = input.message.trim()
+    const image = input.image ?? null
+
+    if (!normalizedMessage && !image) {
       console.warn('Cannot send empty message')
       return
     }
@@ -151,7 +172,12 @@ export function useChatStream(): UseChatStreamReturn {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message,
+          message: normalizedMessage,
+          image: image ? {
+            filename: image.filename,
+            media_type: image.mediaType,
+            data_url: image.url,
+          } : null,
           session_id: sessionId
         }),
         signal: abortControllerRef.current.signal

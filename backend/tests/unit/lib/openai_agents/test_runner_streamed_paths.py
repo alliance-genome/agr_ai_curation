@@ -88,6 +88,41 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_streamed_uses_structured_user_input_content(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+
+    async def _fake_run_agent_with_tracing(**kwargs):
+        captured["run_kwargs"] = kwargs
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response_length": 5, "tool_calls": 0, "agents_used": ["Supervisor"]},
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+
+    multimodal_input = [
+        {"type": "input_text", "text": "Inspect this chart"},
+        {"type": "input_image", "image_url": "data:image/png;base64,ZmFrZQ==", "detail": "auto"},
+    ]
+
+    await _collect_events(
+        runner.run_agent_streamed(
+            user_message="Inspect this chart [Attached image: figure.png]",
+            user_id="user-1",
+            session_id="session-1",
+            user_input_content=multimodal_input,
+        )
+    )
+
+    assert captured["run_kwargs"]["input_items"][-1] == {
+        "role": "user",
+        "content": multimodal_input,
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
