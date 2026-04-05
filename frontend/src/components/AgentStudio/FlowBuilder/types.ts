@@ -18,6 +18,7 @@ export interface AgentInfo {
   has_group_rules: boolean
   tools: string[]
   show_in_palette?: boolean
+  prompt_version?: number
 }
 
 export interface AgentCategory {

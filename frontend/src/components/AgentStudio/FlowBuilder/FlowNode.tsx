@@ -55,6 +55,11 @@ const NodeHeader = styled(Box)(({ theme }) => ({
   marginBottom: theme.spacing(0.5),
 }))
 
+const NodeHeaderText = styled(Box)({
+  minWidth: 0,
+  flex: 1,
+})
+
 const IconWrapper = styled(Box, {
   shouldForwardProp: (prop) => prop !== 'isTaskInput',
 })<{ isTaskInput?: boolean }>(({ theme, isTaskInput }) => ({
@@ -79,6 +84,18 @@ const AgentName = styled(Typography)(() => ({
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
   flex: 1,
+}))
+
+const VersionLabel = styled(Typography)(({ theme }) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  fontSize: '0.625rem',
+  lineHeight: 1.2,
+  color: theme.palette.text.secondary,
+  backgroundColor: alpha(theme.palette.primary.main, 0.08),
+  borderRadius: theme.shape.borderRadius,
+  padding: theme.spacing(0.125, 0.5),
+  marginTop: theme.spacing(0.25),
 }))
 
 const StepPreview = styled(Typography)(({ theme }) => ({
@@ -155,7 +172,12 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
 
         <NodeHeader>
           <IconWrapper isTaskInput={isTaskInput}>{icon}</IconWrapper>
-          <AgentName>{data.agent_display_name}</AgentName>
+          <NodeHeaderText>
+            <AgentName>{data.agent_display_name}</AgentName>
+            {data.prompt_version != null && (
+              <VersionLabel variant="caption">v{data.prompt_version}</VersionLabel>
+            )}
+          </NodeHeaderText>
         </NodeHeader>
 
         <Tooltip title={tooltipTitle} placement="bottom" enterDelay={500}>
