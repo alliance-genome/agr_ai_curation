@@ -19,6 +19,7 @@ MINIO_IMAGE = (
     "minio/minio@sha256:"
     "14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
 )
+EXPECTED_DEFAULT_IMAGE_TAG = "latest"
 
 
 def _load_compose() -> dict:
@@ -59,6 +60,25 @@ def test_production_compose_uses_published_app_images_without_local_builds():
     assert "${TRACE_REVIEW_BACKEND_IMAGE_TAG:-" in trace_review_backend["image"]
     assert services["weaviate"]["image"] == WEAVIATE_IMAGE
     assert services["minio"]["image"] == MINIO_IMAGE
+
+
+def test_production_compose_fallback_image_tags_match_standalone_template_defaults():
+    compose = _load_compose()
+    services = compose["services"]
+    env_template = ENV_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    assert (
+        services["backend"]["image"]
+        == "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-latest}"
+    )
+    assert (
+        services["frontend"]["image"]
+        == "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-latest}"
+    )
+    assert f"BACKEND_IMAGE_TAG={EXPECTED_DEFAULT_IMAGE_TAG}" in env_template
+    assert f"FRONTEND_IMAGE_TAG={EXPECTED_DEFAULT_IMAGE_TAG}" in env_template
+    assert "smoke-20260310-final" not in compose["services"]["backend"]["image"]
+    assert "smoke-20260310-final" not in compose["services"]["frontend"]["image"]
 
 
 def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostics_first_class():

@@ -82,7 +82,14 @@ make_sandbox_repo() {
   local sandbox_repo="$1"
 
   mkdir -p "${sandbox_repo}"
-  tar --exclude=.git -C "${repo_root}" -cf - . | tar -C "${sandbox_repo}" -xf -
+
+  # Copy only tracked repo files from the working tree so local runtime state
+  # (for example root-owned Weaviate data) does not break this regression test.
+  while IFS= read -r -d '' relative_path; do
+    mkdir -p "${sandbox_repo}/$(dirname "${relative_path}")"
+    cp -a "${repo_root}/${relative_path}" "${sandbox_repo}/${relative_path}"
+  done < <(git -C "${repo_root}" ls-files -z)
+
   chmod -R u+w "${sandbox_repo}"
 
   git -C "${sandbox_repo}" init -q
