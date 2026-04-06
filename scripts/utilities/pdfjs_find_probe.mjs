@@ -43,7 +43,8 @@ function printUsage() {
 Options:
   --pdf <path>              PDF file to inspect (required)
   --query <text>            Query to run through real PDF.js find (repeatable)
-  --query-file <path>       Load queries from a text file or JSON array
+  --query-file <path>       Load queries from a text file or JSON array. JSON entries may
+                            be strings or objects with { id, query, preferredPageNumber }.
   --page <number>           Restrict page output to a single page (repeatable)
   --pages <list>            Restrict page output, e.g. "1,2,8-10"
   --context <chars>         Context window around matches (default: ${DEFAULT_CONTEXT_CHARS})
@@ -237,19 +238,67 @@ async function loadQueriesFromFile(queryFile) {
     if (!Array.isArray(parsed)) {
       throw new Error(`Expected JSON array in query file: ${queryFile}`)
     }
-    return parsed.map((value) => String(value)).filter(Boolean)
+    return parsed
+      .map((value, index) => normalizeQuerySpec(value, `query-file[${index}]`))
+      .filter(Boolean)
   }
 
   return content
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .map((query) => ({ query, id: null, preferredPageNumber: null }))
+}
+
+function normalizeQuerySpec(value, label = 'query spec') {
+  if (typeof value === 'string') {
+    const query = value.trim()
+    if (!query) {
+      return null
+    }
+    return {
+      id: null,
+      query,
+      preferredPageNumber: null,
+    }
+  }
+
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Invalid ${label}: expected a string or object`)
+  }
+
+  const queryValue =
+    typeof value.query === 'string'
+      ? value.query
+      : typeof value.text === 'string'
+        ? value.text
+        : ''
+  const query = queryValue.trim()
+  if (!query) {
+    return null
+  }
+
+  const preferredPageNumberCandidate =
+    value.preferredPageNumber ?? value.preferred_page_number ?? value.pageNumber ?? value.page_number ?? null
+  const preferredPageNumber =
+    Number.isInteger(preferredPageNumberCandidate) && preferredPageNumberCandidate >= 1
+      ? preferredPageNumberCandidate
+      : null
+
+  return {
+    id:
+      value.id === null || value.id === undefined
+        ? null
+        : String(value.id),
+    query,
+    preferredPageNumber,
+  }
 }
 
 function parseArgs(argv) {
   const options = {
     pdfPath: null,
-    queries: [],
+    querySpecs: [],
     pageNumbers: new Set(),
     contextChars: DEFAULT_CONTEXT_CHARS,
     matchLimit: DEFAULT_MATCH_LIMIT,
@@ -282,7 +331,11 @@ function parseArgs(argv) {
         index += 1
         break
       case '--query':
-        options.queries.push(next)
+        options.querySpecs.push({
+          id: null,
+          query: next,
+          preferredPageNumber: null,
+        })
         index += 1
         break
       case '--query-file':
@@ -725,12 +778,14 @@ async function runFindQuery({
   findController,
   eventBus,
   linkService,
-  query,
+  querySpec,
   pageRecords,
   contextChars,
   matchLimit,
   timeoutMs,
 }) {
+  const query = querySpec.query
+  const preferredPageNumber = querySpec.preferredPageNumber ?? null
   const controlEvents = []
   const countEvents = []
   let settledControlEvent = null
@@ -768,6 +823,10 @@ async function runFindQuery({
   eventBus._on('updatefindmatchescount', onMatchesCount)
 
   try {
+    if (Number.isInteger(preferredPageNumber) && preferredPageNumber >= 1 && preferredPageNumber <= linkService.pagesCount) {
+      linkService.page = preferredPageNumber
+    }
+
     eventBus.dispatch('find', {
       source: 'pdfjs-find-probe',
       type: 'again',
@@ -889,7 +948,9 @@ async function runFindQuery({
       : []
 
     return {
+      queryId: querySpec.id ?? null,
       query,
+      preferredPageNumber,
       sanitizedQuery,
       normalizedQuery,
       pdfjsNormalizedQuery,
@@ -949,17 +1010,17 @@ async function buildProbeReport(options) {
         : allPageRecords
 
     const queries = options.queryFile
-      ? [...options.queries, ...(await loadQueriesFromFile(options.queryFile))]
-      : [...options.queries]
+      ? [...options.querySpecs, ...(await loadQueriesFromFile(options.queryFile))]
+      : [...options.querySpecs]
 
     const queryResults = []
-    for (const query of queries) {
+    for (const querySpec of queries) {
       queryResults.push(
         await runFindQuery({
           findController,
           eventBus,
           linkService,
-          query,
+          querySpec,
           pageRecords: allPageRecords,
           contextChars: options.contextChars,
           matchLimit: options.matchLimit,

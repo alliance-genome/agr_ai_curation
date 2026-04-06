@@ -184,6 +184,9 @@ docs/plans/
 docs/plans/*
 !docs/plans/2026-03-20-all-94-pdfx-markdown-to-pdf-text-layer-spike.md
 !docs/plans/2026-03-20-localization-policy.md
+docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md
+docs/design/2026-04-02-flow-evidence-curation-integration-plan.md
+docs/design/pdf-evidence-native-search-simplification-plan.md
 docs/research/
 docs/evidence-review.md
 external_review_prompt.md

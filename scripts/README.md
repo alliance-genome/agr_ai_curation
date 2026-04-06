@@ -32,7 +32,9 @@ scripts/
     ├── find_unused_files.py            # Static import analysis (AST-based)
     ├── pdfjs_find_probe.mjs            # Inspect raw PDF text, real PDF.js find internals, and whitespace-boundary drift
     ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
+    ├── pdfjs_native_verifier_benchmark.py # Benchmark the frontend's native-highlight verifier against the 100-quote corpus
     ├── pdf_text_matcher_bakeoff.py     # Compare Python fuzzy/local-alignment libraries against the same quote benchmark
+    ├── symphony_sync_codex_auth_to_vm.sh # Sync host ~/.codex/auth.json into the Symphony Incus VM when it changes
     ├── validate_unused_files.py        # Multi-tool unused file detection
     └── generate_coverage.sh            # Generate coverage data for validation
 ```
@@ -57,6 +59,13 @@ node scripts/utilities/pdfjs_quote_benchmark.mjs \
   --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
   --page-corpus /tmp/pdf-page-corpus.json \
   --output /tmp/pdf-text-matcher-bakeoff-100.json
+
+# Measure the frontend's native PDF.js verifier thresholds against the same corpus
+/tmp/pdf-match-bench-venv/bin/python scripts/utilities/pdfjs_native_verifier_benchmark.py \
+  --benchmark-report /tmp/pdf-quote-benchmark-100-refreshed.json \
+  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --page-corpus /tmp/pdf-page-corpus.json \
+  --output /tmp/pdfjs-native-verifier-benchmark-100.json
 ```
 
 ## Agent Development Tools
