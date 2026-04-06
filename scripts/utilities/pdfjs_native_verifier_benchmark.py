@@ -283,7 +283,9 @@ def build_reference_span(result: dict[str, Any], page_texts: dict[int, str]) -> 
     if literal_matches:
         page_number = int(literal_matches[0]["pageNumber"])
         start = int(literal_matches[0]["indices"][0])
-        query_text = raw_probe.get("pdfjsNormalizedQuery") or raw_probe.get("normalizedQuery") or raw_probe.get("query") or ""
+        query_text = raw_probe.get("pdfjsNormalizedQuery") or ""
+        if not query_text:
+            return None
         end = start + len(query_text)
         return ReferenceSpan(
             page_number=page_number,
