@@ -9,7 +9,7 @@ Usage:
 
 Options:
   --vm-name NAME     Incus VM name (default: symphony-main)
-  --vm-user USER     VM user that owns ~/.codex/auth.json (default: ctabone)
+  --vm-user USER     VM user that owns ~/.codex/auth.json (default: current host user)
   --host-auth PATH   Host auth.json path (default: ~/.codex/auth.json)
   --force            Push even when the VM file hash matches
   --dry-run          Print the planned sync without mutating the VM
@@ -21,8 +21,32 @@ making it safe to call from cron or a user-level systemd timer.
 EOF
 }
 
+resolve_default_vm_user() {
+  if [[ -n "${SYMPHONY_VM_USER:-}" ]]; then
+    printf '%s\n' "${SYMPHONY_VM_USER}"
+    return 0
+  fi
+
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    printf '%s\n' "${SUDO_USER}"
+    return 0
+  fi
+
+  if host_user="$(id -un 2>/dev/null)" && [[ -n "${host_user}" ]]; then
+    printf '%s\n' "${host_user}"
+    return 0
+  fi
+
+  if [[ -n "${USER:-}" ]]; then
+    printf '%s\n' "${USER}"
+    return 0
+  fi
+
+  return 1
+}
+
 VM_NAME="${SYMPHONY_VM_NAME:-symphony-main}"
-VM_USER="${SYMPHONY_VM_USER:-ctabone}"
+VM_USER="$(resolve_default_vm_user || true)"
 HOST_AUTH="${SYMPHONY_HOST_CODEX_AUTH:-${HOME}/.codex/auth.json}"
 FORCE=0
 DRY_RUN=0
@@ -58,8 +82,13 @@ while [[ $# -gt 0 ]]; do
       usage >&2
       exit 2
       ;;
-  esac
+    esac
 done
+
+if [[ -z "${VM_USER}" ]]; then
+  echo "Could not determine VM user; pass --vm-user or set SYMPHONY_VM_USER." >&2
+  exit 2
+fi
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

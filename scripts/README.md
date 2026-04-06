@@ -44,9 +44,12 @@ scripts/
 These utilities are useful when comparing backend quote text against the live PDF.js search corpus:
 
 ```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PDF_PATH="${REPO_ROOT}/sample_fly_publication.pdf"
+
 # Build a realistic quote benchmark from live chunk data
 node scripts/utilities/pdfjs_quote_benchmark.mjs \
-  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --pdf "${PDF_PATH}" \
   --backend-url http://10.222.162.167:8900 \
   --document-id 64fa682e-a074-446c-821e-c4a605d102f0 \
   --sample-size 100 \
@@ -56,14 +59,14 @@ node scripts/utilities/pdfjs_quote_benchmark.mjs \
 # Compare Python fuzzy/local-alignment libraries against the same benchmark
 /tmp/pdf-match-bench-venv/bin/python scripts/utilities/pdf_text_matcher_bakeoff.py \
   --benchmark-report /tmp/pdf-quote-benchmark-100.json \
-  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --pdf "${PDF_PATH}" \
   --page-corpus /tmp/pdf-page-corpus.json \
   --output /tmp/pdf-text-matcher-bakeoff-100.json
 
 # Measure the frontend's native PDF.js verifier thresholds against the same corpus
 /tmp/pdf-match-bench-venv/bin/python scripts/utilities/pdfjs_native_verifier_benchmark.py \
   --benchmark-report /tmp/pdf-quote-benchmark-100-refreshed.json \
-  --pdf /home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf \
+  --pdf "${PDF_PATH}" \
   --page-corpus /tmp/pdf-page-corpus.json \
   --output /tmp/pdfjs-native-verifier-benchmark-100.json
 ```
