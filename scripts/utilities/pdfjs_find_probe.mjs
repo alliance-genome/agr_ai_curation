@@ -267,19 +267,13 @@ function normalizeQuerySpec(value, label = 'query spec') {
     throw new Error(`Invalid ${label}: expected a string or object`)
   }
 
-  const queryValue =
-    typeof value.query === 'string'
-      ? value.query
-      : typeof value.text === 'string'
-        ? value.text
-        : ''
+  const queryValue = typeof value.query === 'string' ? value.query : ''
   const query = queryValue.trim()
   if (!query) {
     return null
   }
 
-  const preferredPageNumberCandidate =
-    value.preferredPageNumber ?? value.preferred_page_number ?? value.pageNumber ?? value.page_number ?? null
+  const preferredPageNumberCandidate = value.preferredPageNumber ?? null
   const preferredPageNumber =
     Number.isInteger(preferredPageNumberCandidate) && preferredPageNumberCandidate >= 1
       ? preferredPageNumberCandidate
