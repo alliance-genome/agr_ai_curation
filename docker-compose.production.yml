@@ -105,7 +105,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD:
 
   frontend:
-    image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-smoke-20260310-final}"
+    image: "${FRONTEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend}:${FRONTEND_IMAGE_TAG:-latest}"
     restart: unless-stopped
     depends_on:
       backend:
@@ -128,7 +128,7 @@ services:
     # Security hardening 2026-03-24: drop all capabilities, block IMDS metadata access
     cap_drop:
       - ALL
-    image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-smoke-20260310-final}"
+    image: "${BACKEND_IMAGE:-public.ecr.aws/v4p5b7m9/agr-ai-curation-backend}:${BACKEND_IMAGE_TAG:-latest}"
     restart: unless-stopped
     depends_on:
       postgres:
