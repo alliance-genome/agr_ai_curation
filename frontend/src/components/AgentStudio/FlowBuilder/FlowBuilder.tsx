@@ -961,9 +961,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     // Load flows
     setLoadingFlows(true)
     refreshFlowLists()
-      .catch((err) => {
-        logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
-        setSnackbar({ message: 'Failed to load flows', severity: 'error' })
+      .catch((err: Error) => {
+        logger.error('Failed to load flows', err, { component: 'FlowBuilder' })
+        setSnackbar({
+          message: err.message,
+          severity: 'error',
+        })
       })
       .finally(() => setLoadingFlows(false))
   }, [refreshFlowLists])
@@ -1042,9 +1045,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     // Load flows
     setLoadingManageFlows(true)
     refreshFlowLists()
-      .catch((err) => {
-        logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
-        setSnackbar({ message: 'Failed to load flows', severity: 'error' })
+      .catch((err: Error) => {
+        logger.error('Failed to load flows', err, { component: 'FlowBuilder' })
+        setSnackbar({
+          message: err.message,
+          severity: 'error',
+        })
       })
       .finally(() => setLoadingManageFlows(false))
   }, [refreshFlowLists])

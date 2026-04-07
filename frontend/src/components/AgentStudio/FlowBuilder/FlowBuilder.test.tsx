@@ -341,4 +341,38 @@ describe('FlowBuilder', () => {
       reason: 'updated',
     })
   })
+
+  it('surfaces the shared auth error when opening saved flows', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.listFlows.mockRejectedValue(new Error('Please log in to view your flows'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    await user.click(screen.getByText('File'))
+
+    const fileMenu = await screen.findByRole('menu')
+    await user.click(within(fileMenu).getByText('Open Flow...'))
+
+    expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
+  })
+
+  it('surfaces unexpected list errors when opening saved flows', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.listFlows.mockRejectedValue(new SyntaxError('Unexpected token < in JSON at position 0'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    await user.click(screen.getByText('File'))
+
+    const fileMenu = await screen.findByRole('menu')
+    await user.click(within(fileMenu).getByText('Open Flow...'))
+
+    expect(await screen.findByText('Unexpected token < in JSON at position 0')).toBeInTheDocument()
+  })
 })

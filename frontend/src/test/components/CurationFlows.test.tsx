@@ -218,6 +218,34 @@ describe('CurationFlows', () => {
     expect(screen.queryByRole('button', { name: /Export Evidence/i })).not.toBeInTheDocument()
   })
 
+  it('shows the shared auth error when flow listing is unauthorized', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(null, {
+        status: 401,
+      }),
+    )
+
+    renderComponent([])
+
+    expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
+  })
+
+  it('surfaces unexpected flow list parsing errors without remapping them', async () => {
+    const parseError = new SyntaxError('Unexpected token < in JSON at position 0')
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => {
+        throw parseError
+      },
+    })
+
+    renderComponent([])
+
+    expect(await screen.findByText(parseError.message)).toBeInTheDocument()
+    expect(screen.queryByText('Failed to connect to server')).not.toBeInTheDocument()
+  })
+
   it('surfaces an error when the export response omits attachment filename', async () => {
     const user = userEvent.setup()
 
