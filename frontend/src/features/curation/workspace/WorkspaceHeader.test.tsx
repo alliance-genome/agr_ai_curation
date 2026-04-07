@@ -1,10 +1,9 @@
 import type { ComponentProps } from 'react'
 
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import type { CurationReviewSession } from '@/features/curation/types'
 import theme from '@/theme'
@@ -56,8 +55,10 @@ function renderHeader(props?: Partial<ComponentProps<typeof WorkspaceHeader>>) {
 }
 
 describe('WorkspaceHeader', () => {
-  it('renders the title, metadata, badges, and navigation placeholders', () => {
-    renderHeader()
+  it('renders the title, metadata, badges, and navigation slot content', () => {
+    renderHeader({
+      navigationSlot: <div>Queue navigation slot</div>,
+    })
 
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
@@ -67,36 +68,13 @@ describe('WorkspaceHeader', () => {
     expect(screen.getByText('Gene')).toBeInTheDocument()
     expect(screen.getByText('3/5')).toBeInTheDocument()
     expect(screen.getByText('In Progress')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /previous session/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /next session/i })).toBeDisabled()
-  })
-
-  it('calls the provided session navigation callbacks when enabled', async () => {
-    const user = userEvent.setup()
-    const onPreviousSession = vi.fn()
-    const onNextSession = vi.fn()
-
-    renderHeader({
-      nextDisabled: false,
-      onNextSession,
-      onPreviousSession,
-      previousDisabled: false,
-    })
-
-    await user.click(screen.getByRole('button', { name: /previous session/i }))
-    await user.click(screen.getByRole('button', { name: /next session/i }))
-
-    expect(onPreviousSession).toHaveBeenCalledTimes(1)
-    expect(onNextSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('renders a custom navigation slot when provided', () => {
-    renderHeader({
-      navigationSlot: <div>Queue navigation slot</div>,
-    })
-
+    expect(screen.getByTestId('workspace-header-navigation-slot')).toBeInTheDocument()
     expect(screen.getByText('Queue navigation slot')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /previous session/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /next session/i })).not.toBeInTheDocument()
+  })
+
+  it('does not render the navigation slot container when none is provided', () => {
+    renderHeader()
+
+    expect(screen.queryByTestId('workspace-header-navigation-slot')).not.toBeInTheDocument()
   })
 })
