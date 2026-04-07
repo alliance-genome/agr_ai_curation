@@ -233,11 +233,13 @@ def test_build_chat_curation_prep_preview_blocks_when_multiple_adapters_are_pres
         db=object(),
     )
 
-    assert preview.ready is False
+    assert preview.ready is True
     assert preview.adapter_keys == ["gene", "disease"]
-    assert preview.blocking_reasons == [
-        "This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review."
-    ]
+    assert preview.blocking_reasons == []
+    assert (
+        preview.summary_text
+        == "You discussed 4 candidate annotations across gene and disease adapters. Prepare all for curation review?"
+    )
 
 
 @pytest.mark.asyncio
@@ -274,6 +276,7 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
     assert result.document_id == "document-1"
     assert result.candidate_count == 2
     assert result.adapter_keys == ["reference_adapter"]
+    assert result.prepared_sessions == []
     assert len(captured["extraction_results"]) == 1
     assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
     assert captured["persistence_context"].origin_session_id == "session-1"
@@ -319,7 +322,50 @@ async def test_run_chat_curation_prep_blocks_when_adapter_scope_is_missing(monke
 
 
 @pytest.mark.asyncio
-async def test_run_chat_curation_prep_allows_explicit_adapter_narrowing(monkeypatch):
+async def test_run_chat_curation_prep_prepares_all_adapters_in_scope(monkeypatch):
+    captured_scope_keys: list[list[str]] = []
+
+    monkeypatch.setattr(
+        module,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _make_extraction_result(adapter_key="gene"),
+            _make_extraction_result(
+                adapter_key="disease",
+                agent_key="disease_extractor",
+            ),
+        ],
+    )
+
+    async def _fake_run_curation_prep(
+        extraction_results,
+        *,
+        scope_confirmation,
+        db=None,
+        persistence_context=None,
+    ):
+        captured_scope_keys.append(list(scope_confirmation.adapter_keys))
+        return _make_prep_output(candidate_count=1)
+
+    monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
+
+    result = await module.run_chat_curation_prep(
+        CurationPrepChatRunRequest(session_id="session-1"),
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert captured_scope_keys == [["gene"], ["disease"]]
+    assert result.summary_text == (
+        "Prepared 2 candidate annotations for curation review across gene and disease adapters."
+    )
+    assert result.candidate_count == 2
+    assert result.adapter_keys == ["gene", "disease"]
+    assert result.prepared_sessions == []
+
+
+@pytest.mark.asyncio
+async def test_run_chat_curation_prep_allows_explicit_adapter_subset(monkeypatch):
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(

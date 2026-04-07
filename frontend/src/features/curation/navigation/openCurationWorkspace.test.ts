@@ -90,6 +90,29 @@ describe('openCurationWorkspace', () => {
     expect(navigate).toHaveBeenCalledWith('/curation/session-existing')
   })
 
+  it('rejects ambiguous existing sessions when no single adapter is pinned', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(buildSessionListResponse(['session-gene', 'session-disease'])), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+    )
+
+    await expect(
+      resolveCurationWorkspaceSessionId({
+        documentId: 'doc-1',
+      })
+    ).rejects.toThrow(
+      'Multiple prepared curation sessions are available for this document. Choose an adapter-specific entry point or open Curation Inventory to select one.',
+    )
+
+    const [requestUrl] = vi.mocked(global.fetch).mock.calls[0]
+    const parsedUrl = new URL(String(requestUrl), 'http://localhost')
+    expect(parsedUrl.searchParams.get('page_size')).toBe('2')
+  })
+
   it('bootstraps a session when no matching session exists for the document and flow run', async () => {
     vi.mocked(global.fetch)
       .mockResolvedValueOnce(

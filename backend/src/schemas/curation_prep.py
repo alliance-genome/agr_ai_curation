@@ -350,8 +350,16 @@ class CurationPrepChatRunRequest(CurationPrepBaseModel):
     session_id: NonEmptyString = Field(description="Current chat session identifier")
     adapter_keys: list[NonEmptyString] = Field(
         default_factory=list,
-        description="Confirmed adapters to include in the prep run",
+        description="Optional adapter subset to include in the prep run; empty means all adapters in scope",
     )
+
+
+class CurationPrepPreparedSession(CurationPrepBaseModel):
+    """Prepared review session created or refreshed from chat prep."""
+
+    session_id: NonEmptyString = Field(description="Prepared review session identifier")
+    adapter_key: NonEmptyString = Field(description="Adapter key owned by the prepared review session")
+    created: bool = Field(description="Whether the prepared review session was newly created")
 
 
 class CurationPrepChatRunResponse(CurationPrepBaseModel):
@@ -378,6 +386,10 @@ class CurationPrepChatRunResponse(CurationPrepBaseModel):
         default_factory=list,
         description="Adapters that were in scope for the confirmed prep run",
     )
+    prepared_sessions: list[CurationPrepPreparedSession] = Field(
+        default_factory=list,
+        description="Prepared review sessions created or refreshed for the confirmed prep run",
+    )
 
 
 __all__ = [
@@ -387,6 +399,7 @@ __all__ = [
     "CurationPrepChatPreviewResponse",
     "CurationPrepChatRunRequest",
     "CurationPrepChatRunResponse",
+    "CurationPrepPreparedSession",
     "CurationPrepConversationMessage",
     "CurationPrepConversationRole",
     "CurationPrepEvidenceRecord",

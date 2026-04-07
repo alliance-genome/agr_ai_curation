@@ -22,6 +22,11 @@ export interface CurationPrepRunResponse {
   warnings: string[]
   processing_notes: string[]
   adapter_keys: string[]
+  prepared_sessions: Array<{
+    session_id: string
+    adapter_key: string
+    created: boolean
+  }>
 }
 
 export async function fetchCurationPrepPreview(sessionId: string): Promise<CurationPrepPreview> {

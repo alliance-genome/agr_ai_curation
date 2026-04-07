@@ -90,6 +90,7 @@ export async function findExistingCurationSessionId(
   }
 
   assertWorkspaceTarget(target)
+  const singleAdapterKey = resolveSingleScopeValue(target.adapterKeys)
 
   const response = await fetchCurationSessionList({
     filters: {
@@ -101,8 +102,28 @@ export async function findExistingCurationSessionId(
     sort_by: 'prepared_at',
     sort_direction: 'desc',
     page: 1,
-    page_size: 1,
+    page_size: singleAdapterKey ? 1 : 2,
   })
+
+  const distinctAdapterKeys = [
+    ...new Set(
+      response.sessions
+        .map((session) => session.adapter?.adapter_key)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ]
+
+  if (
+    !singleAdapterKey
+    && (
+      distinctAdapterKeys.length > 1
+      || (distinctAdapterKeys.length === 0 && response.sessions.length > 1)
+    )
+  ) {
+    throw new Error(
+      'Multiple prepared curation sessions are available for this document. Choose an adapter-specific entry point or open Curation Inventory to select one.',
+    )
+  }
 
   return response.sessions[0]?.session_id ?? null
 }

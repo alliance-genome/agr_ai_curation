@@ -31,7 +31,12 @@ from src.lib.curation_workspace.session_service import (
     upsert_prepared_session,
 )
 from src.models.sql.pdf_document import PDFDocument
-from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepChatRunRequest
+from src.schemas.curation_prep import (
+    CurationPrepAgentOutput,
+    CurationPrepChatRunRequest,
+    CurationPrepChatRunResponse,
+    CurationPrepPreparedSession,
+)
 from src.schemas.curation_workspace import (
     CurationActorType,
     CurationDocumentBootstrapAvailabilityResponse,
@@ -79,12 +84,60 @@ def create_manual_session(
     )
 
 
+async def prepare_chat_curation_sessions(
+    request: CurationPrepChatRunRequest,
+    *,
+    current_user_id: str,
+    db: Session,
+) -> CurationPrepChatRunResponse:
+    """Prepare chat findings and bootstrap one review session per adapter in scope."""
+
+    try:
+        prep_response = await run_chat_curation_prep(
+            request,
+            user_id=current_user_id,
+            db=db,
+        )
+        prepared_sessions: list[CurationPrepPreparedSession] = []
+
+        for adapter_key in prep_response.adapter_keys:
+            bootstrap_response = await bootstrap_document_session(
+                prep_response.document_id,
+                CurationDocumentBootstrapRequest(
+                    adapter_key=adapter_key,
+                    origin_session_id=request.session_id,
+                ),
+                current_user_id=current_user_id,
+                db=db,
+                manage_transaction=False,
+            )
+            prepared_sessions.append(
+                CurationPrepPreparedSession(
+                    session_id=bootstrap_response.session.session_id,
+                    adapter_key=adapter_key,
+                    created=bootstrap_response.created,
+                )
+            )
+
+        db.commit()
+        return prep_response.model_copy(
+            update={
+                "prepared_sessions": prepared_sessions,
+            }
+        )
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
+
+
 async def bootstrap_document_session(
     document_id: str,
     request: CurationDocumentBootstrapRequest,
     *,
     current_user_id: str,
     db: Session,
+    manage_transaction: bool = True,
 ) -> CurationDocumentBootstrapResponse:
     """Replay the newest matching persisted prep result into a review session."""
 
@@ -145,10 +198,13 @@ async def bootstrap_document_session(
             created=bool(pipeline_result.created),
             session=get_session_detail(db, pipeline_result.session_id),
         )
-        db.commit()
+        if manage_transaction:
+            db.commit()
+        else:
+            db.flush()
         return response
     except Exception:
-        if db.in_transaction():
+        if manage_transaction and db.in_transaction():
             db.rollback()
         raise
 
@@ -238,8 +294,8 @@ def _select_bootstrap_extraction_result(
     if origin_session_id is not None:
         statement = statement.where(ExtractionResultModel.origin_session_id == origin_session_id)
 
-    extraction_result = db.scalars(statement).first()
-    if extraction_result is None:
+    matching_results = list(db.scalars(statement).all())
+    if not matching_results:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
@@ -248,7 +304,22 @@ def _select_bootstrap_extraction_result(
             ),
         )
 
-    return extraction_result
+    if adapter_key is None:
+        distinct_adapter_keys = {
+            str(result.adapter_key).strip()
+            for result in matching_results
+            if str(result.adapter_key or "").strip()
+        }
+        if len(distinct_adapter_keys) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Multiple prepared curation sessions are available for this document. "
+                    "Choose an adapter-specific entry point or open Curation Inventory to select one."
+                ),
+            )
+
+    return matching_results[0]
 
 
 def _chat_prep_matches_bootstrap_request(
@@ -385,6 +456,7 @@ def _resolved_adapter_key(extraction_result: ExtractionResultModel) -> str:
         detail="Bootstrap requires a persisted prep result with adapter ownership",
     )
 
+
 def _actor_payload(actor_claims: dict[str, str | None]) -> dict[str, str]:
     actor_id = str(actor_claims.get("sub") or actor_claims.get("uid") or "").strip()
     payload: dict[str, str] = {}
@@ -425,4 +497,5 @@ def _normalized_optional_str(value: str | None) -> str | None:
 __all__ = [
     "bootstrap_document_session",
     "create_manual_session",
+    "prepare_chat_curation_sessions",
 ]
