@@ -12,10 +12,24 @@ function formatEvidenceQuoteCount(count: number): string {
   return count === 1 ? '1 evidence quote' : `${count} evidence quotes`
 }
 
+function formatEvidencePreviewCount(count: number): string {
+  return count === 1 ? '1 evidence quote preview' : `${count} evidence quote previews`
+}
+
+function formatStepEvidenceSummary(evidenceCount: number, previewCount: number): string {
+  if (previewCount > 0 && previewCount < evidenceCount) {
+    return `Showing ${formatEvidencePreviewCount(previewCount)} from ${formatEvidenceQuoteCount(evidenceCount)} captured in this step.`
+  }
+
+  return `${formatEvidenceQuoteCount(evidenceCount)} captured in this step.`
+}
+
 export default function FlowStepEvidenceCard({
   details,
 }: FlowStepEvidenceCardProps) {
   const evidenceRecords = details.evidence_records
+  const previewCount = evidenceRecords.length
+  const isPreviewSubset = previewCount > 0 && previewCount < details.evidence_count
   const agentLabel = details.agent_name?.trim() || null
   const toolLabel = details.tool_name?.trim() || null
   const sourceParts = [`Step ${details.step}`]
@@ -78,7 +92,7 @@ export default function FlowStepEvidenceCard({
             opacity: 0.9,
           }}
         >
-          {formatEvidenceQuoteCount(details.evidence_count)} captured in this step.
+          {formatStepEvidenceSummary(details.evidence_count, previewCount)}
         </Box>
 
         <Box
@@ -93,7 +107,14 @@ export default function FlowStepEvidenceCard({
       </Box>
 
       {evidenceRecords.length > 0 ? (
-        <EvidenceCard evidenceRecords={evidenceRecords} />
+        <EvidenceCard
+          evidenceRecords={evidenceRecords}
+          headerLabel={
+            isPreviewSubset
+              ? formatEvidencePreviewCount(previewCount)
+              : formatEvidenceQuoteCount(previewCount)
+          }
+        />
       ) : (
         <Box
           data-testid="flow-step-evidence-empty"
