@@ -55,7 +55,7 @@ function renderHeader(props?: Partial<ComponentProps<typeof WorkspaceHeader>>) {
 }
 
 describe('WorkspaceHeader', () => {
-  it('renders the title, metadata, badges, and navigation slot content without legacy queue buttons', () => {
+  it('renders the title, metadata, badges, and navigation slot content', () => {
     renderHeader({
       navigationSlot: <div>Queue navigation slot</div>,
     })
@@ -70,7 +70,11 @@ describe('WorkspaceHeader', () => {
     expect(screen.getByText('In Progress')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-header-navigation-slot')).toBeInTheDocument()
     expect(screen.getByText('Queue navigation slot')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /previous session/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /next session/i })).not.toBeInTheDocument()
+  })
+
+  it('does not render the navigation slot container when none is provided', () => {
+    renderHeader()
+
+    expect(screen.queryByTestId('workspace-header-navigation-slot')).not.toBeInTheDocument()
   })
 })
