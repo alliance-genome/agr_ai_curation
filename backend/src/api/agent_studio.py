@@ -24,6 +24,10 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
+from .logs import (
+    ALLOWED_CONTAINERS as LOGS_API_ALLOWED_CONTAINERS,
+    ALLOWED_LOG_LEVELS as LOGS_API_ALLOWED_LOG_LEVELS,
+)
 from src.lib.agent_studio import (
     PromptCatalog,
     GroupRuleInfo,
@@ -1338,7 +1342,7 @@ GET_SERVICE_LOGS_TOOL = {
         "properties": {
             "container": {
                 "type": "string",
-                "enum": ["backend", "frontend", "weaviate", "postgres"],
+                "enum": sorted(LOGS_API_ALLOWED_CONTAINERS),
                 "description": "Service/container name (default: backend)",
                 "default": "backend"
             },
@@ -1351,12 +1355,13 @@ GET_SERVICE_LOGS_TOOL = {
             },
             "level": {
                 "type": "string",
-                "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+                "enum": sorted(LOGS_API_ALLOWED_LOG_LEVELS),
                 "description": "Optional log level filter"
             },
             "since": {
-                "type": "string",
-                "description": "Optional time filter such as 'last 5 minutes'"
+                "type": "integer",
+                "description": "Optional time filter in minutes ago (for example: 15 for the last 15 minutes)",
+                "minimum": 1
             }
         },
         "required": []
@@ -1829,7 +1834,7 @@ async def _handle_tool_call(
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 
-    elif tool_name in {"get_service_logs", "get_docker_logs"}:
+    elif tool_name == "get_service_logs":
         container = tool_input.get("container", "backend")
         lines = tool_input.get("lines", 2000)
         level = tool_input.get("level")

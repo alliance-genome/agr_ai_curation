@@ -176,30 +176,50 @@ async def test_get_trace_view_invalid_and_400(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_docker_logs_success_and_error_branches(monkeypatch):
+async def test_get_service_logs_success_and_error_branches(monkeypatch):
     capture = {}
     _patch_async_client(
         monkeypatch,
         response=_FakeResponse(200, {"container": "backend", "lines_returned": 5, "logs": "line1\nline2"}),
         capture=capture,
     )
-    success = await tools.get_docker_logs(container="backend", lines=50)
+    success = await tools.get_service_logs(
+        container="backend",
+        lines=50,
+        level="fatal",
+        since=15,
+    )
     assert success["status"] == "success"
     assert success["data"]["lines_requested"] == 100  # clamped minimum
     assert capture["params"]["lines"] == 100
+    assert capture["params"]["level"] == "FATAL"
+    assert capture["params"]["since"] == 15
 
     _patch_async_client(monkeypatch, response=_FakeResponse(400, {"detail": "bad container"}))
-    bad_container = await tools.get_docker_logs(container="unknown", lines=200)
+    bad_container = await tools.get_service_logs(container="unknown", lines=200)
     assert bad_container["status"] == "error"
     assert "bad container" in bad_container["error"]
 
     _patch_async_client(monkeypatch, exc=httpx.TimeoutException("timeout"))
-    timeout = await tools.get_docker_logs(container="backend", lines=200)
+    timeout = await tools.get_service_logs(container="backend", lines=200)
     assert timeout["status"] == "error"
     assert "Timeout retrieving logs" in timeout["error"]
 
     request = httpx.Request("GET", "http://localhost:8000/api/logs/backend")
     _patch_async_client(monkeypatch, exc=httpx.ConnectError("connect failed", request=request))
-    connect = await tools.get_docker_logs(container="backend", lines=200)
+    connect = await tools.get_service_logs(container="backend", lines=200)
     assert connect["status"] == "error"
     assert "Cannot connect" in connect["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_service_logs_rejects_non_integer_since(monkeypatch):
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"container": "backend", "lines_returned": 5, "logs": "line1\nline2"}),
+    )
+
+    invalid_since = await tools.get_service_logs(container="backend", since="15")  # type: ignore[arg-type]
+
+    assert invalid_since["status"] == "error"
+    assert invalid_since["error"] == "Time filter must be an integer number of minutes"

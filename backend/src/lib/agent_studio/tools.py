@@ -21,7 +21,10 @@ import os
 import re
 from typing import Dict, Any, Optional
 
-VALID_SERVICE_LOG_LEVELS = {"DEBUG", "INFO", "WARN", "ERROR"}
+from src.lib.loki_client import LOG_LEVEL_LABEL_PATTERNS
+
+
+VALID_SERVICE_LOG_LEVELS = frozenset(LOG_LEVEL_LABEL_PATTERNS)
 
 
 def get_trace_source() -> str:
@@ -688,7 +691,7 @@ async def get_service_logs(
     container: str = "backend",
     lines: int = 2000,
     level: Optional[str] = None,
-    since: Optional[str] = None,
+    since: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Retrieve Loki-backed service logs for troubleshooting.
@@ -698,11 +701,12 @@ async def get_service_logs(
 
     Args:
         container: Service/container name (default: "backend")
-            Valid options: backend, frontend, weaviate, postgres
+            Valid options mirror `/api/logs/{container}` (backend, frontend,
+            weaviate, postgres, langfuse, redis, clickhouse, minio,
+            trace_review_backend)
         lines: Number of recent log lines (default: 2000, min: 100, max: 5000)
-        level: Optional log level filter (DEBUG, INFO, WARN, ERROR)
-        since: Optional time filter string supported by the logs API
-            (for example: "last 5 minutes")
+        level: Optional log level filter (DEBUG, INFO, WARN, ERROR, FATAL)
+        since: Optional time filter in minutes ago
 
     Returns:
         {
@@ -718,38 +722,52 @@ async def get_service_logs(
         }
     """
     try:
+        allowed_levels = ", ".join(sorted(VALID_SERVICE_LOG_LEVELS))
         # Clamp lines to safe range
         lines = max(100, min(lines, 5000))
         params: Dict[str, Any] = {"lines": lines}
 
         if level is not None:
+            if not isinstance(level, str):
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": "Log level filter must be a string",
+                    "help": f"Use one of: {allowed_levels}"
+                }
             normalized_level = level.strip().upper()
             if not normalized_level:
                 return {
                     "status": "error",
                     "data": None,
                     "error": "Log level filter cannot be blank",
-                    "help": "Use one of: DEBUG, INFO, WARN, ERROR"
+                    "help": f"Use one of: {allowed_levels}"
                 }
             if normalized_level not in VALID_SERVICE_LOG_LEVELS:
                 return {
                     "status": "error",
                     "data": None,
                     "error": f"Unsupported log level filter: {normalized_level}",
-                    "help": "Use one of: DEBUG, INFO, WARN, ERROR"
+                    "help": f"Use one of: {allowed_levels}"
                 }
             params["level"] = normalized_level
 
         if since is not None:
-            normalized_since = since.strip()
-            if not normalized_since:
+            if isinstance(since, bool) or not isinstance(since, int):
                 return {
                     "status": "error",
                     "data": None,
-                    "error": "Time filter cannot be blank",
-                    "help": "Use a relative window such as 'last 5 minutes'"
+                    "error": "Time filter must be an integer number of minutes",
+                    "help": "Use a positive integer such as 15 for the last 15 minutes"
                 }
-            params["since"] = normalized_since
+            if since < 1:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": "Time filter must be at least 1 minute",
+                    "help": "Use a positive integer such as 15 for the last 15 minutes"
+                }
+            params["since"] = since
 
         # Call internal logs API endpoint
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
@@ -808,18 +826,3 @@ async def get_service_logs(
             "error": f"Failed to retrieve logs: {str(e)}",
             "help": "Verify the logs API is reachable and the service name is correct"
         }
-
-
-async def get_docker_logs(
-    container: str = "backend",
-    lines: int = 2000,
-    level: Optional[str] = None,
-    since: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Compatibility wrapper for the renamed `get_service_logs` tool."""
-    return await get_service_logs(
-        container=container,
-        lines=lines,
-        level=level,
-        since=since,
-    )

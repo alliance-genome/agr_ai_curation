@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import src.api.agent_studio as api_module
+from src.api import logs as logs_api
 from src.lib.agent_studio.models import ChatContext
 
 
@@ -105,6 +106,56 @@ async def test_handle_tool_call_get_tool_calls_page_forwards_inputs(monkeypatch)
     assert result["kwargs"]["page"] == 2
     assert result["kwargs"]["page_size"] == 25
     assert result["kwargs"]["tool_name"] == "read_section"
+
+
+def test_get_service_logs_tool_schema_matches_logs_api_contract():
+    schema = api_module.GET_SERVICE_LOGS_TOOL["input_schema"]["properties"]
+
+    assert schema["container"]["enum"] == sorted(logs_api.ALLOWED_CONTAINERS)
+    assert schema["level"]["enum"] == sorted(logs_api.ALLOWED_LOG_LEVELS)
+    assert schema["since"]["type"] == "integer"
+    assert schema["since"]["minimum"] == 1
+    assert "minutes ago" in schema["since"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
+    from src.lib.agent_studio import tools as tools_module
+
+    async def _fake_get_service_logs(**kwargs):
+        return {"status": "ok", "kwargs": kwargs}
+
+    monkeypatch.setattr(tools_module, "get_service_logs", _fake_get_service_logs)
+
+    result = await api_module._handle_tool_call(
+        tool_name="get_service_logs",
+        tool_input={"container": "backend", "lines": 250, "level": "FATAL", "since": 30},
+        context=None,
+        user_email="dev@example.org",
+        messages=[],
+    )
+
+    assert result["status"] == "ok"
+    assert result["kwargs"] == {
+        "container": "backend",
+        "lines": 250,
+        "level": "FATAL",
+        "since": 30,
+    }
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_call_get_docker_logs_is_unknown():
+    result = await api_module._handle_tool_call(
+        tool_name="get_docker_logs",
+        tool_input={"container": "backend"},
+        context=None,
+        user_email="dev@example.org",
+        messages=[],
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "Unknown tool: get_docker_logs"
 
 
 @pytest.mark.asyncio

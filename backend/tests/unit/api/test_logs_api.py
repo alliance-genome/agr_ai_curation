@@ -48,6 +48,10 @@ async def test_get_container_logs_rejects_invalid_level():
     assert "Invalid log level" in exc.value.detail
 
 
+def test_allowed_log_levels_track_loki_patterns():
+    assert logs_api.ALLOWED_LOG_LEVELS == frozenset(logs_api.loki.LOG_LEVEL_LABEL_PATTERNS)
+
+
 @pytest.mark.asyncio
 async def test_get_container_logs_queries_loki_with_default_lookback_and_service_label(
     frozen_now, patch_loki_async_client, loki_response
@@ -108,8 +112,8 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
                 "data": {
                     "result": [
                         {
-                            "stream": {"service": "backend", "level": "ERROR"},
-                            "values": [["1742903100000000000", "ERROR line"]],
+                            "stream": {"service": "backend", "level": "FATAL"},
+                            "values": [["1742903100000000000", "FATAL line"]],
                         }
                     ]
                 }
@@ -121,12 +125,12 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
     payload = await logs_api.get_container_logs(
         "backend",
         lines=150,
-        level="error",
+        level="fatal",
         since=15,
     )
 
     assert capture["params"]["query"] == (
-        '{service="backend",level=~"(?i)^error$"}'
+        '{service="backend",level=~"(?i)^fatal$"}'
     )
     assert capture["params"]["limit"] == 150
     assert capture["params"]["start"] == logs_api.loki.normalize_time(
@@ -135,7 +139,7 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
     assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
     assert payload.lines == 1
     assert payload.lines_returned == 1
-    assert payload.logs == "ERROR line\n"
+    assert payload.logs == "FATAL line\n"
 
 
 @pytest.mark.asyncio
