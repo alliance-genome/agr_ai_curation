@@ -45,6 +45,8 @@ function mockChatFetch(options?: {
     extraction_result_count: number
     conversation_message_count: number
     adapter_keys: string[]
+    submit_adapter_keys: string[]
+    requires_adapter_selection: boolean
     blocking_reasons: string[]
   }
   prepRun?: {
@@ -98,6 +100,8 @@ function mockChatFetch(options?: {
           extraction_result_count: 0,
           conversation_message_count: 0,
           adapter_keys: [],
+          submit_adapter_keys: [],
+          requires_adapter_selection: false,
           blocking_reasons: [
             'No candidate annotations are available from this chat yet.',
           ],
@@ -578,6 +582,8 @@ describe('Chat persistence', () => {
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['disease'],
+        submit_adapter_keys: ['disease'],
+        requires_adapter_selection: false,
         blocking_reasons: [],
       },
       prepRun: {
@@ -626,6 +632,62 @@ describe('Chat persistence', () => {
     ).toBeInTheDocument()
   })
 
+  it('requires narrowing to one adapter before multi-adapter chat prep can run', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: false,
+        summary_text: 'This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review.',
+        candidate_count: 4,
+        extraction_result_count: 2,
+        conversation_message_count: 6,
+        adapter_keys: ['gene', 'disease'],
+        submit_adapter_keys: [],
+        requires_adapter_selection: true,
+        blocking_reasons: [
+          'This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review.',
+        ],
+      },
+      prepRun: {
+        summary_text: 'Prepared 1 candidate annotation for curation review.',
+        document_id: 'doc-gene-1',
+        candidate_count: 1,
+        warnings: [],
+        processing_notes: [],
+        adapter_keys: ['gene'],
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+
+    const startPrepButton = await screen.findByRole('button', { name: /start prep/i })
+    expect(startPrepButton).toBeDisabled()
+    expect(screen.getByText('Choose one adapter to prepare')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Gene' }))
+
+    await waitFor(() => {
+      expect(startPrepButton).toBeEnabled()
+    })
+
+    fireEvent.click(startPrepButton)
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/curation-workspace/prep', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id: 'session-1',
+          adapter_keys: ['gene'],
+        }),
+      })
+    })
+  })
+
   it('warns when prep can continue but the chat also contains unsupported evidence-only findings', async () => {
     mockChatFetch({
       prepPreview: {
@@ -635,6 +697,8 @@ describe('Chat persistence', () => {
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['disease'],
+        submit_adapter_keys: ['disease'],
+        requires_adapter_selection: false,
         blocking_reasons: [],
       },
     })
@@ -700,6 +764,8 @@ describe('Chat persistence', () => {
         extraction_result_count: 0,
         conversation_message_count: 0,
         adapter_keys: [],
+        submit_adapter_keys: [],
+        requires_adapter_selection: false,
         blocking_reasons: ['No candidate annotations are available from this chat yet.'],
       },
     })
@@ -755,6 +821,8 @@ describe('Chat persistence', () => {
         extraction_result_count: 1,
         conversation_message_count: 4,
         adapter_keys: ['gene'],
+        submit_adapter_keys: ['gene'],
+        requires_adapter_selection: false,
         blocking_reasons: [],
       },
       prepRun: {
@@ -828,6 +896,8 @@ describe('Chat persistence', () => {
         extraction_result_count: 1,
         conversation_message_count: 2,
         adapter_keys: ['gene'],
+        submit_adapter_keys: ['gene'],
+        requires_adapter_selection: false,
         blocking_reasons: [],
       },
       prepRun: {

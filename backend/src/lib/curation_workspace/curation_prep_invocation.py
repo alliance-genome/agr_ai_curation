@@ -45,6 +45,7 @@ def build_chat_curation_prep_preview(
 
     context = _load_chat_prep_context(session_id=session_id, user_id=user_id, db=db)
     blocking_reasons = _build_blocking_reasons(context)
+    requires_adapter_selection = _requires_adapter_selection(context)
 
     return CurationPrepChatPreviewResponse(
         ready=not blocking_reasons,
@@ -53,6 +54,8 @@ def build_chat_curation_prep_preview(
         extraction_result_count=len(context.extraction_results),
         conversation_message_count=0,
         adapter_keys=context.adapter_keys,
+        submit_adapter_keys=_build_submit_adapter_keys(context),
+        requires_adapter_selection=requires_adapter_selection,
         blocking_reasons=blocking_reasons,
     )
 
@@ -224,7 +227,22 @@ def _resolve_scope_values(
             f"Unknown {scope_name} scope value(s): {', '.join(invalid_values)}."
         )
 
+    if scope_name == "adapter" and len(normalized_requested) != 1:
+        raise ValueError(
+            "Prep requires exactly one adapter scope when the current chat contains multiple adapters."
+        )
+
     return normalized_requested
+
+
+def _requires_adapter_selection(context: _ChatPrepContext) -> bool:
+    return not _build_run_blocking_reasons(context) and len(context.adapter_keys) > 1
+
+
+def _build_submit_adapter_keys(context: _ChatPrepContext) -> list[str]:
+    if _build_run_blocking_reasons(context) or _requires_adapter_selection(context):
+        return []
+    return list(context.adapter_keys)
 
 
 def _format_scope_fragment(label: str, values: Sequence[str]) -> str:

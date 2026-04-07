@@ -150,6 +150,8 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.extraction_result_count == 1
     assert preview.conversation_message_count == 0
     assert preview.adapter_keys == ["reference_adapter"]
+    assert preview.submit_adapter_keys == ["reference_adapter"]
+    assert preview.requires_adapter_selection is False
     assert preview.blocking_reasons == []
     assert "You discussed 2 candidate annotations" in preview.summary_text
     assert "reference adapter" in preview.summary_text
@@ -206,6 +208,8 @@ def test_build_chat_curation_prep_preview_blocks_when_adapter_scope_is_missing(m
 
     assert preview.ready is False
     assert preview.adapter_keys == []
+    assert preview.submit_adapter_keys == []
+    assert preview.requires_adapter_selection is False
     assert preview.blocking_reasons == [
         "The current chat extraction results do not include adapter scope, so prep cannot determine what to prepare."
     ]
@@ -235,6 +239,8 @@ def test_build_chat_curation_prep_preview_blocks_when_multiple_adapters_are_pres
 
     assert preview.ready is False
     assert preview.adapter_keys == ["gene", "disease"]
+    assert preview.submit_adapter_keys == []
+    assert preview.requires_adapter_selection is True
     assert preview.blocking_reasons == [
         "This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review."
     ]
@@ -355,3 +361,33 @@ async def test_run_chat_curation_prep_allows_explicit_adapter_narrowing(monkeypa
 
     assert result.adapter_keys == ["gene"]
     assert captured["scope_confirmation"].adapter_keys == ["gene"]
+
+
+@pytest.mark.asyncio
+async def test_run_chat_curation_prep_rejects_multiple_requested_adapters(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _make_extraction_result(adapter_key="gene"),
+            _make_extraction_result(
+                adapter_key="disease",
+                agent_key="disease_extractor",
+            ),
+        ],
+    )
+
+    async def _fake_run_curation_prep(*_args, **_kwargs):
+        raise AssertionError("run_curation_prep should not be called for multi-adapter chat prep")
+
+    monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
+
+    with pytest.raises(ValueError, match="exactly one adapter scope"):
+        await module.run_chat_curation_prep(
+            CurationPrepChatRunRequest(
+                session_id="session-1",
+                adapter_keys=["gene", "disease"],
+            ),
+            user_id="user-1",
+            db=object(),
+        )

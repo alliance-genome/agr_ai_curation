@@ -7,6 +7,8 @@ export interface CurationPrepPreview {
   extraction_result_count: number
   conversation_message_count: number
   adapter_keys: string[]
+  submit_adapter_keys: string[]
+  requires_adapter_selection: boolean
   blocking_reasons: string[]
 }
 

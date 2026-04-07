@@ -538,6 +538,7 @@ function Chat({
   } | null>(null)
   const [prepDialogOpen, setPrepDialogOpen] = useState(false)
   const [prepPreview, setPrepPreview] = useState<CurationPrepPreview | null>(null)
+  const [selectedPrepAdapterKey, setSelectedPrepAdapterKey] = useState<string | null>(null)
   const [isLoadingPrepPreview, setIsLoadingPrepPreview] = useState(false)
   const [isPreparingCuration, setIsPreparingCuration] = useState(false)
   const [prepDialogError, setPrepDialogError] = useState<string | null>(null)
@@ -1377,11 +1378,13 @@ function Chat({
     setPrepDialogOpen(true)
     setPrepDialogError(null)
     setPrepPreview(null)
+    setSelectedPrepAdapterKey(null)
     setIsLoadingPrepPreview(true)
 
     try {
       const preview = await fetchCurationPrepPreview(propSessionId)
       setPrepPreview(preview)
+      setSelectedPrepAdapterKey(preview.submit_adapter_keys[0] ?? null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load curation scope.'
       setPrepDialogError(message)
@@ -1398,12 +1401,25 @@ function Chat({
     setPrepDialogOpen(false)
     setPrepDialogError(null)
     setPrepPreview(null)
+    setSelectedPrepAdapterKey(null)
     setIsLoadingPrepPreview(false)
   }
 
   const handleConfirmPrep = useCallback(async () => {
     if (!propSessionId || !prepPreview) {
       setPrepDialogError('Curation scope is not available yet.')
+      return
+    }
+
+    const adapterKeysForRun = selectedPrepAdapterKey
+      ? [selectedPrepAdapterKey]
+      : prepPreview.submit_adapter_keys
+    if (adapterKeysForRun.length !== 1) {
+      setPrepDialogError(
+        prepPreview.requires_adapter_selection
+          ? 'Choose one adapter to continue.'
+          : 'Curation scope is not available yet.',
+      )
       return
     }
 
@@ -1417,7 +1433,7 @@ function Chat({
     try {
       const result = await runCurationPrep({
         session_id: propSessionId,
-        adapter_keys: prepPreview.adapter_keys,
+        adapter_keys: adapterKeysForRun,
       })
 
       const warningText = result.warnings.length > 0
@@ -1437,6 +1453,7 @@ function Chat({
       setPrepStatus(null)
       setPrepDialogOpen(false)
       setPrepPreview(null)
+      setSelectedPrepAdapterKey(null)
       setMessages(prev => [
         ...prev,
         {
@@ -1466,7 +1483,13 @@ function Chat({
     } finally {
       setIsPreparingCuration(false)
     }
-  }, [activeDocument?.id, handleOpenCurationWorkspace, prepPreview, propSessionId])
+  }, [
+    activeDocument?.id,
+    handleOpenCurationWorkspace,
+    prepPreview,
+    propSessionId,
+    selectedPrepAdapterKey,
+  ])
 
   const handleResetConversation = async () => {
     if (!window.confirm('Are you sure you want to reset the chat? This will clear all messages and conversation memory.')) {
@@ -2162,11 +2185,16 @@ function Chat({
       <PrepScopeConfirmationDialog
         open={prepDialogOpen}
         preview={effectivePrepPreview}
+        selectedAdapterKey={selectedPrepAdapterKey}
         supplementalNotice={prepSupplementalNotice}
         loading={isLoadingPrepPreview}
         submitting={isPreparingCuration}
         error={prepDialogError}
         onClose={handleClosePrepDialog}
+        onSelectedAdapterKeyChange={(adapterKey) => {
+          setSelectedPrepAdapterKey(adapterKey)
+          setPrepDialogError(null)
+        }}
         onConfirm={handleConfirmPrep}
       />
     </div>

@@ -338,6 +338,14 @@ class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
         default_factory=list,
         description="Adapters discovered from persisted extraction results",
     )
+    submit_adapter_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Adapter scope that can be submitted immediately without additional narrowing",
+    )
+    requires_adapter_selection: bool = Field(
+        default=False,
+        description="Whether the curator must choose exactly one adapter before prep can run",
+    )
     blocking_reasons: list[str] = Field(
         default_factory=list,
         description="Reasons the prep run cannot start yet",

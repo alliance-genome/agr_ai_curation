@@ -7,6 +7,11 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
+  FormControlLabel,
+  FormLabel,
+  Radio,
+  RadioGroup,
   Typography,
 } from '@mui/material'
 
@@ -15,11 +20,13 @@ import type { CurationPrepPreview } from '@/features/curation/services/curationP
 interface PrepScopeConfirmationDialogProps {
   open: boolean
   preview: CurationPrepPreview | null
+  selectedAdapterKey: string | null
   supplementalNotice?: string | null
   loading: boolean
   submitting: boolean
   error: string | null
   onClose: () => void
+  onSelectedAdapterKeyChange: (adapterKey: string) => void
   onConfirm: () => Promise<void> | void
 }
 function humanizeScopeValue(value: string) {
@@ -69,14 +76,21 @@ function ScopePill({ label, values }: { label: string; values: string[] }) {
 function PrepScopeConfirmationDialog({
   open,
   preview,
+  selectedAdapterKey,
   supplementalNotice = null,
   loading,
   submitting,
   error,
   onClose,
+  onSelectedAdapterKeyChange,
   onConfirm,
 }: PrepScopeConfirmationDialogProps) {
-  const confirmDisabled = loading || submitting || !preview?.ready
+  const requiresAdapterSelection = Boolean(preview?.requires_adapter_selection)
+  const confirmDisabled = loading
+    || submitting
+    || !preview
+    || (!preview.ready && !requiresAdapterSelection)
+    || (requiresAdapterSelection && !selectedAdapterKey)
 
   return (
     <Dialog
@@ -141,6 +155,53 @@ function PrepScopeConfirmationDialog({
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                 <ScopePill label="Adapters" values={preview.adapter_keys} />
               </Box>
+
+              {requiresAdapterSelection ? (
+                <FormControl component="fieldset" disabled={submitting}>
+                  <FormLabel
+                    component="legend"
+                    sx={{
+                      mb: 1,
+                      color: 'rgba(255,255,255,0.72)',
+                      '&.Mui-focused': {
+                        color: 'rgba(255,255,255,0.72)',
+                      },
+                    }}
+                  >
+                    Choose one adapter to prepare
+                  </FormLabel>
+                  <RadioGroup
+                    value={selectedAdapterKey ?? ''}
+                    onChange={(event) => onSelectedAdapterKeyChange(event.target.value)}
+                  >
+                    {displayScopeValues(preview.adapter_keys).map((adapterLabel, index) => (
+                      <FormControlLabel
+                        key={preview.adapter_keys[index]}
+                        value={preview.adapter_keys[index]}
+                        control={
+                          <Radio
+                            sx={{
+                              color: 'rgba(255,255,255,0.6)',
+                              '&.Mui-checked': {
+                                color: '#90caf9',
+                              },
+                            }}
+                          />
+                        }
+                        label={adapterLabel}
+                        sx={{
+                          '.MuiFormControlLabel-label': {
+                            color: '#ffffff',
+                          },
+                        }}
+                      />
+                    ))}
+                  </RadioGroup>
+                  <Typography sx={{ mt: 0.5, fontSize: '0.85rem', color: 'rgba(255,255,255,0.65)' }}>
+                    Prep stays single-adapter for chat sessions. Pick the adapter you want to send into curation review.
+                  </Typography>
+                </FormControl>
+              ) : null}
 
               {supplementalNotice ? (
                 <Alert severity="warning">{supplementalNotice}</Alert>

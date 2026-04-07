@@ -68,6 +68,8 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
             extraction_result_count=1,
             conversation_message_count=4,
             adapter_keys=["reference_adapter"],
+            submit_adapter_keys=["reference_adapter"],
+            requires_adapter_selection=False,
             blocking_reasons=[],
         ),
     )
@@ -80,6 +82,8 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
 
     assert response.ready is True
     assert response.adapter_keys == ["reference_adapter"]
+    assert response.submit_adapter_keys == ["reference_adapter"]
+    assert response.requires_adapter_selection is False
     assert response.candidate_count == 2
 
 
