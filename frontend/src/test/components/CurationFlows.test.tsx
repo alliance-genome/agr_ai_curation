@@ -218,6 +218,18 @@ describe('CurationFlows', () => {
     expect(screen.queryByRole('button', { name: /Export Evidence/i })).not.toBeInTheDocument()
   })
 
+  it('shows the shared auth error when flow listing is unauthorized', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(null, {
+        status: 401,
+      }),
+    )
+
+    renderComponent([])
+
+    expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
+  })
+
   it('surfaces an error when the export response omits attachment filename', async () => {
     const user = userEvent.setup()
 

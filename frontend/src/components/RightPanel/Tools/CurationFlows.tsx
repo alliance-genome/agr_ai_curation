@@ -33,31 +33,7 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
 import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
-
-/**
- * Flow summary from API response
- */
-interface FlowSummaryResponse {
-  id: string
-  user_id: number
-  name: string
-  description: string | null
-  step_count: number
-  execution_count: number
-  last_executed_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-/**
- * API list response
- */
-interface FlowListResponse {
-  flows: FlowSummaryResponse[]
-  total: number
-  page: number
-  page_size: number
-}
+import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService'
 
 /**
  * Props for CurationFlows component
@@ -166,22 +142,11 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
     setError(null)
 
     try {
-      const response = await fetch('/api/flows?page=1&page_size=50')
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          setError('Please log in to view your flows')
-        } else {
-          setError(`Failed to load flows (${response.status})`)
-        }
-        return
-      }
-
-      const data: FlowListResponse = await response.json()
+      const data = await listFlows()
       setFlows(data.flows)
     } catch (err) {
       console.error('Error fetching flows:', err)
-      setError('Failed to connect to server')
+      setError(err instanceof Error ? err.message : 'Failed to connect to server')
     } finally {
       setIsLoading(false)
     }

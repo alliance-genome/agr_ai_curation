@@ -4,6 +4,7 @@ import {
   cloneAgentToWorkshop,
   createFlow,
   createCustomAgent,
+  listFlows,
   listCustomAgents,
   listToolIdeaRequests,
   setCustomAgentVisibility,
@@ -231,6 +232,37 @@ describe('agentStudioService', () => {
     await listToolIdeaRequests()
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/tool-ideas')
+  })
+
+  it('listFlows uses the shared default page size', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        flows: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+      }),
+    })
+
+    await listFlows()
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+  })
+
+  it('listFlows maps unauthorized responses to the shared login message', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+    })
+
+    await expect(listFlows()).rejects.toThrow('Please log in to view your flows')
+  })
+
+  it('listFlows maps transport failures to a shared connection message', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    await expect(listFlows()).rejects.toThrow('Failed to connect to server')
   })
 
   it('createFlow returns the created flow object for immediate UI updates', async () => {

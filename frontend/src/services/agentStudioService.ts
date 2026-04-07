@@ -647,17 +647,51 @@ import type {
   UpdateFlowRequest,
 } from '@/components/AgentStudio/FlowBuilder/types'
 
+export type {
+  FlowListResponse,
+  FlowSummaryResponse,
+} from '@/components/AgentStudio/FlowBuilder/types'
+
 const FLOWS_URL = '/api/flows'
+export const DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+
+class FlowListLoadError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FlowListLoadError'
+  }
+}
+
+function createFlowListLoadError(status?: number): FlowListLoadError {
+  if (status === 401) {
+    return new FlowListLoadError('Please log in to view your flows')
+  }
+
+  if (typeof status === 'number') {
+    return new FlowListLoadError(`Failed to load flows (${status})`)
+  }
+
+  return new FlowListLoadError('Failed to connect to server')
+}
 
 /**
  * List all flows for the current user
  */
-export async function listFlows(page = 1, pageSize = 20): Promise<FlowListResponse> {
-  const response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`)
-  if (!response.ok) {
-    throw new Error(`Failed to list flows: ${response.status}`)
+export async function listFlows(page = 1, pageSize = DEFAULT_FLOW_LIST_PAGE_SIZE): Promise<FlowListResponse> {
+  try {
+    const response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`)
+    if (!response.ok) {
+      throw createFlowListLoadError(response.status)
+    }
+
+    return await response.json()
+  } catch (error) {
+    if (error instanceof FlowListLoadError) {
+      throw error
+    }
+
+    throw createFlowListLoadError()
   }
-  return response.json()
 }
 
 /**

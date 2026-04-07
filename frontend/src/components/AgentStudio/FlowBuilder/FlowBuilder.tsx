@@ -963,7 +963,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     refreshFlowLists()
       .catch((err) => {
         logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
-        setSnackbar({ message: 'Failed to load flows', severity: 'error' })
+        setSnackbar({
+          message: err instanceof Error ? err.message : 'Failed to connect to server',
+          severity: 'error',
+        })
       })
       .finally(() => setLoadingFlows(false))
   }, [refreshFlowLists])
@@ -1044,7 +1047,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     refreshFlowLists()
       .catch((err) => {
         logger.error('Failed to load flows', err as Error, { component: 'FlowBuilder' })
-        setSnackbar({ message: 'Failed to load flows', severity: 'error' })
+        setSnackbar({
+          message: err instanceof Error ? err.message : 'Failed to connect to server',
+          severity: 'error',
+        })
       })
       .finally(() => setLoadingManageFlows(false))
   }, [refreshFlowLists])
