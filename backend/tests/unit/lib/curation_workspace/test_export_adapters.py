@@ -282,6 +282,27 @@ def test_build_default_export_adapter_registry_keeps_package_export_when_agent_b
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
 
+def test_build_curation_adapter_registry_keeps_package_export_when_agent_bundle_is_undeclared(
+    tmp_path,
+    monkeypatch,
+):
+    packages_dir = tmp_path / "packages"
+    _write_package_with_curation_adapter_export(packages_dir)
+
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(adapter_registry_module, "_default_packages_dir", lambda: packages_dir)
+
+    try:
+        registry = adapter_registry_module.load_curation_adapter_registry()
+    finally:
+        adapter_registry_module.load_curation_adapter_registry.cache_clear()
+
+    normalizer = registry.require_candidate_normalizer("gene")
+
+    assert registry.adapter_keys() == ("gene",)
+    assert normalizer.__class__.__name__ == "DemoNormalizer"
+
+
 def test_json_bundle_export_adapter_builds_payload_from_candidates_and_evidence():
     adapter = JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY)
 
