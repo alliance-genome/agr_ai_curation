@@ -31,8 +31,6 @@ class Logger {
   private sessionId: string;
   private buffer: LogEntry[] = [];
   private maxBufferSize = 100;
-  private logEndpoint = '/api/logs';
-  private remoteLoggingEnabled = true;
   private flushInterval = 30000; // 30 seconds
   private flushTimer: NodeJS.Timeout | null = null;
 
@@ -123,7 +121,7 @@ class Logger {
       this.logToConsole(logEntry);
     }
 
-    // Add to buffer for remote logging
+    // Buffer entries so production can flush them to the local browser console.
     this.buffer.push(logEntry);
 
     // Flush if buffer is full
@@ -172,37 +170,16 @@ class Logger {
   async flush(): Promise<void> {
     if (this.buffer.length === 0) return;
 
-    const logsToSend = [...this.buffer];
+    const logsToFlush = [...this.buffer];
     this.buffer = [];
 
-    try {
-      // In production, send logs to backend
-      if (process.env.NODE_ENV === 'production' && this.remoteLoggingEnabled) {
-        const response = await fetch(this.logEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            logs: logsToSend,
-          }),
-        });
-
-        if (!response.ok) {
-          // Disable repeated noisy retries when endpoint is unavailable in this deploy.
-          if (response.status === 404 || response.status === 405) {
-            this.remoteLoggingEnabled = false;
-            return;
-          }
-          throw new Error(`Log upload failed with status ${response.status}`);
-        }
-      }
-    } catch (error) {
-      // If logging fails, at least log to console
-      console.error('Failed to send logs to server:', error);
-      // Re-add logs to buffer for retry
-      this.buffer = [...logsToSend, ...this.buffer].slice(-this.maxBufferSize);
+    if (process.env.NODE_ENV !== 'production') {
+      return;
     }
+
+    logsToFlush.forEach((entry) => {
+      this.logToConsole(entry);
+    });
   }
 
   // Public logging methods
