@@ -1,12 +1,16 @@
-"""Contract tests for POST /api/auth/logout."""
+"""Contract tests for logout endpoints."""
 
 import asyncio
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 
 LOGOUT_PATH = "/api/auth/logout"
+LOGOUT_REDIRECT_PATH = "/api/auth/logout/redirect"
 
 
 @pytest.fixture
@@ -57,6 +61,29 @@ def _override_authenticated_user():
     }
 
 
+def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
+    header = next((value for value in set_cookie_headers if value.startswith(f"{cookie_name}=")), None)
+    assert header is not None, f"Missing Set-Cookie header for {cookie_name}"
+
+    cookie = SimpleCookie()
+    cookie.load(header)
+    morsel = cookie[cookie_name]
+    expires_at = parsedate_to_datetime(morsel["expires"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    assert morsel.value == ""
+    assert morsel["max-age"] == "0"
+    assert morsel["path"] == "/"
+    assert morsel["samesite"].lower() == "lax"
+    assert expires_at <= datetime.now(timezone.utc)
+
+
+def _assert_logout_cookies_expired(set_cookie_headers):
+    _assert_logout_cookie_expired(set_cookie_headers, "auth_token")
+    _assert_logout_cookie_expired(set_cookie_headers, "cognito_token")
+
+
 class TestLogoutEndpoint:
     """Current API contract tests for logout behavior."""
 
@@ -68,9 +95,7 @@ class TestLogoutEndpoint:
         response = client.post(LOGOUT_PATH)
         assert response.status_code == 200
         assert response.json()["status"] == "logged_out"
-        set_cookie_headers = response.headers.get_list("set-cookie")
-        assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-        assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+        _assert_logout_cookies_expired(response.headers.get_list("set-cookie"))
 
     def test_logout_invalid_authorization_header_is_ignored(self, client):
         response = client.post(
@@ -79,9 +104,19 @@ class TestLogoutEndpoint:
         )
         assert response.status_code == 200
         assert response.json()["status"] == "logged_out"
-        set_cookie_headers = response.headers.get_list("set-cookie")
-        assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-        assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+        _assert_logout_cookies_expired(response.headers.get_list("set-cookie"))
+
+    def test_logout_redirect_clears_session_and_redirects_to_provider_logout(self, client):
+        response = client.get(LOGOUT_REDIRECT_PATH, follow_redirects=False)
+        assert response.status_code == 302
+
+        parsed_redirect = urlparse(response.headers["location"])
+        params = parse_qs(parsed_redirect.query)
+
+        assert f"{parsed_redirect.scheme}://{parsed_redirect.netloc}{parsed_redirect.path}" == "https://issuer.example.org/logout"
+        assert params.get("client_id") == ["test-client"]
+        assert params.get("post_logout_redirect_uri") == ["http://localhost:3002/"]
+        _assert_logout_cookies_expired(response.headers.get_list("set-cookie"))
 
     def test_logout_success_response_schema(self, client):
         _override_authenticated_user()

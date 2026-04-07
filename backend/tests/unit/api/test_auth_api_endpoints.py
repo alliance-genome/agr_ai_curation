@@ -3,6 +3,9 @@
 import importlib
 import json
 import sys
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +32,29 @@ TokenSet = importlib.import_module("src.auth.base").TokenSet
 
 def _request(headers=None, cookies=None, base_url="https://app.example.org/"):
     return SimpleNamespace(headers=headers or {}, cookies=cookies or {}, base_url=base_url)
+
+
+def _assert_logout_cookie_expired(set_cookie_headers, cookie_name):
+    header = next((value for value in set_cookie_headers if value.startswith(f"{cookie_name}=")), None)
+    assert header is not None, f"Missing Set-Cookie header for {cookie_name}"
+
+    cookie = SimpleCookie()
+    cookie.load(header)
+    morsel = cookie[cookie_name]
+    expires_at = parsedate_to_datetime(morsel["expires"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    assert morsel.value == ""
+    assert morsel["max-age"] == "0"
+    assert morsel["path"] == "/"
+    assert morsel["samesite"].lower() == "lax"
+    assert expires_at <= datetime.now(timezone.utc)
+
+
+def _assert_logout_cookies_expired(set_cookie_headers):
+    _assert_logout_cookie_expired(set_cookie_headers, "auth_token")
+    _assert_logout_cookie_expired(set_cookie_headers, "cognito_token")
 
 
 @pytest.fixture(autouse=True)
@@ -305,8 +331,7 @@ async def test_logout_success_clears_cookies_and_returns_provider_logout_url(mon
     assert payload["status"] == "logged_out"
     assert "issuer.example.org/logout" in payload["logout_url"]
     set_cookie_headers = result.headers.getlist("set-cookie")
-    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+    _assert_logout_cookies_expired(set_cookie_headers)
 
 
 def test_logout_endpoint_allows_missing_auth_cookie(monkeypatch):
@@ -335,8 +360,7 @@ def test_logout_endpoint_allows_missing_auth_cookie(monkeypatch):
     assert response.json()["status"] == "logged_out"
     assert "issuer.example.org/logout" in response.json()["logout_url"]
     set_cookie_headers = response.headers.get_list("set-cookie")
-    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+    _assert_logout_cookies_expired(set_cookie_headers)
 
 
 @pytest.mark.asyncio
@@ -361,8 +385,7 @@ async def test_logout_redirect_clears_cookies_and_redirects_to_provider_logout_u
         == "https://issuer.example.org/logout?redirect=https://issuer.example.org/"
     )
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+    _assert_logout_cookies_expired(set_cookie_headers)
 
 
 @pytest.mark.asyncio
@@ -388,8 +411,7 @@ async def test_logout_redirect_uses_app_root_when_provider_has_no_logout_url(mon
     assert captured["redirect_uri"] == "https://login.example.org/"
     assert str(response.headers["location"]) == "https://app.example.org/"
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any(header.startswith("auth_token=") for header in set_cookie_headers)
-    assert any(header.startswith("cognito_token=") for header in set_cookie_headers)
+    _assert_logout_cookies_expired(set_cookie_headers)
 
 
 def test_auth_compat_get_user_property_returns_impl():
