@@ -135,8 +135,11 @@ def build_flow_evidence_export_artifact(
     """Build a stable CSV, TSV, or JSON export artifact for one flow run."""
 
     flow_name = _resolve_flow_name(extraction_results)
-    unique_evidence_records = build_flow_evidence_records(extraction_results)
-    evidence_steps = build_flow_evidence_steps(extraction_results)
+    exportable_step_results = _filter_step_extraction_results_for_export(
+        extraction_results
+    )
+    unique_evidence_records = build_flow_evidence_records(exportable_step_results)
+    evidence_steps = build_flow_evidence_steps(exportable_step_results)
     filename = (
         f"flow-{_safe_filename_fragment(flow_run_id)}-evidence.{export_format.value}"
     )
@@ -209,6 +212,26 @@ def build_flow_evidence_steps(
         )
 
     return steps
+
+
+def _filter_step_extraction_results_for_export(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+) -> list[CurationExtractionResultRecord]:
+    return [
+        extraction_result
+        for extraction_result in extraction_results
+        if _has_positive_integer_step_metadata(extraction_result)
+    ]
+
+
+def _has_positive_integer_step_metadata(
+    extraction_result: CurationExtractionResultRecord,
+) -> bool:
+    raw_step = (extraction_result.metadata or {}).get("step")
+    try:
+        return int(raw_step) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _build_json_export_payload(

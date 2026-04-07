@@ -71,9 +71,17 @@ def _extraction_result(
     agent_key: str = "gene_specialist",
     agent_name: str = "Gene Specialist",
     tool_name: str = "ask_gene_specialist",
-    step: int = 1,
+    step: int | None = 1,
     flow_name: str = "Flow Evidence",
 ) -> CurationExtractionResultRecord:
+    metadata: dict[str, object] = {
+        "agent_name": agent_name,
+        "flow_name": flow_name,
+        "tool_name": tool_name,
+    }
+    if step is not None:
+        metadata["step"] = step
+
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": extraction_result_id,
@@ -100,12 +108,7 @@ def _extraction_result(
                 "run_summary": {"kept_count": 1},
             },
             "created_at": datetime.now(timezone.utc),
-            "metadata": {
-                "agent_name": agent_name,
-                "flow_name": flow_name,
-                "step": step,
-                "tool_name": tool_name,
-            },
+            "metadata": metadata,
         }
     )
 
@@ -271,10 +274,91 @@ def test_build_flow_evidence_export_artifact_rejects_empty_flow_run_id_in_filena
         )
 
 
+def test_build_flow_evidence_export_artifact_ignores_non_step_results_from_mixed_flow_runs():
+    first_step_record = _evidence_record(
+        evidence_record_id="evidence-step-1",
+        entity="act-5c",
+        quote="Step one evidence quote.",
+        page=3,
+        section="Results",
+        chunk_id="chunk-1",
+    )
+    ignored_prep_record = _evidence_record(
+        evidence_record_id="evidence-curation-prep",
+        entity="egl-1",
+        quote="Prep-only evidence quote.",
+        page=9,
+        section="Appendix",
+        chunk_id="chunk-prep",
+    )
+    second_step_record = _evidence_record(
+        evidence_record_id="evidence-step-2",
+        entity="unc-54",
+        quote="Step two evidence quote.",
+        page=5,
+        section="Discussion",
+        chunk_id="chunk-2",
+    )
+
+    artifact = evidence_export.build_flow_evidence_export_artifact(
+        flow_run_id="flow-run-123",
+        extraction_results=[
+            _extraction_result(
+                extraction_result_id="result-1",
+                evidence_records=[first_step_record],
+                step=1,
+            ),
+            _extraction_result(
+                extraction_result_id="result-curation-prep",
+                agent_key="curation_prep",
+                agent_name="Curation Prep",
+                tool_name="ask_curation_prep_specialist",
+                evidence_records=[ignored_prep_record],
+                step=None,
+            ),
+            _extraction_result(
+                extraction_result_id="result-2",
+                evidence_records=[second_step_record],
+                step=2,
+            ),
+        ],
+        export_format=evidence_export.FlowEvidenceExportFormat.CSV,
+    )
+
+    assert artifact.record_count == 2
+
+    rows = list(csv.DictReader(io.StringIO(artifact.payload_text)))
+    assert rows == [
+        {
+            "entity": "act-5c",
+            "verified_quote": "Step one evidence quote.",
+            "page": "3",
+            "section": "Results",
+            "subsection": "",
+            "chunk_id": "chunk-1",
+            "figure_reference": "",
+            "agent_id": "gene_specialist",
+            "step_number": "1",
+            "evidence_record_id": "evidence-step-1",
+        },
+        {
+            "entity": "unc-54",
+            "verified_quote": "Step two evidence quote.",
+            "page": "5",
+            "section": "Discussion",
+            "subsection": "",
+            "chunk_id": "chunk-2",
+            "figure_reference": "",
+            "agent_id": "gene_specialist",
+            "step_number": "2",
+            "evidence_record_id": "evidence-step-2",
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_message"),
     [
-        ({"metadata": {"agent_name": "Gene Specialist", "flow_name": "Flow Evidence", "tool_name": "ask_gene_specialist"}}, "missing a valid integer step metadata value"),
         ({"agent_key": "", "metadata": {"agent_name": "Gene Specialist", "flow_name": "Flow Evidence", "step": 1, "tool_name": "ask_gene_specialist"}}, "missing required agent_key metadata"),
         ({"metadata": {"agent_name": "Gene Specialist", "step": 1, "tool_name": "ask_gene_specialist"}}, "missing required flow_name metadata"),
     ],
