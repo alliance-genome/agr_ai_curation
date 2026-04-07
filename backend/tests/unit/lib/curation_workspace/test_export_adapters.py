@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import (
     DEFAULT_JSON_BUNDLE_TARGET_KEY,
@@ -188,6 +190,56 @@ def _export_payload_context() -> dict[str, object]:
     }
 
 
+def _write_package_with_curation_adapter_export(packages_dir: Path) -> None:
+    package_dir = packages_dir / "demo-core"
+    module_dir = package_dir / "python" / "src" / "demo_core"
+    module_dir.mkdir(parents=True)
+    (package_dir / "package.yaml").write_text(
+        """package_id: demo.core
+display_name: Demo Core
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/demo_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: curation_adapter
+    name: default
+    path: python/src/demo_core/curation_adapters.py
+    description: Demo curation adapters
+agent_bundles:
+  - name: gene
+""",
+        encoding="utf-8",
+    )
+    (module_dir / "curation_adapters.py").write_text(
+        """from src.lib.curation_workspace.export_adapters import JsonBundleExportAdapter
+
+
+class DemoNormalizer:
+    pass
+
+
+def register_curation_adapters(registry) -> None:
+    registry.register_adapter(
+        adapter_key="gene",
+        candidate_normalizer=DemoNormalizer(),
+        export_adapter=JsonBundleExportAdapter(adapter_key="gene"),
+    )
+""",
+        encoding="utf-8",
+    )
+
+    for agent_name in ("gene", "undeclared"):
+        agent_dir = package_dir / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(
+            f"agent_id: {agent_name}\n",
+            encoding="utf-8",
+        )
+
+
 def test_export_adapter_registry_registers_and_looks_up_adapters():
     registry = ExportAdapterRegistry()
     adapter = JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY)
@@ -204,6 +256,28 @@ def test_build_default_export_adapter_registry_exposes_reference_adapter():
 
     adapter = registry.require(REFERENCE_ADAPTER_KEY)
 
+    assert isinstance(adapter, JsonBundleExportAdapter)
+    assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
+
+
+def test_build_default_export_adapter_registry_keeps_package_export_when_agent_bundle_is_undeclared(
+    tmp_path,
+    monkeypatch,
+):
+    packages_dir = tmp_path / "packages"
+    _write_package_with_curation_adapter_export(packages_dir)
+
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(adapter_registry_module, "_default_packages_dir", lambda: packages_dir)
+
+    try:
+        registry = build_default_export_adapter_registry()
+    finally:
+        adapter_registry_module.load_curation_adapter_registry.cache_clear()
+
+    adapter = registry.require("gene")
+
+    assert registry.adapter_keys() == ("gene",)
     assert isinstance(adapter, JsonBundleExportAdapter)
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
