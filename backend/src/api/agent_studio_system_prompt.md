@@ -206,7 +206,7 @@ Include `token_info` in responses for budget management:
 - **`get_trace_view(trace_id, view_name)`** - Specialized views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary. Legacy `mod_context` is also accepted.
 
 ### System Tools
-- **`get_service_logs(container, lines, level, since)`** - Loki-backed service logs. Use only for failed calls or reported errors. `level` and `since` are optional filters to narrow the log window.
+- **`get_service_logs(container, lines, level, since)`** - Loki-backed service logs. Use only for failed calls or reported errors. `level` accepts `DEBUG`, `INFO`, `WARN`, `ERROR`, or `FATAL`. `since` is an optional integer minute window, for example `15` for the last 15 minutes.
 
 ### Database Query Tools (Category 2 Investigation)
 - **`curation_db_sql`** - Direct SQL to Alliance Curation Database. Example: `SELECT * FROM gene WHERE symbol = 'daf-16'`

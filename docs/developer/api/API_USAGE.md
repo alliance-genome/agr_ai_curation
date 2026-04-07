@@ -755,7 +755,7 @@ Opus has access to these token-aware tools during analysis:
 | `get_tool_call_detail` | ~1-5K | Single call full detail |
 | `get_trace_conversation` | ~1-10K | User query + assistant response |
 | `get_trace_view` | varies | Access other analysis views |
-| `get_docker_logs` | varies | Retrieve container logs |
+| `get_service_logs` | varies | Retrieve Loki-backed service logs |
 | `submit_anthropic_suggestion` | N/A | Submit system prompt improvements |
 
 ### Context Overflow Handling

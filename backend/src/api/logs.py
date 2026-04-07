@@ -2,7 +2,7 @@
 Logs API Endpoint
 
 Provides access to service logs via Loki for troubleshooting.
-Used by Opus Workflow Analysis feature's get_docker_logs tool.
+Used by Agent Studio's get_service_logs tool.
 """
 
 from datetime import datetime, timedelta, timezone
