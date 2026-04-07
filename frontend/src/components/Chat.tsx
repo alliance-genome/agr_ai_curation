@@ -1433,7 +1433,7 @@ function Chat({
         ? ' Additional prepared sessions are available in Curation Inventory.'
         : ''
       const prepSummary = `${result.summary_text}${warningText}${multiSessionNote}`.trim()
-      const targetDocumentId = result.document_id || activeDocument?.id || null
+      const targetDocumentId = result.document_id ?? null
       const primaryPreparedSession = result.prepared_sessions[0] ?? null
       const reviewAndCurateTarget = primaryPreparedSession
         ? {
@@ -1466,7 +1466,7 @@ function Chat({
       ])
 
       if (result.prepared_sessions.length > 1) {
-        const primaryAdapterLabel = humanizeAdapterKey(primaryPreparedSession?.adapter_key ?? result.adapter_keys[0] ?? 'adapter')
+        const primaryAdapterLabel = humanizeAdapterKey(primaryPreparedSession.adapter_key)
         const additionalSessionCount = result.prepared_sessions.length - 1
         emitGlobalToast({
           message: (

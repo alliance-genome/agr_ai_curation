@@ -45,7 +45,7 @@ def build_chat_curation_prep_preview(
     """Build a curator-facing prep summary for the current chat session."""
 
     context = _load_chat_prep_context(session_id=session_id, user_id=user_id, db=db)
-    blocking_reasons = _build_blocking_reasons(context)
+    blocking_reasons = _build_run_blocking_reasons(context)
 
     return CurationPrepChatPreviewResponse(
         ready=not blocking_reasons,
@@ -173,12 +173,6 @@ def _load_chat_prep_context(
         adapter_keys=adapter_keys,
         candidate_count=sum(max(int(record.candidate_count), 0) for record in extraction_results),
     )
-
-
-def _build_blocking_reasons(context: _ChatPrepContext) -> list[str]:
-    return _build_run_blocking_reasons(context)
-
-
 def _build_run_blocking_reasons(context: _ChatPrepContext) -> list[str]:
     if not context.extraction_results:
         return [
