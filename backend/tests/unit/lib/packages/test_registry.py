@@ -73,7 +73,9 @@ def test_load_package_registry_reports_manifest_load_failures(tmp_path):
     assert "version" in failure.reason
 
 
-def test_load_package_registry_reports_missing_agent_bundle_manifest_registration(tmp_path):
+def test_load_package_registry_keeps_package_loaded_when_agent_bundle_manifest_registration_is_missing(
+    tmp_path,
+):
     packages_dir = tmp_path / "packages"
     package_dir = _write_package(
         packages_dir,
@@ -101,15 +103,21 @@ def test_load_package_registry_reports_missing_agent_bundle_manifest_registratio
 
     registry = load_package_registry(packages_dir, fail_on_validation_error=False)
 
-    assert registry.loaded_packages == ()
-    assert len(registry.failed_packages) == 1
-    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in (
-        registry.failed_packages[0].reason
-    )
-    assert "agents/missing_manifest" in registry.failed_packages[0].reason
+    assert registry.validation_errors == ()
+    assert len(registry.loaded_packages) == 1
+    assert registry.failed_packages == ()
+    loaded_package = registry.get_package("demo.core")
+    assert loaded_package is not None
+    assert {
+        (export.kind, export.name)
+        for export in loaded_package.manifest.exports
+        if export.kind is ExportKind.AGENT
+    } == {
+        (ExportKind.AGENT, "gene"),
+    }
 
 
-def test_load_package_registry_reports_missing_agent_bundle_manifest_registration_when_key_omitted(
+def test_load_package_registry_keeps_package_loaded_when_agent_bundle_manifest_registration_key_is_omitted(
     tmp_path,
 ):
     packages_dir = tmp_path / "packages"
@@ -141,12 +149,14 @@ def test_load_package_registry_reports_missing_agent_bundle_manifest_registratio
 
     registry = load_package_registry(packages_dir, fail_on_validation_error=False)
 
-    assert registry.loaded_packages == ()
-    assert len(registry.failed_packages) == 1
-    assert "agent_bundles is missing package-owned agent directories with agent.yaml" in (
-        registry.failed_packages[0].reason
-    )
-    assert "agents/missing_manifest" in registry.failed_packages[0].reason
+    assert registry.validation_errors == ()
+    assert len(registry.loaded_packages) == 1
+    assert registry.failed_packages == ()
+    loaded_package = registry.get_package("demo.core")
+    assert loaded_package is not None
+    assert {export.kind for export in loaded_package.manifest.exports} == {
+        ExportKind.TOOL_BINDING
+    }
 
 
 def test_load_package_registry_reports_runtime_incompatibility(tmp_path):

@@ -164,6 +164,64 @@ tools:
     assert document_binding.source.package_id == "org.custom"
 
 
+def test_load_tool_registry_keeps_declared_tool_exports_when_package_has_undeclared_agent_bundle(
+    tmp_path,
+):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "demo-core"
+    (package_dir / "tools").mkdir(parents=True)
+    (package_dir / "package.yaml").write_text(
+        """package_id: demo.core
+display_name: Demo Core
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: src/demo_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default tool bindings
+agent_bundles:
+  - name: gene
+""",
+        encoding="utf-8",
+    )
+    (package_dir / "tools" / "bindings.yaml").write_text(
+        """package_id: demo.core
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: agr_curation_query
+    binding_kind: static
+    callable: demo_core.tools.agr:agr_curation_query
+    required_context: []
+""",
+        encoding="utf-8",
+    )
+    for agent_name in ("gene", "missing_manifest"):
+        agent_dir = package_dir / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(
+            f"agent_id: {agent_name}\n",
+            encoding="utf-8",
+        )
+
+    registry = load_tool_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+
+    assert registry.validation_errors == ()
+    assert registry.package_registry.failed_packages == ()
+    assert [package.package_id for package in registry.package_registry.loaded_packages] == [
+        "demo.core"
+    ]
+    assert set(registry.bindings_by_tool_id) == {"agr_curation_query"}
+
+
 def test_load_tool_registry_rejects_conflicting_exports_without_override(tmp_path):
     packages_dir = tmp_path / "packages"
     for directory_name, package_id in (

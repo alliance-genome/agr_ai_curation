@@ -5,12 +5,14 @@ from pathlib import Path
 import pytest
 
 from src.lib.packages.manifest_loader import (
+    AgentBundleRegistrationError,
     PackageManifestError,
     RuntimeOverridesError,
     ToolBindingsError,
     load_package_manifest,
     load_runtime_overrides,
     load_tool_bindings,
+    validate_agent_bundle_directory_registration,
 )
 from src.lib.packages.models import ExportKind, ToolBindingKind
 
@@ -76,7 +78,9 @@ agent_bundles:
     }
 
 
-def test_load_package_manifest_rejects_package_agent_dir_missing_from_agent_bundles(tmp_path: Path):
+def test_validate_agent_bundle_directory_registration_rejects_package_agent_dir_missing_from_agent_bundles(
+    tmp_path: Path,
+):
     manifest_path = tmp_path / "package.yaml"
     manifest_path.write_text(
         """
@@ -98,8 +102,10 @@ agent_bundles:
         agent_dir.mkdir(parents=True)
         (agent_dir / "agent.yaml").write_text(f"agent_id: {agent_name}\n", encoding="utf-8")
 
-    with pytest.raises(PackageManifestError) as exc_info:
-        load_package_manifest(manifest_path)
+    manifest = load_package_manifest(manifest_path)
+
+    with pytest.raises(AgentBundleRegistrationError) as exc_info:
+        validate_agent_bundle_directory_registration(manifest_path, manifest)
 
     message = str(exc_info.value)
     assert "agent_bundles is missing package-owned agent directories with agent.yaml" in message
@@ -107,7 +113,9 @@ agent_bundles:
     assert "Add each bundle name to agent_bundles to activate it." in message
 
 
-def test_load_package_manifest_rejects_default_agent_dir_when_agent_bundles_omitted(tmp_path: Path):
+def test_validate_agent_bundle_directory_registration_rejects_default_agent_dir_when_agent_bundles_omitted(
+    tmp_path: Path,
+):
     manifest_path = tmp_path / "package.yaml"
     manifest_path.write_text(
         """
@@ -131,8 +139,10 @@ exports:
     agent_dir.mkdir(parents=True)
     (agent_dir / "agent.yaml").write_text("agent_id: missing_manifest\n", encoding="utf-8")
 
-    with pytest.raises(PackageManifestError) as exc_info:
-        load_package_manifest(manifest_path)
+    manifest = load_package_manifest(manifest_path)
+
+    with pytest.raises(AgentBundleRegistrationError) as exc_info:
+        validate_agent_bundle_directory_registration(manifest_path, manifest)
 
     message = str(exc_info.value)
     assert "agent_bundles is missing package-owned agent directories with agent.yaml" in message

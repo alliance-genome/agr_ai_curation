@@ -21,6 +21,10 @@ class PackageManifestError(PackageContractError):
     """Raised when ``package.yaml`` is missing or invalid."""
 
 
+class AgentBundleRegistrationError(PackageContractError):
+    """Raised when package-owned agent bundles are not declared in ``agent_bundles``."""
+
+
 class ToolBindingsError(PackageContractError):
     """Raised when ``tools/bindings.yaml`` is missing or invalid."""
 
@@ -66,12 +70,12 @@ def _load_contract_model(path: Path, model_type: type[T], error_type: type[Packa
         raise error_type(str(exc)) from exc
 
 
-def _validate_agent_bundle_directory_registration(
+def _collect_undeclared_agent_bundle_directories(
     path: Path,
     manifest: PackageManifest,
     raw_data: dict,
-) -> None:
-    """Fail clearly when package-owned agent bundles exist on disk but not in the manifest."""
+) -> tuple[str, ...]:
+    """Return package-owned agent bundles that exist on disk but are not declared."""
     package_dir = path.parent
     declared_bundle_paths: set[tuple[str, str]] = set()
     for export in manifest.exports:
@@ -106,14 +110,34 @@ def _validate_agent_bundle_directory_registration(
                 child.name if agents_dir == "." else f"{agents_dir}/{child.name}"
             )
 
-    if not missing_bundle_dirs:
-        return
+    return tuple(missing_bundle_dirs)
 
+
+def _format_agent_bundle_registration_error(path: Path, missing_bundle_dirs: tuple[str, ...]) -> str:
     missing_list = ", ".join(missing_bundle_dirs)
-    raise PackageContractError(
+    return (
         f"Invalid {path.name} at {path}: agent_bundles is missing package-owned "
         f"agent directories with agent.yaml: {missing_list}. Add each bundle name "
         "to agent_bundles to activate it."
+    )
+
+
+def validate_agent_bundle_directory_registration(
+    path: Path,
+    manifest: PackageManifest,
+) -> None:
+    """Raise when package-owned agent bundles exist on disk but are undeclared."""
+    try:
+        raw_data = _load_yaml_mapping(path)
+    except PackageContractError as exc:
+        raise AgentBundleRegistrationError(str(exc)) from exc
+
+    missing_bundle_dirs = _collect_undeclared_agent_bundle_directories(path, manifest, raw_data)
+    if not missing_bundle_dirs:
+        return
+
+    raise AgentBundleRegistrationError(
+        _format_agent_bundle_registration_error(path, missing_bundle_dirs)
     )
 
 
@@ -121,9 +145,7 @@ def load_package_manifest(path: Path) -> PackageManifest:
     """Load and validate a package manifest file."""
     try:
         raw_data = _load_yaml_mapping(path)
-        manifest = PackageManifest.model_validate(dict(raw_data))
-        _validate_agent_bundle_directory_registration(path, manifest, raw_data)
-        return manifest
+        return PackageManifest.model_validate(dict(raw_data))
     except ValidationError as exc:
         details = _format_validation_error(exc)
         raise PackageManifestError(f"Invalid {path.name} at {path}: {details}") from exc

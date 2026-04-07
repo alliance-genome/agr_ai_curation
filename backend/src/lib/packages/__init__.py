@@ -18,6 +18,7 @@ from .env_manager import (
 )
 from .health import build_package_health_report
 from .manifest_loader import (
+    AgentBundleRegistrationError,
     PackageContractError,
     PackageManifestError,
     RuntimeOverridesError,
@@ -25,6 +26,7 @@ from .manifest_loader import (
     load_package_manifest,
     load_runtime_overrides,
     load_tool_bindings,
+    validate_agent_bundle_directory_registration,
 )
 from .models import (
     ExportKind,
@@ -105,6 +107,7 @@ __all__ = [
     "LoadedCurationAdapterExport",
     "LoadedToolBindingExport",
     "PROTOCOL_VERSION",
+    "AgentBundleRegistrationError",
     "PackageContractError",
     "PackageDiscoveryFailure",
     "PackageEnvironment",
@@ -172,4 +175,5 @@ __all__ = [
     "load_runtime_overrides",
     "load_tool_bindings",
     "load_tool_registry",
+    "validate_agent_bundle_directory_registration",
 ]

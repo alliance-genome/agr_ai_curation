@@ -16,6 +16,7 @@ import psycopg2
 from psycopg2 import sql
 
 from src.lib.packages import (
+    AgentBundleRegistrationError,
     ExportKind,
     PackageEnvironmentManager,
     PackageRegistry,
@@ -32,6 +33,7 @@ from src.lib.packages import (
     get_runtime_state_dir,
     load_package_registry,
     load_tool_registry,
+    validate_agent_bundle_directory_registration,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,6 +120,8 @@ def validate_runtime_packages() -> PackageRegistry:
             "or /runtime/packages."
         )
 
+    _warn_undeclared_agent_bundle_directories(registry)
+
     tool_registry = load_tool_registry(
         packages_dir,
         fail_on_validation_error=True,
@@ -139,6 +143,22 @@ def validate_runtime_packages() -> PackageRegistry:
             )
 
     return registry
+
+
+def _warn_undeclared_agent_bundle_directories(registry: PackageRegistry) -> None:
+    """Warn when on-disk agent bundles are undeclared but do not fail package loading."""
+    for package in registry.loaded_packages:
+        try:
+            validate_agent_bundle_directory_registration(
+                package.manifest_path,
+                package.manifest,
+            )
+        except AgentBundleRegistrationError as exc:
+            logger.warning(
+                "Ignoring undeclared agent bundle directories for package '%s': %s",
+                package.package_id,
+                exc,
+            )
 
 
 def bootstrap_package_environments(registry: PackageRegistry) -> None:
