@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -80,6 +81,67 @@ def test_validate_runtime_packages_accepts_core_only_runtime(monkeypatch, tmp_pa
 
     assert [package.package_id for package in registry.loaded_packages] == ["agr.core"]
     assert registry.failed_packages == ()
+
+
+def test_validate_runtime_packages_warns_for_undeclared_agent_bundle_but_keeps_package_loaded(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+):
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    runtime_entrypoint.ensure_runtime_layout()
+
+    package_dir = packages_dir / "demo.core"
+    (package_dir / "tools").mkdir(parents=True)
+    (package_dir / "package.yaml").write_text(
+        """package_id: demo.core
+display_name: Demo Core
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/demo_core
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default bindings
+agent_bundles:
+  - name: gene
+""",
+        encoding="utf-8",
+    )
+    (package_dir / "tools" / "bindings.yaml").write_text(
+        """package_id: demo.core
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: agr_curation_query
+    binding_kind: static
+    callable: demo_core.tools.agr:agr_curation_query
+    required_context: []
+""",
+        encoding="utf-8",
+    )
+    for agent_name in ("gene", "missing_manifest"):
+        agent_dir = package_dir / "agents" / agent_name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.yaml").write_text(
+            f"agent_id: {agent_name}\n",
+            encoding="utf-8",
+        )
+
+    with caplog.at_level(logging.WARNING):
+        registry = runtime_entrypoint.validate_runtime_packages()
+
+    assert [package.package_id for package in registry.loaded_packages] == ["demo.core"]
+    assert registry.failed_packages == ()
+    assert "Ignoring undeclared agent bundle directories for package 'demo.core'" in caplog.text
+    assert "agents/missing_manifest" in caplog.text
+    assert "Skipping runtime package" not in caplog.text
 
 
 def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, tmp_path: Path):

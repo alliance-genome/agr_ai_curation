@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-import os
 import logging
+import os
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from src.lib.packages import ExportKind, LoadedPackage, PackageExport, load_package_registry
+
+from src.lib.packages import (
+    AgentBundleRegistrationError,
+    ExportKind,
+    LoadedPackage,
+    PackageExport,
+    load_package_registry,
+    validate_agent_bundle_directory_registration,
+)
 from src.lib.packages.paths import get_runtime_config_dir, get_runtime_packages_dir
 
 logger = logging.getLogger(__name__)
@@ -177,6 +186,28 @@ def _warn_failed_packages_once(
         )
 
 
+def _warn_undeclared_agent_bundles_once(
+    package: LoadedPackage,
+    warned_bundle_registration_failures: set[tuple[str, str]],
+) -> None:
+    """Emit actionable warnings for undeclared on-disk agent bundle directories."""
+    try:
+        validate_agent_bundle_directory_registration(
+            package.manifest_path,
+            package.manifest,
+        )
+    except AgentBundleRegistrationError as exc:
+        warning_key = (str(package.manifest_path), str(exc))
+        if warning_key in warned_bundle_registration_failures:
+            return
+        warned_bundle_registration_failures.add(warning_key)
+        logger.warning(
+            "Ignoring undeclared agent bundle directories for package '%s': %s",
+            package.package_id,
+            exc,
+        )
+
+
 def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigSource, ...]:
     """Resolve agent-owned config assets exported by one runtime package.
 
@@ -315,6 +346,7 @@ def _resolve_agent_config_sources_for_path(
     *,
     used_default_search_path: bool,
     warned_package_failures: set[tuple[str, str]],
+    warned_bundle_registration_failures: set[tuple[str, str]],
 ) -> tuple[AgentConfigSource, ...]:
     """Resolve agent config bundles from one packages root, package dir, or legacy agents dir."""
     if not resolved_path.exists():
@@ -348,6 +380,7 @@ def _resolve_agent_config_sources_for_path(
             raise FileNotFoundError(
                 f"Package directory is not a loaded runtime package: {resolved_path}"
             )
+        _warn_undeclared_agent_bundles_once(package, warned_bundle_registration_failures)
         sources = _resolve_package_agent_sources(package)
     elif _looks_like_packages_root(resolved_path):
         registry = load_package_registry(
@@ -355,6 +388,8 @@ def _resolve_agent_config_sources_for_path(
             fail_on_validation_error=True,
         )
         _warn_failed_packages_once(registry, warned_package_failures)
+        for package in registry.loaded_packages:
+            _warn_undeclared_agent_bundles_once(package, warned_bundle_registration_failures)
         sources = tuple(
             source
             for package in registry.loaded_packages
@@ -399,11 +434,13 @@ def resolve_agent_config_sources(
 
     owners: dict[str, AgentConfigSource] = {}
     warned_package_failures: set[tuple[str, str]] = set()
+    warned_bundle_registration_failures: set[tuple[str, str]] = set()
     for index, resolved_path in enumerate(resolved_paths):
         sources = _resolve_agent_config_sources_for_path(
             resolved_path,
             used_default_search_path=bool(used_default_search_paths and index == 0),
             warned_package_failures=warned_package_failures,
+            warned_bundle_registration_failures=warned_bundle_registration_failures,
         )
         for source in sources:
             existing = owners.get(source.folder_name)
