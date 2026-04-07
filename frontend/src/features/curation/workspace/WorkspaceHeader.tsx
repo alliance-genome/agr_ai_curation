@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react'
 
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
-import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded'
-import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded'
 import {
   Box,
   Button,
@@ -25,10 +23,6 @@ export interface WorkspaceHeaderProps {
   session: CurationReviewSession
   backHref?: string
   navigationSlot?: ReactNode
-  onPreviousSession?: () => void
-  onNextSession?: () => void
-  previousDisabled?: boolean
-  nextDisabled?: boolean
 }
 
 function getDocumentMetaLabel(session: CurationReviewSession): string {
@@ -52,10 +46,6 @@ export default function WorkspaceHeader({
   session,
   backHref = '/curation',
   navigationSlot,
-  onPreviousSession,
-  onNextSession,
-  previousDisabled = true,
-  nextDisabled = true,
 }: WorkspaceHeaderProps) {
   const adapterChipColor = getAdapterChipColor(session.adapter)
   const statusChipColor = getStatusChipColor(session.status)
@@ -158,30 +148,7 @@ export default function WorkspaceHeader({
         >
           {navigationSlot}
         </Stack>
-      ) : (
-        <Stack direction="row" justifyContent="flex-end" spacing={0.75}>
-          <Button
-            aria-label="Previous session"
-            disabled={previousDisabled}
-            onClick={onPreviousSession}
-            size="small"
-            startIcon={<ChevronLeftRoundedIcon />}
-            variant="outlined"
-          >
-            Prev
-          </Button>
-          <Button
-            aria-label="Next session"
-            disabled={nextDisabled}
-            onClick={onNextSession}
-            size="small"
-            endIcon={<ChevronRightRoundedIcon />}
-            variant="outlined"
-          >
-            Next
-          </Button>
-        </Stack>
-      )}
+      ) : null}
     </Box>
   )
 }
