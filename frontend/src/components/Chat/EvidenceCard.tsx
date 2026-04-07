@@ -77,6 +77,7 @@ const EVIDENCE_COLOR_PALETTE = [
 
 interface EvidenceCardProps {
   evidenceRecords: EvidenceRecord[]
+  headerLabel?: string
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   onReviewAndCurateClick?: (() => void) | null
 }
@@ -121,6 +122,7 @@ function buildEntityData(
 
 export default function EvidenceCard({
   evidenceRecords,
+  headerLabel,
   onReviewAndCurateClick,
 }: EvidenceCardProps) {
   const [activeEntity, setActiveEntity] = useState<string | null>(null)
@@ -198,7 +200,7 @@ export default function EvidenceCard({
             color: 'rgba(255, 255, 255, 0.7)',
           }}
         >
-          {evidenceRecords.length} evidence quotes
+          {headerLabel ?? `${evidenceRecords.length} evidence quotes`}
         </Box>
       </Box>
 
