@@ -653,7 +653,7 @@ export type {
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 const FLOWS_URL = '/api/flows'
-export const DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+const DEFAULT_FLOW_LIST_PAGE_SIZE = 50
 
 class FlowListLoadError extends Error {
   constructor(message: string) {
@@ -678,19 +678,25 @@ function createFlowListLoadError(status?: number): FlowListLoadError {
  * List all flows for the current user
  */
 export async function listFlows(page = 1, pageSize = DEFAULT_FLOW_LIST_PAGE_SIZE): Promise<FlowListResponse> {
+  let response: Response
   try {
-    const response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`)
-    if (!response.ok) {
-      throw createFlowListLoadError(response.status)
-    }
+    response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`)
+  } catch {
+    throw createFlowListLoadError()
+  }
 
+  if (!response.ok) {
+    throw createFlowListLoadError(response.status)
+  }
+
+  try {
     return await response.json()
   } catch (error) {
-    if (error instanceof FlowListLoadError) {
+    if (error instanceof Error) {
       throw error
     }
 
-    throw createFlowListLoadError()
+    throw new FlowListLoadError(`Unexpected error while loading flows: ${String(error)}`)
   }
 }
 

@@ -34,6 +34,7 @@ import type { SSEEvent } from '@/hooks/useChatStream'
 import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
 import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
 import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService'
+import logger from '@/services/logger'
 
 /**
  * Props for CurationFlows component
@@ -145,8 +146,9 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       const data = await listFlows()
       setFlows(data.flows)
     } catch (err) {
-      console.error('Error fetching flows:', err)
-      setError(err instanceof Error ? err.message : 'Failed to connect to server')
+      const error = err as Error
+      logger.error('Failed to load flows', error, { component: 'CurationFlows' })
+      setError(error.message)
     } finally {
       setIsLoading(false)
     }

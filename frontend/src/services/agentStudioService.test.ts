@@ -265,6 +265,19 @@ describe('agentStudioService', () => {
     await expect(listFlows()).rejects.toThrow('Failed to connect to server')
   })
 
+  it('listFlows preserves unexpected response parsing errors', async () => {
+    const parseError = new SyntaxError('Unexpected token < in JSON at position 0')
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => {
+        throw parseError
+      },
+    })
+
+    await expect(listFlows()).rejects.toBe(parseError)
+  })
+
   it('createFlow returns the created flow object for immediate UI updates', async () => {
     const createdFlow = {
       id: 'flow-123',
