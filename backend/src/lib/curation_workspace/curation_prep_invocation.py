@@ -28,6 +28,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 
+
 @dataclass(frozen=True)
 class _ChatPrepContext:
     extraction_results: list[CurationExtractionResultRecord]
@@ -71,35 +72,55 @@ async def run_chat_curation_prep(
         db=db,
         requested_adapter_keys=request.adapter_keys,
     )
-    scope_confirmation = CurationPrepScopeConfirmation(
-        confirmed=True,
-        adapter_keys=adapter_keys,
-        notes=[
-            f"Confirmed from chat session {request.session_id}.",
-            f"Prep requested by user {user_id}.",
-        ],
-    )
+    total_candidate_count = 0
+    warnings: list[str] = []
+    processing_notes: list[str] = []
 
-    prep_output = await run_curation_prep(
-        context.extraction_results,
-        scope_confirmation=scope_confirmation,
-        db=db,
-        persistence_context=CurationPrepPersistenceContext(
-            origin_session_id=request.session_id,
-            user_id=user_id,
-            source_kind=CurationExtractionSourceKind.CHAT,
-        ),
-    )
+    for adapter_key in adapter_keys:
+        scope_confirmation = CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=[adapter_key],
+            notes=[
+                f"Confirmed from chat session {request.session_id}.",
+                f"Prep requested by user {user_id}.",
+            ],
+        )
+
+        prep_output = await run_curation_prep(
+            context.extraction_results,
+            scope_confirmation=scope_confirmation,
+            db=db,
+            persistence_context=CurationPrepPersistenceContext(
+                origin_session_id=request.session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.CHAT,
+            ),
+        )
+        total_candidate_count += len(prep_output.candidates)
+        warnings.extend(
+            _format_adapter_messages(
+                messages=prep_output.run_metadata.warnings,
+                adapter_key=adapter_key,
+                multi_adapter=len(adapter_keys) > 1,
+            )
+        )
+        processing_notes.extend(
+            _format_adapter_messages(
+                messages=prep_output.run_metadata.processing_notes,
+                adapter_key=adapter_key,
+                multi_adapter=len(adapter_keys) > 1,
+            )
+        )
 
     return CurationPrepChatRunResponse(
-        summary_text=(
-            f"Prepared {len(prep_output.candidates)} candidate "
-            f"annotation{'s' if len(prep_output.candidates) != 1 else ''} for curation review."
+        summary_text=_build_prep_completion_summary(
+            candidate_count=total_candidate_count,
+            adapter_keys=adapter_keys,
         ),
         document_id=context.extraction_results[0].document_id,
-        candidate_count=len(prep_output.candidates),
-        warnings=list(prep_output.run_metadata.warnings),
-        processing_notes=list(prep_output.run_metadata.processing_notes),
+        candidate_count=total_candidate_count,
+        warnings=_unique_non_empty(warnings),
+        processing_notes=_unique_non_empty(processing_notes),
         adapter_keys=adapter_keys,
     )
 
@@ -155,15 +176,7 @@ def _load_chat_prep_context(
 
 
 def _build_blocking_reasons(context: _ChatPrepContext) -> list[str]:
-    blocking_reasons = _build_run_blocking_reasons(context)
-    if blocking_reasons:
-        return blocking_reasons
-
-    if len(context.adapter_keys) > 1:
-        return [
-            "This chat includes findings for multiple adapters. Narrow the extraction scope to one adapter before preparing for curation review."
-        ]
-    return []
+    return _build_run_blocking_reasons(context)
 
 
 def _build_run_blocking_reasons(context: _ChatPrepContext) -> list[str]:
@@ -192,7 +205,7 @@ def _build_summary_text(context: _ChatPrepContext, blocking_reasons: Sequence[st
 
     scope_suffix = ""
     if scope_labels:
-        preposition = " in " if len(scope_labels) == 1 else " across "
+        preposition = " across " if len(context.adapter_keys) > 1 else " in "
         scope_suffix = f"{preposition}{_humanize_list(scope_labels)}"
 
     return (
@@ -212,10 +225,6 @@ def _resolve_scope_values(
     normalized_available = _unique_non_empty(available_values)
 
     if not normalized_requested:
-        if scope_name == "adapter" and len(normalized_available) > 1:
-            raise ValueError(
-                "Prep requires exactly one adapter scope when the current chat contains multiple adapters."
-            )
         return normalized_available
 
     invalid_values = [value for value in normalized_requested if value not in normalized_available]
@@ -225,6 +234,39 @@ def _resolve_scope_values(
         )
 
     return normalized_requested
+
+
+def _build_prep_completion_summary(
+    *,
+    candidate_count: int,
+    adapter_keys: Sequence[str],
+) -> str:
+    if len(adapter_keys) <= 1:
+        return (
+            f"Prepared {candidate_count} candidate "
+            f"annotation{'s' if candidate_count != 1 else ''} for curation review."
+        )
+
+    adapter_scope = _format_scope_fragment("adapter", adapter_keys)
+    return (
+        f"Prepared {candidate_count} candidate "
+        f"annotation{'s' if candidate_count != 1 else ''} for curation review across "
+        f"{adapter_scope}."
+    )
+
+
+def _format_adapter_messages(
+    *,
+    messages: Sequence[str],
+    adapter_key: str,
+    multi_adapter: bool,
+) -> list[str]:
+    normalized_messages = _unique_non_empty(messages)
+    if not multi_adapter:
+        return normalized_messages
+
+    adapter_label = _display_scope_value(adapter_key).title()
+    return [f"{adapter_label}: {message}" for message in normalized_messages]
 
 
 def _format_scope_fragment(label: str, values: Sequence[str]) -> str:

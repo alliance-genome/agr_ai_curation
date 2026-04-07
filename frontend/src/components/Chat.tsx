@@ -161,6 +161,12 @@ function buildEvidenceReviewAndCurateTarget(
   }
 }
 
+function humanizeAdapterKey(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -1423,15 +1429,26 @@ function Chat({
       const warningText = result.warnings.length > 0
         ? ` Warnings: ${result.warnings.join(' ')}`
         : ''
-      const prepSummary = `${result.summary_text}${warningText}`.trim()
+      const multiSessionNote = result.prepared_sessions.length > 1
+        ? ' Additional prepared sessions are available in Curation Inventory.'
+        : ''
+      const prepSummary = `${result.summary_text}${warningText}${multiSessionNote}`.trim()
       const targetDocumentId = result.document_id || activeDocument?.id || null
-      const reviewAndCurateTarget = targetDocumentId
+      const primaryPreparedSession = result.prepared_sessions[0] ?? null
+      const reviewAndCurateTarget = primaryPreparedSession
         ? {
+            sessionId: primaryPreparedSession.session_id,
             documentId: targetDocumentId,
             originSessionId: propSessionId,
-            adapterKeys: result.adapter_keys,
+            adapterKeys: [primaryPreparedSession.adapter_key],
           }
-        : null
+        : targetDocumentId
+          ? {
+              documentId: targetDocumentId,
+              originSessionId: propSessionId,
+              adapterKeys: result.adapter_keys,
+            }
+          : null
       const prepMessageId = `prep-${Date.now()}`
 
       setPrepStatus(null)
@@ -1447,6 +1464,20 @@ function Chat({
           reviewAndCurateTarget,
         },
       ])
+
+      if (result.prepared_sessions.length > 1) {
+        const primaryAdapterLabel = humanizeAdapterKey(primaryPreparedSession?.adapter_key ?? result.adapter_keys[0] ?? 'adapter')
+        const additionalSessionCount = result.prepared_sessions.length - 1
+        emitGlobalToast({
+          message: (
+            `Prepared ${result.prepared_sessions.length} curation sessions. `
+            + `Opening ${primaryAdapterLabel} first; `
+            + `${additionalSessionCount} additional prepared session`
+            + `${additionalSessionCount === 1 ? ' is' : 's are'} available in Curation Inventory.`
+          ),
+          severity: 'info',
+        })
+      }
 
       if (reviewAndCurateTarget) {
         void handleOpenCurationWorkspace(reviewAndCurateTarget, { messageId: prepMessageId })

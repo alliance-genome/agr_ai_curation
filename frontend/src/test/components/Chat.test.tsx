@@ -54,6 +54,11 @@ function mockChatFetch(options?: {
     warnings: string[]
     processing_notes: string[]
     adapter_keys: string[]
+    prepared_sessions: Array<{
+      session_id: string
+      adapter_key: string
+      created: boolean
+    }>
   }
   activeDocument?: {
     id: string
@@ -115,6 +120,7 @@ function mockChatFetch(options?: {
           warnings: [],
           processing_notes: [],
           adapter_keys: ['disease'],
+          prepared_sessions: [],
         },
       } as Response
     }
@@ -587,6 +593,13 @@ describe('Chat persistence', () => {
         warnings: ['Review warnings are available.'],
         processing_notes: ['Prep completed successfully.'],
         adapter_keys: ['disease'],
+        prepared_sessions: [
+          {
+            session_id: 'curation-session-disease',
+            adapter_key: 'disease',
+            created: true,
+          },
+        ],
       },
     })
 
@@ -624,6 +637,85 @@ describe('Chat persistence', () => {
     expect(
       await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
     ).toBeInTheDocument()
+  })
+
+  it('prepares all adapters in scope and opens the first prepared session', async () => {
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-gene')
+    mockChatFetch({
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 4 candidate annotations across gene and disease adapters. Prepare all for curation review?',
+        candidate_count: 4,
+        extraction_result_count: 2,
+        conversation_message_count: 6,
+        adapter_keys: ['gene', 'disease'],
+        blocking_reasons: [],
+      },
+      prepRun: {
+        summary_text: 'Prepared 4 candidate annotations for curation review across gene and disease adapters.',
+        document_id: 'doc-1',
+        candidate_count: 4,
+        warnings: [],
+        processing_notes: [],
+        adapter_keys: ['gene', 'disease'],
+        prepared_sessions: [
+          {
+            session_id: 'curation-session-gene',
+            adapter_key: 'gene',
+            created: true,
+          },
+          {
+            session_id: 'curation-session-disease',
+            adapter_key: 'disease',
+            created: true,
+          },
+        ],
+      },
+    })
+
+    renderChat({
+      sessionId: 'session-1',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /start prep/i }))
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/curation-workspace/prep', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id: 'session-1',
+          adapter_keys: ['gene', 'disease'],
+        }),
+      })
+    })
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'curation-session-gene',
+          documentId: 'doc-1',
+          originSessionId: 'session-1',
+          adapterKeys: ['gene'],
+          navigate: mockNavigate,
+        }),
+      )
+    })
+
+    expect(
+      await screen.findByText(
+        /Additional prepared sessions are available in Curation Inventory\./i,
+      ),
+    ).toBeInTheDocument()
+    expect(emitGlobalToastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'info',
+      }),
+    )
   })
 
   it('warns when prep can continue but the chat also contains unsupported evidence-only findings', async () => {
@@ -741,8 +833,7 @@ describe('Chat persistence', () => {
   it('opens the curation workspace after prep completes for an active document', async () => {
     openCurationWorkspaceMock
       .mockResolvedValueOnce('curation-session-1')
-      .mockResolvedValueOnce('curation-session-2')
-      .mockResolvedValueOnce('curation-session-2')
+      .mockResolvedValueOnce('curation-session-1')
     mockChatFetch({
       activeDocument: {
         id: 'doc-1',
@@ -764,6 +855,13 @@ describe('Chat persistence', () => {
         warnings: [],
         processing_notes: [],
         adapter_keys: ['gene'],
+        prepared_sessions: [
+          {
+            session_id: 'curation-session-1',
+            adapter_key: 'gene',
+            created: true,
+          },
+        ],
       },
     })
 
@@ -775,6 +873,7 @@ describe('Chat persistence', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          sessionId: 'curation-session-1',
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
@@ -795,20 +894,6 @@ describe('Chat persistence', () => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: 'curation-session-1',
-          documentId: 'doc-1',
-          originSessionId: 'session-1',
-          adapterKeys: ['gene'],
-          navigate: mockNavigate,
-        })
-      )
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: /review & curate/i, hidden: true }))
-
-    await waitFor(() => {
-      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: 'curation-session-2',
           documentId: 'doc-1',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
@@ -837,6 +922,13 @@ describe('Chat persistence', () => {
         warnings: [],
         processing_notes: [],
         adapter_keys: ['gene'],
+        prepared_sessions: [
+          {
+            session_id: 'curation-session-fallback',
+            adapter_key: 'gene',
+            created: true,
+          },
+        ],
       },
     })
 
@@ -848,6 +940,7 @@ describe('Chat persistence', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          sessionId: 'curation-session-fallback',
           documentId: 'doc-from-backend',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],

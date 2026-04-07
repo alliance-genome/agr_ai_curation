@@ -929,7 +929,7 @@ async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch):
     async def _raise_value_error(*_args, **_kwargs):
         raise ValueError("No candidate annotations are available from this chat yet.")
 
-    monkeypatch.setattr(module, "run_chat_curation_prep", _raise_value_error)
+    monkeypatch.setattr(module, "prepare_chat_curation_sessions", _raise_value_error)
 
     with pytest.raises(module.HTTPException) as exc:
         await module.trigger_chat_prep(
@@ -954,9 +954,10 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
             warnings=["Review evidence alignment before downstream normalization."],
             processing_notes=["Prepared from chat extraction context."],
             adapter_keys=["reference_adapter"],
+            prepared_sessions=[],
         )
 
-    monkeypatch.setattr(module, "run_chat_curation_prep", _run_chat_prep)
+    monkeypatch.setattr(module, "prepare_chat_curation_sessions", _run_chat_prep)
 
     response = await module.trigger_chat_prep(
         CurationPrepChatRunRequest(session_id="session-1"),

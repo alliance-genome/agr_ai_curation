@@ -15,10 +15,10 @@ from src.lib.curation_workspace.bootstrap_service import (
     bootstrap_document_session,
     create_manual_session,
     get_document_bootstrap_availability,
+    prepare_chat_curation_sessions,
 )
 from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
-    run_chat_curation_prep,
 )
 from src.lib.curation_workspace.evidence_service import (
     create_manual_evidence,
@@ -487,9 +487,9 @@ async def trigger_chat_prep(
     user_id = _require_current_user_id(user)
 
     try:
-        return await run_chat_curation_prep(
+        return await prepare_chat_curation_sessions(
             request,
-            user_id=user_id,
+            current_user_id=user_id,
             db=db,
         )
     except SessionAccessError as exc:

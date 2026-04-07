@@ -18,6 +18,7 @@ from src.lib.curation_workspace import bootstrap_service as module
 from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionResultModel
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
+from src.schemas.curation_prep import CurationPrepChatRunResponse
 from src.schemas.curation_workspace import (
     CurationDocumentBootstrapRequest,
     CurationExtractionSourceKind,
@@ -103,11 +104,12 @@ def _create_extraction_result(
     flow_run_id: str | None,
     origin_session_id: str | None,
     created_at: datetime,
+    adapter_key: str = "reference_adapter",
 ) -> ExtractionResultModel:
     record = ExtractionResultModel(
         id=uuid4(),
         document_id=document_id,
-        adapter_key="reference_adapter",
+        adapter_key=adapter_key,
         agent_key="curation_prep",
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=origin_session_id,
@@ -187,6 +189,36 @@ def test_select_bootstrap_extraction_result_honors_origin_session_id(db_session)
     )
 
     assert selected.id == older_matching.id
+
+
+def test_select_bootstrap_extraction_result_rejects_ambiguous_multi_adapter_scope(db_session):
+    document = _create_document(db_session)
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id=None,
+        origin_session_id=None,
+        adapter_key="gene",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+    )
+    _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id=None,
+        origin_session_id=None,
+        adapter_key="disease",
+        created_at=datetime(2026, 3, 21, 15, 31, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        module._select_bootstrap_extraction_result(
+            db_session,
+            document_id=str(document.id),
+            request=CurationDocumentBootstrapRequest(),
+        )
+
+    assert exc.value.status_code == 409
+    assert "Multiple prepared curation sessions are available" in exc.value.detail
 
 
 def test_get_document_bootstrap_availability_returns_true_when_matching_result_exists(db_session):
@@ -507,6 +539,150 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
     assert detail_request == {"db": fake_db, "session_id": "session-123"}
     assert fake_db.commit_calls == 1
     assert fake_db.rollback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_chat_curation_sessions_bootstraps_each_adapter(monkeypatch):
+    bootstrap_calls: list[tuple[str, str | None]] = []
+    manage_transaction_calls: list[bool] = []
+
+    class FakeDb:
+        def __init__(self):
+            self.commit_calls = 0
+            self.rollback_calls = 0
+            self._in_transaction = True
+
+        def commit(self):
+            self.commit_calls += 1
+            self._in_transaction = False
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._in_transaction = False
+
+        def in_transaction(self):
+            return self._in_transaction
+
+    async def _fake_run_chat_curation_prep(request, *, user_id, db):
+        assert request.session_id == "chat-session-1"
+        assert user_id == "user-1"
+        assert db is fake_db
+        return CurationPrepChatRunResponse(
+            summary_text="Prepared 3 candidate annotations for curation review across gene and disease adapters.",
+            document_id="document-1",
+            candidate_count=3,
+            warnings=[],
+            processing_notes=[],
+            adapter_keys=["gene", "disease"],
+        )
+
+    async def _fake_bootstrap_document_session(
+        document_id,
+        request,
+        *,
+        current_user_id,
+        db,
+        manage_transaction,
+    ):
+        bootstrap_calls.append((document_id, request.adapter_key))
+        manage_transaction_calls.append(manage_transaction)
+        assert request.origin_session_id == "chat-session-1"
+        assert current_user_id == "user-1"
+        assert db is fake_db
+        return SimpleNamespace(
+            created=request.adapter_key == "gene",
+            session=SimpleNamespace(session_id=f"session-{request.adapter_key}"),
+        )
+
+    fake_db = FakeDb()
+    monkeypatch.setattr(module, "run_chat_curation_prep", _fake_run_chat_curation_prep)
+    monkeypatch.setattr(module, "bootstrap_document_session", _fake_bootstrap_document_session)
+
+    response = await module.prepare_chat_curation_sessions(
+        module.CurationPrepChatRunRequest(session_id="chat-session-1"),
+        current_user_id="user-1",
+        db=fake_db,
+    )
+
+    assert bootstrap_calls == [
+        ("document-1", "gene"),
+        ("document-1", "disease"),
+    ]
+    assert manage_transaction_calls == [False, False]
+    assert [session.session_id for session in response.prepared_sessions] == [
+        "session-gene",
+        "session-disease",
+    ]
+    assert [session.adapter_key for session in response.prepared_sessions] == [
+        "gene",
+        "disease",
+    ]
+    assert [session.created for session in response.prepared_sessions] == [True, False]
+    assert fake_db.commit_calls == 1
+    assert fake_db.rollback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_chat_curation_sessions_rolls_back_when_a_later_adapter_fails(monkeypatch):
+    bootstrap_calls: list[str | None] = []
+
+    class FakeDb:
+        def __init__(self):
+            self.commit_calls = 0
+            self.rollback_calls = 0
+            self._in_transaction = True
+
+        def commit(self):
+            self.commit_calls += 1
+            self._in_transaction = False
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._in_transaction = False
+
+        def in_transaction(self):
+            return self._in_transaction
+
+    async def _fake_run_chat_curation_prep(request, *, user_id, db):
+        return CurationPrepChatRunResponse(
+            summary_text="Prepared 3 candidate annotations for curation review across gene and disease adapters.",
+            document_id="document-1",
+            candidate_count=3,
+            warnings=[],
+            processing_notes=[],
+            adapter_keys=["gene", "disease"],
+        )
+
+    async def _fake_bootstrap_document_session(
+        document_id,
+        request,
+        *,
+        current_user_id,
+        db,
+        manage_transaction,
+    ):
+        bootstrap_calls.append(request.adapter_key)
+        if request.adapter_key == "disease":
+            raise RuntimeError("pipeline failed")
+        return SimpleNamespace(
+            created=True,
+            session=SimpleNamespace(session_id=f"session-{request.adapter_key}"),
+        )
+
+    fake_db = FakeDb()
+    monkeypatch.setattr(module, "run_chat_curation_prep", _fake_run_chat_curation_prep)
+    monkeypatch.setattr(module, "bootstrap_document_session", _fake_bootstrap_document_session)
+
+    with pytest.raises(RuntimeError, match="pipeline failed"):
+        await module.prepare_chat_curation_sessions(
+            module.CurationPrepChatRunRequest(session_id="chat-session-1"),
+            current_user_id="user-1",
+            db=fake_db,
+        )
+
+    assert bootstrap_calls == ["gene", "disease"]
+    assert fake_db.commit_calls == 0
+    assert fake_db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
