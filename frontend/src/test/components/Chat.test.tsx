@@ -904,7 +904,7 @@ describe('Chat persistence', () => {
   })
 
   it('opens the curation workspace after prep completes even when active document state is missing', async () => {
-    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-fallback')
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-from-backend')
     mockChatFetch({
       prepPreview: {
         ready: true,
@@ -924,7 +924,7 @@ describe('Chat persistence', () => {
         adapter_keys: ['gene'],
         prepared_sessions: [
           {
-            session_id: 'curation-session-fallback',
+            session_id: 'curation-session-from-backend',
             adapter_key: 'gene',
             created: true,
           },
@@ -940,7 +940,7 @@ describe('Chat persistence', () => {
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionId: 'curation-session-fallback',
+          sessionId: 'curation-session-from-backend',
           documentId: 'doc-from-backend',
           originSessionId: 'session-1',
           adapterKeys: ['gene'],
