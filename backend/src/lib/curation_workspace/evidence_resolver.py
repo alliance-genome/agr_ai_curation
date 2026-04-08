@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -295,7 +296,7 @@ class DeterministicEvidenceAnchorResolver:
     def _safe_resolve_user_id(self, prep_extraction_result_id: str) -> str | None:
         try:
             return self._user_id_resolver(prep_extraction_result_id)
-        except Exception:  # pragma: no cover - defensive logging only
+        except SQLAlchemyError:  # pragma: no cover - defensive logging only
             logger.exception(
                 "Evidence resolution could not resolve a user id for prep extraction result %s",
                 prep_extraction_result_id,
@@ -315,7 +316,7 @@ class DeterministicEvidenceAnchorResolver:
         warnings: list[str] = []
         try:
             raw_chunks = self._chunk_loader(document_id, user_id)
-        except Exception:  # pragma: no cover - defensive logging only
+        except (RuntimeError, OSError):  # pragma: no cover - defensive logging only
             logger.exception(
                 "Evidence resolution failed to load PDFX chunks for document %s",
                 document_id,
@@ -327,7 +328,7 @@ class DeterministicEvidenceAnchorResolver:
 
         try:
             raw_elements = self._processed_element_loader(document_id, user_id)
-        except Exception:  # pragma: no cover - defensive logging only
+        except (RuntimeError, OSError):  # pragma: no cover - defensive logging only
             logger.exception(
                 "Evidence resolution failed to load processed PDFX elements for document %s",
                 document_id,

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy.exc import SQLAlchemyError
+
 from src.lib.curation_workspace.evidence_resolver import (
     DeterministicEvidenceAnchorResolver,
     _build_canonical_markdown_from_elements,
@@ -129,6 +132,119 @@ def test_resolver_preserves_tool_verified_anchor_payload():
     assert anchor.figure_reference == "Figure 2A"
     assert anchor.table_reference is None
     assert anchor.chunk_ids == ["chunk-1"]
+
+
+def test_resolver_handles_sqlalchemy_user_lookup_failure_with_warning():
+    candidate = _make_candidate(_make_anchor_payload())
+    resolver = DeterministicEvidenceAnchorResolver(
+        user_id_resolver=lambda _prep_result_id: (_ for _ in ()).throw(
+            SQLAlchemyError("db unavailable")
+        ),
+        resolve_against_document=True,
+    )
+
+    result = resolver.resolve(
+        candidate,
+        normalized_candidate=_make_normalized_candidate(candidate),
+        context=_make_context(),
+    )
+
+    anchor = EvidenceAnchor.model_validate(result[0].anchor)
+
+    assert anchor.page_number == 4
+    assert result[0].warnings == [
+        "Evidence resolution skipped PDFX document lookup because the prep extraction result has no user_id.",
+    ]
+
+
+def test_resolver_handles_expected_document_loader_failures_with_warnings():
+    candidate = _make_candidate(_make_anchor_payload())
+    resolver = DeterministicEvidenceAnchorResolver(
+        user_id_resolver=lambda _prep_result_id: "user-1",
+        chunk_loader=lambda _document_id, _user_id: (_ for _ in ()).throw(
+            RuntimeError("weaviate unavailable")
+        ),
+        processed_element_loader=lambda _document_id, _user_id: (_ for _ in ()).throw(
+            OSError("processed json unavailable")
+        ),
+        resolve_against_document=True,
+    )
+
+    result = resolver.resolve(
+        candidate,
+        normalized_candidate=_make_normalized_candidate(candidate),
+        context=_make_context(),
+    )
+
+    anchor = EvidenceAnchor.model_validate(result[0].anchor)
+
+    assert anchor.page_number == 4
+    assert "Evidence resolution could not load PDFX chunks for this document." in result[0].warnings
+    assert (
+        "Evidence resolution could not load canonical PDFX markdown for offsets."
+        in result[0].warnings
+    )
+    assert (
+        "Evidence resolution could not derive canonical PDFX markdown offsets because processed JSON was unavailable."
+        in result[0].warnings
+    )
+
+
+def test_resolver_propagates_unexpected_user_lookup_failure():
+    candidate = _make_candidate(_make_anchor_payload())
+    resolver = DeterministicEvidenceAnchorResolver(
+        user_id_resolver=lambda _prep_result_id: (_ for _ in ()).throw(
+            RuntimeError("unexpected user lookup failure")
+        ),
+        resolve_against_document=True,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected user lookup failure"):
+        resolver.resolve(
+            candidate,
+            normalized_candidate=_make_normalized_candidate(candidate),
+            context=_make_context(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("chunk_loader", "processed_element_loader", "expected_message"),
+    [
+        (
+            lambda _document_id, _user_id: (_ for _ in ()).throw(
+                ValueError("unexpected chunk loader failure")
+            ),
+            lambda _document_id, _user_id: [],
+            "unexpected chunk loader failure",
+        ),
+        (
+            lambda _document_id, _user_id: [],
+            lambda _document_id, _user_id: (_ for _ in ()).throw(
+                ValueError("unexpected processed element loader failure")
+            ),
+            "unexpected processed element loader failure",
+        ),
+    ],
+)
+def test_resolver_propagates_unexpected_document_loader_failures(
+    chunk_loader,
+    processed_element_loader,
+    expected_message: str,
+):
+    candidate = _make_candidate(_make_anchor_payload())
+    resolver = DeterministicEvidenceAnchorResolver(
+        user_id_resolver=lambda _prep_result_id: "user-1",
+        chunk_loader=chunk_loader,
+        processed_element_loader=processed_element_loader,
+        resolve_against_document=True,
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        resolver.resolve(
+            candidate,
+            normalized_candidate=_make_normalized_candidate(candidate),
+            context=_make_context(),
+        )
 
 
 def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
