@@ -20,8 +20,10 @@ from src.lib.curation_adapters.reference import (
 from src.lib.curation_adapters.structured_payload import (
     StructuredPayloadCandidateNormalizer,
 )
+from src.lib.curation_workspace import evidence_resolver as evidence_resolver_module
 from src.lib.curation_workspace import pipeline as module
 from src.lib.curation_workspace import session_service
+from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -486,6 +488,93 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
         CurationActionType.SESSION_CREATED,
         CurationActionType.VALIDATION_COMPLETED,
     }
+
+
+def test_execute_post_curation_pipeline_default_dependencies_resolve_markdown_offsets(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    prep_output_payload = _make_prep_output().model_dump(mode="json")
+    anchor_payload = prep_output_payload["candidates"][0]["evidence_records"][0]["anchor"]
+    anchor_payload["pdfx_markdown_offset_start"] = None
+    anchor_payload["pdfx_markdown_offset_end"] = None
+    anchor_payload["page_number"] = None
+    anchor_payload["section_title"] = None
+    anchor_payload["subsection_title"] = None
+    anchor_payload["chunk_ids"] = []
+    prep_output = CurationPrepAgentOutput.model_validate(prep_output_payload)
+    prep_record = _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    processed_elements = markdown_to_pipeline_elements(
+        """# Paper Title
+
+## Results
+
+GENE1 was linked to the reported phenotype.
+"""
+    )
+    canonical_markdown = evidence_resolver_module._build_canonical_markdown_from_elements(
+        processed_elements
+    )
+    init_kwargs: list[dict[str, object]] = []
+
+    class _DocumentBackedResolver(
+        evidence_resolver_module.DeterministicEvidenceAnchorResolver
+    ):
+        def __init__(self, **kwargs):
+            init_kwargs.append(dict(kwargs))
+            super().__init__(
+                user_id_resolver=lambda _prep_extraction_result_id: "user-1",
+                chunk_loader=lambda _document_id, _user_id: [
+                    {
+                        "id": "chunk-1",
+                        "chunk_index": 0,
+                        "content": (
+                            "Introductory text. "
+                            "GENE1 was linked to the reported phenotype. "
+                            "Closing text."
+                        ),
+                        "page_number": 3,
+                        "section_title": "Results",
+                        "subsection": "Association",
+                        "metadata": {},
+                    }
+                ],
+                processed_element_loader=lambda _document_id, _user_id: processed_elements,
+                **kwargs,
+            )
+
+    monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _DocumentBackedResolver)
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+    )
+
+    evidence_row = db_session.scalars(select(EvidenceRecordModel)).one()
+
+    assert result.status is module.PipelineRunStatus.COMPLETED
+    assert result.prep_extraction_result_id == str(prep_record.id)
+    assert init_kwargs == [{"resolve_against_document": True}]
+    assert evidence_row.anchor["chunk_ids"] == ["chunk-1"]
+    assert evidence_row.anchor["page_number"] == 3
+    assert evidence_row.anchor["section_title"] == "Results"
+    assert evidence_row.anchor["subsection_title"] == "Association"
+    assert evidence_row.anchor["pdfx_markdown_offset_start"] is not None
+    assert evidence_row.anchor["pdfx_markdown_offset_end"] is not None
+    assert (
+        canonical_markdown[
+            evidence_row.anchor["pdfx_markdown_offset_start"] : evidence_row.anchor[
+                "pdfx_markdown_offset_end"
+            ]
+        ]
+        == "GENE1 was linked to the reported phenotype."
+    )
 
 
 def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(

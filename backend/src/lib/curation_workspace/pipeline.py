@@ -71,6 +71,12 @@ def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer
     return load_curation_adapter_registry().candidate_normalizers()
 
 
+def _default_evidence_resolver() -> EvidenceAnchorResolver:
+    """Resolve prep evidence against the canonical PDFX document by default."""
+
+    return DeterministicEvidenceAnchorResolver(resolve_against_document=True)
+
+
 class PipelineExecutionMode(str, Enum):
     """Dispatch mode for the deterministic post-agent pipeline."""
 
@@ -356,7 +362,7 @@ class PostCurationPipelineDependencies:
         default_factory=_default_candidate_normalizers
     )
     evidence_resolver: EvidenceAnchorResolver = field(
-        default_factory=DeterministicEvidenceAnchorResolver
+        default_factory=_default_evidence_resolver
     )
     validation_service: BatchValidationService = field(
         default_factory=DeterministicStructuralValidationService
