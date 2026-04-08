@@ -7,6 +7,7 @@
 #
 # To use: pip install -r requirements.lock.txt
 #
+agr-abc-document-parsers==1.5.1
 agr-cognito-py==0.1.0
 agr-curation-api-client==0.8.2
 aiofile==3.9.0
@@ -91,6 +92,7 @@ librt==0.8.1
 linkml==1.10.0
 linkml-runtime==1.10.0
 litellm==1.82.4
+lxml==6.0.2
 Mako==1.3.10
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3

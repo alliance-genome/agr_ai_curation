@@ -6,6 +6,8 @@ import logging
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Set
+
+from agr_abc_document_parsers import strip_markdown_formatting
 from pydantic import BaseModel, Field
 
 
@@ -91,8 +93,8 @@ class NormalizedElement(BaseModel):
         return mapping.get(self.content_type, "NarrativeText")
 
 
-def _normalize_text(value: str) -> str:
-    """Normalize extracted text: collapse unicode ligatures and escapes."""
+def normalize_text(value: str) -> str:
+    """Normalize extracted text for comparison and embeddings."""
 
     if not value:
         return ""
@@ -112,7 +114,12 @@ def _normalize_text(value: str) -> str:
             return match.group(0)
 
     normalized = _UNICODE_ESCAPE_PATTERN.sub(_replace_unicode_escape, normalized)
-    return normalized
+    return strip_markdown_formatting(normalized).strip()
+
+
+def _normalize_section_path(section_path: List[str]) -> List[str]:
+    """Normalize section path entries while dropping empty segments."""
+    return [part for part in (normalize_text(section) for section in section_path) if part]
 
 
 def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
@@ -147,10 +154,12 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
             )
             continue
 
-        text = _normalize_text(element.cleaned_text())
+        text = normalize_text(element.cleaned_text())
+        normalized_section_title = normalize_text(element.section_title) if element.section_title else None
+        normalized_section_path = _normalize_section_path(element.section_path)
 
         if element.is_heading:
-            heading_text = text or element.section_title
+            heading_text = text or normalized_section_title
             if not heading_text:
                 logger.warning(
                     "Skipping heading element %s (%s) with no textual content",
@@ -160,10 +169,13 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
                 continue
             active_section = heading_text
             last_prefixed_section = None
+            heading_section_path = normalized_section_path or [heading_text]
+            if heading_section_path[-1] != heading_text:
+                heading_section_path.append(heading_text)
 
             heading_metadata = dict(element.metadata)
             heading_metadata["section_title"] = heading_text
-            heading_metadata.setdefault("section_path", element.section_path or [heading_text])
+            heading_metadata["section_path"] = heading_section_path
             if heading_text:
                 heading_metadata["character_count"] = len(heading_text)
 
@@ -174,7 +186,7 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
                     text=heading_text,
                     embedding_text=heading_text,
                     section_title=heading_text,
-                    section_path=element.section_path or [heading_text],
+                    section_path=heading_section_path,
                     hierarchy_level=element.level,
                     page_number=element.page_number(),
                     list_prefix=None,
@@ -194,13 +206,13 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
                 )
             continue
 
-        section_title = element.section_title or active_section
-        section_path = element.section_path or ([section_title] if section_title else [])
+        section_title = normalized_section_title or active_section
+        section_path = normalized_section_path or ([section_title] if section_title else [])
         embedding_text = text
 
         # Lists: prepend bullet/number marker if available
         list_prefix = element.list_prefix
-        normalized_prefix = _normalize_text(list_prefix) if list_prefix else None
+        normalized_prefix = normalize_text(list_prefix) if list_prefix else None
         if element.is_list_item and normalized_prefix:
             embedding_text = f"{normalized_prefix} {embedding_text}".strip()
 
@@ -260,8 +272,9 @@ def build_pipeline_elements(elements: List[NormalizedElement]) -> List[Dict[str,
                 "original_type": elem.original_type,
             }
         )
+        embedding_text = normalize_text(elem.embedding_text)
 
-        if not elem.embedding_text.strip():
+        if not embedding_text.strip():
             logger.warning(
                 "Element %s (%s) produced empty embedding text; skipping",
                 elem.index,
@@ -272,7 +285,7 @@ def build_pipeline_elements(elements: List[NormalizedElement]) -> List[Dict[str,
         element_dict = {
             "index": elem.index,
             "type": elem.pipeline_type(),
-            "text": elem.embedding_text,
+            "text": embedding_text,
             "metadata": metadata,
         }
         pipeline_elements.append(element_dict)
