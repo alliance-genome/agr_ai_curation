@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
@@ -48,6 +49,7 @@ TABLE_REFERENCE_PATTERN = re.compile(
 )
 
 ChunkLoader = Callable[[str, str], Sequence[Mapping[str, Any]]]
+ProcessedElementLoader = Callable[[str, str], Sequence[Mapping[str, Any]]]
 SessionFactory = Callable[[], Session]
 UserIdResolver = Callable[[str], str | None]
 
@@ -117,6 +119,20 @@ class _PreparedDocument:
 
 
 @dataclass(frozen=True)
+class _PreparedEvidenceDocuments:
+    chunk_document: _PreparedDocument
+    markdown_document: _PreparedDocument
+
+    @classmethod
+    def empty(cls) -> "_PreparedEvidenceDocuments":
+        empty_document = _PreparedDocument.from_chunks(())
+        return cls(
+            chunk_document=empty_document,
+            markdown_document=empty_document,
+        )
+
+
+@dataclass(frozen=True)
 class _QuoteCandidate:
     query: str
     locator_quality: EvidenceLocatorQuality
@@ -166,6 +182,42 @@ def _default_chunk_loader(document_id: str, user_id: str) -> Sequence[Mapping[st
     return fetch_document_chunks_for_resolution(document_id, user_id)
 
 
+def _default_processed_element_loader(
+    document_id: str,
+    user_id: str,
+) -> Sequence[Mapping[str, Any]]:
+    from src.config import get_pdf_storage_path
+
+    storage_root = get_pdf_storage_path().resolve(strict=False)
+    processed_path = (
+        storage_root / user_id / "processed_json" / f"{document_id}.json"
+    ).resolve(strict=False)
+    user_storage_root = (storage_root / user_id).resolve(strict=False)
+    try:
+        processed_path.relative_to(user_storage_root)
+    except ValueError as exc:  # pragma: no cover - defensive safety only
+        raise RuntimeError(
+            f"Processed JSON path for document {document_id} escaped the user storage root."
+        ) from exc
+
+    if not processed_path.exists():
+        return []
+
+    try:
+        payload = json.loads(processed_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Processed JSON for document {document_id} could not be loaded."
+        ) from exc
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            f"Processed JSON for document {document_id} must contain a list of elements."
+        )
+
+    return payload
+
+
 class DeterministicEvidenceAnchorResolver:
     """Preserve verified prep anchors or enrich evidence anchors against PDFX chunks."""
 
@@ -175,11 +227,15 @@ class DeterministicEvidenceAnchorResolver:
         session_factory: SessionFactory = SessionLocal,
         user_id_resolver: UserIdResolver | None = None,
         chunk_loader: ChunkLoader | None = None,
+        processed_element_loader: ProcessedElementLoader | None = None,
         resolve_against_document: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._user_id_resolver = user_id_resolver or self._resolve_user_id
         self._chunk_loader = chunk_loader or _default_chunk_loader
+        self._processed_element_loader = (
+            processed_element_loader or _default_processed_element_loader
+        )
         self._resolve_against_document = resolve_against_document
 
     def resolve(
@@ -197,18 +253,18 @@ class DeterministicEvidenceAnchorResolver:
         primary_fields: set[str] = set()
         resolved_records: list[PreparedEvidenceRecordInput] = []
 
-        document = _PreparedDocument.from_chunks(())
-        load_warning: str | None = None
+        document = _PreparedEvidenceDocuments.empty()
+        load_warnings: tuple[str, ...] = ()
         if self._resolve_against_document:
             user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
-            document, load_warning = self._prepare_document(context.document_id, user_id)
+            document, load_warnings = self._prepare_document(context.document_id, user_id)
 
         for evidence_record in candidate.evidence_records:
             field_keys = list(evidence_record.field_paths)
             resolved_anchor, warnings = self._resolve_evidence_record(
                 evidence_record,
                 document=document,
-                load_warning=load_warning,
+                load_warnings=load_warnings,
             )
             resolved_records.append(
                 PreparedEvidenceRecordInput(
@@ -241,12 +297,13 @@ class DeterministicEvidenceAnchorResolver:
         self,
         document_id: str,
         user_id: str | None,
-    ) -> tuple[_PreparedDocument, str | None]:
+    ) -> tuple[_PreparedEvidenceDocuments, tuple[str, ...]]:
         if not user_id:
-            return _PreparedDocument.from_chunks(()), (
-                "Evidence resolution skipped PDFX chunk lookup because the prep extraction result has no user_id."
+            return _PreparedEvidenceDocuments.empty(), (
+                "Evidence resolution skipped PDFX document lookup because the prep extraction result has no user_id.",
             )
 
+        warnings: list[str] = []
         try:
             raw_chunks = self._chunk_loader(document_id, user_id)
         except Exception:  # pragma: no cover - defensive logging only
@@ -254,33 +311,77 @@ class DeterministicEvidenceAnchorResolver:
                 "Evidence resolution failed to load PDFX chunks for document %s",
                 document_id,
             )
-            return _PreparedDocument.from_chunks(()), (
+            raw_chunks = []
+            warnings.append(
                 "Evidence resolution could not load PDFX chunks for this document."
             )
 
-        return _PreparedDocument.from_chunks(_coerce_resolution_chunks(raw_chunks)), None
+        try:
+            raw_elements = self._processed_element_loader(document_id, user_id)
+        except Exception:  # pragma: no cover - defensive logging only
+            logger.exception(
+                "Evidence resolution failed to load processed PDFX elements for document %s",
+                document_id,
+            )
+            raw_elements = []
+            warnings.append(
+                "Evidence resolution could not load canonical PDFX markdown for offsets."
+            )
+
+        if not raw_elements:
+            warnings.append(
+                "Evidence resolution could not derive canonical PDFX markdown offsets because processed JSON was unavailable."
+            )
+
+        return _PreparedEvidenceDocuments(
+            chunk_document=_PreparedDocument.from_chunks(
+                _coerce_resolution_chunks(raw_chunks)
+            ),
+            markdown_document=_PreparedDocument.from_chunks(
+                _coerce_markdown_resolution_chunks(raw_elements)
+            ),
+        ), tuple(_dedupe_strings(warnings))
 
     def _resolve_evidence_record(
         self,
         evidence_record: CurationPrepEvidenceRecord,
         *,
-        document: _PreparedDocument,
-        load_warning: str | None,
+        document: _PreparedEvidenceDocuments,
+        load_warnings: tuple[str, ...],
     ) -> tuple[EvidenceAnchor, list[str]]:
         incoming_anchor = _normalized_anchor(evidence_record.anchor)
         if not self._resolve_against_document:
             return incoming_anchor, []
 
-        warnings: list[str] = [load_warning] if load_warning else []
+        warnings: list[str] = list(load_warnings)
 
-        quote_resolution = _resolve_quote_reference(document, incoming_anchor)
+        quote_resolution = _resolve_quote_reference(document.chunk_document, incoming_anchor)
         if quote_resolution is not None:
             warnings.extend(quote_resolution.warnings)
+            markdown_resolution = _resolve_markdown_quote_reference(
+                document.markdown_document,
+                incoming_anchor,
+                quote_resolution=quote_resolution,
+            )
+            if (
+                document.markdown_document.raw_text
+                and markdown_resolution is None
+            ):
+                warnings.append(
+                    "Evidence resolution could not map the matched quote to canonical PDFX markdown offsets."
+                )
             return _normalized_anchor(
-                _build_quote_anchor(incoming_anchor, quote_resolution)
+                _build_quote_anchor(
+                    incoming_anchor,
+                    quote_resolution,
+                    markdown_resolution=markdown_resolution,
+                )
             ), _dedupe_strings(warnings)
 
-        section_resolution = _resolve_section_reference(document, incoming_anchor)
+        section_resolution = _resolve_section_reference(
+            document.chunk_document,
+            incoming_anchor,
+        )
         if section_resolution is not None:
             warnings.extend(section_resolution.warnings)
             return _normalized_anchor(
@@ -326,7 +427,71 @@ def _resolve_quote_reference(
     if not raw_quote and not normalized_quote:
         return None
 
-    candidates = _build_quote_candidates(anchor)
+    return _resolve_quote_candidates(
+        document,
+        anchor,
+        candidates=_build_quote_candidates(anchor),
+        normalized_quote=normalized_quote,
+    )
+
+
+def _resolve_markdown_quote_reference(
+    document: _PreparedDocument,
+    anchor: EvidenceAnchor,
+    *,
+    quote_resolution: _QuoteResolution,
+) -> _QuoteResolution | None:
+    if not document.raw_text:
+        return None
+
+    biased_anchor = anchor.model_copy(
+        update={
+            "page_number": quote_resolution.page_number or anchor.page_number,
+            "section_title": quote_resolution.section_title or anchor.section_title,
+            "subsection_title": (
+                quote_resolution.subsection_title or anchor.subsection_title
+            ),
+        }
+    )
+    preferred_candidates: list[_QuoteCandidate] = []
+    viewer_search_text = _first_non_empty(quote_resolution.viewer_search_text)
+    if viewer_search_text:
+        preferred_candidates.append(
+            _QuoteCandidate(
+                query=viewer_search_text,
+                locator_quality=quote_resolution.locator_quality,
+                fragment=quote_resolution.fragment,
+            )
+        )
+    if (
+        quote_resolution.locator_quality is EvidenceLocatorQuality.NORMALIZED_QUOTE
+        and quote_resolution.normalized_text
+    ):
+        preferred_candidates.append(
+            _QuoteCandidate(
+                query=quote_resolution.normalized_text,
+                locator_quality=EvidenceLocatorQuality.NORMALIZED_QUOTE,
+                fragment=quote_resolution.fragment,
+            )
+        )
+
+    return _resolve_quote_candidates(
+        document,
+        biased_anchor,
+        candidates=_dedupe_quote_candidates(
+            [*preferred_candidates, *_build_quote_candidates(biased_anchor)]
+        ),
+        normalized_quote=quote_resolution.normalized_text,
+    )
+
+
+def _resolve_quote_candidates(
+    document: _PreparedDocument,
+    anchor: EvidenceAnchor,
+    *,
+    candidates: Sequence[_QuoteCandidate],
+    normalized_quote: str | None,
+) -> _QuoteResolution | None:
     for candidate in candidates:
         if candidate.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE:
             spans = _resolve_raw_quote_spans(document, candidate.query)
@@ -414,6 +579,8 @@ def _resolve_section_reference(
 def _build_quote_anchor(
     incoming_anchor: EvidenceAnchor,
     resolution: _QuoteResolution,
+    *,
+    markdown_resolution: _QuoteResolution | None,
 ) -> EvidenceAnchor:
     raw_quote = _quote_source_text(incoming_anchor)
     snippet_text = _first_non_empty(incoming_anchor.snippet_text)
@@ -447,8 +614,12 @@ def _build_quote_anchor(
         sentence_text=sentence_text,
         normalized_text=resolution.normalized_text,
         viewer_search_text=resolution.viewer_search_text,
-        pdfx_markdown_offset_start=resolution.raw_start,
-        pdfx_markdown_offset_end=resolution.raw_end,
+        pdfx_markdown_offset_start=(
+            markdown_resolution.raw_start if markdown_resolution is not None else None
+        ),
+        pdfx_markdown_offset_end=(
+            markdown_resolution.raw_end if markdown_resolution is not None else None
+        ),
         page_number=resolution.page_number or incoming_anchor.page_number,
         page_label=incoming_anchor.page_label,
         section_title=resolution.section_title or incoming_anchor.section_title,
@@ -614,6 +785,10 @@ def _build_quote_candidates(anchor: EvidenceAnchor) -> list[_QuoteCandidate]:
             )
         )
 
+    return _dedupe_quote_candidates(candidates)
+
+
+def _dedupe_quote_candidates(candidates: Sequence[_QuoteCandidate]) -> list[_QuoteCandidate]:
     deduped: list[_QuoteCandidate] = []
     seen_queries: set[str] = set()
     for candidate in candidates:
@@ -938,6 +1113,127 @@ def _canonicalize_character(value: str) -> str | None:
     if value in DOUBLE_QUOTE_CHARACTERS:
         return '"'
     return value
+
+
+def _build_canonical_markdown_from_elements(
+    raw_elements: Sequence[Mapping[str, Any]],
+) -> str:
+    return _PreparedDocument.from_chunks(
+        _coerce_markdown_resolution_chunks(raw_elements)
+    ).raw_text
+
+
+def _coerce_markdown_resolution_chunks(
+    raw_elements: Sequence[Mapping[str, Any]],
+) -> list[_ResolutionChunk]:
+    chunks: list[_ResolutionChunk] = []
+    for fallback_index, raw_element in enumerate(raw_elements):
+        if not isinstance(raw_element, Mapping):
+            continue
+
+        metadata = raw_element.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+
+        text = _first_non_empty(raw_element.get("text"))
+        if not text:
+            continue
+
+        section_path = _coerce_string_tuple(
+            raw_element.get("section_path")
+            or raw_element.get("sectionPath")
+            or metadata.get("section_path")
+            or metadata.get("sectionPath")
+        )
+        section_title = _first_non_empty(
+            raw_element.get("section_title"),
+            raw_element.get("sectionTitle"),
+            metadata.get("section_title"),
+            metadata.get("sectionTitle"),
+        )
+        parent_section = _first_non_empty(
+            raw_element.get("parent_section"),
+            raw_element.get("parentSection"),
+            metadata.get("parent_section"),
+            metadata.get("parentSection"),
+        )
+        subsection = _first_non_empty(
+            raw_element.get("subsection"),
+            metadata.get("subsection"),
+        )
+
+        if section_title is None and section_path:
+            section_title = section_path[-1]
+        if parent_section is None and section_path:
+            parent_section = section_path[0]
+
+        rendered_text = _render_canonical_markdown_block(
+            raw_element,
+            metadata=metadata,
+            text=text,
+            section_path=section_path,
+        )
+        if not rendered_text:
+            continue
+
+        chunks.append(
+            _ResolutionChunk(
+                id=_first_non_empty(
+                    raw_element.get("id"),
+                    metadata.get("element_id"),
+                    metadata.get("doc_item_id"),
+                )
+                or f"element-{fallback_index + 1}",
+                chunk_index=_coerce_int(
+                    raw_element.get("index"),
+                    metadata.get("index"),
+                )
+                or fallback_index,
+                text=rendered_text,
+                page_number=_coerce_positive_int(
+                    raw_element.get("page_number"),
+                    raw_element.get("pageNumber"),
+                    metadata.get("page_number"),
+                    metadata.get("pageNumber"),
+                ),
+                section_title=section_title,
+                parent_section=parent_section,
+                subsection=subsection,
+                section_path=section_path,
+            )
+        )
+
+    return chunks
+
+
+def _render_canonical_markdown_block(
+    raw_element: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any],
+    text: str,
+    section_path: tuple[str, ...],
+) -> str | None:
+    normalized_text = text.strip()
+    if not normalized_text:
+        return None
+
+    element_type = _first_non_empty(raw_element.get("type")) or ""
+    content_type = _first_non_empty(metadata.get("content_type")) or ""
+    original_type = _first_non_empty(metadata.get("original_type")) or ""
+
+    if element_type == "Title":
+        heading_depth = len(section_path) or _coerce_positive_int(
+            metadata.get("hierarchy_level")
+        )
+        depth = max(1, min(heading_depth or 1, 6))
+        return f"{'#' * depth} {normalized_text}"
+
+    if content_type == "code_block" or original_type == "markdown_code_block":
+        if normalized_text.startswith("```"):
+            return normalized_text
+        return f"```\n{normalized_text}\n```"
+
+    return normalized_text
 
 
 def _coerce_resolution_chunks(raw_chunks: Sequence[Mapping[str, Any]]) -> list[_ResolutionChunk]:

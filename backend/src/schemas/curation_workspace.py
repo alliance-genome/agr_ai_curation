@@ -80,12 +80,12 @@ class EvidenceAnchor(BaseModel):
     pdfx_markdown_offset_start: Optional[int] = Field(
         default=None,
         ge=0,
-        description="Inclusive character offset into PDFX markdown for the anchor start",
+        description="Inclusive character offset into canonical schema-enforced PDFX markdown for the anchor start",
     )
     pdfx_markdown_offset_end: Optional[int] = Field(
         default=None,
         ge=0,
-        description="Exclusive character offset into PDFX markdown for the anchor end",
+        description="Exclusive character offset into canonical schema-enforced PDFX markdown for the anchor end",
     )
     page_number: Optional[int] = Field(
         default=None,

@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_workspace import evidence_service as module
 from src.lib.curation_workspace.session_service import PreparedEvidenceRecordInput
+from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate as CandidateModel,
@@ -484,6 +485,14 @@ def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
                     "metadata": {},
                 }
             ]
+            kwargs["processed_element_loader"] = (
+                lambda _document_id, _user_id: markdown_to_pipeline_elements(
+                    """# Results
+
+Example quote.
+"""
+                )
+            )
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _ChunkBackedResolver)

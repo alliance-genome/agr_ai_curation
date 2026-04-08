@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
+from src.lib.curation_workspace.evidence_resolver import (
+    DeterministicEvidenceAnchorResolver,
+    _build_canonical_markdown_from_elements,
+)
 from src.lib.curation_workspace.pipeline import EvidenceResolutionContext, NormalizedCandidate
+from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.schemas.curation_prep import CurationPrepCandidate
 from src.schemas.curation_workspace import EvidenceAnchor, EvidenceAnchorKind, EvidenceLocatorQuality
 
@@ -76,11 +80,13 @@ def _resolve_anchor(
     candidate: CurationPrepCandidate,
     *,
     chunks: list[dict],
+    processed_elements: list[dict] | None = None,
     resolve_against_document: bool = True,
 ) -> tuple[EvidenceAnchor, list[str], list[str]]:
     resolver = DeterministicEvidenceAnchorResolver(
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: chunks,
+        processed_element_loader=lambda _document_id, _user_id: processed_elements or [],
         resolve_against_document=resolve_against_document,
     )
     result = resolver.resolve(
@@ -126,6 +132,12 @@ def test_resolver_preserves_tool_verified_anchor_payload():
 
 
 def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
+    processed_elements = markdown_to_pipeline_elements(
+        """# Results
+
+Verified quote from the paper.
+"""
+    )
     candidate = _make_candidate(
         _make_anchor_payload(
             page_number=None,
@@ -149,6 +161,7 @@ def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
                 "metadata": {},
             }
         ],
+        processed_elements=processed_elements,
     )
 
     assert field_keys == ["gene_symbol"]
@@ -160,6 +173,13 @@ def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
     assert anchor.chunk_ids == ["chunk-1"]
     assert anchor.pdfx_markdown_offset_start is not None
     assert anchor.pdfx_markdown_offset_end is not None
+    canonical_markdown = _build_canonical_markdown_from_elements(processed_elements)
+    assert (
+        canonical_markdown[
+            anchor.pdfx_markdown_offset_start:anchor.pdfx_markdown_offset_end
+        ]
+        == "Verified quote from the paper."
+    )
     assert warnings == []
 
 
@@ -184,3 +204,69 @@ def test_resolver_moves_table_literal_into_table_reference():
     assert result[0].field_keys == ["anatomy_label"]
     assert anchor.figure_reference is None
     assert anchor.table_reference == "Table 3"
+
+
+def test_resolver_offsets_remain_stable_across_canonical_markdown_round_trip():
+    schema_enforced_markdown = """# Title
+
+## Metadata
+
+Study: Example study
+
+## Results
+
+Verified quote from the paper.
+
+## References
+
+- Example reference
+"""
+    processed_elements = markdown_to_pipeline_elements(schema_enforced_markdown)
+    candidate = _make_candidate(
+        _make_anchor_payload(
+            snippet_text="Verified quote from the paper.",
+            sentence_text="Verified quote from the paper.",
+            viewer_search_text="Verified quote from the paper.",
+            page_number=1,
+            section_title="Results",
+            subsection_title=None,
+            chunk_ids=[],
+        )
+    )
+
+    anchor, warnings, _field_keys = _resolve_anchor(
+        candidate,
+        chunks=[
+            {
+                "id": "chunk-1",
+                "chunk_index": 0,
+                "content": "Verified quote from the paper.",
+                "page_number": 1,
+                "section_title": "Results",
+                "metadata": {},
+            }
+        ],
+        processed_elements=processed_elements,
+    )
+
+    canonical_markdown = _build_canonical_markdown_from_elements(processed_elements)
+    round_trip_markdown = _build_canonical_markdown_from_elements(
+        markdown_to_pipeline_elements(canonical_markdown)
+    )
+
+    assert warnings == []
+    assert canonical_markdown == round_trip_markdown
+    assert anchor.pdfx_markdown_offset_start is not None
+    assert anchor.pdfx_markdown_offset_end is not None
+    assert (
+        canonical_markdown[
+            anchor.pdfx_markdown_offset_start:anchor.pdfx_markdown_offset_end
+        ]
+        == "Verified quote from the paper."
+    )
+    assert (
+        round_trip_markdown[
+            anchor.pdfx_markdown_offset_start:anchor.pdfx_markdown_offset_end
+        ]
+        == "Verified quote from the paper."
+    )
