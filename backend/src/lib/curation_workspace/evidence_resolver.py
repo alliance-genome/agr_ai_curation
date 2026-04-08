@@ -64,6 +64,7 @@ class _ResolutionChunk:
     parent_section: str | None
     subsection: str | None
     section_path: tuple[str, ...]
+    separator_before: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,12 @@ class _PreparedDocument:
     normalized_index_map: tuple[int, ...]
 
     @classmethod
-    def from_chunks(cls, chunks: Sequence[_ResolutionChunk]) -> "_PreparedDocument":
+    def from_chunks(
+        cls,
+        chunks: Sequence[_ResolutionChunk],
+        *,
+        default_separator: str = MERGED_MARKDOWN_SEPARATOR,
+    ) -> "_PreparedDocument":
         normalized_chunks = tuple(
             sorted(chunks, key=lambda chunk: (chunk.chunk_index, chunk.page_number or 0))
         )
@@ -99,9 +105,12 @@ class _PreparedDocument:
         spans: list[_ChunkSpan] = []
         cursor = 0
         for index, chunk in enumerate(normalized_chunks):
-            if index:
-                parts.append(MERGED_MARKDOWN_SEPARATOR)
-                cursor += len(MERGED_MARKDOWN_SEPARATOR)
+            separator = chunk.separator_before
+            if separator is None:
+                separator = "" if index == 0 else default_separator
+            if separator:
+                parts.append(separator)
+                cursor += len(separator)
             start = cursor
             parts.append(chunk.text)
             cursor += len(chunk.text)
@@ -1190,6 +1199,10 @@ def _coerce_markdown_resolution_chunks(
                 )
                 or fallback_index,
                 text=rendered_text,
+                separator_before=_coerce_markdown_separator_before(
+                    metadata,
+                    fallback_index=fallback_index,
+                ),
                 page_number=_coerce_positive_int(
                     raw_element.get("page_number"),
                     raw_element.get("pageNumber"),
@@ -1213,6 +1226,10 @@ def _render_canonical_markdown_block(
     text: str,
     section_path: tuple[str, ...],
 ) -> str | None:
+    source_markdown_block = metadata.get("markdown_block")
+    if isinstance(source_markdown_block, str) and source_markdown_block:
+        return source_markdown_block
+
     normalized_text = text.strip()
     if not normalized_text:
         return None
@@ -1234,6 +1251,19 @@ def _render_canonical_markdown_block(
         return f"```\n{normalized_text}\n```"
 
     return normalized_text
+
+
+def _coerce_markdown_separator_before(
+    metadata: Mapping[str, Any],
+    *,
+    fallback_index: int,
+) -> str | None:
+    separator = metadata.get("markdown_separator_before")
+    if isinstance(separator, str):
+        return separator
+    if fallback_index == 0:
+        return ""
+    return None
 
 
 def _coerce_resolution_chunks(raw_chunks: Sequence[Mapping[str, Any]]) -> list[_ResolutionChunk]:

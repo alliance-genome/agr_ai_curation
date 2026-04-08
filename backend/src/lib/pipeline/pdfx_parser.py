@@ -509,11 +509,20 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
     """Convert merged markdown output into pipeline element dictionaries."""
     normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.split("\n")
+    line_offsets: List[int] = []
+    cursor = 0
+    for idx, line in enumerate(lines):
+        line_offsets.append(cursor)
+        cursor += len(line)
+        if idx < len(lines) - 1:
+            cursor += 1
+
     elements: List[Dict[str, Any]] = []
     section_path: List[str] = []
     current_page = 1
     index = 0
     i = 0
+    previous_block_end: int | None = None
 
     heading_re = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
     list_re = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.+)$")
@@ -522,11 +531,28 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
         re.compile(r"^\[\s*page\s+(\d+)\s*\]$", re.IGNORECASE),
     ]
 
-    def add_element(element_type: str, text: str, content_type: str, original_type: str) -> None:
+    def add_element(
+        element_type: str,
+        text: str,
+        content_type: str,
+        original_type: str,
+        *,
+        source_start_line: int,
+        source_end_line: int,
+    ) -> None:
         nonlocal index
+        nonlocal previous_block_end
         clean_text = text.strip()
         if not clean_text:
             return
+        block_start = line_offsets[source_start_line]
+        block_end = line_offsets[source_end_line - 1] + len(lines[source_end_line - 1])
+        markdown_block = normalized[block_start:block_end]
+        separator_before = (
+            normalized[previous_block_end:block_start]
+            if previous_block_end is not None
+            else normalized[:block_start]
+        )
         active_section = section_path[-1] if section_path else None
         doc_item_label = {
             "Title": "section_header",
@@ -542,6 +568,8 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             "page_number": current_page,
             "content_type": content_type,
             "original_type": original_type,
+            "markdown_block": markdown_block,
+            "markdown_separator_before": separator_before,
         }
         elements.append(
             {
@@ -552,6 +580,7 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             }
         )
         index += 1
+        previous_block_end = block_end
 
     while i < len(lines):
         raw_line = lines[i]
@@ -573,24 +602,41 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
 
         heading_match = heading_re.match(stripped)
         if heading_match:
+            source_start_line = i
             level = len(heading_match.group(1))
             title = heading_match.group(2).strip()
             section_path = section_path[: level - 1]
             section_path.append(title)
-            add_element("Title", title, "heading", "markdown_heading")
+            add_element(
+                "Title",
+                title,
+                "heading",
+                "markdown_heading",
+                source_start_line=source_start_line,
+                source_end_line=source_start_line + 1,
+            )
             i += 1
             continue
 
         if stripped.startswith("|"):
+            source_start_line = i
             table_lines = [stripped]
             i += 1
             while i < len(lines) and lines[i].strip().startswith("|"):
                 table_lines.append(lines[i].strip())
                 i += 1
-            add_element("Table", "\n".join(table_lines), "table", "markdown_table")
+            add_element(
+                "Table",
+                "\n".join(table_lines),
+                "table",
+                "markdown_table",
+                source_start_line=source_start_line,
+                source_end_line=i,
+            )
             continue
 
         if stripped.startswith("```"):
+            source_start_line = i
             code_lines = [stripped]
             i += 1
             while i < len(lines):
@@ -599,27 +645,58 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
                     i += 1
                     break
                 i += 1
-            add_element("NarrativeText", "\n".join(code_lines), "code_block", "markdown_code_block")
+            add_element(
+                "NarrativeText",
+                "\n".join(code_lines),
+                "code_block",
+                "markdown_code_block",
+                source_start_line=source_start_line,
+                source_end_line=i,
+            )
             continue
 
         list_match = list_re.match(raw_line)
         if list_match:
-            add_element("ListItem", stripped, "list_item", "markdown_list_item")
+            add_element(
+                "ListItem",
+                stripped,
+                "list_item",
+                "markdown_list_item",
+                source_start_line=i,
+                source_end_line=i + 1,
+            )
             i += 1
             continue
 
+        source_start_line = i
         paragraph_lines = [stripped]
         i += 1
         while i < len(lines):
             peek = lines[i].strip()
             if not peek:
-                i += 1
                 break
             if heading_re.match(peek) or peek.startswith("|") or peek.startswith("```") or list_re.match(lines[i]):
                 break
             paragraph_lines.append(peek)
             i += 1
-        add_element("NarrativeText", " ".join(paragraph_lines), "paragraph", "markdown_paragraph")
+        source_end_line = i
+        if i < len(lines) and not lines[i].strip():
+            i += 1
+        add_element(
+            "NarrativeText",
+            " ".join(paragraph_lines),
+            "paragraph",
+            "markdown_paragraph",
+            source_start_line=source_start_line,
+            source_end_line=source_end_line,
+        )
+
+    if elements and previous_block_end is not None and previous_block_end < len(normalized):
+        metadata = elements[-1].get("metadata")
+        if isinstance(metadata, dict):
+            markdown_block = metadata.get("markdown_block")
+            if isinstance(markdown_block, str):
+                metadata["markdown_block"] = f"{markdown_block}{normalized[previous_block_end:]}"
 
     return elements
 

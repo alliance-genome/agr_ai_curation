@@ -211,9 +211,13 @@ def test_resolver_offsets_remain_stable_across_canonical_markdown_round_trip():
 
 ## Metadata
 
-Study: Example study
+**Study:** Example study
+**Species:** D. melanogaster
 
 ## Results
+
+- First item
+- Second item
 
 Verified quote from the paper.
 
@@ -255,6 +259,8 @@ Verified quote from the paper.
     )
 
     assert warnings == []
+    assert canonical_markdown == schema_enforced_markdown
+    assert round_trip_markdown == schema_enforced_markdown
     assert canonical_markdown == round_trip_markdown
     assert anchor.pdfx_markdown_offset_start is not None
     assert anchor.pdfx_markdown_offset_end is not None

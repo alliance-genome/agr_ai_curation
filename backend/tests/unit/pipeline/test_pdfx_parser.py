@@ -91,6 +91,27 @@ This is the intro paragraph.
     assert elements[5]["metadata"]["content_type"] == "table"
 
 
+def test_markdown_to_pipeline_elements_preserves_source_markdown_blocks_and_separators():
+    markdown = """# Results
+
+- First item
+- Second item
+
+Target sentence.
+"""
+
+    elements = markdown_to_pipeline_elements(markdown)
+
+    assert elements[0]["metadata"]["markdown_block"] == "# Results"
+    assert elements[0]["metadata"]["markdown_separator_before"] == ""
+    assert elements[1]["metadata"]["markdown_block"] == "- First item"
+    assert elements[1]["metadata"]["markdown_separator_before"] == "\n\n"
+    assert elements[2]["metadata"]["markdown_block"] == "- Second item"
+    assert elements[2]["metadata"]["markdown_separator_before"] == "\n"
+    assert elements[3]["metadata"]["markdown_block"] == "Target sentence.\n"
+    assert elements[3]["metadata"]["markdown_separator_before"] == "\n\n"
+
+
 def test_markdown_to_pipeline_elements_does_not_synthesize_bbox_provenance():
     markdown = """<!-- page: 2 -->
 # Results
