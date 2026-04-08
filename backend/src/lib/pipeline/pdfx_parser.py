@@ -17,6 +17,7 @@ from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingErr
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
     build_pipeline_elements,
+    normalize_section_path,
     normalize_text,
     normalize_elements,
 )
@@ -528,7 +529,7 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
         clean_text = normalize_text(text.strip())
         if not clean_text:
             return
-        normalized_section_path = [part for part in (normalize_text(section) for section in section_path) if part]
+        normalized_section_path = normalize_section_path(section_path)
         active_section = normalized_section_path[-1] if normalized_section_path else None
         doc_item_label = {
             "Title": "section_header",

@@ -117,7 +117,7 @@ def normalize_text(value: str) -> str:
     return strip_markdown_formatting(normalized).strip()
 
 
-def _normalize_section_path(section_path: List[str]) -> List[str]:
+def normalize_section_path(section_path: List[str]) -> List[str]:
     """Normalize section path entries while dropping empty segments."""
     return [part for part in (normalize_text(section) for section in section_path) if part]
 
@@ -156,7 +156,7 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
 
         text = normalize_text(element.cleaned_text())
         normalized_section_title = normalize_text(element.section_title) if element.section_title else None
-        normalized_section_path = _normalize_section_path(element.section_path)
+        normalized_section_path = normalize_section_path(element.section_path)
 
         if element.is_heading:
             heading_text = text or normalized_section_title
@@ -169,7 +169,7 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
                 continue
             active_section = heading_text
             last_prefixed_section = None
-            heading_section_path = normalized_section_path or [heading_text]
+            heading_section_path = list(normalized_section_path) if normalized_section_path else [heading_text]
             if heading_section_path[-1] != heading_text:
                 heading_section_path.append(heading_text)
 
@@ -272,7 +272,7 @@ def build_pipeline_elements(elements: List[NormalizedElement]) -> List[Dict[str,
                 "original_type": elem.original_type,
             }
         )
-        embedding_text = normalize_text(elem.embedding_text)
+        embedding_text = normalize_text(elem.embedding_text)  # Keep: safety-net for callers bypassing normalize_elements.
 
         if not embedding_text.strip():
             logger.warning(
