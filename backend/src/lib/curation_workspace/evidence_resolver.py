@@ -266,6 +266,8 @@ class DeterministicEvidenceAnchorResolver:
         document = _PreparedEvidenceDocuments.empty()
         load_warnings: tuple[str, ...] = ()
         if self._resolve_against_document:
+            # This resolver degrades lookup failures to per-candidate warnings;
+            # batch-level fail-fast decisions belong in the calling workflow.
             user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
             document, load_warnings = self._prepare_document(context.document_id, user_id)
 
