@@ -104,6 +104,23 @@ This paragraph came from a markdown-only extraction fallback.
     assert all("provenance" not in element["metadata"] for element in elements)
 
 
+def test_markdown_to_pipeline_elements_strips_inline_formatting_from_text_and_sections():
+    markdown = """# **Results** <sup>2+</sup>
+Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
+"""
+
+    elements = markdown_to_pipeline_elements(markdown)
+
+    assert [element["text"] for element in elements] == [
+        "Results 2+",
+        "Signal from B cells depends on Ca2+ and kinase activity.",
+    ]
+    assert elements[0]["metadata"]["section_title"] == "Results 2+"
+    assert elements[0]["metadata"]["section_path"] == ["Results 2+"]
+    assert elements[1]["metadata"]["section_title"] == "Results 2+"
+    assert elements[1]["metadata"]["section_path"] == ["Results 2+"]
+
+
 def test_build_progress_message_prefers_stage_display():
     message = _build_progress_message(
         {

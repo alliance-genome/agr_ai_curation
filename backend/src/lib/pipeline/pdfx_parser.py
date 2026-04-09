@@ -17,6 +17,8 @@ from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingErr
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
     build_pipeline_elements,
+    normalize_section_path,
+    normalize_text,
     normalize_elements,
 )
 
@@ -524,10 +526,11 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
 
     def add_element(element_type: str, text: str, content_type: str, original_type: str) -> None:
         nonlocal index
-        clean_text = text.strip()
+        clean_text = normalize_text(text.strip())
         if not clean_text:
             return
-        active_section = section_path[-1] if section_path else None
+        normalized_section_path = normalize_section_path(section_path)
+        active_section = normalized_section_path[-1] if normalized_section_path else None
         doc_item_label = {
             "Title": "section_header",
             "ListItem": "list_item",
@@ -537,7 +540,7 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
             "element_id": f"md_element_{index}",
             "doc_item_label": doc_item_label,
             "section_title": active_section,
-            "section_path": list(section_path),
+            "section_path": normalized_section_path,
             "hierarchy_level": len(section_path) if section_path else 1,
             "page_number": current_page,
             "content_type": content_type,
@@ -574,10 +577,11 @@ def markdown_to_pipeline_elements(markdown: str) -> List[Dict[str, Any]]:
         heading_match = heading_re.match(stripped)
         if heading_match:
             level = len(heading_match.group(1))
-            title = heading_match.group(2).strip()
+            title = normalize_text(heading_match.group(2).strip())
             section_path = section_path[: level - 1]
-            section_path.append(title)
-            add_element("Title", title, "heading", "markdown_heading")
+            if title:
+                section_path.append(title)
+                add_element("Title", title, "heading", "markdown_heading")
             i += 1
             continue
 
