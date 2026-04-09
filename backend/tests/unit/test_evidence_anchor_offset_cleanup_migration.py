@@ -55,6 +55,7 @@ def test_upgrade_strips_pdfx_markdown_offsets_from_evidence_anchor_payloads(monk
     assert "UPDATE evidence_anchors" in statement
     assert "pdfx_markdown_offset_start" in statement
     assert "pdfx_markdown_offset_end" in statement
+    assert "COALESCE(anchor" not in statement
 
 
 def test_downgrade_is_a_noop(monkeypatch):

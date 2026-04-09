@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.text(
             """
             UPDATE evidence_anchors
-            SET anchor = COALESCE(anchor, '{}'::jsonb)
+            SET anchor = anchor
                 - 'pdfx_markdown_offset_start'
                 - 'pdfx_markdown_offset_end'
             WHERE anchor ? 'pdfx_markdown_offset_start'
