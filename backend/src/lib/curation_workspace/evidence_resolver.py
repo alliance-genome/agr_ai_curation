@@ -140,8 +140,6 @@ class _QuoteResolution:
     locator_quality: EvidenceLocatorQuality
     viewer_search_text: str
     normalized_text: str | None
-    raw_start: int
-    raw_end: int
     matched_text: str
     chunk_ids: tuple[str, ...]
     page_number: int | None
@@ -352,8 +350,6 @@ def _resolve_quote_reference(
             locator_quality=candidate.locator_quality,
             viewer_search_text=viewer_search_text,
             normalized_text=normalized_quote,
-            raw_start=selected_span.raw_start,
-            raw_end=selected_span.raw_end,
             matched_text=selected_span.matched_text,
             chunk_ids=selected_span.chunk_ids,
             page_number=selected_span.page_number,
@@ -447,8 +443,6 @@ def _build_quote_anchor(
         sentence_text=sentence_text,
         normalized_text=resolution.normalized_text,
         viewer_search_text=resolution.viewer_search_text,
-        pdfx_markdown_offset_start=resolution.raw_start,
-        pdfx_markdown_offset_end=resolution.raw_end,
         page_number=resolution.page_number or incoming_anchor.page_number,
         page_label=incoming_anchor.page_label,
         section_title=resolution.section_title or incoming_anchor.section_title,

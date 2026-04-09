@@ -122,8 +122,6 @@ def _anchor(
         sentence_text=snippet_text,
         normalized_text=None,
         viewer_search_text=None,
-        pdfx_markdown_offset_start=None,
-        pdfx_markdown_offset_end=None,
         page_number=page_number,
         page_label=None,
         section_title="Results" if page_number is not None else None,
@@ -503,9 +501,8 @@ def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
     assert resolved_anchor.page_number == 3
     assert resolved_anchor.section_title == "Results"
     assert resolved_anchor.subsection_title == "Association"
+    assert resolved_anchor.viewer_search_text == "Example quote."
     assert resolved_anchor.chunk_ids == ["chunk-1"]
-    assert resolved_anchor.pdfx_markdown_offset_start is not None
-    assert resolved_anchor.pdfx_markdown_offset_end is not None
     assert warnings == []
 
 

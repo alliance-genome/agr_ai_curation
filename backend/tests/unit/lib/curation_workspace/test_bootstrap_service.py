@@ -413,8 +413,6 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
                             "normalized_text": None,
                             "viewer_search_text": "APOE finding.",
                             "viewer_highlightable": False,
-                            "pdfx_markdown_offset_start": None,
-                            "pdfx_markdown_offset_end": None,
                             "page_number": 2,
                             "page_label": None,
                             "section_title": "Results",

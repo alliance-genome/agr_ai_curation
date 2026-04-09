@@ -136,8 +136,6 @@ def _export_payload_context() -> dict[str, object]:
                             "normalized_text": "apoe was linked to the reported phenotype",
                             "viewer_search_text": "APOE was linked to the reported phenotype.",
                             "viewer_highlightable": True,
-                            "pdfx_markdown_offset_start": 14,
-                            "pdfx_markdown_offset_end": 57,
                             "page_number": 3,
                             "page_label": "3",
                             "section_title": "Results",

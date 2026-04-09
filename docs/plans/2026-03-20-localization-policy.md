@@ -77,28 +77,6 @@ Important contract boundary:
 - The pipeline parser carries `section_path` in element metadata.
 - The shared `EvidenceAnchor` contract does not currently expose `section_path`; it exposes `section_title` and `subsection_title` only.
 
-### How character offsets are represented today
-
-They are not represented in the parsed pipeline output today.
-
-- `markdown_to_pipeline_elements()` does not emit markdown offsets.
-- `build_pipeline_elements()` in `backend/src/schemas/pdfx_schema.py` does not emit markdown offsets.
-- Parser tests explicitly confirm that markdown fallback output does not synthesize bbox/provenance geometry.
-
-The existing anchor fields:
-
-- `pdfx_markdown_offset_start`
-- `pdfx_markdown_offset_end`
-
-must therefore be treated as companion metadata computed later by the resolver, not as parser-native fields.
-
-Offset semantics are:
-
-- offsets refer to the merged PDFX markdown string, not PDF byte offsets and not PDF.js text-layer character positions
-- `start` is inclusive
-- `end` is exclusive
-- both must be populated together or both omitted
-
 ## What the Spike Established
 
 From `ALL-94` on a 44-element fixture:
@@ -157,12 +135,6 @@ These rules define how downstream tickets should populate and consume the existi
 - Section-level degraded fallback hints.
 - `section_title` is the primary fallback.
 - `subsection_title` is a secondary fallback when it is materially more specific than the section title.
-
-### `pdfx_markdown_offset_start` and `pdfx_markdown_offset_end`
-
-- Optional traceability back to the merged PDFX markdown string.
-- Useful for resolver auditing and debugging.
-- Not usable as direct viewer highlight coordinates.
 
 ## Canonical Text Normalization Contract
 

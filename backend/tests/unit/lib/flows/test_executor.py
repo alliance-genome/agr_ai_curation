@@ -803,8 +803,6 @@ class TestGetAllAgentToolsStepOrderRuntime:
                                             "normalized_text": None,
                                             "viewer_search_text": "unc-54 was observed.",
                                             "viewer_highlightable": False,
-                                            "pdfx_markdown_offset_start": None,
-                                            "pdfx_markdown_offset_end": None,
                                             "page_number": 2,
                                             "page_label": None,
                                             "section_title": "Results",

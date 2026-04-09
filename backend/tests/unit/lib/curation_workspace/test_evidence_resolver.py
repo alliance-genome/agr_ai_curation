@@ -41,8 +41,6 @@ def _make_anchor_payload(**overrides: object) -> dict:
         "sentence_text": "Verified quote from the paper.",
         "normalized_text": None,
         "viewer_search_text": "Verified quote from the paper.",
-        "pdfx_markdown_offset_start": None,
-        "pdfx_markdown_offset_end": None,
         "page_number": 4,
         "page_label": None,
         "section_title": "Results",
@@ -157,9 +155,8 @@ def test_resolver_document_lookup_enriches_quote_from_matching_chunk():
     assert anchor.page_number == 3
     assert anchor.section_title == "Results"
     assert anchor.subsection_title == "Association"
+    assert anchor.viewer_search_text == "Verified quote from the paper."
     assert anchor.chunk_ids == ["chunk-1"]
-    assert anchor.pdfx_markdown_offset_start is not None
-    assert anchor.pdfx_markdown_offset_end is not None
     assert warnings == []
 
 

@@ -433,8 +433,6 @@ def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnch
         sentence_text=verified_quote,
         normalized_text=None,
         viewer_search_text=verified_quote,
-        pdfx_markdown_offset_start=None,
-        pdfx_markdown_offset_end=None,
         page_number=page_number,
         page_label=None,
         section_title=section_title,
