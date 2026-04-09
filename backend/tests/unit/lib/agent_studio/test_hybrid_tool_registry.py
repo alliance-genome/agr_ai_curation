@@ -1,5 +1,4 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
-import pytest
 from src.lib.agent_studio.catalog_service import (
     get_tool_registry,
     TOOL_OVERRIDES,
@@ -34,3 +33,19 @@ def test_tool_overrides_merge_with_introspected():
         override = TOOL_OVERRIDES["agr_curation_query"]
         if "category" in override:
             assert tool.get("category") == override["category"]
+
+
+def test_save_csv_file_docs_match_runtime_signature():
+    registry = get_tool_registry()
+
+    params = registry["save_csv_file"]["documentation"]["parameters"]
+    param_names = [param["name"] for param in params]
+    params_by_name = {param["name"]: param for param in params}
+
+    assert param_names == ["data_json", "filename", "columns"]
+    assert params_by_name["data_json"]["type"] == "string"
+    assert params_by_name["data_json"]["required"] is True
+    assert params_by_name["filename"]["type"] == "string"
+    assert params_by_name["filename"]["required"] is True
+    assert params_by_name["columns"]["type"] == "string"
+    assert params_by_name["columns"]["required"] is False

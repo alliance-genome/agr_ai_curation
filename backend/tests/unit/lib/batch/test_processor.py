@@ -38,11 +38,19 @@ def _build_batch_context():
 def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     db = Mock()
     batch, batch_doc, flow = _build_batch_context()
+    published_events = []
 
     async def _fake_execute_flow_for_document(**_kwargs):
         return None
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_id, event: published_events.append(event)
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="FILE_READY"):
         processor._process_single_document(
@@ -57,6 +65,20 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     assert batch.failed_documents == 1
     assert batch.completed_documents == 0
     assert batch_doc.result_file_path is None
+    assert published_events == [
+        {
+            "type": "DOCUMENT_STATUS",
+            "batch_id": str(batch.id),
+            "document_id": str(batch_doc.document_id),
+            "batch_document_id": str(batch_doc.id),
+            "position": batch_doc.position,
+            "status": BatchDocumentStatus.FAILED.value,
+            "result_file_path": None,
+            "error_message": "Flow completed without FILE_READY output",
+            "processing_time_ms": batch_doc.processing_time_ms,
+            "timestamp": batch_doc.processed_at.isoformat(),
+        }
+    ]
 
 
 def test_batch_processor_marks_completed_when_file_ready(monkeypatch):

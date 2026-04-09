@@ -246,11 +246,27 @@ def _process_single_document(
     except Exception as e:
         processing_time_ms = int((time.time() - start_time) * 1000)
         batch_doc.status = BatchDocumentStatus.FAILED
+        batch_doc.result_file_path = None
         batch_doc.error_message = str(e)[:500]
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
         batch.failed_documents += 1
         db.commit()
+        get_batch_broadcaster().publish_sync(
+            batch.id,
+            {
+                "type": "DOCUMENT_STATUS",
+                "batch_id": str(batch.id),
+                "document_id": str(batch_doc.document_id),
+                "batch_document_id": str(batch_doc.id),
+                "position": batch_doc.position,
+                "status": BatchDocumentStatus.FAILED.value,
+                "result_file_path": None,
+                "error_message": batch_doc.error_message,
+                "processing_time_ms": processing_time_ms,
+                "timestamp": batch_doc.processed_at.isoformat(),
+            },
+        )
         raise
 
 
