@@ -77,16 +77,6 @@ class EvidenceAnchor(BaseModel):
         default=False,
         description="Whether the viewer has enough quote text to reliably highlight this anchor",
     )
-    pdfx_markdown_offset_start: Optional[int] = Field(
-        default=None,
-        ge=0,
-        description="Inclusive character offset into PDFX markdown for the anchor start",
-    )
-    pdfx_markdown_offset_end: Optional[int] = Field(
-        default=None,
-        ge=0,
-        description="Exclusive character offset into PDFX markdown for the anchor end",
-    )
     page_number: Optional[int] = Field(
         default=None,
         ge=1,
@@ -116,20 +106,6 @@ class EvidenceAnchor(BaseModel):
         default_factory=list,
         description="Resolved PDFX chunk identifiers contributing to this anchor",
     )
-
-    @model_validator(mode="after")
-    def validate_markdown_offsets(self) -> "EvidenceAnchor":
-        """Require complete, monotonic markdown offsets when offsets are present."""
-
-        start = self.pdfx_markdown_offset_start
-        end = self.pdfx_markdown_offset_end
-
-        if (start is None) != (end is None):
-            raise ValueError("PDFX markdown offsets must include both start and end values")
-        if start is not None and end is not None and end < start:
-            raise ValueError("PDFX markdown offset end must be greater than or equal to start")
-
-        return self
 
 
 class ValidationCandidateMatch(BaseModel):

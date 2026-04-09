@@ -35,8 +35,6 @@ def make_anchor_payload() -> dict:
         "sentence_text": "Observed response was recorded in treated samples.",
         "normalized_text": "observed response was recorded in treated samples",
         "viewer_search_text": "Observed response was recorded in treated samples",
-        "pdfx_markdown_offset_start": 120,
-        "pdfx_markdown_offset_end": 177,
         "page_number": 3,
         "page_label": "3",
         "section_title": "Results",
@@ -351,28 +349,6 @@ def test_evidence_anchor_accepts_minimal_required_fields_and_defaults():
     assert anchor.sentence_text is None
     assert anchor.viewer_search_text is None
     assert anchor.chunk_ids == []
-
-
-def test_evidence_anchor_rejects_incomplete_or_reversed_offsets():
-    """Markdown offsets must be complete and monotonic."""
-
-    with pytest.raises(ValidationError):
-        EvidenceAnchor(
-            **{
-                **make_anchor_payload(),
-                "pdfx_markdown_offset_start": 120,
-                "pdfx_markdown_offset_end": None,
-            }
-        )
-
-    with pytest.raises(ValidationError):
-        EvidenceAnchor(
-            **{
-                **make_anchor_payload(),
-                "pdfx_markdown_offset_start": 200,
-                "pdfx_markdown_offset_end": 150,
-            }
-        )
 
 
 def test_field_validation_result_supports_required_statuses():

@@ -309,8 +309,6 @@ function buildEvidenceRecords(
         viewer_search_text:
           normalizeOptionalText(row.snippetText),
         viewer_highlightable: true,
-        pdfx_markdown_offset_start: null,
-        pdfx_markdown_offset_end: null,
         page_number: parseOptionalInteger(row.pageNumber),
         page_label: null,
         section_title: normalizeOptionalText(row.sectionTitle),

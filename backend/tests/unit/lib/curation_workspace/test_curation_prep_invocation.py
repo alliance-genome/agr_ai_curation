@@ -99,8 +99,6 @@ def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
                                 "sentence_text": "Verified quote.",
                                 "normalized_text": None,
                                 "viewer_search_text": "Verified quote.",
-                                "pdfx_markdown_offset_start": None,
-                                "pdfx_markdown_offset_end": None,
                                 "page_number": 4,
                                 "page_label": None,
                                 "section_title": "Results",

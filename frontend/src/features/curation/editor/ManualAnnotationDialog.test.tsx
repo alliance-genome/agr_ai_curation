@@ -413,8 +413,6 @@ describe('ManualAnnotationDialog', () => {
               normalized_text: null,
               viewer_search_text: 'Quoted support text',
               viewer_highlightable: true,
-              pdfx_markdown_offset_start: null,
-              pdfx_markdown_offset_end: null,
               page_number: 4,
               page_label: null,
               section_title: null,

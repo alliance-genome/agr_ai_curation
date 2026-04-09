@@ -348,8 +348,6 @@ def _build_manual_candidate_request(
                     "normalized_text": None,
                     "viewer_search_text": "Quoted support text",
                     "viewer_highlightable": True,
-                    "pdfx_markdown_offset_start": None,
-                    "pdfx_markdown_offset_end": None,
                     "page_number": 4,
                     "page_label": None,
                     "section_title": "Results",
