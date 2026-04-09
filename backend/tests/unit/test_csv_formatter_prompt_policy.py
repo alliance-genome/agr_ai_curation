@@ -11,7 +11,10 @@ def _repo_root() -> Path:
 def _load_prompt_content(relative_path: str) -> str:
     prompt_path = _repo_root() / relative_path
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
-    return str(data.get("content") or "")
+    content = data.get("content")
+    if content is None:
+        raise ValueError(f"Missing 'content' key in {prompt_path}")
+    return str(content)
 
 
 @pytest.mark.parametrize(
