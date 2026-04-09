@@ -778,8 +778,14 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "category": "Output",
         "source_file": "backend/src/lib/openai_agents/tools/file_output_tools.py",
         "documentation": {
-            "summary": "Creates a CSV file from structured data and returns a download link.",
+            "summary": "Creates a CSV file from structured row data and returns a download link.",
             "parameters": [
+                {
+                    "name": "data_json",
+                    "type": "string",
+                    "required": True,
+                    "description": "JSON array string of row objects to convert to CSV.",
+                },
                 {
                     "name": "filename",
                     "type": "string",
@@ -787,10 +793,10 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "description": "Output filename (without extension).",
                 },
                 {
-                    "name": "data",
-                    "type": "array",
-                    "required": True,
-                    "description": "Array of objects to convert to CSV rows.",
+                    "name": "columns",
+                    "type": "string",
+                    "required": False,
+                    "description": "Optional JSON array string listing column names in output order.",
                 },
             ],
         },
