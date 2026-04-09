@@ -1,5 +1,4 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
-import pytest
 from src.lib.agent_studio.catalog_service import (
     get_tool_registry,
     TOOL_OVERRIDES,
