@@ -44,6 +44,20 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 - Agent PR gate (local):
   - `./scripts/testing/agent_pr_gate.sh`
 
+## 3.5) GitHub Access In Interactive Codex Sessions
+
+- In Symphony/Incus VM shells, bare `gh auth status` may report "not logged in" unless the repo PAT has already been exported into the current shell environment.
+- Preferred interactive entry points in the Symphony VM shell:
+  - `co` for the current directory
+  - `comain` for `~/.symphony/sandboxes/agr_ai_curation/main`
+- Those shortcuts are installed from `scripts/utilities/symphony_vm_shell_shortcuts.sh` via `scripts/utilities/symphony_install_vm_shell_shortcuts.sh`.
+- The shortcuts call `scripts/utilities/codex_with_repo_pat.sh`, which loads the repo-scoped PAT from `.symphony/github_pat_env.sh` before starting Codex so plain `gh ...` commands inside the interactive session inherit `GH_TOKEN`/`GITHUB_TOKEN`.
+- If you are already inside Codex and need a manual GitHub CLI command, use `./.symphony/with_github_pat.sh gh ...`.
+- Never run `gh auth login` in this VM/workspace and never copy a personal `~/.config/gh` into the VM.
+- Before concluding that GitHub Actions logs or PR metadata are unavailable, try:
+  - `./.symphony/with_github_pat.sh gh auth status`
+  - `./.symphony/with_github_pat.sh gh pr checks <number>`
+
 ## 4) Dangerous Areas
 
 - Secrets: never commit `.env`, API keys, or any credential files.
@@ -73,6 +87,12 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 ### Symphony deployment route for new/modified scripts
 
 Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of files with different deployment paths:
+
+- For full `symphony-main` rebuilds, the tracked source of truth is now:
+  - `scripts/utilities/symphony_print_incus_vm_cloud_init.sh`
+  - `scripts/utilities/symphony_rebuild_incus_vm.sh`
+  - `docs/developer/guides/SYMPHONY_INCUS_VM_REBUILD.md`
+- That rebuild path installs pinned `gitleaks` and `trufflehog` during VM creation so interactive SSH work does not have to wait for repo bootstrap before secret-scanning hooks become real.
 
 1. **Git-tracked scripts** (`scripts/utilities/symphony_*.sh`):
    - Committed to the repo and pushed to `origin/main`.

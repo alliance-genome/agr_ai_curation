@@ -34,7 +34,13 @@ scripts/
     ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
     ├── pdfjs_native_verifier_benchmark.py # Benchmark the frontend's native-highlight verifier against the 100-quote corpus
     ├── pdf_text_matcher_bakeoff.py     # Compare Python fuzzy/local-alignment libraries against the same quote benchmark
+    ├── symphony_ensure_git_safety_tools.sh # Ensure Gitleaks + TruffleHog are installed in the Symphony VM user environment
+    ├── symphony_git_safety_tool_versions.sh # Shared pinned versions/checksums for VM git safety scanners
+    ├── symphony_install_vm_shell_shortcuts.sh # Install/update the managed ~/.bash_aliases block for Symphony VM Codex shortcuts
+    ├── symphony_print_incus_vm_cloud_init.sh # Print tracked cloud-init for rebuilding the Symphony Incus VM
+    ├── symphony_rebuild_incus_vm.sh    # Rebuild the Symphony Incus VM shell from the tracked cloud-init source
     ├── symphony_sync_codex_auth_to_vm.sh # Sync host ~/.codex/auth.json into the Symphony Incus VM when it changes
+    ├── symphony_vm_shell_shortcuts.sh  # Sourceable Codex helper functions (`co`, `comain`, `cor`) for Symphony VM shells
     ├── validate_unused_files.py        # Multi-tool unused file detection
     └── generate_coverage.sh            # Generate coverage data for validation
 ```
@@ -293,6 +299,63 @@ override them, and can tear the sandbox down when you are done.
 
 # Tear down the sandbox stack and remove the worktree
 ./scripts/utilities/symphony_main_sandbox.sh cleanup
+```
+
+### utilities/symphony_install_vm_shell_shortcuts.sh
+
+Installs or refreshes the managed `~/.bash_aliases` block that sources the
+tracked Symphony VM Codex shortcuts. This is the durable way to keep `co`,
+`comain`, and `cor` working in rebuilt VM shells.
+
+```bash
+# Install/update the managed shell shortcut block
+./scripts/utilities/symphony_install_vm_shell_shortcuts.sh
+```
+
+### utilities/symphony_ensure_git_safety_tools.sh
+
+Ensures `gitleaks` and `trufflehog` are available in the Symphony VM user
+environment. The script installs missing tools into `~/.local/bin`, which keeps
+the current repo `pre-commit` hook's secret scanning active for the source
+checkout, the main sandbox worktree, and issue workspaces that inherit the same
+hooks. The installer uses pinned release versions and checksum verification; the
+shared pins live in `utilities/symphony_git_safety_tool_versions.sh`.
+
+```bash
+# Verify the tools are already available
+./scripts/utilities/symphony_ensure_git_safety_tools.sh --check
+
+# Install missing tools into ~/.local/bin
+./scripts/utilities/symphony_ensure_git_safety_tools.sh
+```
+
+### utilities/symphony_print_incus_vm_cloud_init.sh
+
+Prints the tracked `cloud-init.user-data` payload for a fresh `symphony-main`
+VM build. The generated payload creates the VM user and installs pinned
+`gitleaks` and `trufflehog` into `/usr/local/bin`.
+
+```bash
+./scripts/utilities/symphony_print_incus_vm_cloud_init.sh \
+  --ssh-key-file ~/.ssh/id_ed25519.pub
+```
+
+### utilities/symphony_rebuild_incus_vm.sh
+
+Rebuilds the base `symphony-main` Incus VM shell from the tracked cloud-init
+source. This is the supported way to make fresh VM builds include the git
+safety scanners by default rather than waiting for repo bootstrap.
+
+```bash
+# Preview only
+./scripts/utilities/symphony_rebuild_incus_vm.sh \
+  --ssh-key-file ~/.ssh/id_ed25519.pub \
+  --dry-run
+
+# Rebuild the VM shell
+./scripts/utilities/symphony_rebuild_incus_vm.sh \
+  --ssh-key-file ~/.ssh/id_ed25519.pub \
+  --replace
 ```
 
 ### local_db_tunnel.sh
