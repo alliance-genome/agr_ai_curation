@@ -387,6 +387,19 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     assert 'You are helping the user with the document: "Smith et al. (2024).pdf"' not in formatter_runtime_text
     assert "RULES" in formatter_runtime_text
 
+    formatter_runtime_text_with_invalid_filename = catalog_service._build_runtime_instructions(
+        db_agent=db_agent,
+        runtime_kwargs={
+            "active_groups": ["WB"],
+            "document_name": "().pdf",
+        },
+        output_schema=None,
+        canonical_tool_ids=["save_tsv_file"],
+    )
+    assert formatter_runtime_text_with_invalid_filename.startswith(
+        'Use "output" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+    )
+
     monkeypatch.setattr(
         catalog_service,
         "_inject_group_rules_with_overrides",

@@ -127,9 +127,10 @@ class TestInputValidation:
         """Test that human document filenames become safe descriptors."""
         assert sanitize_output_descriptor("Smith et al. (2024).pdf") == "Smith_et_al_2024"
 
-    def test_sanitize_output_descriptor_falls_back_for_empty_result(self):
-        """Test that fully-invalid descriptor candidates fall back to a safe default."""
-        assert sanitize_output_descriptor("().pdf") == "output"
+    def test_sanitize_output_descriptor_rejects_empty_result(self):
+        """Test that fully-invalid descriptor candidates fail after sanitization."""
+        with pytest.raises(FileValidationError, match="contains no usable characters"):
+            sanitize_output_descriptor("().pdf")
 
     def test_sanitize_output_descriptor_rejects_non_string_input(self):
         """Test that non-string descriptors fail explicitly."""
@@ -377,6 +378,19 @@ class TestSaveOutput:
                 content="not valid json",
                 file_type="json",
                 descriptor="test",
+            )
+
+    def test_save_output_rejects_descriptor_without_usable_characters(
+        self, storage_service, valid_trace_id, valid_session_id
+    ):
+        """Test that save_output fails when descriptor sanitization removes everything."""
+        with pytest.raises(FileValidationError, match="contains no usable characters"):
+            storage_service.save_output(
+                trace_id=valid_trace_id,
+                session_id=valid_session_id,
+                content="gene_id\tsymbol\nFBgn0001\tNotch\n",
+                file_type="tsv",
+                descriptor="().pdf",
             )
 
 

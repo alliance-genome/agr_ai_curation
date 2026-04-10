@@ -38,7 +38,6 @@ MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 VALID_FILE_TYPES = frozenset({"csv", "tsv", "json"})
 TRACE_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 DESCRIPTOR_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,100}$")
-DESCRIPTOR_FALLBACK = "output"
 DESCRIPTOR_INVALID_CHARS_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
 DESCRIPTOR_SEPARATOR_RUN_PATTERN = re.compile(r"[_-]{2,}")
 DESCRIPTOR_EDGE_SEPARATOR_PATTERN = re.compile(r"^[_-]+|[_-]+$")
@@ -74,14 +73,9 @@ class FileSizeError(FileOutputStorageError):
 def sanitize_output_descriptor(
     descriptor: str,
     *,
-    default: str = DESCRIPTOR_FALLBACK,
     max_length: int = 100,
 ) -> str:
-    """Normalize a human-readable filename hint into a safe descriptor.
-
-    ALL-199 requires a safe fallback when sanitization removes every character
-    so formatter flows still produce a curator-friendly downloadable file.
-    """
+    """Normalize a human-readable filename hint into a safe descriptor."""
     if not isinstance(descriptor, str):
         raise FileValidationError("Descriptor must be a string")
 
@@ -92,7 +86,11 @@ def sanitize_output_descriptor(
     candidate = DESCRIPTOR_SEPARATOR_RUN_PATTERN.sub("_", candidate)
     candidate = DESCRIPTOR_EDGE_SEPARATOR_PATTERN.sub("", candidate)
     candidate = candidate[:max_length].strip("_-")
-    return candidate or default
+    if not candidate:
+        raise FileValidationError(
+            f"Descriptor '{descriptor}' contains no usable characters after sanitization"
+        )
+    return candidate
 
 
 class FileOutputStorageService:

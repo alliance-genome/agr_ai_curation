@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 
 from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
-from src.lib.file_outputs import sanitize_output_descriptor
+from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -2023,7 +2023,10 @@ def _build_runtime_instructions(
                 f'You are helping the user with the document: "{document_name}"'
             )
         if tool_id_set & _FORMATTER_TOOL_IDS:
-            sanitized_stem = sanitize_output_descriptor(document_name)
+            try:
+                sanitized_stem = sanitize_output_descriptor(document_name)
+            except FileValidationError:
+                sanitized_stem = "output"
             preamble_lines.append(
                 f'Use "{sanitized_stem}" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
             )
