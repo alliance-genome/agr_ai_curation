@@ -14,6 +14,7 @@ _DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[5]
 _MAX_READ_LINES = 400
 _MAX_SEARCH_RESULTS = 100
 _MAX_FILE_LIST_RESULTS = 200
+_RG_SUBPROCESS_TIMEOUT_SECONDS = 30
 
 
 def get_codebase_root() -> Path:
@@ -64,12 +65,16 @@ def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iter
     command = [rg_path, "--files", str(root)]
     if path_glob:
         command.extend(["-g", path_glob])
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_RG_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("rg file listing timed out") from exc
     if completed.returncode not in (0, 1):
         raise RuntimeError(completed.stderr.strip() or "rg --files failed")
 
@@ -103,12 +108,16 @@ def _iter_content_matches(
     if path_glob:
         command.extend(["-g", path_glob])
     command.extend([query, str(root)])
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_RG_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("rg content search timed out") from exc
     if completed.returncode not in (0, 1):
         raise RuntimeError(completed.stderr.strip() or "rg search failed")
 

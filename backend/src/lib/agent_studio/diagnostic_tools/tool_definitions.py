@@ -79,6 +79,8 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
 
         obj_dict = getattr(obj, "__dict__", None)
         if isinstance(obj_dict, dict):
+            # Newer Agents SDK wrappers keep the callable inside helper/invoker
+            # objects, so we need to inspect instance attributes as well.
             for value in obj_dict.values():
                 if callable(value) or hasattr(value, "__dict__"):
                     _walk(value, depth + 1)

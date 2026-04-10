@@ -164,3 +164,21 @@ def test_search_codebase_requires_rg(tmp_path, monkeypatch):
             search_mode="files",
             limit=10,
         )
+
+
+def test_search_codebase_raises_clear_error_when_rg_times_out(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["rg"], timeout=30)
+
+    monkeypatch.setattr(codebase_tools.subprocess, "run", _raise_timeout)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        codebase_tools.search_codebase(
+            query="agent_studio",
+            search_mode="files",
+            limit=10,
+        )
