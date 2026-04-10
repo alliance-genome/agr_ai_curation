@@ -182,6 +182,12 @@ function getLabeledControl(label: string): HTMLElement {
   return control!
 }
 
+async function waitForAgentName(value: string): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByLabelText('Agent Name')).toHaveValue(value)
+  }, { timeout: 10000 })
+}
+
 async function getGroupOverrideSelect(): Promise<HTMLElement> {
   const accordionButton = screen.getByRole('button', { name: /Group Prompt Overrides/ })
   if (accordionButton.getAttribute('aria-expanded') !== 'true') {
@@ -763,9 +769,7 @@ describe('PromptWorkshop', () => {
 
     render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Gene Specialist (Custom)')
-    })
+    await waitForAgentName('Gene Specialist (Custom)')
 
     await assertGroupOptions(['FB', 'WB'], ['MGI'])
 
@@ -773,9 +777,7 @@ describe('PromptWorkshop', () => {
     fireEvent.mouseDown(within(templateControl).getByRole('combobox'))
     fireEvent.click(await screen.findByRole('option', { name: 'Disease Specialist' }))
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Specialist (Custom)')
-    })
+    await waitForAgentName('Disease Specialist (Custom)')
     expect(await getGroupOverrideSelect()).toHaveTextContent('WB')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
@@ -793,17 +795,13 @@ describe('PromptWorkshop', () => {
 
     render(<PromptWorkshop catalog={buildCatalogWithTemplateSpecificGroupRules()} />)
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Gene Specialist (Custom)')
-    })
+    await waitForAgentName('Gene Specialist (Custom)')
 
     await assertGroupOptions(['FB', 'WB'], ['MGI'])
 
     fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Agent (Copy)')
-    })
+    await waitForAgentName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 15000)
@@ -877,9 +875,7 @@ describe('PromptWorkshop', () => {
     fireEvent.mouseDown(within(cloneSourceControl).getByRole('combobox'))
     fireEvent.click(await screen.findByRole('option', { name: 'Disease Agent' }))
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Disease Agent (Copy)')
-    })
+    await waitForAgentName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 15000)
