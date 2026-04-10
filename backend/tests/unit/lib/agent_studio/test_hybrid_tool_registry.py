@@ -1,4 +1,6 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
+import pytest
+
 from src.lib.agent_studio.catalog_service import (
     get_tool_registry,
     TOOL_OVERRIDES,
@@ -35,17 +37,43 @@ def test_tool_overrides_merge_with_introspected():
             assert tool.get("category") == override["category"]
 
 
-def test_save_csv_file_docs_match_runtime_signature():
+@pytest.mark.parametrize(
+    ("tool_id", "expected_params"),
+    [
+        (
+            "save_csv_file",
+            [
+                ("data_json", "string", True),
+                ("filename", "string", True),
+                ("columns", "string", False),
+            ],
+        ),
+        (
+            "save_tsv_file",
+            [
+                ("data_json", "string", True),
+                ("filename", "string", True),
+                ("columns", "string", False),
+            ],
+        ),
+        (
+            "save_json_file",
+            [
+                ("data_json", "string", True),
+                ("filename", "string", True),
+                ("pretty", "boolean", False),
+            ],
+        ),
+    ],
+)
+def test_file_output_tool_docs_match_runtime_signature(tool_id, expected_params):
     registry = get_tool_registry()
 
-    params = registry["save_csv_file"]["documentation"]["parameters"]
+    params = registry[tool_id]["documentation"]["parameters"]
     param_names = [param["name"] for param in params]
     params_by_name = {param["name"]: param for param in params}
 
-    assert param_names == ["data_json", "filename", "columns"]
-    assert params_by_name["data_json"]["type"] == "string"
-    assert params_by_name["data_json"]["required"] is True
-    assert params_by_name["filename"]["type"] == "string"
-    assert params_by_name["filename"]["required"] is True
-    assert params_by_name["columns"]["type"] == "string"
-    assert params_by_name["columns"]["required"] is False
+    assert param_names == [name for name, _type, _required in expected_params]
+    for name, expected_type, expected_required in expected_params:
+        assert params_by_name[name]["type"] == expected_type
+        assert params_by_name[name]["required"] is expected_required

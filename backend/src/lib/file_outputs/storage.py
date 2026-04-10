@@ -38,6 +38,10 @@ MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 VALID_FILE_TYPES = frozenset({"csv", "tsv", "json"})
 TRACE_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 DESCRIPTOR_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,100}$")
+DESCRIPTOR_FALLBACK = "output"
+DESCRIPTOR_INVALID_CHARS_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
+DESCRIPTOR_SEPARATOR_RUN_PATTERN = re.compile(r"[_-]{2,}")
+DESCRIPTOR_EDGE_SEPARATOR_PATTERN = re.compile(r"^[_-]+|[_-]+$")
 
 # Formula injection characters for CSV/TSV (cells starting with these could execute formulas)
 FORMULA_INJECTION_CHARS = frozenset({"=", "+", "-", "@"})
@@ -65,6 +69,23 @@ class FileSizeError(FileOutputStorageError):
     """Raised when file exceeds size limits."""
 
     pass
+
+
+def sanitize_output_descriptor(
+    descriptor: str,
+    *,
+    default: str = DESCRIPTOR_FALLBACK,
+    max_length: int = 100,
+) -> str:
+    """Normalize a human-readable filename hint into a safe descriptor."""
+    candidate = (descriptor or "").strip()
+    candidate = Path(candidate.replace("\\", "/")).name
+    candidate = Path(candidate).stem
+    candidate = DESCRIPTOR_INVALID_CHARS_PATTERN.sub("_", candidate)
+    candidate = DESCRIPTOR_SEPARATOR_RUN_PATTERN.sub("_", candidate)
+    candidate = DESCRIPTOR_EDGE_SEPARATOR_PATTERN.sub("", candidate)
+    candidate = candidate[:max_length].strip("_-")
+    return candidate or default
 
 
 class FileOutputStorageService:
@@ -273,10 +294,11 @@ class FileOutputStorageService:
         self._validate_trace_id(trace_id)
         self._validate_session_id(session_id)
         self._validate_file_type(file_type)
-        self._validate_descriptor(descriptor)
+        normalized_descriptor = sanitize_output_descriptor(descriptor)
+        self._validate_descriptor(normalized_descriptor)
 
         # Generate filename
-        filename = self._generate_filename(trace_id, descriptor, file_type)
+        filename = self._generate_filename(trace_id, normalized_descriptor, file_type)
 
         # Prepare content as bytes
         if isinstance(content, str):

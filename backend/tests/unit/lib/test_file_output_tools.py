@@ -4,6 +4,7 @@ Tests the tool implementation functions and their context variable integration.
 """
 import json
 import importlib
+from types import SimpleNamespace
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -255,6 +256,52 @@ class TestSaveTsvImpl:
         call_args = mock_storage.save_output.call_args
         assert call_args.kwargs["file_type"] == "tsv"
         assert result["format"] == "tsv"
+
+    @pytest.mark.asyncio
+    async def test_sequential_tsv_runs_sanitize_pdf_filenames(self, tmp_path):
+        """Sequential formatter runs should produce sanitized downloadable files."""
+        from src.lib.file_outputs import FileOutputStorageService
+        from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
+
+        set_current_trace_id("d3b0a19f2c2df7b2b31dfb7cded3acbd")
+        set_current_session_id("session-123")
+        set_current_user_id("curator@example.com")
+
+        storage = FileOutputStorageService(base_path=tmp_path)
+        mock_db = MagicMock()
+        file_id_counter = {"value": 0}
+
+        def build_file_output(**kwargs):
+            file_id_counter["value"] += 1
+            return SimpleNamespace(id=f"test-file-id-{file_id_counter['value']}", **kwargs)
+
+        with patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
+            return_value=storage,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+            return_value=mock_db,
+        ), patch(
+            "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+            side_effect=build_file_output,
+        ):
+            first_result = await _save_tsv_impl(
+                data_json=json.dumps([{"allele": "FBal0001"}]),
+                filename="Smith et al. (2024).pdf",
+            )
+            second_result = await _save_tsv_impl(
+                data_json=json.dumps([{"allele": "FBal0002"}]),
+                filename="Jones 2025.pdf",
+            )
+
+        saved_files = sorted((tmp_path / "outputs").rglob("*.tsv"))
+
+        assert len(saved_files) == 2
+        assert "Smith_et_al_2024" in first_result["filename"]
+        assert "Jones_2025" in second_result["filename"]
+        assert any("Smith_et_al_2024" in path.name for path in saved_files)
+        assert any("Jones_2025" in path.name for path in saved_files)
+        assert all(path.read_text(encoding="utf-8").startswith("allele\n") for path in saved_files)
 
 
 class TestSaveJsonImpl:

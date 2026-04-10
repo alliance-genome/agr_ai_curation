@@ -24,6 +24,7 @@ from src.lib.file_outputs import (
     FileValidationError,
     PathSecurityError,
     FileSizeError,
+    sanitize_output_descriptor,
 )
 
 
@@ -121,6 +122,14 @@ class TestInputValidation:
         """Test that descriptors over 100 chars are rejected."""
         with pytest.raises(FileValidationError, match="Invalid descriptor"):
             storage_service._validate_descriptor("a" * 101)
+
+    def test_sanitize_output_descriptor_strips_pdf_extension_and_invalid_chars(self):
+        """Test that human document filenames become safe descriptors."""
+        assert sanitize_output_descriptor("Smith et al. (2024).pdf") == "Smith_et_al_2024"
+
+    def test_sanitize_output_descriptor_falls_back_for_empty_result(self):
+        """Test that fully-invalid descriptor candidates fall back to a safe default."""
+        assert sanitize_output_descriptor("().pdf") == "output"
 
     def test_valid_file_types(self, storage_service):
         """Test that valid file types pass validation."""
@@ -245,6 +254,25 @@ class TestSaveOutput:
 
         assert path.exists()
         assert path.suffix == ".tsv"
+
+    def test_save_output_sanitizes_descriptor_before_generating_filename(
+        self, storage_service, valid_trace_id, valid_session_id
+    ):
+        """Test that save_output normalizes human-readable filenames before saving."""
+        content = "gene_id\tsymbol\nFBgn0001\tNotch\n"
+
+        path, _, _, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content=content,
+            file_type="tsv",
+            descriptor="Smith et al. (2024).pdf",
+        )
+
+        assert path.exists()
+        assert "Smith_et_al_2024" in path.name
+        assert " " not in path.name
+        assert ".pdf" not in path.name
 
     def test_save_json_file(
         self, storage_service, valid_trace_id, valid_session_id

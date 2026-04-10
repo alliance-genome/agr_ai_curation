@@ -372,6 +372,21 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     assert "Use multiple evidence records when one quote alone does not fully support" in runtime_text_with_evidence
     assert "Each claimed quote should be a single contiguous excerpt." in runtime_text_with_evidence
 
+    formatter_runtime_text = catalog_service._build_runtime_instructions(
+        db_agent=db_agent,
+        runtime_kwargs={
+            "active_groups": ["WB"],
+            "document_name": "Smith et al. (2024).pdf",
+        },
+        output_schema=None,
+        canonical_tool_ids=["save_tsv_file"],
+    )
+    assert formatter_runtime_text.startswith(
+        'Use "Smith_et_al_2024" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+    )
+    assert 'You are helping the user with the document: "Smith et al. (2024).pdf"' not in formatter_runtime_text
+    assert "RULES" in formatter_runtime_text
+
     monkeypatch.setattr(
         catalog_service,
         "_inject_group_rules_with_overrides",

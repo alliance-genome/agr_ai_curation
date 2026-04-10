@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 
 from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
+from src.lib.file_outputs import sanitize_output_descriptor
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -812,16 +813,22 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "summary": "Creates a TSV file from structured data and returns a download link.",
             "parameters": [
                 {
+                    "name": "data_json",
+                    "type": "string",
+                    "required": True,
+                    "description": "JSON array string of row objects to convert to TSV.",
+                },
+                {
                     "name": "filename",
                     "type": "string",
                     "required": True,
                     "description": "Output filename (without extension).",
                 },
                 {
-                    "name": "data",
-                    "type": "array",
-                    "required": True,
-                    "description": "Array of objects to convert to TSV rows.",
+                    "name": "columns",
+                    "type": "string",
+                    "required": False,
+                    "description": "Optional JSON array string listing column names in output order.",
                 },
             ],
         },
@@ -837,16 +844,22 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "summary": "Creates a JSON file from structured data and returns a download link.",
             "parameters": [
                 {
+                    "name": "data_json",
+                    "type": "string",
+                    "required": True,
+                    "description": "JSON string containing the data to serialize to JSON.",
+                },
+                {
                     "name": "filename",
                     "type": "string",
                     "required": True,
                     "description": "Output filename (without extension).",
                 },
                 {
-                    "name": "data",
-                    "type": "any",
-                    "required": True,
-                    "description": "Data to serialize as JSON.",
+                    "name": "pretty",
+                    "type": "boolean",
+                    "required": False,
+                    "description": "Whether to pretty-print the JSON output with indentation.",
                 },
             ],
         },
@@ -1990,8 +2003,10 @@ def _build_runtime_instructions(
                 f"Failed group-rules injection for agent '{db_agent.agent_key}'"
             )
 
+    tool_id_set = set(canonical_tool_ids)
+
     # Inject document structure context for document-aware tools.
-    if bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS):
+    if bool(tool_id_set & _DOCUMENT_TOOL_IDS):
         context_text, _structure_info = format_document_context_for_prompt(
             hierarchy=runtime_kwargs.get("hierarchy"),
             sections=runtime_kwargs.get("sections"),
@@ -2000,12 +2015,20 @@ def _build_runtime_instructions(
         if context_text:
             instructions += context_text
 
-        document_name = runtime_kwargs.get("document_name")
-        if document_name:
-            instructions = (
-                f'You are helping the user with the document: "{document_name}"\n\n'
-                + instructions
+    document_name = runtime_kwargs.get("document_name")
+    if document_name:
+        preamble_lines: List[str] = []
+        if tool_id_set & _DOCUMENT_TOOL_IDS:
+            preamble_lines.append(
+                f'You are helping the user with the document: "{document_name}"'
             )
+        if tool_id_set & _FORMATTER_TOOL_IDS:
+            sanitized_stem = sanitize_output_descriptor(document_name)
+            preamble_lines.append(
+                f'Use "{sanitized_stem}" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+            )
+        if preamble_lines:
+            instructions = "\n".join(preamble_lines) + "\n\n" + instructions
 
     if "record_evidence" in canonical_tool_ids:
         instructions = instructions.rstrip() + "\n\n" + _RECORD_EVIDENCE_RUNTIME_NOTE
