@@ -42,6 +42,14 @@ def _relative_repo_path(path: Path) -> str:
     return str(path.relative_to(get_codebase_root()))
 
 
+def _normalize_rg_path(root: Path, raw_path: str) -> str:
+    """Normalize rg output to a repository-relative path."""
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve(strict=False)
+    return str(candidate.relative_to(root))
+
+
 def _require_rg() -> str:
     """Resolve the rg binary or fail with a clear runtime error."""
     rg_path = shutil.which("rg")
@@ -67,8 +75,7 @@ def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iter
 
     lowered = query.lower()
     for raw_line in completed.stdout.splitlines():
-        file_path = Path(raw_line.strip())
-        relative = str(file_path.relative_to(root))
+        relative = _normalize_rg_path(root, raw_line.strip())
         if lowered in relative.lower():
             yield {"path": relative}
 
@@ -113,7 +120,7 @@ def _iter_content_matches(
             continue
         data = payload["data"]
         path_text = data["path"]["text"]
-        relative = str(Path(path_text).relative_to(root))
+        relative = _normalize_rg_path(root, path_text)
         yield {
             "path": relative,
             "line_number": data["line_number"],

@@ -68,6 +68,30 @@ def test_search_codebase_files_mode_finds_matching_paths(tmp_path, monkeypatch):
     assert result["results"] == [{"path": "backend/src/agent_studio.py"}]
 
 
+def test_search_codebase_files_mode_normalizes_relative_rg_paths(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+    monkeypatch.setattr(
+        codebase_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="backend/src/agent_studio.py\n",
+            stderr="",
+        ),
+    )
+
+    result = codebase_tools.search_codebase(
+        query="agent_studio",
+        search_mode="files",
+        limit=10,
+    )
+
+    assert result["results"] == [{"path": "backend/src/agent_studio.py"}]
+
+
 def test_search_codebase_content_mode_finds_matching_lines(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
@@ -99,6 +123,33 @@ def test_search_codebase_content_mode_finds_matching_lines(tmp_path, monkeypatch
     assert result["results"][0]["path"] == "backend/src/agent_studio.py"
     assert result["results"][0]["line_number"] == 2
     assert "search_codebase" in result["results"][0]["line_text"]
+
+
+def test_search_codebase_content_mode_normalizes_relative_rg_paths(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+    monkeypatch.setattr(
+        codebase_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(
+                '{"type":"match","data":{"path":{"text":"backend/src/agent_studio.py"},"lines":{"text":"tool_name = \\"search_codebase\\"\\n"},"line_number":2}}\n'
+            ),
+            stderr="",
+        ),
+    )
+
+    result = codebase_tools.search_codebase(
+        query="search_codebase",
+        search_mode="content",
+        limit=10,
+    )
+
+    assert result["results"][0]["path"] == "backend/src/agent_studio.py"
+    assert result["results"][0]["line_number"] == 2
 
 
 def test_search_codebase_requires_rg(tmp_path, monkeypatch):
