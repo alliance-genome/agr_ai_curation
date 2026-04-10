@@ -21,13 +21,17 @@ Note: These use contextvars which are properly isolated per async task.
 Each request gets its own set of context variables.
 """
 
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Optional
 
 # Context variables set by API layer at start of each request
 _current_trace_id: ContextVar[Optional[str]] = ContextVar('trace_id', default=None)
 _current_session_id: ContextVar[Optional[str]] = ContextVar('session_id', default=None)
 _current_user_id: ContextVar[Optional[str]] = ContextVar('user_id', default=None)
+_current_output_filename_stem: ContextVar[Optional[str]] = ContextVar(
+    'output_filename_stem',
+    default=None,
+)
 
 
 def set_current_trace_id(trace_id: str) -> None:
@@ -91,6 +95,26 @@ def get_current_user_id() -> Optional[str]:
     return _current_user_id.get()
 
 
+def set_current_output_filename_stem(
+    filename_stem: Optional[str],
+) -> Token[Optional[str]]:
+    """Set the current flow-resolved filename stem override for file-output tools."""
+
+    return _current_output_filename_stem.set(filename_stem)
+
+
+def get_current_output_filename_stem() -> Optional[str]:
+    """Get the current flow-resolved filename stem override for file-output tools."""
+
+    return _current_output_filename_stem.get()
+
+
+def reset_current_output_filename_stem(token: Token[Optional[str]]) -> None:
+    """Reset the filename stem override using the token returned by set_current_output_filename_stem()."""
+
+    _current_output_filename_stem.reset(token)
+
+
 def clear_context() -> None:
     """Clear all context variables.
 
@@ -100,3 +124,4 @@ def clear_context() -> None:
     _current_trace_id.set(None)
     _current_session_id.set(None)
     _current_user_id.set(None)
+    _current_output_filename_stem.set(None)

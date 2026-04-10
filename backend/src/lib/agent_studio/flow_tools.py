@@ -928,6 +928,7 @@ def _get_current_flow_handler():
             task_instructions = node_data.get("task_instructions")
             input_source = node_data.get("input_source", "previous_output")
             custom_input = node_data.get("custom_input")
+            output_filename_template = node_data.get("output_filename_template")
             output_key = node_data.get("output_key", f"step_{i}_output")
 
             # Check if this is a task_input node
@@ -958,6 +959,8 @@ def _get_current_flow_handler():
                 step_info["custom_instructions"] = custom_instructions
             if custom_input:
                 step_info["custom_input"] = custom_input
+            if output_filename_template:
+                step_info["output_filename_template"] = output_filename_template
 
             steps.append(step_info)
 
@@ -979,6 +982,10 @@ def _get_current_flow_handler():
                     markdown_lines.append(f"- **Custom Input:** {custom_input[:100]}...")
                 if custom_instructions:
                     markdown_lines.append(f"- **Custom Instructions:** {custom_instructions[:200]}{'...' if len(custom_instructions) > 200 else ''}")
+                if output_filename_template:
+                    markdown_lines.append(
+                        f"- **Output Filename Template:** {output_filename_template[:100]}..."
+                    )
             markdown_lines.append(f"- **Output Key:** `{output_key}`")
             markdown_lines.append("")
 

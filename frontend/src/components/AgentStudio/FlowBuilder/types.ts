@@ -51,6 +51,8 @@ export interface FlowNodeData {
   custom_input?: string
   /** For output/formatter steps only. Defaults to true when omitted. */
   include_evidence?: boolean
+  /** For output/formatter steps only. Controls the human-readable output descriptor. */
+  output_filename_template?: string
   output_key: string
 }
 
@@ -163,6 +165,7 @@ export interface FlowState {
     custom_instructions?: string
     input_source: InputSource
     custom_input?: string
+    output_filename_template?: string
     output_key: string
   }>
   edges: Array<{

@@ -59,12 +59,17 @@ def _agent_node(
     step_goal=None,
     display_name=None,
     include_evidence=None,
+    input_source="previous_output",
+    custom_input=None,
+    output_key=None,
+    output_filename_template=None,
 ):
     """Build a minimal agent node dict."""
     data = {
         "agent_id": agent_id,
         "agent_display_name": display_name or agent_id.title(),
-        "output_key": f"{node_id}_out",
+        "input_source": input_source,
+        "output_key": output_key or f"{node_id}_out",
     }
     if custom_instructions is not None:
         data["custom_instructions"] = custom_instructions
@@ -72,6 +77,10 @@ def _agent_node(
         data["step_goal"] = step_goal
     if include_evidence is not None:
         data["include_evidence"] = include_evidence
+    if custom_input is not None:
+        data["custom_input"] = custom_input
+    if output_filename_template is not None:
+        data["output_filename_template"] = output_filename_template
     return {
         "id": node_id,
         "type": "agent",
@@ -80,7 +89,7 @@ def _agent_node(
     }
 
 
-def _task_input_node(task_instructions="Do the thing"):
+def _task_input_node(task_instructions="Do the thing", output_key="task_out"):
     """Build a task_input node dict."""
     return {
         "id": "node_task",
@@ -89,7 +98,7 @@ def _task_input_node(task_instructions="Do the thing"):
         "data": {
             "agent_id": "task_input",
             "agent_display_name": "Task Input",
-            "output_key": "task_out",
+            "output_key": output_key,
             "task_instructions": task_instructions,
         },
     }
@@ -230,6 +239,44 @@ class TestCountAgentIds:
     def test_empty_flow(self):
         flow = _make_flow([])
         assert _count_agent_ids(flow) == {}
+
+
+class TestFlowTemplateHelpers:
+    """Tests the flow template rendering helpers used by the executor."""
+
+    def test_build_flow_template_variables_uses_safe_built_in_defaults(self):
+        variables = _executor_module()._build_flow_template_variables(
+            stored_variables={},
+            document_name=None,
+            flow_run_id=None,
+            timestamp="20260410T120000Z",
+        )
+
+        assert variables["input_filename"] == "input"
+        assert variables["input_filename_stem"] == "input"
+        assert variables["trace_id"] == "trace"
+        assert variables["timestamp"] == "20260410T120000Z"
+
+    def test_render_flow_template_replaces_missing_variables_with_empty_string(self):
+        rendered = _executor_module()._render_flow_template(
+            "Use {{known}} and {{missing}}.",
+            {"known": "alpha"},
+        )
+
+        assert rendered == "Use alpha and ."
+
+    def test_resolve_output_filename_descriptor_sanitizes_and_falls_back(self):
+        resolved = _executor_module()._resolve_output_filename_descriptor(
+            output_filename_template="{{input_filename_stem}}.tsv",
+            template_variables={"input_filename_stem": "Smith et al. (2024)"},
+        )
+        fallback = _executor_module()._resolve_output_filename_descriptor(
+            output_filename_template="{{missing_variable}}",
+            template_variables={},
+        )
+
+        assert resolved == "Smith_et_al_2024"
+        assert fallback == "output"
 
 
 # ===========================================================================
@@ -739,6 +786,141 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ("ask_gene_specialist", "q1"),
             ("ask_disease_specialist", "q3"),
         ]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_custom_input_templates_bind_task_input_and_prior_step_outputs(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Custom input templates should render built-ins plus stored output_key values."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        invocations = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append((tool_name, query))
+                if tool_name == "ask_gene_specialist":
+                    return "gene-result"
+                return f"validated:{query}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        flow = _make_flow([
+            _task_input_node(
+                "Review the paper carefully.",
+                output_key="task_input_text",
+            ),
+            _agent_node("n1", "gene", output_key="gene_output"),
+            _agent_node(
+                "n2",
+                "disease",
+                input_source="custom",
+                custom_input=(
+                    "Task={{task_input_text}} | "
+                    "Gene={{gene_output}} | "
+                    "File={{input_filename_stem}} | "
+                    "Trace={{trace_id}} | "
+                    "Timestamp={{timestamp}}"
+                ),
+            ),
+        ])
+
+        with patch("src.lib.flows.executor.get_current_trace_id", lambda: "trace-123"):
+            tools, _ = get_all_agent_tools(
+                flow,
+                document_name="Smith et al. (2024).pdf",
+                user_query="Focus on the validated findings.",
+                flow_run_id="flow-run-123",
+            )
+
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q1"})))
+            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q2"})))
+
+        assert invocations[0] == ("ask_gene_specialist", "ignored-q1")
+        assert invocations[1][0] == "ask_disease_specialist"
+        assert "Task=Focus on the validated findings." in invocations[1][1]
+        assert "Gene=gene-result" in invocations[1][1]
+        assert "File=Smith et al. (2024)" in invocations[1][1]
+        assert "Trace=trace-123" in invocations[1][1]
+        assert "Timestamp=" in invocations[1][1]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_non_custom_input_source_preserves_supervisor_query(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Only input_source='custom' should override the supervisor-provided query."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        invocations = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append(query)
+                return "ok"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        flow = _make_flow([
+            _task_input_node(output_key="task_input_text"),
+            _agent_node(
+                "n1",
+                "gene",
+                input_source="previous_output",
+                custom_input="Should not replace {{task_input_text}}",
+            ),
+        ])
+
+        tools, _ = get_all_agent_tools(flow, user_query="Original flow input")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
+
+        assert invocations == ["supervisor-query"]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_output_filename_template_sets_step_scoped_formatter_override(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Formatter steps should expose a resolved filename stem only during that tool call."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        observed = {}
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                from src.lib.context import get_current_output_filename_stem
+
+                observed["during_call"] = get_current_output_filename_stem()
+                return "formatted"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node(
+                "n1",
+                "chat_output_formatter",
+                output_filename_template="{{input_filename_stem}}.tsv",
+            ),
+        ])
+
+        tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
+
+        from src.lib.context import get_current_output_filename_stem
+
+        assert observed["during_call"] == "Smith_et_al_2024"
+        assert get_current_output_filename_stem() is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

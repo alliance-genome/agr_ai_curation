@@ -31,6 +31,14 @@ def set_current_user_id(value: str):
     _context_module().set_current_user_id(value)
 
 
+def set_current_output_filename_stem(value: str):
+    return _context_module().set_current_output_filename_stem(value)
+
+
+def reset_current_output_filename_stem(token):
+    _context_module().reset_current_output_filename_stem(token)
+
+
 class TestGetContextFromContextvars:
     """Tests for _get_context_from_contextvars helper."""
 
@@ -302,6 +310,47 @@ class TestSaveTsvImpl:
         assert any("Smith_et_al_2024" in path.name for path in saved_files)
         assert any("Jones_2025" in path.name for path in saved_files)
         assert all(path.read_text(encoding="utf-8").startswith("allele\n") for path in saved_files)
+
+    @pytest.mark.asyncio
+    async def test_uses_flow_resolved_filename_override_when_present(self):
+        """A flow-scoped filename template should override the model-provided descriptor."""
+        from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
+
+        set_current_trace_id("d3b0a19f2c2df7b2b31dfb7cded3acbd")
+        set_current_session_id("session-123")
+
+        mock_storage = MagicMock()
+        mock_storage.save_output.return_value = (
+            Path("/tmp/Smith_et_al_2024.tsv"),
+            "hash123",
+            50,
+            [],
+        )
+        mock_db = MagicMock()
+        mock_file_output = MagicMock()
+        mock_file_output.id = "test-file-id-tsv-override"
+
+        override_token = set_current_output_filename_stem("Smith_et_al_2024")
+        try:
+            with patch(
+                "src.lib.openai_agents.tools.file_output_tools.FileOutputStorageService",
+                return_value=mock_storage,
+            ), patch(
+                "src.lib.openai_agents.tools.file_output_tools.SessionLocal",
+                return_value=mock_db,
+            ), patch(
+                "src.lib.openai_agents.tools.file_output_tools.FileOutput",
+                return_value=mock_file_output,
+            ):
+                await _save_tsv_impl(
+                    data_json=json.dumps([{"allele": "FBal0001"}]),
+                    filename="llm_supplied_name",
+                )
+        finally:
+            reset_current_output_filename_stem(override_token)
+
+        call_args = mock_storage.save_output.call_args
+        assert call_args.kwargs["descriptor"] == "Smith_et_al_2024"
 
 
 class TestSaveJsonImpl:
