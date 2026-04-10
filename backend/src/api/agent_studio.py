@@ -1395,6 +1395,8 @@ _AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
     "chebi_api_call",
     "quickgo_api_call",
     "go_api_call",
+    "search_codebase",
+    "read_source_file",
 }
 
 
