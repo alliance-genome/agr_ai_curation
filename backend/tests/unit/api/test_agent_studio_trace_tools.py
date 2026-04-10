@@ -189,11 +189,15 @@ async def test_handle_tool_call_submit_prompt_suggestion_invalid_type():
 
 
 @pytest.mark.asyncio
-async def test_handle_tool_call_submit_prompt_suggestion_reports_sns_failed(monkeypatch):
+async def test_handle_tool_call_submit_prompt_suggestion_returns_clear_failure(monkeypatch):
     monkeypatch.setattr(api_module, "_format_conversation_context", lambda _messages: "conversation")
 
     async def _fake_submit_suggestion_sns(**_kwargs):
-        return {"suggestion_id": "s-123", "sns_status": "failed"}
+        return {
+            "status": "failed",
+            "sns_status": "failed",
+            "message": "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again.",
+        }
 
     monkeypatch.setattr(api_module, "submit_suggestion_sns", _fake_submit_suggestion_sns)
 
@@ -210,9 +214,8 @@ async def test_handle_tool_call_submit_prompt_suggestion_reports_sns_failed(monk
         messages=[{"role": "user", "content": "help"}],
     )
 
-    assert result["success"] is True
-    assert result["suggestion_id"] == "s-123"
-    assert result["sns_failed"] is True
+    assert result["success"] is False
+    assert result["error"] == "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again."
 
 
 def test_fetch_trace_for_opus_returns_none_when_trace_missing(monkeypatch):
