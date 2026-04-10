@@ -244,6 +244,18 @@ class TestCountAgentIds:
 class TestFlowTemplateHelpers:
     """Tests the flow template rendering helpers used by the executor."""
 
+    def test_build_initial_flow_template_variables_use_task_input_instructions(self):
+        flow = _make_flow([
+            _task_input_node(
+                "Curator-authored task instructions",
+                output_key="task_input_text",
+            ),
+        ])
+
+        variables = _executor_module()._build_initial_flow_template_variables(flow)
+
+        assert variables == {"task_input_text": "Curator-authored task instructions"}
+
     def test_build_flow_template_variables_uses_safe_built_in_defaults(self):
         variables = _executor_module()._build_flow_template_variables(
             stored_variables={},
@@ -842,7 +854,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         assert invocations[0] == ("ask_gene_specialist", "ignored-q1")
         assert invocations[1][0] == "ask_disease_specialist"
-        assert "Task=Focus on the validated findings." in invocations[1][1]
+        assert "Task=Review the paper carefully." in invocations[1][1]
         assert "Gene=gene-result" in invocations[1][1]
         assert "File=Smith et al. (2024)" in invocations[1][1]
         assert "Trace=trace-123" in invocations[1][1]

@@ -247,16 +247,18 @@ def _get_task_input_output_key(flow: CurationFlow) -> Optional[str]:
     return None
 
 
-def _build_initial_flow_template_variables(
-    flow: CurationFlow,
-    user_query: Optional[str],
-) -> dict[str, str]:
-    """Bind task_input output_key so downstream templates can reference the flow input."""
+def _build_initial_flow_template_variables(flow: CurationFlow) -> dict[str, str]:
+    """Bind task_input output_key to the curator-authored task instructions."""
 
     output_key = _get_task_input_output_key(flow)
     if not output_key:
         return {}
-    return {output_key: _build_flow_conversation_summary(flow, user_query)}
+
+    task_instructions = str(get_task_instructions(flow) or "").strip()
+    if not task_instructions:
+        return {}
+
+    return {output_key: task_instructions}
 
 
 def _build_flow_template_variables(
@@ -802,7 +804,7 @@ def get_all_agent_tools(
         "next_tool_index": 0,
         "completed_steps": [],
         "evidence_registry": _EvidenceRegistry(),
-        "template_variables": _build_initial_flow_template_variables(flow, user_query),
+        "template_variables": _build_initial_flow_template_variables(flow),
     }
     flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
