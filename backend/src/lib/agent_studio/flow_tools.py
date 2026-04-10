@@ -41,6 +41,12 @@ _current_user_email: ContextVar[Optional[str]] = ContextVar("current_user_email"
 _current_flow_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar("current_flow_context", default=None)
 
 
+def _truncate_preview(text: str, max_chars: int) -> str:
+    """Return a preview string with ellipsis only when truncation occurred."""
+
+    return text[:max_chars] + ("..." if len(text) > max_chars else "")
+
+
 def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) -> None:
     """Set the current user context for flow tools.
 
@@ -971,7 +977,7 @@ def _get_current_flow_handler():
             if is_task_input:
                 markdown_lines.append("- **Input:** Flow entry point")
                 if task_instructions and task_instructions.strip():
-                    truncated = task_instructions[:300] + ('...' if len(task_instructions) > 300 else '')
+                    truncated = _truncate_preview(task_instructions, 300)
                     markdown_lines.append(f"- **Task Instructions:** {truncated}")
                 else:
                     # Explicitly flag empty task_instructions as a warning
@@ -979,12 +985,17 @@ def _get_current_flow_handler():
             else:
                 markdown_lines.append(f"- **Input:** {input_source.replace('_', ' ')}")
                 if custom_input:
-                    markdown_lines.append(f"- **Custom Input:** {custom_input[:100]}...")
+                    markdown_lines.append(
+                        f"- **Custom Input:** {_truncate_preview(custom_input, 100)}"
+                    )
                 if custom_instructions:
-                    markdown_lines.append(f"- **Custom Instructions:** {custom_instructions[:200]}{'...' if len(custom_instructions) > 200 else ''}")
+                    markdown_lines.append(
+                        f"- **Custom Instructions:** {_truncate_preview(custom_instructions, 200)}"
+                    )
                 if output_filename_template:
                     markdown_lines.append(
-                        f"- **Output Filename Template:** {output_filename_template[:100]}..."
+                        "- **Output Filename Template:** "
+                        f"{_truncate_preview(output_filename_template, 100)}"
                     )
             markdown_lines.append(f"- **Output Key:** `{output_key}`")
             markdown_lines.append("")

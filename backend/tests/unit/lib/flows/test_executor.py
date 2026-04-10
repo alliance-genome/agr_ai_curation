@@ -2,12 +2,14 @@
 import asyncio
 import importlib
 import json
+import logging
 from types import SimpleNamespace
 from uuid import UUID
 import pytest
 from unittest.mock import MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
+from src.lib.file_outputs import FileValidationError
 
 def _executor_module():
     """Load flow executor lazily so monkeypatches target the active module instance."""
@@ -277,18 +279,52 @@ class TestFlowTemplateHelpers:
 
         assert rendered == "Use alpha and ."
 
-    def test_resolve_output_filename_descriptor_sanitizes_and_falls_back(self):
+    def test_render_flow_template_logs_unresolved_variables(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            rendered = _executor_module()._render_flow_template(
+                "Use {{known}} and {{missing}}.",
+                {"known": "alpha"},
+            )
+
+        assert rendered == "Use alpha and ."
+        assert "Unresolved flow template variables ['missing']" in caplog.text
+
+    def test_stringify_flow_template_value_raises_for_non_serializable_values(self):
+        with pytest.raises(TypeError):
+            _executor_module()._stringify_flow_template_value({"bad": object()})
+
+    def test_resolve_output_filename_descriptor_sanitizes_and_raises_on_misconfiguration(self):
+        executor = _executor_module()
+
         resolved = _executor_module()._resolve_output_filename_descriptor(
             output_filename_template="{{input_filename_stem}}.tsv",
             template_variables={"input_filename_stem": "Smith et al. (2024)"},
         )
-        fallback = _executor_module()._resolve_output_filename_descriptor(
-            output_filename_template="{{missing_variable}}",
-            template_variables={},
-        )
 
         assert resolved == "Smith_et_al_2024"
-        assert fallback == "output"
+
+        with pytest.raises(executor.FlowTemplateConfigurationError):
+            executor._resolve_output_filename_descriptor(
+                output_filename_template="{{missing_variable}}",
+                template_variables={},
+            )
+
+        with pytest.raises(FileValidationError):
+            executor._resolve_output_filename_descriptor(
+                output_filename_template="!!!.tsv",
+                template_variables={},
+            )
+
+    def test_resolve_flow_step_query_raises_when_custom_input_renders_empty(self):
+        executor = _executor_module()
+
+        with pytest.raises(executor.FlowTemplateConfigurationError):
+            executor._resolve_flow_step_query(
+                input_source="custom",
+                custom_input="{{missing_variable}}",
+                default_query="fallback query",
+                template_variables={},
+            )
 
 
 # ===========================================================================

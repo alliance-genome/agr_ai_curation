@@ -44,7 +44,7 @@ from src.lib.curation_workspace import (
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
-from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
+from src.lib.file_outputs import sanitize_output_descriptor
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
@@ -74,6 +74,10 @@ _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_DESCRIPTOR = "output"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
+
+
+class FlowTemplateConfigurationError(ValueError):
+    """Raised when a flow step template is explicitly configured but invalid."""
 
 
 def _now_iso() -> str:
@@ -229,10 +233,7 @@ def _stringify_flow_template_value(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, ensure_ascii=False)
-        except TypeError:
-            pass
+        return json.dumps(value, ensure_ascii=False)
     return str(value)
 
 
@@ -298,10 +299,24 @@ def _render_flow_template(
 
     if not isinstance(template, str):
         return ""
-    return _FLOW_TEMPLATE_VARIABLE_PATTERN.sub(
-        lambda match: template_variables.get(match.group(1), ""),
-        template,
-    )
+
+    unresolved_variables: set[str] = set()
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in template_variables:
+            return template_variables[key]
+        unresolved_variables.add(key)
+        return ""
+
+    rendered = _FLOW_TEMPLATE_VARIABLE_PATTERN.sub(_replace, template)
+    if unresolved_variables:
+        logger.warning(
+            "[Flow Executor] Unresolved flow template variables %s in template %r",
+            sorted(unresolved_variables),
+            template,
+        )
+    return rendered
 
 
 def _resolve_flow_step_query(
@@ -323,7 +338,12 @@ def _resolve_flow_step_query(
         return default_query
 
     rendered = _render_flow_template(custom_input, template_variables).strip()
-    return rendered or default_query
+    if not rendered:
+        raise FlowTemplateConfigurationError(
+            "custom_input rendered empty while input_source='custom'; "
+            "check the configured template variables."
+        )
+    return rendered
 
 
 def _resolve_output_filename_descriptor(
@@ -338,12 +358,12 @@ def _resolve_output_filename_descriptor(
 
     rendered = _render_flow_template(output_filename_template, template_variables).strip()
     if not rendered:
-        return _FLOW_TEMPLATE_DEFAULT_DESCRIPTOR
+        raise FlowTemplateConfigurationError(
+            "output_filename_template rendered empty after variable substitution; "
+            "check the configured template variables."
+        )
 
-    try:
-        return sanitize_output_descriptor(rendered)
-    except FileValidationError:
-        return _FLOW_TEMPLATE_DEFAULT_DESCRIPTOR
+    return sanitize_output_descriptor(rendered)
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
