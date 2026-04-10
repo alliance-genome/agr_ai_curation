@@ -131,6 +131,11 @@ class TestInputValidation:
         """Test that fully-invalid descriptor candidates fall back to a safe default."""
         assert sanitize_output_descriptor("().pdf") == "output"
 
+    def test_sanitize_output_descriptor_rejects_non_string_input(self):
+        """Test that non-string descriptors fail explicitly."""
+        with pytest.raises(FileValidationError, match="Descriptor must be a string"):
+            sanitize_output_descriptor(None)  # type: ignore[arg-type]
+
     def test_valid_file_types(self, storage_service):
         """Test that valid file types pass validation."""
         for file_type in ["csv", "tsv", "json"]:

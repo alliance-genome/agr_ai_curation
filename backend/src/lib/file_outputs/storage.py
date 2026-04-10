@@ -77,8 +77,15 @@ def sanitize_output_descriptor(
     default: str = DESCRIPTOR_FALLBACK,
     max_length: int = 100,
 ) -> str:
-    """Normalize a human-readable filename hint into a safe descriptor."""
-    candidate = (descriptor or "").strip()
+    """Normalize a human-readable filename hint into a safe descriptor.
+
+    ALL-199 requires a safe fallback when sanitization removes every character
+    so formatter flows still produce a curator-friendly downloadable file.
+    """
+    if not isinstance(descriptor, str):
+        raise FileValidationError("Descriptor must be a string")
+
+    candidate = descriptor.strip()
     candidate = Path(candidate.replace("\\", "/")).name
     candidate = Path(candidate).stem
     candidate = DESCRIPTOR_INVALID_CHARS_PATTERN.sub("_", candidate)
