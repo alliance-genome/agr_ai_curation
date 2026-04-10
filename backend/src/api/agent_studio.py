@@ -261,7 +261,7 @@ class ManualSuggestionRequest(BaseModel):
 class SuggestionResponse(BaseModel):
     """Response after submitting a suggestion."""
     status: str
-    suggestion_id: str
+    suggestion_id: Optional[str] = None
     message: str
 
 
@@ -1892,20 +1892,16 @@ async def _handle_tool_call(
             source="opus_tool",
         )
 
-        # Check if SNS actually succeeded or fell back to logging
-        sns_status = result.get("sns_status")
-        if sns_status == "failed":
+        if result.get("status") != "success":
             return {
-                "success": True,
-                "suggestion_id": result["suggestion_id"],
-                "message": "Suggestion recorded locally. SNS delivery failed - the team will review from logs.",
-                "sns_failed": True,
+                "success": False,
+                "error": result["message"],
             }
 
         return {
             "success": True,
             "suggestion_id": result["suggestion_id"],
-            "message": "Suggestion submitted successfully. The development team will review it.",
+            "message": result["message"],
         }
 
     elif tool_name == "update_workshop_prompt_draft":
@@ -3210,11 +3206,20 @@ async def submit_suggestion(
             source="manual",
         )
 
+        if result.get("status") != "success":
+            status_code = 503 if result.get("sns_status") == "not_configured" else 502
+            raise HTTPException(
+                status_code=status_code,
+                detail=result["message"],
+            )
+
         return SuggestionResponse(
             status="success",
             suggestion_id=result["suggestion_id"],
-            message="Suggestion submitted successfully. The development team will review it.",
+            message=result["message"],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error('Failed to submit suggestion: %s', e, exc_info=True)
         raise HTTPException(

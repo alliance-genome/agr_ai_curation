@@ -85,6 +85,7 @@ async def test_submit_suggestion_logs_when_sns_disabled(monkeypatch):
     assert result["status"] == "success"
     assert result["sns_status"] == "disabled"
     assert "suggestion_id" in result
+    assert result["message"] == "Suggestion logged locally because prompt suggestion SNS is disabled."
 
 
 @pytest.mark.asyncio
@@ -106,6 +107,7 @@ async def test_submit_suggestion_uses_default_boto3_client_when_no_profile(monke
     result = await svc.submit_suggestion_sns(_build_suggestion(), submitted_by="curator@example.org")
 
     assert result["status"] == "success"
+    assert result["sns_status"] == "published"
     assert result["sns_message_id"] == "msg-1"
     assert published["TopicArn"] == "arn:aws:sns:us-east-1:123:topic"
     assert published["MessageAttributes"]["type"]["StringValue"] == "prompt_suggestion"
@@ -154,7 +156,7 @@ async def test_submit_suggestion_uses_profiled_session_when_profile_present(monk
 
 
 @pytest.mark.asyncio
-async def test_submit_suggestion_falls_back_to_log_mode_when_publish_fails(monkeypatch):
+async def test_submit_suggestion_returns_failure_when_publish_fails(monkeypatch):
     monkeypatch.setenv("PROMPT_SUGGESTIONS_USE_SNS", "true")
     monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123:topic")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -167,9 +169,10 @@ async def test_submit_suggestion_falls_back_to_log_mode_when_publish_fails(monke
 
     result = await svc.submit_suggestion_sns(_build_suggestion(agent_id=None), submitted_by="curator@example.org")
 
-    assert result["status"] == "success"
+    assert result["status"] == "failed"
     assert result["sns_status"] == "failed"
-    assert result["message"] == "SNS failed, logged locally"
+    assert "suggestion_id" not in result
+    assert result["message"] == "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again."
 
 
 @pytest.mark.asyncio
@@ -179,5 +182,6 @@ async def test_submit_suggestion_treats_missing_topic_as_failed_when_enabled(mon
 
     result = await svc.submit_suggestion_sns(_build_suggestion(), submitted_by="curator@example.org")
 
-    assert result["status"] == "success"
-    assert result["sns_status"] == "failed"
+    assert result["status"] == "failed"
+    assert result["sns_status"] == "not_configured"
+    assert "suggestion_id" not in result

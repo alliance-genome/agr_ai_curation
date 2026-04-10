@@ -152,6 +152,36 @@ class TestAgentTestEndpoint:
 
         assert request.group_id == "WB"
 
+    def test_manual_suggestion_endpoint_returns_error_when_sns_publish_fails(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        async def _fake_submit_suggestion_sns(**_kwargs):
+            return {
+                "status": "failed",
+                "sns_status": "failed",
+                "message": "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again.",
+            }
+
+        monkeypatch.setattr(api_module, "submit_suggestion_sns", _fake_submit_suggestion_sns)
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.submit_suggestion(
+                    request=api_module.ManualSuggestionRequest(
+                        agent_id="gene",
+                        suggestion_type="improvement",
+                        summary="Summary",
+                        detailed_reasoning="Reasoning",
+                    ),
+                    user={"email": "curator@example.org"},
+                )
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail == (
+            "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again."
+        )
+
     def test_endpoint_resolves_custom_agent_ids_with_ownership_check(self, monkeypatch):
         import src.api.agent_studio as api_module
 
