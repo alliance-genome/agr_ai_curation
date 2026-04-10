@@ -44,7 +44,7 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
     candidates: List[Callable] = []
 
     def _walk(obj: Any, depth: int = 0) -> None:
-        if obj is None or depth > 4:
+        if obj is None or depth > 6:
             return
         obj_id = id(obj)
         if obj_id in seen:
@@ -61,12 +61,27 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
                     except Exception:
                         continue
 
-        for attr in ("func", "function", "_func", "_function", "handler", "on_invoke_tool"):
+        for attr in (
+            "on_invoke_tool",
+            "_invoke_tool_impl",
+            "_function_tool",
+            "func",
+            "function",
+            "_func",
+            "_function",
+            "handler",
+        ):
             if hasattr(obj, attr):
                 try:
                     _walk(getattr(obj, attr), depth + 1)
                 except Exception:
                     continue
+
+        obj_dict = getattr(obj, "__dict__", None)
+        if isinstance(obj_dict, dict):
+            for value in obj_dict.values():
+                if callable(value) or hasattr(value, "__dict__"):
+                    _walk(value, depth + 1)
 
     _walk(tool)
 
