@@ -41,7 +41,7 @@ The shell shortcuts persist through VM rebuilds in two layers:
 This means the durable source of truth is the tracked repo utility, while the
 home-directory dotfile is just a thin bootstrap shim.
 
-Git safety scanners still have repo/bootstrap fallback coverage:
+Git safety scanners are installed through multiple tracked paths:
 
 1. `scripts/utilities/symphony_ensure_git_safety_tools.sh` ensures `gitleaks`
    and `trufflehog` exist in `~/.local/bin`.

@@ -180,15 +180,16 @@ run_and_print() {
 }
 
 ensure_git_safety_tools_available() {
-  local installer="${REPO_ROOT}/scripts/utilities/symphony_ensure_git_safety_tools.sh"
+  local installer="${SYMPHONY_GIT_SAFETY_TOOLS_INSTALLER:-${REPO_ROOT}/scripts/utilities/symphony_ensure_git_safety_tools.sh}"
 
   if [[ ! -x "${installer}" ]]; then
-    echo "warning: missing git safety tools installer: ${installer}" >&2
-    return 0
+    echo "Missing git safety tools installer: ${installer}" >&2
+    return 1
   fi
 
   if ! bash "${installer}" --quiet; then
-    echo "warning: unable to preinstall gitleaks/trufflehog; continuing with existing git hook setup" >&2
+    echo "Unable to install gitleaks/trufflehog with: ${installer}" >&2
+    return 1
   fi
 }
 
@@ -1112,7 +1113,11 @@ prepare_sandbox() {
     exit 0
   fi
 
-  ensure_git_safety_tools_available
+  if ! ensure_git_safety_tools_available; then
+    kv sandbox_status error
+    kv sandbox_error "Git safety tools are unavailable. Run scripts/utilities/symphony_ensure_git_safety_tools.sh and retry."
+    exit 2
+  fi
 
   git -C "${REPO_ROOT}" worktree prune >/dev/null 2>&1 || true
   git -C "${REPO_ROOT}" fetch --prune "${REMOTE_NAME}" "${BRANCH_NAME}"
@@ -1209,7 +1214,11 @@ repair_sandbox() {
     exit 0
   fi
 
-  ensure_git_safety_tools_available
+  if ! ensure_git_safety_tools_available; then
+    kv sandbox_status error
+    kv sandbox_error "Git safety tools are unavailable. Run scripts/utilities/symphony_ensure_git_safety_tools.sh and retry."
+    exit 2
+  fi
 
   if [[ ! -d "${SANDBOX_DIR}" ]]; then
     kv sandbox_status absent

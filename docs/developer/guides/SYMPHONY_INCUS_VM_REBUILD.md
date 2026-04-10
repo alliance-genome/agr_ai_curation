@@ -23,9 +23,10 @@ This matters because:
 - rebuilding from plain Ubuntu plus ad-hoc shell history is too easy to drift
 
 The repo-level installer at
-`scripts/utilities/symphony_ensure_git_safety_tools.sh` still exists as a
-fallback for the source checkout, main sandbox, and workspaces. The rebuild
-helper simply moves the default all the way up to VM creation.
+`scripts/utilities/symphony_ensure_git_safety_tools.sh` remains the tracked
+source-checkout and sandbox installer for the source checkout, main sandbox,
+and workspaces. The rebuild helper simply moves the default all the way up to
+VM creation.
 
 ## Standard Rebuild Path
 
@@ -72,8 +73,8 @@ gitleaks version
 trufflehog --version
 ```
 
-If the repo checkout is already present, you can also confirm the fallback
-bootstrap still agrees:
+If the repo checkout is already present, you can also confirm the
+source-checkout installer still agrees:
 
 ```bash
 ./scripts/utilities/symphony_ensure_git_safety_tools.sh --check
