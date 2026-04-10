@@ -60,6 +60,7 @@ const PDFJS_FIND_TIMEOUT_MS = 3500
 const PDFJS_FIND_RESULT_SETTLE_MS = 75
 const PDF_TEXT_LAYER_MATCH_TIMEOUT_MS = 2000
 const PDF_TEXT_LAYER_RETRY_TIMEOUT_MS = 300
+const PDF_LATE_FIND_HIGHLIGHT_CLEAR_TIMEOUT_MS = 300
 const EVIDENCE_SPIKE_EVENT_NAME = 'pdf-viewer-evidence-spike'
 const EVIDENCE_SPIKE_RESULT_EVENT_NAME = 'pdf-viewer-evidence-spike-result'
 const PDF_EVIDENCE_DEBUG_STORAGE_KEY = 'pdf-evidence-debug'
@@ -3095,6 +3096,8 @@ export function PdfViewer({
   const loadStartRef = useRef<number | null>(null)
   const handledNavigationKeyRef = useRef<string | null>(null)
   const navigationRequestIdRef = useRef(0)
+  const lateFindHighlightCleanupTimeoutRef = useRef<number | null>(null)
+  const lateFindHighlightCleanupRef = useRef<(() => void) | null>(null)
   const evidencePageTextCorpusRef = useRef<PdfEvidencePageTextCorpusCache>({
     cacheKey: null,
     pages: null,
@@ -3589,6 +3592,56 @@ export function PdfViewer({
     })
   }, [])
 
+  const cancelLatePdfJsFindHighlightCleanup = useCallback(() => {
+    if (lateFindHighlightCleanupTimeoutRef.current !== null) {
+      window.clearTimeout(lateFindHighlightCleanupTimeoutRef.current)
+      lateFindHighlightCleanupTimeoutRef.current = null
+    }
+    lateFindHighlightCleanupRef.current?.()
+    lateFindHighlightCleanupRef.current = null
+  }, [])
+
+  const watchForLatePdfJsFindHighlights = useCallback((pdfApp: any) => {
+    cancelLatePdfJsFindHighlightCleanup()
+
+    const iframeDoc = iframeRef.current?.contentWindow?.document as Document | undefined
+    const eventBus = pdfApp?.eventBus
+    if (!iframeDoc || !eventBus?.on || !eventBus?.off) {
+      return
+    }
+
+    const clearLateHighlights = () => {
+      if (!iframeDoc.querySelector('.highlight.selected')) {
+        return
+      }
+
+      logPdfEvidenceDebug('Clearing a late PDF.js native highlight after degraded evidence navigation settled', {
+        activeDocumentId: activeDocument?.documentId ?? null,
+      })
+      clearPdfJsFindHighlights(pdfApp)
+    }
+
+    const handleTextLayerMatchesUpdated = (event: any) => {
+      if (event?.source && event.source !== pdfApp?.findController) {
+        return
+      }
+
+      window.setTimeout(clearLateHighlights, 0)
+    }
+
+    eventBus.on('updatetextlayermatches', handleTextLayerMatchesUpdated)
+    lateFindHighlightCleanupRef.current = () => {
+      eventBus.off('updatetextlayermatches', handleTextLayerMatchesUpdated)
+    }
+    lateFindHighlightCleanupTimeoutRef.current = window.setTimeout(() => {
+      lateFindHighlightCleanupRef.current?.()
+      lateFindHighlightCleanupRef.current = null
+      lateFindHighlightCleanupTimeoutRef.current = null
+    }, PDF_LATE_FIND_HIGHLIGHT_CLEAR_TIMEOUT_MS)
+  }, [activeDocument?.documentId, cancelLatePdfJsFindHighlightCleanup])
+
+  useEffect(() => cancelLatePdfJsFindHighlightCleanup, [cancelLatePdfJsFindHighlightCleanup])
+
   const executeEvidenceNavigation = useCallback(async (
     command: EvidenceNavigationCommand,
     options?: {
@@ -3659,6 +3712,7 @@ export function PdfViewer({
       }
     }
 
+    cancelLatePdfJsFindHighlightCleanup()
     setEvidenceHighlight(null)
     clearPdfJsFindHighlights(pdfApp)
 
@@ -3875,6 +3929,9 @@ export function PdfViewer({
           preserveNativeHighlight: !renderOverlay,
           reason: 'section-match',
         })
+        if (renderOverlay) {
+          watchForLatePdfJsFindHighlights(pdfApp)
+        }
         logPdfEvidenceDebug('Falling back to section context', {
           anchorId: command.anchorId,
           query: candidate.query,
@@ -3902,6 +3959,7 @@ export function PdfViewer({
     if (quoteMatchedPageContext && quoteContextPage !== null) {
       setEvidenceSpikePage(pdfApp, quoteContextPage)
       clearPdfJsFindHighlights(pdfApp)
+      watchForLatePdfJsFindHighlights(pdfApp)
       setEvidenceHighlight(null)
       logPdfEvidenceDebug('Falling back to matched page without stable highlight rects after section localization failed', {
         anchorId: command.anchorId,
@@ -3925,6 +3983,7 @@ export function PdfViewer({
     assertCurrentRequest()
     if (anchor.locator_quality === 'document_only') {
       clearPdfJsFindHighlights(pdfApp)
+      watchForLatePdfJsFindHighlights(pdfApp)
       setEvidenceHighlight(null)
       logPdfEvidenceDebug('Falling back to document-only context by anchor design', {
         anchorId: command.anchorId,
@@ -3947,6 +4006,7 @@ export function PdfViewer({
     if (preferredPage !== null) {
       setEvidenceSpikePage(pdfApp, preferredPage)
       clearPdfJsFindHighlights(pdfApp)
+      watchForLatePdfJsFindHighlights(pdfApp)
       setEvidenceHighlight(null)
       logPdfEvidenceDebug('Falling back to page hint only', {
         anchorId: command.anchorId,
@@ -3969,6 +4029,7 @@ export function PdfViewer({
 
     assertCurrentRequest()
     clearPdfJsFindHighlights(pdfApp)
+    watchForLatePdfJsFindHighlights(pdfApp)
     setEvidenceHighlight(null)
     logPdfEvidenceDebug('Evidence navigation failed to localize anchor', {
       anchorId: command.anchorId,
@@ -3990,8 +4051,10 @@ export function PdfViewer({
   }, [
     activeDocument?.documentId,
     activeDocument?.pageCount,
+    cancelLatePdfJsFindHighlightCleanup,
     ensureEvidencePageTextCorpus,
     getCachedEvidencePageText,
+    watchForLatePdfJsFindHighlights,
   ])
 
   const executeEvidenceSpike = useCallback(async (input: PdfEvidenceSpikeInput): Promise<PdfEvidenceSpikeResult> => {
