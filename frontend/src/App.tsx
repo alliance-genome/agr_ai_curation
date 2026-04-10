@@ -407,24 +407,6 @@ export function AppContent() {
           <BatchNavIcon />
           <Box
             component={Link}
-            to="/changelog"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.5,
-              textDecoration: 'none',
-              color: 'inherit',
-              marginRight: 2,
-              '&:hover': {
-                opacity: 0.8
-              }
-            }}
-          >
-            <ChangelogIcon fontSize="small" />
-            <Typography variant="body2">Changelog</Typography>
-          </Box>
-          <Box
-            component={Link}
             to="/curation"
             sx={{
               display: 'flex',
@@ -440,6 +422,24 @@ export function AppContent() {
           >
             <CurationIcon fontSize="small" />
             <Typography variant="body2">Curation</Typography>
+          </Box>
+          <Box
+            component={Link}
+            to="/changelog"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              textDecoration: 'none',
+              color: 'inherit',
+              marginRight: 2,
+              '&:hover': {
+                opacity: 0.8
+              }
+            }}
+          >
+            <ChangelogIcon fontSize="small" />
+            <Typography variant="body2">Changelog</Typography>
           </Box>
           <Box
             component="a"
