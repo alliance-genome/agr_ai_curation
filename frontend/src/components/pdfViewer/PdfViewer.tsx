@@ -3930,6 +3930,8 @@ export function PdfViewer({
           reason: 'section-match',
         })
         if (renderOverlay) {
+          // Section fallbacks can intentionally keep the native PDF.js quote highlight when no overlay
+          // rects are available, so only scrub late highlights after we have cleared that native state.
           watchForLatePdfJsFindHighlights(pdfApp)
         }
         logPdfEvidenceDebug('Falling back to section context', {
