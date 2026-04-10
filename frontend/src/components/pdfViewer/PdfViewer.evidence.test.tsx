@@ -833,10 +833,6 @@ const getNativeSelectedHighlights = (iframe: HTMLIFrameElement): HTMLElement[] =
   )
 }
 
-const waitForMs = (delayMs: number): Promise<void> => new Promise((resolve) => {
-  window.setTimeout(resolve, delayMs)
-})
-
 const buildNavigationCommand = (
   overrides: Partial<EvidenceNavigationCommand> = {},
 ): EvidenceNavigationCommand => ({
@@ -2101,7 +2097,6 @@ describe('PdfViewer evidence navigation', () => {
     await waitFor(() => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
-    await waitForMs(200)
 
     expect(eventBus.findQueries).toEqual([query, 'Results'])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
