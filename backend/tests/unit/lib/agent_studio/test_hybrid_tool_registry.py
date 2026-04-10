@@ -19,6 +19,16 @@ def test_get_tool_registry_includes_agr_curation():
     assert "agr_curation_query" in registry
 
 
+def test_get_diagnostic_registry_includes_codebase_tools():
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+
+    reset_registry()
+    registry = get_diagnostic_tools_registry()
+
+    assert registry.has_tool("search_codebase")
+    assert registry.has_tool("read_source_file")
+
+
 def test_get_tool_registry_has_description():
     """Tools should have descriptions."""
     registry = get_tool_registry()

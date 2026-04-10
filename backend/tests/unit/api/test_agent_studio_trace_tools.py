@@ -118,6 +118,16 @@ def test_get_service_logs_tool_schema_matches_logs_api_contract():
     assert "minutes ago" in schema["since"]["description"]
 
 
+def test_codebase_tools_are_agents_only():
+    agents_context = ChatContext(active_tab="agents")
+    flows_context = ChatContext(active_tab="flows")
+
+    assert api_module._is_tool_allowed_for_context("search_codebase", agents_context) is True
+    assert api_module._is_tool_allowed_for_context("read_source_file", agents_context) is True
+    assert api_module._is_tool_allowed_for_context("search_codebase", flows_context) is False
+    assert api_module._is_tool_allowed_for_context("read_source_file", flows_context) is False
+
+
 @pytest.mark.asyncio
 async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
     from src.lib.agent_studio import tools as tools_module

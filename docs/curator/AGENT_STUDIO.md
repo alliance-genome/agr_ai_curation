@@ -14,6 +14,8 @@ Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**.
 
 On both tabs, the left panel is your chat with Claude Opus. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
 
+When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
+
 ### Agents Tab
 
 Browse the instructions given to each AI agent and chat with Opus about them.
@@ -51,6 +53,8 @@ This helps you understand exactly what capabilities each agent has and how they 
 - "I think this prompt is missing guidance about [organism-specific convention]"
 - "Can you help me write a suggestion to improve this?"
 - "What does this instruction mean in practice?"
+- "Can Agent Studio custom agents inspect the repository source code?"
+- "Is there a tool policy that prevents this tool from being attached?"
 
 ### Flows Tab
 

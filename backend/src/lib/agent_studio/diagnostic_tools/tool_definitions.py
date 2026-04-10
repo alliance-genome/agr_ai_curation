@@ -9,6 +9,7 @@ Tool Categories:
 - database: SQL query tools (curation_db_sql)
 - api: REST API tools (agr_curation_query, chebi_api_call, quickgo_api_call, go_api_call)
 - prompt: Prompt inspection tools (get_prompt)
+- codebase: Read-only runtime repository inspection tools
 """
 
 import logging
@@ -252,6 +253,46 @@ def _create_get_prompt_handler():
             "available_groups": list(agent.group_rules.keys()) if agent.group_rules else [],
             "tools": agent.tools
         }
+
+    return handler
+
+
+def _create_search_codebase_handler():
+    """Create handler for searching the runtime repository."""
+    from .codebase_tools import search_codebase
+
+    def handler(
+        query: str,
+        search_mode: str = "content",
+        path_glob: Optional[str] = None,
+        per_file_matches: int = 1,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        return search_codebase(
+            query=query,
+            search_mode=search_mode,
+            path_glob=path_glob,
+            per_file_matches=per_file_matches,
+            limit=limit,
+        )
+
+    return handler
+
+
+def _create_read_source_file_handler():
+    """Create handler for reading a repository file."""
+    from .codebase_tools import read_source_file
+
+    def handler(
+        path: str,
+        start_line: int = 1,
+        end_line: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return read_source_file(
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+        )
 
     return handler
 
@@ -574,5 +615,104 @@ Some agents have organism-specific rules. Use these group aliases:
         tags=["prompt", "agent", "debugging", "mod"]
     )
     logger.debug("Registered: get_prompt")
+
+    # -------------------------------------------------------------------------
+    # 7. Codebase Search Tool
+    # -------------------------------------------------------------------------
+    registry.register(
+        name="search_codebase",
+        description="""Search the AGR AI Curation runtime repository in read-only mode.
+
+Use this when a curator asks whether the current code supports a feature,
+contains a limitation, or implements a specific Agent Studio behavior.
+
+Two search modes:
+- content: search file contents and return matching lines with file paths
+- files: search repository-relative file paths only
+
+Typical workflow:
+1. search_codebase(query="agent_studio", search_mode="files")
+2. search_codebase(query="tool policy", search_mode="content", path_glob="backend/src/**/*.py")
+3. read_source_file(path="backend/src/api/agent_studio.py", start_line=1400, end_line=1505)
+
+The tool only reads files from the current repository checkout and never executes code.""",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Substring or ripgrep search text to find in file paths or contents.",
+                },
+                "search_mode": {
+                    "type": "string",
+                    "description": "Choose 'content' to search file contents or 'files' to search file paths.",
+                    "enum": ["content", "files"],
+                    "default": "content",
+                },
+                "path_glob": {
+                    "type": "string",
+                    "description": "Optional rg-style glob to narrow the search, for example 'backend/src/**/*.py'.",
+                },
+                "per_file_matches": {
+                    "type": "integer",
+                    "description": "Maximum content matches to return per file (content mode only).",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 1,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return.",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 20,
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_create_search_codebase_handler(),
+        category="codebase",
+        tags=["repo", "code", "files", "read-only"],
+    )
+    logger.debug("Registered: search_codebase")
+
+    # -------------------------------------------------------------------------
+    # 8. Source File Reader Tool
+    # -------------------------------------------------------------------------
+    registry.register(
+        name="read_source_file",
+        description="""Read a text file from the AGR AI Curation runtime repository.
+
+Use this after search_codebase identifies the relevant file. The response is
+line-numbered so you can cite the implementation precisely when explaining a
+feature, behavior, or limitation to a curator.
+
+This tool is read-only and restricted to files inside the current repository checkout.""",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Repository-relative file path, for example 'backend/src/api/agent_studio.py'.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line number to read (1-based).",
+                    "minimum": 1,
+                    "default": 1,
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional inclusive ending line number. Reads up to 400 lines per call.",
+                    "minimum": 1,
+                },
+            },
+            "required": ["path"],
+        },
+        handler=_create_read_source_file_handler(),
+        category="codebase",
+        tags=["repo", "code", "file", "read-only"],
+    )
+    logger.debug("Registered: read_source_file")
 
     logger.info('Registered %s diagnostic tools', registry.get_tool_count())
