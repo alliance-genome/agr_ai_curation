@@ -156,7 +156,7 @@ async def test_submit_suggestion_uses_profiled_session_when_profile_present(monk
 
 
 @pytest.mark.asyncio
-async def test_submit_suggestion_falls_back_to_log_mode_when_publish_fails(monkeypatch):
+async def test_submit_suggestion_returns_failure_when_publish_fails(monkeypatch):
     monkeypatch.setenv("PROMPT_SUGGESTIONS_USE_SNS", "true")
     monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123:topic")
     monkeypatch.delenv("AWS_PROFILE", raising=False)

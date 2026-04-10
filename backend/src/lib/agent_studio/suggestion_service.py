@@ -213,69 +213,68 @@ async def submit_suggestion_sns(
             "message": "Suggestion submission failed because prompt suggestion delivery is not configured.",
         }
 
-    if use_sns and sns_topic_arn:
-        try:
-            sns_region = os.getenv("SNS_REGION", "us-east-1")
-            # Use AWS_PROFILE if set (for local dev), otherwise use default credential chain
-            aws_profile = os.getenv("AWS_PROFILE")
-            if aws_profile:
-                session = boto3.Session(profile_name=aws_profile)
-                sns_client = session.client("sns", region_name=sns_region)
-            else:
-                sns_client = boto3.client("sns", region_name=sns_region)
+    try:
+        sns_region = os.getenv("SNS_REGION", "us-east-1")
+        # Use AWS_PROFILE if set (for local dev), otherwise use default credential chain
+        aws_profile = os.getenv("AWS_PROFILE")
+        if aws_profile:
+            session = boto3.Session(profile_name=aws_profile)
+            sns_client = session.client("sns", region_name=sns_region)
+        else:
+            sns_client = boto3.client("sns", region_name=sns_region)
 
-            # Format subject for email (use 'General' if no agent_id)
-            agent_label = suggestion.agent_id or "General"
-            subject = f"[Prompt Suggestion] {suggestion.suggestion_type.value}: {agent_label}"
-            if suggestion.group_id:
-                subject += f" ({suggestion.group_id})"
+        # Format subject for email (use 'General' if no agent_id)
+        agent_label = suggestion.agent_id or "General"
+        subject = f"[Prompt Suggestion] {suggestion.suggestion_type.value}: {agent_label}"
+        if suggestion.group_id:
+            subject += f" ({suggestion.group_id})"
 
-            # Format message for human readability
-            formatted_message = _format_suggestion_email(message)
+        # Format message for human readability
+        formatted_message = _format_suggestion_email(message)
 
-            # Build message attributes (agent_id only if present)
-            message_attrs = {
-                "type": {
-                    "DataType": "String",
-                    "StringValue": "prompt_suggestion"
-                },
-                "suggestion_type": {
-                    "DataType": "String",
-                    "StringValue": suggestion.suggestion_type.value
-                }
+        # Build message attributes (agent_id only if present)
+        message_attrs = {
+            "type": {
+                "DataType": "String",
+                "StringValue": "prompt_suggestion"
+            },
+            "suggestion_type": {
+                "DataType": "String",
+                "StringValue": suggestion.suggestion_type.value
             }
-            if suggestion.agent_id:
-                message_attrs["agent_id"] = {
-                    "DataType": "String",
-                    "StringValue": suggestion.agent_id
-                }
-
-            # Send to SNS
-            response = sns_client.publish(
-                TopicArn=sns_topic_arn,
-                Subject=subject[:100],  # SNS subject limit
-                Message=formatted_message,
-                MessageAttributes=message_attrs
-            )
-
-            logger.info('Suggestion %s sent to SNS: %s', suggestion_id, response['MessageId'])
-
-            return {
-                "status": "success",
-                "suggestion_id": suggestion_id,
-                "sns_status": "published",
-                "sns_message_id": response["MessageId"],
-                "message": "Suggestion submitted successfully. The development team will review it.",
+        }
+        if suggestion.agent_id:
+            message_attrs["agent_id"] = {
+                "DataType": "String",
+                "StringValue": suggestion.agent_id
             }
 
-        except Exception as e:
-            logger.error('Failed to send suggestion %s to SNS: %s', suggestion_id, e, exc_info=True)
-            _log_suggestion_locally(message, "sns_publish_failed")
-            return {
-                "status": "failed",
-                "sns_status": "failed",
-                "message": "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again.",
-            }
+        # Send to SNS
+        response = sns_client.publish(
+            TopicArn=sns_topic_arn,
+            Subject=subject[:100],  # SNS subject limit
+            Message=formatted_message,
+            MessageAttributes=message_attrs
+        )
+
+        logger.info('Suggestion %s sent to SNS: %s', suggestion_id, response['MessageId'])
+
+        return {
+            "status": "success",
+            "suggestion_id": suggestion_id,
+            "sns_status": "published",
+            "sns_message_id": response["MessageId"],
+            "message": "Suggestion submitted successfully. The development team will review it.",
+        }
+
+    except Exception as e:
+        logger.error('Failed to send suggestion %s to SNS: %s', suggestion_id, e, exc_info=True)
+        _log_suggestion_locally(message, "sns_publish_failed")
+        return {
+            "status": "failed",
+            "sns_status": "failed",
+            "message": "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again.",
+        }
 
 
 # Tool definition for Opus

@@ -1895,10 +1895,7 @@ async def _handle_tool_call(
         if result.get("status") != "success":
             return {
                 "success": False,
-                "error": result.get(
-                    "message",
-                    "Suggestion submission failed.",
-                ),
+                "error": result["message"],
             }
 
         return {
@@ -3213,7 +3210,7 @@ async def submit_suggestion(
             status_code = 503 if result.get("sns_status") == "not_configured" else 502
             raise HTTPException(
                 status_code=status_code,
-                detail=result.get("message", "Failed to submit suggestion"),
+                detail=result["message"],
             )
 
         return SuggestionResponse(
