@@ -1,5 +1,7 @@
 """Tests for Agent Studio read-only codebase inspection helpers."""
 
+import subprocess
+
 import pytest
 
 from src.lib.agent_studio.diagnostic_tools import codebase_tools
@@ -39,12 +41,21 @@ def test_read_source_file_rejects_path_traversal(tmp_path, monkeypatch):
 
 def test_search_codebase_files_mode_finds_matching_paths(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
-    target = repo_root / "backend" / "src" / "agent_studio.py"
-    target.parent.mkdir(parents=True)
-    target.write_text("pass\n", encoding="utf-8")
-    (repo_root / "docs" / "guide.md").parent.mkdir(parents=True)
-    (repo_root / "docs" / "guide.md").write_text("docs\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+    monkeypatch.setattr(
+        codebase_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(
+                f"{repo_root / 'backend' / 'src' / 'agent_studio.py'}\n"
+                f"{repo_root / 'docs' / 'guide.md'}\n"
+            ),
+            stderr="",
+        ),
+    )
 
     result = codebase_tools.search_codebase(
         query="agent_studio",
@@ -59,15 +70,22 @@ def test_search_codebase_files_mode_finds_matching_paths(tmp_path, monkeypatch):
 
 def test_search_codebase_content_mode_finds_matching_lines(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
-    target = repo_root / "backend" / "src" / "agent_studio.py"
-    target.parent.mkdir(parents=True)
-    target.write_text(
-        "first line\n"
-        "tool_name = 'search_codebase'\n"
-        "another line\n",
-        encoding="utf-8",
-    )
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+    monkeypatch.setattr(
+        codebase_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(
+                '{"type":"match","data":{"path":{"text":"'
+                + str(repo_root / "backend" / "src" / "agent_studio.py")
+                + '"},"lines":{"text":"tool_name = \\"search_codebase\\"\\n"},"line_number":2}}\n'
+            ),
+            stderr="",
+        ),
+    )
 
     result = codebase_tools.search_codebase(
         query="search_codebase",
@@ -81,3 +99,17 @@ def test_search_codebase_content_mode_finds_matching_lines(tmp_path, monkeypatch
     assert result["results"][0]["path"] == "backend/src/agent_studio.py"
     assert result["results"][0]["line_number"] == 2
     assert "search_codebase" in result["results"][0]["line_text"]
+
+
+def test_search_codebase_requires_rg(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="ripgrep \\(rg\\) is required"):
+        codebase_tools.search_codebase(
+            query="agent_studio",
+            search_mode="files",
+            limit=10,
+        )

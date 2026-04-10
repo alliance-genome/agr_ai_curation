@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -41,37 +42,33 @@ def _relative_repo_path(path: Path) -> str:
     return str(path.relative_to(get_codebase_root()))
 
 
-def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iterable[Dict[str, Any]]:
-    """Yield file path matches using rg when available, otherwise a Python fallback."""
+def _require_rg() -> str:
+    """Resolve the rg binary or fail with a clear runtime error."""
     rg_path = shutil.which("rg")
-    if rg_path:
-        command = [rg_path, "--files", str(root)]
-        if path_glob:
-            command.extend(["-g", path_glob])
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode not in (0, 1):
-            raise RuntimeError(completed.stderr.strip() or "rg --files failed")
+    if not rg_path:
+        raise RuntimeError("ripgrep (rg) is required for Agent Studio codebase inspection")
+    return rg_path
 
-        lowered = query.lower()
-        for raw_line in completed.stdout.splitlines():
-            file_path = Path(raw_line.strip())
-            relative = str(file_path.relative_to(root))
-            if lowered in relative.lower():
-                yield {"path": relative}
-        return
+
+def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iterable[Dict[str, Any]]:
+    """Yield file path matches using rg."""
+    rg_path = _require_rg()
+    command = [rg_path, "--files", str(root)]
+    if path_glob:
+        command.extend(["-g", path_glob])
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode not in (0, 1):
+        raise RuntimeError(completed.stderr.strip() or "rg --files failed")
 
     lowered = query.lower()
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
+    for raw_line in completed.stdout.splitlines():
+        file_path = Path(raw_line.strip())
         relative = str(file_path.relative_to(root))
-        if path_glob and not file_path.match(path_glob):
-            continue
         if lowered in relative.lower():
             yield {"path": relative}
 
@@ -82,79 +79,46 @@ def _iter_content_matches(
     path_glob: Optional[str],
     per_file_matches: int,
 ) -> Iterable[Dict[str, Any]]:
-    """Yield content matches using rg when available, otherwise a Python fallback."""
-    rg_path = shutil.which("rg")
-    if rg_path:
-        command = [
-            rg_path,
-            "--json",
-            "--line-number",
-            "--color",
-            "never",
-            "--smart-case",
-            "--max-count",
-            str(per_file_matches),
-            "--max-filesize",
-            "1M",
-        ]
-        if path_glob:
-            command.extend(["-g", path_glob])
-        command.extend([query, str(root)])
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode not in (0, 1):
-            raise RuntimeError(completed.stderr.strip() or "rg search failed")
+    """Yield content matches using rg."""
+    rg_path = _require_rg()
+    command = [
+        rg_path,
+        "--json",
+        "--line-number",
+        "--color",
+        "never",
+        "--smart-case",
+        "--max-count",
+        str(per_file_matches),
+        "--max-filesize",
+        "1M",
+    ]
+    if path_glob:
+        command.extend(["-g", path_glob])
+    command.extend([query, str(root)])
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode not in (0, 1):
+        raise RuntimeError(completed.stderr.strip() or "rg search failed")
 
-        import json
-
-        for raw_line in completed.stdout.splitlines():
-            if not raw_line.strip():
-                continue
-            payload = json.loads(raw_line)
-            if payload.get("type") != "match":
-                continue
-            data = payload.get("data", {})
-            path_text = (
-                data.get("path", {}).get("text")
-                or data.get("path", {}).get("bytes")
-                or ""
-            )
-            relative = str(Path(path_text).relative_to(root))
-            yield {
-                "path": relative,
-                "line_number": data.get("line_number"),
-                "line_text": (data.get("lines", {}).get("text") or "").rstrip("\n"),
-            }
-        return
-
-    seen_per_file: Dict[str, int] = {}
-    lowered = query.lower()
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
+    for raw_line in completed.stdout.splitlines():
+        if not raw_line.strip():
             continue
-        if path_glob and not file_path.match(path_glob):
+        payload = json.loads(raw_line)
+        if payload.get("type") != "match":
             continue
-        relative = str(file_path.relative_to(root))
-        try:
-            with file_path.open("r", encoding="utf-8") as handle:
-                for index, line in enumerate(handle, start=1):
-                    if lowered not in line.lower():
-                        continue
-                    count = seen_per_file.get(relative, 0)
-                    if count >= per_file_matches:
-                        break
-                    seen_per_file[relative] = count + 1
-                    yield {
-                        "path": relative,
-                        "line_number": index,
-                        "line_text": line.rstrip("\n"),
-                    }
-        except UnicodeDecodeError:
-            continue
+        data = payload["data"]
+        path_text = data["path"]["text"]
+        relative = str(Path(path_text).relative_to(root))
+        yield {
+            "path": relative,
+            "line_number": data["line_number"],
+            "line_text": data["lines"]["text"].rstrip("\n"),
+        }
 
 
 def search_codebase(
