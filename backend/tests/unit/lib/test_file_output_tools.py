@@ -148,7 +148,7 @@ class TestSaveCsvImpl:
             "src.lib.openai_agents.tools.file_output_tools.FileOutput",
             return_value=mock_file_output,
         ):
-            result = await _save_csv_impl(
+            await _save_csv_impl(
                 data_json=json.dumps([{"gene": "FBgn0001", "symbol": "Notch"}]),
                 filename="gene_results",
             )

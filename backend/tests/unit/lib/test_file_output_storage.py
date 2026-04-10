@@ -13,17 +13,16 @@ Tests cover:
 """
 
 import json
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+
+import pytest
 
 from src.lib.file_outputs import (
     FileOutputStorageService,
-    FileOutputStorageError,
+    FileSizeError,
     FileValidationError,
     PathSecurityError,
-    FileSizeError,
     sanitize_output_descriptor,
 )
 
@@ -58,7 +57,7 @@ class TestStorageServiceInit:
 
     def test_creates_required_directories(self, temp_storage_dir):
         """Test that initialization creates all required directories."""
-        service = FileOutputStorageService(base_path=temp_storage_dir)
+        FileOutputStorageService(base_path=temp_storage_dir)
 
         assert (temp_storage_dir / "outputs").exists()
         assert (temp_storage_dir / "temp" / "processing").exists()

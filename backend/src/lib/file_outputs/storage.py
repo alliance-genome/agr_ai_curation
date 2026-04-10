@@ -27,8 +27,6 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
-
 from src.config import get_file_output_storage_path
 
 logger = logging.getLogger(__name__)
@@ -134,7 +132,7 @@ class FileOutputStorageService:
         # Prevent path traversal in session_id
         if ".." in session_id or "/" in session_id or "\\" in session_id:
             raise PathSecurityError(
-                f"Invalid session_id: contains path traversal characters"
+                "Invalid session_id: contains path traversal characters"
             )
 
     def _validate_descriptor(self, descriptor: str) -> None:
@@ -341,7 +339,7 @@ class FileOutputStorageService:
 
             return final_path, file_hash, file_size, warnings
 
-        except Exception as e:
+        except Exception:
             # On any error, move to failed directory for debugging
             if temp_file.exists():
                 failed_file = self.temp_failed_path / filename
