@@ -2314,7 +2314,12 @@ async def chat_with_opus(
                 logger.error('Anthropic bad request error: %s', e, exc_info=True)
                 error_event = {
                     "type": "ERROR",
-                    "message": f"Bad request: {str(e)}",
+                    "message": (
+                        "Agent Studio couldn't complete that request because it ran into a "
+                        "problem sending it to the model. Please review your last step and "
+                        "try again. If the problem continues, refresh Agent Studio and retry."
+                    ),
+                    "error_source": "anthropic",
                 }
             yield f"data: {json.dumps(error_event)}\n\n"
 
@@ -2333,7 +2338,12 @@ async def chat_with_opus(
             logger.error('Anthropic API error: %s', e, exc_info=True)
             error_event = {
                 "type": "ERROR",
-                "message": f"API error: {str(e)}",
+                "message": (
+                    "The model service had a temporary problem while working on your request. "
+                    "Any tool actions started during this turn may already have completed, so "
+                    "please check the results before retrying. If needed, try again in a moment."
+                ),
+                "error_source": "anthropic",
             }
             yield f"data: {json.dumps(error_event)}\n\n"
 
