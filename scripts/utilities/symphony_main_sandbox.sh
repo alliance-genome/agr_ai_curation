@@ -179,6 +179,20 @@ run_and_print() {
   return "${status}"
 }
 
+ensure_git_safety_tools_available() {
+  local installer="${SYMPHONY_GIT_SAFETY_TOOLS_INSTALLER:-${REPO_ROOT}/scripts/utilities/symphony_ensure_git_safety_tools.sh}"
+
+  if [[ ! -x "${installer}" ]]; then
+    echo "Missing git safety tools installer: ${installer}" >&2
+    return 1
+  fi
+
+  if ! bash "${installer}" --quiet; then
+    echo "Unable to install gitleaks/trufflehog with: ${installer}" >&2
+    return 1
+  fi
+}
+
 filter_runtime_git_status() {
   while IFS= read -r line; do
     case "${line}" in
@@ -1099,6 +1113,12 @@ prepare_sandbox() {
     exit 0
   fi
 
+  if ! ensure_git_safety_tools_available; then
+    kv sandbox_status error
+    kv sandbox_error "Git safety tools are unavailable. Run scripts/utilities/symphony_ensure_git_safety_tools.sh and retry."
+    exit 2
+  fi
+
   git -C "${REPO_ROOT}" worktree prune >/dev/null 2>&1 || true
   git -C "${REPO_ROOT}" fetch --prune "${REMOTE_NAME}" "${BRANCH_NAME}"
 
@@ -1192,6 +1212,12 @@ repair_sandbox() {
   if [[ "${DRY_RUN}" == "1" ]]; then
     kv sandbox_status dry_run
     exit 0
+  fi
+
+  if ! ensure_git_safety_tools_available; then
+    kv sandbox_status error
+    kv sandbox_error "Git safety tools are unavailable. Run scripts/utilities/symphony_ensure_git_safety_tools.sh and retry."
+    exit 2
   fi
 
   if [[ ! -d "${SANDBOX_DIR}" ]]; then

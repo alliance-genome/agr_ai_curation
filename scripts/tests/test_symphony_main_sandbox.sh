@@ -132,6 +132,30 @@ test_prepare_dry_run_auto_shifts_trace_review_ports_after_main_override() {
   assert_output_contains "trace_review_backend_port=8902" "${output}"
 }
 
+test_repair_fails_when_git_safety_tools_are_unavailable() {
+  local temp_dir output
+  temp_dir="$(mktemp -d)"
+
+  if output="$(
+    cd "${REPO_ROOT}" && \
+      SYMPHONY_MAIN_SANDBOX_ROOT="${temp_dir}" \
+      SYMPHONY_MAIN_SANDBOX_FRONTEND_PORT=53900 \
+      SYMPHONY_MAIN_SANDBOX_BACKEND_PORT=58900 \
+      SYMPHONY_MAIN_SANDBOX_TRACE_REVIEW_FRONTEND_PORT=53901 \
+      SYMPHONY_MAIN_SANDBOX_TRACE_REVIEW_BACKEND_PORT=58901 \
+      SYMPHONY_MAIN_SANDBOX_DB_TUNNEL_LOCAL_PORT=56330 \
+      SYMPHONY_MAIN_SANDBOX_DB_TUNNEL_DOCKER_PORT=56331 \
+      SYMPHONY_GIT_SAFETY_TOOLS_INSTALLER="${temp_dir}/missing-installer.sh" \
+      bash "${SCRIPT_PATH}" repair 2>&1
+  )"; then
+    echo "Expected repair to fail when git safety tools installer is unavailable" >&2
+    exit 1
+  fi
+
+  assert_output_contains "sandbox_status=error" "${output}"
+  assert_output_contains "sandbox_error=Git safety tools are unavailable. Run scripts/utilities/symphony_ensure_git_safety_tools.sh and retry." "${output}"
+}
+
 test_trace_review_compose_accepts_dev_and_langfuse_env() {
   local output
 
@@ -164,6 +188,7 @@ test_prepare_dry_run_reuses_persisted_ports
 test_env_overrides_replace_default_tunnel_ports
 test_prepare_dry_run_rejects_overlapping_trace_review_ports
 test_prepare_dry_run_auto_shifts_trace_review_ports_after_main_override
+test_repair_fails_when_git_safety_tools_are_unavailable
 test_trace_review_compose_accepts_dev_and_langfuse_env
 
 echo "symphony_main_sandbox tests passed"
