@@ -27,8 +27,6 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
-
 from src.config import get_file_output_storage_path
 
 logger = logging.getLogger(__name__)
@@ -38,6 +36,9 @@ MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 VALID_FILE_TYPES = frozenset({"csv", "tsv", "json"})
 TRACE_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 DESCRIPTOR_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,100}$")
+DESCRIPTOR_INVALID_CHARS_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
+DESCRIPTOR_SEPARATOR_RUN_PATTERN = re.compile(r"[_-]{2,}")
+DESCRIPTOR_EDGE_SEPARATOR_PATTERN = re.compile(r"^[_-]+|[_-]+$")
 
 # Formula injection characters for CSV/TSV (cells starting with these could execute formulas)
 FORMULA_INJECTION_CHARS = frozenset({"=", "+", "-", "@"})
@@ -65,6 +66,29 @@ class FileSizeError(FileOutputStorageError):
     """Raised when file exceeds size limits."""
 
     pass
+
+
+def sanitize_output_descriptor(
+    descriptor: str,
+    *,
+    max_length: int = 100,
+) -> str:
+    """Normalize a human-readable filename hint into a safe descriptor."""
+    if not isinstance(descriptor, str):
+        raise FileValidationError("Descriptor must be a string")
+
+    candidate = descriptor.strip()
+    candidate = Path(candidate.replace("\\", "/")).name
+    candidate = Path(candidate).stem
+    candidate = DESCRIPTOR_INVALID_CHARS_PATTERN.sub("_", candidate)
+    candidate = DESCRIPTOR_SEPARATOR_RUN_PATTERN.sub("_", candidate)
+    candidate = DESCRIPTOR_EDGE_SEPARATOR_PATTERN.sub("", candidate)
+    candidate = candidate[:max_length].strip("_-")
+    if not candidate:
+        raise FileValidationError(
+            f"Descriptor '{descriptor}' contains no usable characters after sanitization"
+        )
+    return candidate
 
 
 class FileOutputStorageService:
@@ -108,7 +132,7 @@ class FileOutputStorageService:
         # Prevent path traversal in session_id
         if ".." in session_id or "/" in session_id or "\\" in session_id:
             raise PathSecurityError(
-                f"Invalid session_id: contains path traversal characters"
+                "Invalid session_id: contains path traversal characters"
             )
 
     def _validate_descriptor(self, descriptor: str) -> None:
@@ -273,10 +297,11 @@ class FileOutputStorageService:
         self._validate_trace_id(trace_id)
         self._validate_session_id(session_id)
         self._validate_file_type(file_type)
-        self._validate_descriptor(descriptor)
+        normalized_descriptor = sanitize_output_descriptor(descriptor)
+        self._validate_descriptor(normalized_descriptor)
 
         # Generate filename
-        filename = self._generate_filename(trace_id, descriptor, file_type)
+        filename = self._generate_filename(trace_id, normalized_descriptor, file_type)
 
         # Prepare content as bytes
         if isinstance(content, str):
@@ -314,7 +339,7 @@ class FileOutputStorageService:
 
             return final_path, file_hash, file_size, warnings
 
-        except Exception as e:
+        except Exception:
             # On any error, move to failed directory for debugging
             if temp_file.exists():
                 failed_file = self.temp_failed_path / filename

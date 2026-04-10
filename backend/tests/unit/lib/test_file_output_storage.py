@@ -13,17 +13,17 @@ Tests cover:
 """
 
 import json
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+
+import pytest
 
 from src.lib.file_outputs import (
     FileOutputStorageService,
-    FileOutputStorageError,
+    FileSizeError,
     FileValidationError,
     PathSecurityError,
-    FileSizeError,
+    sanitize_output_descriptor,
 )
 
 
@@ -57,7 +57,7 @@ class TestStorageServiceInit:
 
     def test_creates_required_directories(self, temp_storage_dir):
         """Test that initialization creates all required directories."""
-        service = FileOutputStorageService(base_path=temp_storage_dir)
+        FileOutputStorageService(base_path=temp_storage_dir)
 
         assert (temp_storage_dir / "outputs").exists()
         assert (temp_storage_dir / "temp" / "processing").exists()
@@ -121,6 +121,20 @@ class TestInputValidation:
         """Test that descriptors over 100 chars are rejected."""
         with pytest.raises(FileValidationError, match="Invalid descriptor"):
             storage_service._validate_descriptor("a" * 101)
+
+    def test_sanitize_output_descriptor_strips_pdf_extension_and_invalid_chars(self):
+        """Test that human document filenames become safe descriptors."""
+        assert sanitize_output_descriptor("Smith et al. (2024).pdf") == "Smith_et_al_2024"
+
+    def test_sanitize_output_descriptor_rejects_empty_result(self):
+        """Test that fully-invalid descriptor candidates fail after sanitization."""
+        with pytest.raises(FileValidationError, match="contains no usable characters"):
+            sanitize_output_descriptor("().pdf")
+
+    def test_sanitize_output_descriptor_rejects_non_string_input(self):
+        """Test that non-string descriptors fail explicitly."""
+        with pytest.raises(FileValidationError, match="Descriptor must be a string"):
+            sanitize_output_descriptor(None)  # type: ignore[arg-type]
 
     def test_valid_file_types(self, storage_service):
         """Test that valid file types pass validation."""
@@ -246,6 +260,25 @@ class TestSaveOutput:
         assert path.exists()
         assert path.suffix == ".tsv"
 
+    def test_save_output_sanitizes_descriptor_before_generating_filename(
+        self, storage_service, valid_trace_id, valid_session_id
+    ):
+        """Test that save_output normalizes human-readable filenames before saving."""
+        content = "gene_id\tsymbol\nFBgn0001\tNotch\n"
+
+        path, _, _, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content=content,
+            file_type="tsv",
+            descriptor="Smith et al. (2024).pdf",
+        )
+
+        assert path.exists()
+        assert "Smith_et_al_2024" in path.name
+        assert " " not in path.name
+        assert ".pdf" not in path.name
+
     def test_save_json_file(
         self, storage_service, valid_trace_id, valid_session_id
     ):
@@ -344,6 +377,19 @@ class TestSaveOutput:
                 content="not valid json",
                 file_type="json",
                 descriptor="test",
+            )
+
+    def test_save_output_rejects_descriptor_without_usable_characters(
+        self, storage_service, valid_trace_id, valid_session_id
+    ):
+        """Test that save_output fails when descriptor sanitization removes everything."""
+        with pytest.raises(FileValidationError, match="contains no usable characters"):
+            storage_service.save_output(
+                trace_id=valid_trace_id,
+                session_id=valid_session_id,
+                content="gene_id\tsymbol\nFBgn0001\tNotch\n",
+                file_type="tsv",
+                descriptor="().pdf",
             )
 
 

@@ -31,6 +31,7 @@ from src.lib.file_outputs.storage import (
     FileSizeError,
     FileValidationError,
     PathSecurityError,
+    sanitize_output_descriptor,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "FileValidationError",
     "PathSecurityError",
     "FileSizeError",
+    "sanitize_output_descriptor",
 ]
