@@ -229,6 +229,7 @@ export interface FlowContextDefinition {
     custom_instructions?: string
     input_source: InputSource
     custom_input?: string
+    output_filename_template?: string
     output_key: string
   }>
   edges: Array<{

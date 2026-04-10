@@ -497,6 +497,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           custom_instructions: n.data.custom_instructions,
           input_source: n.data.input_source,
           custom_input: n.data.custom_input,
+          output_filename_template: n.data.output_filename_template,
           output_key: n.data.output_key,
         })),
         edges: edges.map((e) => ({

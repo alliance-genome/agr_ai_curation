@@ -322,6 +322,55 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
     assert "Parallel flows not yet supported" in result["execution_order_markdown"]
 
 
+def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
+    handler = flow_tools._get_current_flow_handler()
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Preview Flow",
+            "entry_node_id": "task_input_0",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Read the paper.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "formatter_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "chat_output_formatter",
+                        "agent_display_name": "Formatter",
+                        "input_source": "custom",
+                        "custom_input": "Use {{task_input}}.",
+                        "output_filename_template": "{{input_filename_stem}}.tsv",
+                        "output_key": "formatted_output",
+                    },
+                },
+            ],
+            "edges": [
+                {"source": "task_input_0", "target": "formatter_1"},
+            ],
+        }
+    )
+
+    result = handler()
+    markdown = result["execution_order_markdown"]
+
+    assert result["success"] is True
+    assert "- **Custom Input:** Use {{task_input}}." in markdown
+    assert "- **Output Filename Template:** {{input_filename_stem}}.tsv" in markdown
+    assert "- **Custom Input:** Use {{task_input}}...." not in markdown
+    assert (
+        "- **Output Filename Template:** {{input_filename_stem}}.tsv..."
+        not in markdown
+    )
+
+
 def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: None)

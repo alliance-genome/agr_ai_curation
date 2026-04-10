@@ -29,6 +29,7 @@ def make_agent_node(
     agent_id: str = "pdf_extraction",
     output_key: str = None,
     include_evidence: bool | None = None,
+    output_filename_template: str | None = None,
 ) -> dict:
     """Helper to create a valid agent node dict."""
     data = {
@@ -39,6 +40,8 @@ def make_agent_node(
     }
     if include_evidence is not None:
         data["include_evidence"] = include_evidence
+    if output_filename_template is not None:
+        data["output_filename_template"] = output_filename_template
 
     return {
         "id": node_id,
@@ -85,6 +88,27 @@ class TestFlowDefinitionTaskInputRequirement:
         flow = FlowDefinition(**flow_data)
         assert len(flow.nodes) == 2
         assert flow.entry_node_id == "task_1"
+
+    def test_flow_definition_accepts_output_filename_template(self):
+        """Formatter/output nodes should accept the explicit filename-template field."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Export the reviewed findings"),
+                make_agent_node(
+                    "n1",
+                    "chat_output_formatter",
+                    "final_output",
+                    output_filename_template="{{input_filename_stem}}.tsv",
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+
+        assert flow.nodes[1].data.output_filename_template == "{{input_filename_stem}}.tsv"
 
     def test_task_input_must_have_instructions(self):
         """task_input node without instructions should fail validation."""

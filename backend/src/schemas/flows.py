@@ -83,6 +83,15 @@ class FlowNodeData(BaseModel):
             "for output/formatter agents and is ignored for other step types."
         ),
     )
+    output_filename_template: Optional[str] = Field(
+        None,
+        max_length=255,
+        description=(
+            "For output/formatter nodes only. Template for the human-readable filename "
+            "descriptor with {{variable}} placeholders (for example "
+            "'{{input_filename_stem}}.tsv')."
+        ),
+    )
     # IMPORTANT: output_key pattern ensures valid Python identifier
     output_key: str = Field(
         ...,

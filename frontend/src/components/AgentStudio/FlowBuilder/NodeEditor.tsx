@@ -113,6 +113,13 @@ const VariableChip = styled(Box)(({ theme }) => ({
   },
 }))
 
+const BUILT_IN_TEMPLATE_VARIABLES = [
+  'input_filename',
+  'input_filename_stem',
+  'trace_id',
+  'timestamp',
+] as const
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -121,6 +128,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const [inputSource, setInputSource] = useState<InputSource>('previous_output')
   const [customInput, setCustomInput] = useState('')
   const [includeEvidence, setIncludeEvidence] = useState(false)
+  const [outputFilenameTemplate, setOutputFilenameTemplate] = useState('')
   const [outputKey, setOutputKey] = useState('')
 
   // Check if this is a PDF agent (input source is hardcoded to PDF document)
@@ -129,6 +137,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const supportsOutputFormatting = node
     ? isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
     : false
+  const customInputVariables = Array.from(
+    new Set([...availableVariables, ...BUILT_IN_TEMPLATE_VARIABLES])
+  )
 
   // Initialize form when node changes
   useEffect(() => {
@@ -149,6 +160,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           node.data.include_evidence,
         ) ?? false
       )
+      setOutputFilenameTemplate(node.data.output_filename_template || '')
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
     }
   }, [node, isPdfAgent, hasIncomingEdge, agentMetadata])
@@ -170,6 +182,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
       input_source: inputSource,
       custom_input: inputSource === 'custom' ? customInput : undefined,
       include_evidence: nextIncludeEvidence,
+      output_filename_template: supportsOutputFormatting
+        ? outputFilenameTemplate.trim() || undefined
+        : undefined,
       output_key: outputKey,
     })
 
@@ -182,6 +197,10 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   // Insert variable into custom input
   const handleInsertVariable = (variable: string) => {
     setCustomInput((prev) => prev + `{{${variable}}}`)
+  }
+
+  const handleInsertOutputFilenameVariable = (variable: string) => {
+    setOutputFilenameTemplate((prev) => prev + `{{${variable}}}`)
   }
 
   // Get icon from registry via hook
@@ -358,13 +377,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 Custom Input Template
               </Typography>
             </FieldLabel>
-            {availableVariables.length > 0 && (
+            {customInputVariables.length > 0 && (
               <Box sx={{ mb: 1 }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
                   Click to insert:
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>
-                  {availableVariables.map((v) => (
+                  {customInputVariables.map((v) => (
                     <VariableChip key={v} onClick={() => handleInsertVariable(v)}>
                       {`{{${v}}}`}
                     </VariableChip>
@@ -416,6 +435,40 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                     </Typography>
                   </Box>
                 )}
+              />
+            </Box>
+
+            <Box>
+              <FieldLabel>
+                <Typography variant="caption" fontWeight={600}>
+                  Output Filename Template
+                </Typography>
+                <Tooltip title="Controls the readable filename descriptor for formatter outputs using {{variable}} placeholders. Stored files still keep the trace ID prefix and timestamp suffix.">
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
+                </Tooltip>
+              </FieldLabel>
+              <Box sx={{ mb: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                  Built-in variables:
+                </Typography>
+                <Box sx={{ mt: 0.5 }}>
+                  {BUILT_IN_TEMPLATE_VARIABLES.map((variable) => (
+                    <VariableChip
+                      key={variable}
+                      onClick={() => handleInsertOutputFilenameVariable(variable)}
+                    >
+                      {`{{${variable}}}`}
+                    </VariableChip>
+                  ))}
+                </Box>
+              </Box>
+              <TextField
+                fullWidth
+                size="small"
+                placeholder="{{input_filename_stem}}.tsv"
+                value={outputFilenameTemplate}
+                onChange={(e) => setOutputFilenameTemplate(e.target.value)}
+                helperText="Applies before sanitization. Example final file: traceid_input_filename_stem_20260410T120000Z.tsv"
               />
             </Box>
 

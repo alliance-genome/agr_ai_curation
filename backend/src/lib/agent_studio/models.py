@@ -162,6 +162,7 @@ class FlowNodeContext(BaseModel):
     custom_instructions: Optional[str] = None
     input_source: str = "previous_output"  # 'previous_output' or 'custom'
     custom_input: Optional[str] = None
+    output_filename_template: Optional[str] = None
     output_key: str
 
 

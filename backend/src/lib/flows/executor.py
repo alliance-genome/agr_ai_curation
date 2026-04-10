@@ -21,13 +21,19 @@ Architecture:
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
+import re
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 from uuid import uuid4
 
 from agents import Agent, function_tool
 
-from src.lib.context import get_current_trace_id
+from src.lib.context import (
+    get_current_trace_id,
+    reset_current_output_filename_stem,
+    set_current_output_filename_stem,
+)
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     ExtractionEnvelopeCandidate,
@@ -38,6 +44,7 @@ from src.lib.curation_workspace import (
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
+from src.lib.file_outputs import sanitize_output_descriptor
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
@@ -63,6 +70,13 @@ logger = logging.getLogger(__name__)
 
 _FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
 _FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = 10
+_FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
+_FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
+_FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
+
+
+class FlowTemplateConfigurationError(ValueError):
+    """Raised when a flow step template is explicitly configured but invalid."""
 
 
 def _now_iso() -> str:
@@ -186,6 +200,169 @@ def _build_flow_conversation_summary(
         if text:
             return text
     return f"Run flow '{flow.name}'"
+
+
+def _extract_flow_input_filename(document_name: Optional[str]) -> str:
+    """Return the input filename basename or a safe fallback when no document is loaded."""
+
+    candidate = str(document_name or "").strip()
+    if not candidate:
+        return _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME
+    basename = Path(candidate.replace("\\", "/")).name.strip()
+    return basename or _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME
+
+
+def _extract_flow_input_filename_stem(document_name: Optional[str]) -> str:
+    """Return the input filename stem or a safe fallback when no document is loaded."""
+
+    return Path(_extract_flow_input_filename(document_name)).stem or _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME
+
+
+def _format_flow_template_timestamp(now: Optional[datetime] = None) -> str:
+    """Return the canonical UTC timestamp used by flow template variables."""
+
+    return (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _stringify_flow_template_value(value: Any) -> str:
+    """Normalize template variable values into stable strings."""
+
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _get_task_input_output_key(flow: CurationFlow) -> Optional[str]:
+    """Return the configured output_key for the task_input node, if present."""
+
+    for node in flow.flow_definition.get("nodes", []):
+        data = node.get("data", {})
+        if node.get("type") == "task_input" or data.get("agent_id") == "task_input":
+            output_key = str(data.get("output_key") or "").strip()
+            return output_key or None
+    return None
+
+
+def _build_initial_flow_template_variables(flow: CurationFlow) -> dict[str, str]:
+    """Bind task_input output_key to the curator-authored task instructions."""
+
+    output_key = _get_task_input_output_key(flow)
+    if not output_key:
+        return {}
+
+    task_instructions = str(get_task_instructions(flow) or "").strip()
+    if not task_instructions:
+        return {}
+
+    return {output_key: task_instructions}
+
+
+def _build_flow_template_variables(
+    *,
+    stored_variables: dict[str, Any],
+    document_name: Optional[str],
+    flow_run_id: Optional[str],
+    timestamp: Optional[str] = None,
+) -> dict[str, str]:
+    """Assemble built-in and step-bound variables for one template-render pass."""
+
+    variables = {
+        key: _stringify_flow_template_value(value)
+        for key, value in stored_variables.items()
+        if str(key or "").strip()
+    }
+    variables.update(
+        {
+            "input_filename": _extract_flow_input_filename(document_name),
+            "input_filename_stem": _extract_flow_input_filename_stem(document_name),
+            "trace_id": (
+                get_current_trace_id()
+                or str(flow_run_id or "").strip()
+                or _FLOW_TEMPLATE_DEFAULT_TRACE_ID
+            ),
+            "timestamp": timestamp or _format_flow_template_timestamp(),
+        }
+    )
+    return variables
+
+
+def _render_flow_template(
+    template: Optional[str],
+    template_variables: dict[str, str],
+) -> str:
+    """Render {{variable}} placeholders using the provided flow variable map."""
+
+    if not isinstance(template, str):
+        return ""
+
+    unresolved_variables: set[str] = set()
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in template_variables:
+            return template_variables[key]
+        unresolved_variables.add(key)
+        return ""
+
+    rendered = _FLOW_TEMPLATE_VARIABLE_PATTERN.sub(_replace, template)
+    if unresolved_variables:
+        logger.warning(
+            "[Flow Executor] Unresolved flow template variables %s in template %r",
+            sorted(unresolved_variables),
+            template,
+        )
+    return rendered
+
+
+def _resolve_flow_step_query(
+    *,
+    input_source: Any,
+    custom_input: Optional[str],
+    default_query: str,
+    template_variables: dict[str, str],
+) -> str:
+    """Resolve the per-step query.
+
+    Only input_source='custom' overrides the supervisor-provided query. The existing
+    supervisor conversation remains authoritative for 'previous_output' and 'user_query'
+    so this ticket can ship deterministic custom-input templates without rewriting the
+    broader flow prompting model.
+    """
+
+    if str(input_source or "previous_output").strip() != "custom":
+        return default_query
+
+    rendered = _render_flow_template(custom_input, template_variables).strip()
+    if not rendered:
+        raise FlowTemplateConfigurationError(
+            "custom_input rendered empty while input_source='custom'; "
+            "check the configured template variables."
+        )
+    return rendered
+
+
+def _resolve_output_filename_descriptor(
+    *,
+    output_filename_template: Optional[str],
+    template_variables: dict[str, str],
+) -> Optional[str]:
+    """Resolve and sanitize the output filename descriptor override for formatter steps."""
+
+    if not isinstance(output_filename_template, str) or not output_filename_template.strip():
+        return None
+
+    rendered = _render_flow_template(output_filename_template, template_variables).strip()
+    if not rendered:
+        raise FlowTemplateConfigurationError(
+            "output_filename_template rendered empty after variable substitution; "
+            "check the configured template variables."
+        )
+
+    return sanitize_output_descriptor(rendered)
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
@@ -646,6 +823,7 @@ def get_all_agent_tools(
         "next_tool_index": 0,
         "completed_steps": [],
         "evidence_registry": _EvidenceRegistry(),
+        "template_variables": _build_initial_flow_template_variables(flow),
     }
     flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
@@ -658,6 +836,7 @@ def get_all_agent_tools(
         agent_name: str,
         step_number: int,
         curation_adapter_key: str | None,
+        node_data: dict[str, Any],
     ):
         """Enforce strict flow step ordering at runtime."""
 
@@ -686,16 +865,44 @@ def get_all_agent_tools(
                     f"'{expected_tool}'. Do not call '{tool_name}' yet."
                 )
 
+            template_timestamp = _format_flow_template_timestamp()
+            template_variables = _build_flow_template_variables(
+                stored_variables=execution_state["template_variables"],
+                document_name=document_name,
+                flow_run_id=flow_run_id,
+                timestamp=template_timestamp,
+            )
+            resolved_query = _resolve_flow_step_query(
+                input_source=node_data.get("input_source"),
+                custom_input=node_data.get("custom_input"),
+                default_query=query,
+                template_variables=template_variables,
+            )
+            output_filename_descriptor = _resolve_output_filename_descriptor(
+                output_filename_template=node_data.get("output_filename_template"),
+                template_variables=template_variables,
+            )
+
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
-            if hasattr(tool_callable, "on_invoke_tool"):
-                # Newer openai-agents tool invokers may dereference ctx.tool_name.
-                tool_ctx = SimpleNamespace(tool_name=tool_name)
-                result = await tool_callable.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
-            else:
-                result = await tool_callable(query=query)
+            output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
+            try:
+                if hasattr(tool_callable, "on_invoke_tool"):
+                    # Newer openai-agents tool invokers may dereference ctx.tool_name.
+                    tool_ctx = SimpleNamespace(tool_name=tool_name)
+                    result = await tool_callable.on_invoke_tool(
+                        tool_ctx,
+                        json.dumps({"query": resolved_query}),
+                    )
+                else:
+                    result = await tool_callable(query=resolved_query)
+            finally:
+                reset_current_output_filename_stem(output_filename_token)
 
             result_text = _stringify_tool_output(result)
+            output_key = str(node_data.get("output_key") or "").strip()
+            if output_key:
+                execution_state["template_variables"][output_key] = result_text
             candidate, step_evidence_metadata = (
                 build_extraction_envelope_candidate_with_evidence(
                     result,
@@ -887,6 +1094,7 @@ def get_all_agent_tools(
             agent_id=agent_id,
             agent_name=entry.get("name", agent_id),
             step_number=step_num,
+            node_data=data,
             curation_adapter_key=(
                 str(entry.get("curation", {}).get("adapter_key") or "").strip() or None
                 if isinstance(entry.get("curation"), dict)

@@ -40,7 +40,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from agents import function_tool
 
@@ -72,6 +72,15 @@ def _get_context_from_contextvars() -> tuple[Optional[str], Optional[str], Optio
         get_current_session_id(),
         get_current_user_id(),
     )
+
+
+def _resolve_output_descriptor(filename: str) -> str:
+    """Prefer a flow-resolved filename stem override when one is active."""
+
+    from src.lib.context import get_current_output_filename_stem
+
+    override = str(get_current_output_filename_stem() or "").strip()
+    return override or filename
 
 
 def _build_download_url(file_id: str) -> str:
@@ -145,7 +154,7 @@ async def _save_csv_impl(
         session_id=effective_session_id,
         content=content,
         file_type="csv",
-        descriptor=filename,
+        descriptor=_resolve_output_descriptor(filename),
     )
 
     # Log any warnings from validation
@@ -306,7 +315,7 @@ async def _save_tsv_impl(
         session_id=effective_session_id,
         content=content,
         file_type="tsv",
-        descriptor=filename,
+        descriptor=_resolve_output_descriptor(filename),
     )
 
     for warning in warnings:
@@ -434,7 +443,7 @@ async def _save_json_impl(
         session_id=effective_session_id,
         content=content,
         file_type="json",
-        descriptor=filename,
+        descriptor=_resolve_output_descriptor(filename),
     )
 
     for warning in warnings:
