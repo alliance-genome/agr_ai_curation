@@ -19,8 +19,12 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
 )
 
 
-def find_repo_root(start: Path) -> Path:
-    """Resolve the repository root by walking upward to a known sentinel."""
+def find_repo_root(start: Path) -> Path | None:
+    """Resolve the repository root by walking upward to a known sentinel.
+
+    Returns ``None`` when the repo layout is unavailable (e.g. inside a
+    Docker image that does not mount ``packages/``).
+    """
     current = start.resolve()
     if current.is_file():
         current = current.parent
@@ -31,4 +35,4 @@ def find_repo_root(start: Path) -> Path:
         if (candidate / "backend").is_dir() and (candidate / "packages").is_dir():
             return candidate
 
-    raise RuntimeError(f"Could not resolve repository root from {start}")
+    return None

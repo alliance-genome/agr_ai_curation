@@ -7,6 +7,8 @@ Tests the helper functions that build registry entries from YAML configurations.
 import shutil
 from pathlib import Path
 
+import pytest
+
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
 from src.lib.agent_studio.registry_builder import _build_config_defaults, build_agent_registry
@@ -14,6 +16,8 @@ from src.lib.agent_studio.registry_builder import _build_config_defaults, build_
 from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
+if REPO_ROOT is None:
+    pytest.skip("requires full repository checkout", allow_module_level=True)
 
 
 class TestBuildConfigDefaults:

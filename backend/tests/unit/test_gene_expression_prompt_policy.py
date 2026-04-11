@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from src.lib.config.agent_sources import resolve_agent_config_sources
@@ -8,6 +9,12 @@ from src.lib.config.agent_sources import resolve_agent_config_sources
 def _repo_root() -> Path:
     # backend/tests/unit/<this_file>.py -> repo root is parents[3]
     return Path(__file__).resolve().parents[3]
+
+
+pytestmark = pytest.mark.skipif(
+    not (_repo_root() / "packages").is_dir(),
+    reason="requires full repository checkout (packages/ at repo root)",
+)
 
 
 def _load_gene_expression_source():

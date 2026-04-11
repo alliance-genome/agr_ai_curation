@@ -1,10 +1,17 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+pytestmark = pytest.mark.skipif(
+    not (_repo_root() / "packages").is_dir(),
+    reason="requires full repository checkout (packages/ at repo root)",
+)
 
 
 def _load_prompt(path: Path) -> str:

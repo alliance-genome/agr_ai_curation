@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 
 WORKSPACE_ROOT = Path("/workspace")
+
+pytestmark = pytest.mark.skipif(
+    not (WORKSPACE_ROOT / "docker-compose.production.yml").exists(),
+    reason="requires /workspace mount (standalone installer CI layout)",
+)
+
 COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.production.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"

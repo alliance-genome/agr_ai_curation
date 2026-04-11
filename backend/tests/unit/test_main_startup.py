@@ -296,6 +296,10 @@ class TestLifespan:
                 pass
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[3] / "packages").is_dir(),
+    reason="requires full repository checkout (packages/ at repo root)",
+)
 @pytest.mark.asyncio
 async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[3]

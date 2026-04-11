@@ -14,6 +14,8 @@ from src.lib.packages.models import PackageManifest
 from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
+if REPO_ROOT is None:
+    pytest.skip("requires full repository checkout", allow_module_level=True)
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 
