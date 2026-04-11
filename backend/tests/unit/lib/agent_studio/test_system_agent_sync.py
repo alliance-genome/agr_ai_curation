@@ -138,7 +138,7 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
     assert result == {
         "inserted": 1,
         "updated": 1,
-        "reactivated": 0,
+        "reactivated": 1,
         "deactivated": 1,
         "discovered": 2,
     }
@@ -150,9 +150,7 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
     assert inserted.instructions == "prompt:disease:disease_validation"
     assert inserted.tool_ids == ["agr_curation_query"]
 
-    # Inactive agents are NOT re-enabled by sync (they may have been disabled
-    # by runtime validation due to missing tool dependencies).
-    assert inactive_gene.is_active is False
+    assert inactive_gene.is_active is True
     assert inactive_gene.name == "Gene Agent"
     assert inactive_gene.group_rules_enabled is True
     assert inactive_gene.group_rules_component == "gene"
@@ -312,8 +310,8 @@ def test_sync_does_not_auto_attach_record_evidence_to_unstructured_pdf_agent(mon
     assert db.added[0].tool_ids == ["search_document", "read_section", "read_subsection"]
 
 
-def test_sync_does_not_reenable_disabled_agent(monkeypatch):
-    """Sync should not re-enable an agent that was disabled (e.g. by runtime validation)."""
+def test_sync_reactivates_discovered_disabled_agent(monkeypatch):
+    """Sync should reactivate shipped system agents when the current source still defines them."""
     import src.lib.agent_studio.system_agent_sync as module
 
     disabled_gene = SimpleNamespace(
@@ -363,7 +361,7 @@ def test_sync_does_not_reenable_disabled_agent(monkeypatch):
         lambda _db, *, folder_name, agent_id: "prompt:gene",
     )
 
-    module.sync_system_agents(db, force_reload=True)
+    result = module.sync_system_agents(db, force_reload=True)
 
-    # is_active should remain False — sync must not re-enable disabled agents
-    assert disabled_gene.is_active is False
+    assert result["reactivated"] == 1
+    assert disabled_gene.is_active is True

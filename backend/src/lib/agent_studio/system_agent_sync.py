@@ -176,12 +176,10 @@ def sync_system_agents(
 
         was_active = bool(row.is_active)
         metadata_changed = False
+        # Shipped system agents are config-owned, so a discovered definition
+        # should reactivate any previously disabled row before runtime
+        # validation decides whether it remains runnable in this environment.
         for field_name, field_value in values.items():
-            # Don't force re-enable agents that were programmatically disabled
-            # (e.g. by runtime validation due to missing tool dependencies).
-            # Only new inserts get is_active=True automatically.
-            if field_name == "is_active" and not was_active:
-                continue
             if getattr(row, field_name) != field_value:
                 setattr(row, field_name, field_value)
                 metadata_changed = True
