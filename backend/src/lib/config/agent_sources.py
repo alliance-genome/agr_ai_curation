@@ -137,7 +137,12 @@ class AgentConfigSource:
     def source_file_display(self, path: Path) -> str:
         """Return a stable provenance string for an asset path."""
         if self.package_id and self.package_path:
-            return f"packages/{self.package_id}/{path.relative_to(self.package_path).as_posix()}"
+            try:
+                relative_path = path.relative_to(self.package_path)
+            except ValueError:
+                relative_path = None
+            if relative_path is not None:
+                return f"packages/{self.package_id}/{relative_path.as_posix()}"
 
         project_root = _find_project_root()
         if project_root:
@@ -165,6 +170,50 @@ def _looks_like_agent_directory(path: Path) -> bool:
     return any(
         child.is_dir() and (child / "agent.yaml").exists()
         for child in path.iterdir()
+    )
+
+
+def _merge_group_rule_files(
+    base_group_rule_files: tuple[Path, ...],
+    override_group_rule_files: tuple[Path, ...],
+) -> tuple[Path, ...]:
+    """Merge group-rule files by filename so later sources override earlier ones."""
+    merged: dict[str, Path] = {
+        path.name.casefold(): path
+        for path in base_group_rule_files
+    }
+    for path in override_group_rule_files:
+        merged[path.name.casefold()] = path
+
+    return tuple(
+        sorted(merged.values(), key=lambda item: item.name.casefold())
+    )
+
+
+def _merge_agent_config_source(
+    base: AgentConfigSource,
+    override: AgentConfigSource,
+) -> AgentConfigSource:
+    """Layer one agent-config source on top of another without dropping base assets."""
+    def _pick_path(base_path: Path | None, override_path: Path | None) -> Path | None:
+        if override_path is not None and override_path.exists():
+            return override_path
+        return base_path
+
+    return AgentConfigSource(
+        folder_name=override.folder_name,
+        agent_dir=override.agent_dir,
+        agent_yaml=_pick_path(base.agent_yaml, override.agent_yaml),
+        prompt_yaml=_pick_path(base.prompt_yaml, override.prompt_yaml),
+        schema_py=_pick_path(base.schema_py, override.schema_py),
+        group_rule_files=_merge_group_rule_files(
+            base.group_rule_files,
+            override.group_rule_files,
+        ),
+        package_id=override.package_id if override.package_id is not None else base.package_id,
+        package_path=(
+            override.package_path if override.package_path is not None else base.package_path
+        ),
     )
 
 
@@ -445,12 +494,15 @@ def resolve_agent_config_sources(
         for source in sources:
             existing = owners.get(source.folder_name)
             if existing is not None:
+                merged_source = _merge_agent_config_source(existing, source)
                 logger.info(
                     "Agent bundle override: '%s' from %s overrides %s",
                     source.folder_name,
                     source.package_id or source.agent_dir,
                     existing.package_id or existing.agent_dir,
                 )
+                owners[source.folder_name] = merged_source
+                continue
             owners[source.folder_name] = source
 
     return tuple(sorted(owners.values(), key=lambda item: item.folder_name))

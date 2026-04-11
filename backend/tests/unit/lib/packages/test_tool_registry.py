@@ -18,8 +18,6 @@ from src.lib.packages.tool_registry import (
 )
 
 REPO_ROOT = find_repo_root(Path(__file__))
-if REPO_ROOT is None:
-    pytest.skip("requires full repository checkout", allow_module_level=True)
 ALLIANCE_TOOLS_DIR = (
     REPO_ROOT
     / "packages"

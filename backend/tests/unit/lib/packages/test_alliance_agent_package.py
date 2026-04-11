@@ -10,8 +10,6 @@ from src.lib.packages.manifest_loader import load_package_manifest
 from src.lib.packages.models import ExportKind
 
 REPO_ROOT = find_repo_root(Path(__file__))
-if REPO_ROOT is None:
-    pytest.skip("requires full repository checkout", allow_module_level=True)
 ALLIANCE_PACKAGE_DIR = REPO_ROOT / "packages" / "alliance"
 ALLIANCE_AGENTS_DIR = ALLIANCE_PACKAGE_DIR / "agents"
 

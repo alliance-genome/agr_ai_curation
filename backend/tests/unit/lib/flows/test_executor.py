@@ -9,11 +9,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
-from src.lib.file_outputs import FileValidationError
 
 def _executor_module():
     """Load flow executor lazily so monkeypatches target the active module instance."""
     return importlib.import_module("src.lib.flows.executor")
+
+
+def _file_outputs_storage_module():
+    """Load file-output storage lazily so exception assertions use the active module instance."""
+    return importlib.import_module("src.lib.file_outputs.storage")
 
 
 def _count_agent_ids(*args, **kwargs):
@@ -309,7 +313,7 @@ class TestFlowTemplateHelpers:
                 template_variables={},
             )
 
-        with pytest.raises(FileValidationError):
+        with pytest.raises(_file_outputs_storage_module().FileValidationError):
             executor._resolve_output_filename_descriptor(
                 output_filename_template="!!!.tsv",
                 template_variables={},

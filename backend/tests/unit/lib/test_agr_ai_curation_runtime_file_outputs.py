@@ -2,9 +2,7 @@
 
 from types import SimpleNamespace
 
-import pytest
-
-runtime_file_outputs = pytest.importorskip("agr_ai_curation_runtime.file_outputs")
+import agr_ai_curation_runtime.file_outputs as runtime_file_outputs
 
 
 def test_get_current_file_output_context_reads_backend_context(monkeypatch):

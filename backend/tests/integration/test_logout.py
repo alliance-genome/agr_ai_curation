@@ -7,7 +7,7 @@ Tests the complete logout workflow:
 1. Authenticate user with mock Cognito credentials
 2. Verify authenticated access to protected endpoint (GET /api/users/me)
 3. Call POST /api/auth/logout to terminate session
-4. Verify subsequent requests without re-auth return 401 Unauthorized
+4. Verify subsequent protected requests without re-auth return 401 Unauthorized
 5. Verify httpOnly cookies are cleared (where applicable)
 6. Verify user must re-authenticate after logout
 
@@ -249,17 +249,18 @@ class TestLogoutFlowIntegration:
         response = client.get("/api/users/me")
         assert response.status_code == 401, f"Expected 401 after logout, got {response.status_code}"
 
-    def test_logout_without_authentication_requires_auth(self, client, test_db):
-        """Test unauthenticated logout returns 401 per current API contract."""
+    def test_logout_without_authentication_is_idempotent(self, client, test_db):
+        """Test unauthenticated logout still succeeds and clears session state."""
         # Simulate unauthenticated state
         client.simulate_logout()
 
         # Call logout WITHOUT authentication
         response = client.post("/api/auth/logout")
 
-        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         data = response.json()
-        assert "detail" in data
+        assert data["status"] == "logged_out"
+        assert "message" in data
 
     def test_logout_response_contract_compliance(self, client):
         """Test that logout response matches contract specification.
@@ -389,11 +390,7 @@ class TestLogoutFlowEdgeCases:
             assert response.status_code == 401, f"{endpoint} should return 401 after logout, got {response.status_code}"
 
     def test_multiple_logout_calls(self, client, test_db):
-        """Test that repeated logout after session termination requires auth.
-
-        Current behavior: first authenticated logout succeeds; once the session
-        is terminated, subsequent logout calls return 401 until re-auth.
-        """
+        """Test that repeated logout calls remain idempotent after session termination."""
         # First logout succeeds
         logout_response = client.post("/api/auth/logout")
         assert logout_response.status_code == 200
@@ -401,11 +398,12 @@ class TestLogoutFlowEdgeCases:
         # Simulate session termination
         client.simulate_logout()
 
-        # Second logout now requires authentication
+        # Second logout remains idempotent even after session termination
         logout_response2 = client.post("/api/auth/logout")
-        assert logout_response2.status_code == 401, (
-            f"Second logout should return 401, got {logout_response2.status_code}"
+        assert logout_response2.status_code == 200, (
+            f"Second logout should return 200, got {logout_response2.status_code}"
         )
+        assert logout_response2.json()["status"] == "logged_out"
 
     def test_logout_preserves_database_integrity(self, client, test_db):
         """Test that logout does not corrupt database state.

@@ -22,11 +22,6 @@ ALLIANCE_AGENTS_PATH = (
     / "agents"
 )
 
-pytestmark = pytest.mark.skipif(
-    not ALLIANCE_AGENTS_PATH.is_dir(),
-    reason="requires full repository checkout (packages/ at repo root)",
-)
-
 
 class TestAgentLoader:
     """Tests for agent_loader module."""

@@ -440,10 +440,7 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
             )
         ]
 
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.evidence_resolver.DeterministicEvidenceAnchorResolver.resolve",
-        _resolve,
-    )
+    monkeypatch.setattr(module.DeterministicEvidenceAnchorResolver, "resolve", _resolve)
 
     resolved_anchor, warnings = module._resolve_anchor_against_document(
         db_session,

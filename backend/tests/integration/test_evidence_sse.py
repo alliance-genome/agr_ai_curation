@@ -17,6 +17,25 @@ from tests.integration.evidence_test_support import (
 pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
+def _assert_frontend_evidence_records_match(
+    actual_records: list[dict[str, object]],
+    expected_records: list[dict[str, object]],
+) -> None:
+    """Validate the frontend-required shape while allowing additive record metadata."""
+
+    assert len(actual_records) == len(expected_records)
+
+    seen_record_ids: set[str] = set()
+    for actual_record, expected_record in zip(actual_records, expected_records):
+        assert {key: actual_record[key] for key in expected_record} == expected_record
+
+        evidence_record_id = actual_record.get("evidence_record_id")
+        assert isinstance(evidence_record_id, str)
+        assert evidence_record_id
+        assert evidence_record_id not in seen_record_ids
+        seen_record_ids.add(evidence_record_id)
+
+
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
 def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
     client,
@@ -61,4 +80,7 @@ def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
     )
     assert evidence_summary_event["session_id"] == session_id
     assert evidence_summary_event["sessionId"] == session_id
-    assert evidence_summary_event["evidence_records"] == expected_sse_records
+    _assert_frontend_evidence_records_match(
+        evidence_summary_event["evidence_records"],
+        expected_sse_records,
+    )

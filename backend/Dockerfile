@@ -48,7 +48,7 @@ COPY alembic.ini .
 COPY tests/ ./tests/
 COPY pytest.ini .
 # Set Python path
-ENV PYTHONPATH=/app/backend:$PYTHONPATH
+ENV PYTHONPATH=/app/backend:/app/backend/src:$PYTHONPATH
 
 # Expose the API port
 EXPOSE 8000

@@ -919,6 +919,16 @@ def _serialize_submission_payload_contract(payload: SubmissionPayloadContract) -
     }
 
 
+def _submission_payload_model_input(
+    payload: SubmissionPayloadContract | None,
+) -> dict[str, Any] | None:
+    """Normalize nested payload models before embedding them in larger response schemas."""
+
+    if payload is None:
+        return None
+    return payload.model_dump()
+
+
 def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
     return CurationSubmissionRecord(
         submission_id=str(record.id),
@@ -928,7 +938,7 @@ def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
         target_key=record.target_key,
         status=record.status,
         readiness=list(record.readiness or []),
-        payload=_submission_payload(record),
+        payload=_submission_payload_model_input(_submission_payload(record)),
         requested_at=record.requested_at,
         completed_at=record.completed_at,
         external_reference=record.external_reference,
@@ -3312,7 +3322,7 @@ def submission_preview(
                 else CurationSubmissionStatus.PREVIEW_READY
             ),
             readiness=readiness,
-            payload=payload,
+            payload=_submission_payload_model_input(payload),
             requested_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
             validation_errors=[],

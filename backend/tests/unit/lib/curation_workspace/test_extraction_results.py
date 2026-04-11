@@ -11,7 +11,6 @@ from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
     build_extraction_envelope_candidate_with_evidence,
-    list_extraction_results,
     persist_extraction_result,
     persist_extraction_results,
 )
@@ -526,17 +525,11 @@ def test_persist_extraction_results_rolls_back_batch_on_commit_error():
 def test_list_extraction_results_returns_empty_for_invalid_document_id(monkeypatch, caplog):
     session = _FakeSelectSession(rows=[])
 
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.extraction_results.CurationExtractionResultRecordModel",
-        _fake_select_model(),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.extraction_results.select",
-        lambda _model: _FakeSelectStatement(),
-    )
+    monkeypatch.setattr(module, "CurationExtractionResultRecordModel", _fake_select_model())
+    monkeypatch.setattr(module, "select", lambda _model: _FakeSelectStatement())
 
     with caplog.at_level("WARNING"):
-        results = list_extraction_results(
+        results = module.list_extraction_results(
             origin_session_id="session-1",
             user_id="user-1",
             source_kind=CurationExtractionSourceKind.CHAT,
@@ -597,16 +590,10 @@ def test_list_extraction_results_applies_filters_and_ordering(monkeypatch):
     ]
     session = _FakeSelectSession(rows=rows)
 
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.extraction_results.CurationExtractionResultRecordModel",
-        _fake_select_model(),
-    )
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.extraction_results.select",
-        lambda _model: _FakeSelectStatement(),
-    )
+    monkeypatch.setattr(module, "CurationExtractionResultRecordModel", _fake_select_model())
+    monkeypatch.setattr(module, "select", lambda _model: _FakeSelectStatement())
 
-    results = list_extraction_results(
+    results = module.list_extraction_results(
         origin_session_id="session-1",
         user_id="user-1",
         source_kind=CurationExtractionSourceKind.CHAT,

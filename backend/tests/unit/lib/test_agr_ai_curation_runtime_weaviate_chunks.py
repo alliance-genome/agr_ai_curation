@@ -2,9 +2,8 @@
 
 from types import SimpleNamespace
 
+import agr_ai_curation_runtime.weaviate_chunks as runtime_weaviate_chunks
 import pytest
-
-runtime_weaviate_chunks = pytest.importorskip("agr_ai_curation_runtime.weaviate_chunks")
 
 
 @pytest.mark.asyncio

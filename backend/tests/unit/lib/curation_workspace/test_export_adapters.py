@@ -254,7 +254,10 @@ def test_build_default_export_adapter_registry_exposes_reference_adapter():
 
     adapter = registry.require(REFERENCE_ADAPTER_KEY)
 
-    assert isinstance(adapter, JsonBundleExportAdapter)
+    assert adapter.__class__.__name__ == "JsonBundleExportAdapter"
+    assert adapter.__class__.__module__ == (
+        "src.lib.curation_workspace.export_adapters.json_bundle"
+    )
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
 
@@ -276,7 +279,10 @@ def test_build_default_export_adapter_registry_keeps_package_export_when_agent_b
     adapter = registry.require("gene")
 
     assert registry.adapter_keys() == ("gene",)
-    assert isinstance(adapter, JsonBundleExportAdapter)
+    assert adapter.__class__.__name__ == "JsonBundleExportAdapter"
+    assert adapter.__class__.__module__ == (
+        "src.lib.curation_workspace.export_adapters.json_bundle"
+    )
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
 

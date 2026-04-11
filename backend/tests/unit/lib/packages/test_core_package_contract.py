@@ -9,8 +9,6 @@ from src.lib.packages.manifest_loader import load_package_manifest
 from src.lib.packages.models import ExportKind
 
 REPO_ROOT = find_repo_root(Path(__file__))
-if REPO_ROOT is None:
-    pytest.skip("requires full repository checkout", allow_module_level=True)
 CORE_PACKAGE_DIR = REPO_ROOT / "packages" / "core"
 CORE_AGENTS_DIR = CORE_PACKAGE_DIR / "agents"
 CORE_CONFIG_DIR = CORE_PACKAGE_DIR / "config"

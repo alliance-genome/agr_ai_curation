@@ -1,9 +1,12 @@
 """Tests for registry-driven supervisor tool generation."""
+import importlib
 from unittest.mock import patch
 
-from src.lib.openai_agents.agents.supervisor_agent import (
-    get_supervisor_agent_tools,
-)
+
+def _supervisor_module():
+    """Load the supervisor module lazily so patches hit the active module instance."""
+
+    return importlib.import_module("src.lib.openai_agents.agents.supervisor_agent")
 
 MOCK_SUPERVISOR_SPECS = [
     {
@@ -25,42 +28,46 @@ MOCK_SUPERVISOR_SPECS = [
 ]
 
 
-@patch(
-    "src.lib.openai_agents.agents.supervisor_agent._get_supervisor_specialist_specs",
-    return_value=MOCK_SUPERVISOR_SPECS,
-)
-def test_get_supervisor_agent_tools_returns_list(_mock_specs):
+def test_get_supervisor_agent_tools_returns_list():
     """Should return a list of tool names."""
-    tools = get_supervisor_agent_tools()
+    with patch.object(
+        _supervisor_module(),
+        "_get_supervisor_specialist_specs",
+        return_value=MOCK_SUPERVISOR_SPECS,
+    ):
+        tools = _supervisor_module().get_supervisor_agent_tools()
     assert isinstance(tools, list)
 
 
-@patch(
-    "src.lib.openai_agents.agents.supervisor_agent._get_supervisor_specialist_specs",
-    return_value=MOCK_SUPERVISOR_SPECS,
-)
-def test_get_supervisor_agent_tools_includes_gene(_mock_specs):
+def test_get_supervisor_agent_tools_includes_gene():
     """Should include gene specialist tool."""
-    tools = get_supervisor_agent_tools()
+    with patch.object(
+        _supervisor_module(),
+        "_get_supervisor_specialist_specs",
+        return_value=MOCK_SUPERVISOR_SPECS,
+    ):
+        tools = _supervisor_module().get_supervisor_agent_tools()
     assert "ask_gene_specialist" in tools
 
 
-@patch(
-    "src.lib.openai_agents.agents.supervisor_agent._get_supervisor_specialist_specs",
-    return_value=MOCK_SUPERVISOR_SPECS,
-)
-def test_get_supervisor_agent_tools_excludes_disabled(_mock_specs):
+def test_get_supervisor_agent_tools_excludes_disabled():
     """Should exclude tools not returned by supervisor-enabled spec lookup."""
-    tools = get_supervisor_agent_tools()
+    with patch.object(
+        _supervisor_module(),
+        "_get_supervisor_specialist_specs",
+        return_value=MOCK_SUPERVISOR_SPECS,
+    ):
+        tools = _supervisor_module().get_supervisor_agent_tools()
     # Formatter agents should not be in supervisor
     assert "ask_csv_formatter_specialist" not in tools
 
 
-@patch(
-    "src.lib.openai_agents.agents.supervisor_agent._get_supervisor_specialist_specs",
-    return_value=MOCK_SUPERVISOR_SPECS,
-)
-def test_get_supervisor_agent_tools_excludes_task_input(_mock_specs):
+def test_get_supervisor_agent_tools_excludes_task_input():
     """Should exclude non-agent entries like task_input."""
-    tools = get_supervisor_agent_tools()
+    with patch.object(
+        _supervisor_module(),
+        "_get_supervisor_specialist_specs",
+        return_value=MOCK_SUPERVISOR_SPECS,
+    ):
+        tools = _supervisor_module().get_supervisor_agent_tools()
     assert "task_input" not in tools

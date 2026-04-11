@@ -14,8 +14,6 @@ from src.lib.packages.models import PackageManifest
 from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
-if REPO_ROOT is None:
-    pytest.skip("requires full repository checkout", allow_module_level=True)
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 
@@ -412,8 +410,95 @@ def test_resolve_agent_config_sources_allows_config_override_layer(tmp_path):
 
     assert {source.folder_name for source in sources} == {"custom_local", "gene"}
     gene_source = next(source for source in sources if source.folder_name == "gene")
-    assert gene_source.package_id is None
+    assert gene_source.package_id == "demo.core"
     assert gene_source.agent_dir == (overrides_dir / "gene")
+    assert gene_source.agent_yaml == (overrides_dir / "gene" / "agent.yaml")
+    assert gene_source.prompt_yaml == (overrides_dir / "gene" / "prompt.yaml")
+
+
+def test_resolve_agent_config_sources_merges_partial_override_without_dropping_package_bundle(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "demo_core"
+    overrides_dir = tmp_path / "config-agents"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "demo.core",
+            "display_name": "Demo Core",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/demo_core",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "gene"}],
+        },
+    )
+    package_agent_dir = package_dir / "agents" / "gene"
+    package_agent_dir.mkdir(parents=True)
+    (package_agent_dir / "agent.yaml").write_text(
+        "agent_id: gene_validation\nname: Package Gene\n",
+        encoding="utf-8",
+    )
+    (package_agent_dir / "prompt.yaml").write_text(
+        "content: Package prompt\n",
+        encoding="utf-8",
+    )
+    (package_agent_dir / "group_rules").mkdir()
+    (package_agent_dir / "group_rules" / "fb.yaml").write_text(
+        "content: Package FB rules\n",
+        encoding="utf-8",
+    )
+    (package_agent_dir / "group_rules" / "wb.yaml").write_text(
+        "content: Package WB rules\n",
+        encoding="utf-8",
+    )
+
+    override_agent_dir = overrides_dir / "gene"
+    (override_agent_dir / "group_rules").mkdir(parents=True)
+    (override_agent_dir / "group_rules" / "wb.yaml").write_text(
+        "content: Override WB rules\n",
+        encoding="utf-8",
+    )
+
+    sources = agent_sources.resolve_agent_config_sources((packages_dir, overrides_dir))
+
+    assert {source.folder_name for source in sources} == {"gene"}
+    gene_source = sources[0]
+    assert gene_source.package_id == "demo.core"
+    assert gene_source.agent_dir == override_agent_dir
+    assert gene_source.agent_yaml == (package_agent_dir / "agent.yaml")
+    assert gene_source.prompt_yaml == (package_agent_dir / "prompt.yaml")
+    assert gene_source.group_rule_files == (
+        override_agent_dir / "group_rules" / "wb.yaml",
+    )
+    assert gene_source.source_file_display(package_agent_dir / "prompt.yaml") == (
+        "packages/demo.core/agents/gene/prompt.yaml"
+    )
+    assert gene_source.source_file_display(
+        override_agent_dir / "group_rules" / "wb.yaml"
+    ).endswith("config-agents/gene/group_rules/wb.yaml")
+
+    loaded_agents = agent_loader.load_agent_definitions(
+        (packages_dir, overrides_dir),
+        force_reload=True,
+    )
+
+    assert "gene_validation" in loaded_agents
+    assert loaded_agents["gene_validation"].name == "Package Gene"
+
+
+def test_merge_group_rule_files_prefers_later_paths():
+    fb_package = Path("/tmp/packages/demo_core/agents/gene/group_rules/fb.yaml")
+    wb_package = Path("/tmp/packages/demo_core/agents/gene/group_rules/wb.yaml")
+    wb_override = Path("/tmp/config-agents/gene/group_rules/wb.yaml")
+
+    merged = agent_sources._merge_group_rule_files(
+        (fb_package, wb_package),
+        (wb_override,),
+    )
+
+    assert merged == (fb_package, wb_override)
 
 
 def test_resolve_agent_config_sources_rejects_duplicate_bundles_within_packages_root(tmp_path):
