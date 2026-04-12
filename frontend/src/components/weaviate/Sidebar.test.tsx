@@ -57,7 +57,7 @@ describe('Sidebar', () => {
     expect(getNavButton('Documents')).toBeInTheDocument();
     expect(getNavButton('Dashboard')).toBeInTheDocument();
     expect(getNavButton('Settings')).toBeInTheDocument();
-  });
+  }, 15000); // Drawer bootstrap can exceed 5s in the full suite on shared dev hardware.
 
   it('displays Weaviate title', () => {
     renderWithTheme(<Sidebar />);

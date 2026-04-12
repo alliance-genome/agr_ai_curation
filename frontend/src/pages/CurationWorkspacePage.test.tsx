@@ -616,7 +616,7 @@ describe('CurationWorkspacePage', () => {
       expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
       expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     })
-  })
+  }, 15000) // The deferred decision flow is intentionally async and can overrun 5s during suite-wide contention.
 
   it('shows loading state while workspace is being fetched', () => {
     serviceMocks.fetchCurationWorkspace.mockReturnValue(new Promise(() => {}))

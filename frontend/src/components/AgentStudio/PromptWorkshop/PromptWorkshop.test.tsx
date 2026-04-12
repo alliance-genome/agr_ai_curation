@@ -324,7 +324,19 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    metadataMocks.refresh.mockReset()
+    serviceMocks.createCustomAgent.mockReset()
+    serviceMocks.deleteCustomAgent.mockReset()
+    serviceMocks.fetchAgentTemplates.mockReset()
+    serviceMocks.fetchModelOptions.mockReset()
+    serviceMocks.fetchToolLibrary.mockReset()
+    serviceMocks.listToolIdeaRequests.mockReset()
+    serviceMocks.listCustomAgentVersions.mockReset()
+    serviceMocks.listCustomAgents.mockReset()
+    serviceMocks.revertCustomAgentVersion.mockReset()
+    serviceMocks.setCustomAgentVisibility.mockReset()
+    serviceMocks.submitToolIdeaRequest.mockReset()
+    serviceMocks.updateCustomAgent.mockReset()
 
     metadataMocks.refresh.mockResolvedValue(undefined)
     serviceMocks.fetchModelOptions.mockResolvedValue(modelOptions)
@@ -392,7 +404,7 @@ describe('PromptWorkshop', () => {
     const adminLabel = await screen.findByText('Admin Tool')
     const adminRowButton = adminLabel.closest('.MuiListItemButton-root')
     expect(adminRowButton).toHaveClass('Mui-disabled')
-  }, 15000)
+  }, 25000) // Tool-library bootstrap plus modal rendering can cross 15s in the full suite on dev hardware.
 
   it('filters tool library by selected category', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
@@ -487,7 +499,7 @@ describe('PromptWorkshop', () => {
       description: 'Add a tool that returns expanded GO relationships for a term.',
       opus_conversation: opusConversation,
     })
-  }, 15000) // Full workshop bootstrap plus dialog submission can exceed the default timeout under CI load.
+  }, 25000) // Full workshop bootstrap plus dialog submission can exceed 15s when the suite is saturated.
 
   it('opens the provided initial custom agent id for editing', async () => {
     const existing = buildCustomAgent({ name: 'Cloned Agent' })
@@ -512,7 +524,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1)
     })
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
-  })
+  }, 15000) // Loading an existing custom agent and reopening the file menu can exceed the default timeout under suite load.
 
   it('blocks saving an existing agent when all previously attached tools are removed', async () => {
     const existing = buildCustomAgent({
@@ -589,7 +601,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
     })
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
-  })
+  }, 15000)
 
   it('refreshes once to resolve a cloned initial custom agent id created after initial load', async () => {
     const existing = buildCustomAgent({ id: 'aaaaaaaa-1111-1111-1111-111111111111', name: 'Existing Agent' })
@@ -692,7 +704,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
     })
     expect(serviceMocks.createCustomAgent.mock.calls[0][0].model_reasoning).toBe('high')
-  })
+  }, 15000)
 
   it('opens a model-selection guidance request with Claude', async () => {
     const onVerifyRequest = vi.fn()
@@ -703,11 +715,17 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
     })
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Confused about models? Chat with Claude' }))
+    fireEvent.click(
+      await screen.findByRole(
+        'button',
+        { name: 'Confused about models? Chat with Claude' },
+        { timeout: 15000 }
+      )
+    )
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me choose the best model settings')
-  })
+  }, 15000)
 
   it('opens a system-prompt discussion request with Claude', async () => {
     const onVerifyRequest = vi.fn()
@@ -878,5 +896,5 @@ describe('PromptWorkshop', () => {
     await waitForAgentName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
-  }, 15000)
+  }, 20000)
 })

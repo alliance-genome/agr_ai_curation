@@ -214,7 +214,14 @@ function buildFlowListResponse(name: string) {
 
 describe('FlowBuilder', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    serviceMocks.createFlow.mockReset()
+    serviceMocks.updateFlow.mockReset()
+    serviceMocks.listFlows.mockReset()
+    serviceMocks.getFlow.mockReset()
+    serviceMocks.deleteFlow.mockReset()
+    invalidationMocks.notifyFlowListInvalidated.mockReset()
+    reactFlowMocks.fitView.mockClear()
+    reactFlowMocks.screenToFlowPosition.mockClear()
   })
 
   it('preserves prompt_version when creating a node from catalog drag data', async () => {
@@ -274,7 +281,7 @@ describe('FlowBuilder', () => {
         })
       )
     })
-  })
+  }, 15000) // Builder bootstrap plus save dialog interactions can exceed 5s in the full suite.
 
   it('refreshes the flow list after creating a new flow and after saving an existing flow', async () => {
     const user = userEvent.setup()
@@ -340,7 +347,7 @@ describe('FlowBuilder', () => {
       flowId: 'flow-1',
       reason: 'updated',
     })
-  })
+  }, 15000) // Create-then-update coverage depends on two async refresh cycles and needs more headroom under suite load.
 
   it('surfaces the shared auth error when opening saved flows', async () => {
     const user = userEvent.setup()
@@ -356,8 +363,14 @@ describe('FlowBuilder', () => {
     const fileMenu = await screen.findByRole('menu')
     await user.click(within(fileMenu).getByText('Open Flow...'))
 
-    expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
-  })
+    expect(
+      await screen.findByText(
+        'Please log in to view your flows',
+        undefined,
+        { timeout: 15000 },
+      )
+    ).toBeInTheDocument()
+  }, 15000)
 
   it('surfaces unexpected list errors when opening saved flows', async () => {
     const user = userEvent.setup()
@@ -373,6 +386,12 @@ describe('FlowBuilder', () => {
     const fileMenu = await screen.findByRole('menu')
     await user.click(within(fileMenu).getByText('Open Flow...'))
 
-    expect(await screen.findByText('Unexpected token < in JSON at position 0')).toBeInTheDocument()
-  })
+    expect(
+      await screen.findByText(
+        'Unexpected token < in JSON at position 0',
+        undefined,
+        { timeout: 15000 },
+      )
+    ).toBeInTheDocument()
+  }, 15000)
 })

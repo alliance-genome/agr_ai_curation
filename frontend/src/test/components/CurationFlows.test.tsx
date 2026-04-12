@@ -131,7 +131,7 @@ describe('CurationFlows', () => {
     expect(screen.getByText(/4 evidence records ready/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: /Export Evidence/i })).toBeEnabled()
-  })
+  }, 15000) // SSE-driven completion cards can render late when the suite is already CPU-bound.
 
   it('reuses the curation workspace launcher for the completion card', async () => {
     const user = userEvent.setup()

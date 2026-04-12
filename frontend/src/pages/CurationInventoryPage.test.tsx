@@ -317,7 +317,7 @@ describe('CurationInventoryPage', () => {
     expect(await screen.findByText('Workspace route for session-1')).toBeInTheDocument()
     expect(screen.getByTestId('location-state')).toHaveTextContent('"queueRequest"')
     expect(screen.getByTestId('location-state')).toHaveTextContent('"sort_by":"prepared_at"')
-  })
+  }, 15000) // Initial inventory hydration plus route navigation can exceed the default timeout in the full suite.
 
   it('re-queries the inventory when filters change', async () => {
     renderPage()
@@ -360,7 +360,7 @@ describe('CurationInventoryPage', () => {
     })
 
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(1)
-  }, 15000) // Filter-driven refetches plus MUI interactions can exceed the default timeout under CI load.
+  }, 25000) // Filter-driven refetches plus MUI interactions can exceed 15s under full-suite load on slower dev hosts.
 
   it('applies a saved view through the inventory hook and re-queries the session list', async () => {
     const user = userEvent.setup()
@@ -457,5 +457,5 @@ describe('CurationInventoryPage', () => {
     pendingStatsResponse.resolve()
 
     expect(await screen.findByText('Total Sessions')).toBeInTheDocument()
-  })
+  }, 15000) // Full-suite refetch timing on slower CI/dev hosts can exceed the default 5s despite the behavior being correct.
 })

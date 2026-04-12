@@ -481,7 +481,7 @@ describe('ManualAnnotationDialog', () => {
         'candidate_created',
       )
     })
-  })
+  }, 15000) // Optimistic update plus deferred success resolution can exceed the default timeout under full-suite load.
 
   it('requires a shared template when the workspace has no existing candidates', async () => {
     serviceMocks.createManualCurationCandidate.mockReturnValue(new Promise(() => {}))

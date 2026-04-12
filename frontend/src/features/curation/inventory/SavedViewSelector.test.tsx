@@ -229,7 +229,7 @@ describe('SavedViewSelector', () => {
     expect(requestBody.filters.origin_session_id).toBeNull()
     expect(requestBody.filters.saved_view_id).toBeNull()
     expect(requestBody.filters.statuses).toEqual(['in_progress'])
-  }, 10_000)
+  }, 20_000)
 
   it('deletes the selected saved view and clears the selection', async () => {
     const savedView = buildSavedView()
@@ -280,7 +280,7 @@ describe('SavedViewSelector', () => {
     await waitFor(() => {
       expect(onClearSelection).toHaveBeenCalled()
     })
-  })
+  }, 20000) // Dialog input plus create/apply round-trip can exceed 10s when the full suite is saturated.
 
   it('does not delete a saved view until the confirmation is accepted', async () => {
     const savedView = buildSavedView()

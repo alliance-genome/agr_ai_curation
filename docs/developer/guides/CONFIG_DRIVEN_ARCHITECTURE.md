@@ -310,12 +310,12 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5-mini
-    name: GPT-5 Mini
+  - model_id: gpt-5.4-nano
+    name: GPT-5.4 Nano
     provider: openai                    # Must match a key in providers.yaml
-    description: Fast default model for day-to-day drafting and light extraction.
-    guidance: Start here for most tasks.
-    default: true                       # Exactly one model should be default
+    description: Faster, lower-cost model for quick drafting and lightweight extraction.
+    guidance: Use when speed matters more than peak accuracy.
+    default: false                      # Exactly one model should be default
     supports_reasoning: false
     supports_temperature: false
     recommended_for:
@@ -328,6 +328,7 @@ models:
     name: GPT-5.4
     provider: openai
     description: Highest-quality model for complex reasoning.
+    default: true
     supports_reasoning: true
     reasoning_options: [low, medium, high]
     default_reasoning: medium

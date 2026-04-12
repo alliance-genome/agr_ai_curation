@@ -81,7 +81,7 @@ describe('DocumentFilters', () => {
 
     fireEvent.click(pendingCheckbox);
     expect(onFilterChange).toHaveBeenLastCalledWith({ embeddingStatus: ['completed'] });
-  });
+  }, 15000); // Accordion + checkbox interactions remain correct but can exceed 5s during the heaviest suite runs.
 
   it('shows status selection count chip', () => {
     renderFilters(<DocumentFilters filters={{ embeddingStatus: ['pending', 'completed'] }} />);

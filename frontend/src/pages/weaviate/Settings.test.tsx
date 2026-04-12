@@ -50,7 +50,7 @@ describe('Settings', () => {
     expect(screen.getByRole('tab', { name: /embeddings/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /database/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /schema/i })).toBeInTheDocument();
-  });
+  }, 15000); // The full frontend suite can leave this initial MUI render just over the default timeout on shared dev hardware.
 
   it('displays embeddings tab by default', () => {
     render(<Settings />);

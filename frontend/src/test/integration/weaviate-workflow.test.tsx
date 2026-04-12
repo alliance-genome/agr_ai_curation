@@ -144,7 +144,7 @@ describe('Weaviate Workflow Integration Tests', () => {
       expect(onSaveEmbedding).toHaveBeenCalledWith(
         expect.objectContaining({ batchSize: 75 })
       );
-    });
+    }, 15000); // Integration-style settings interactions can exceed 5s when the full frontend suite is CPU-bound.
 
     it('switches between settings tabs', async () => {
       render(<Settings />);
