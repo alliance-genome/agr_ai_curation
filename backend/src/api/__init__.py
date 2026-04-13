@@ -1,17 +1,14 @@
-"""API module for Weaviate Control Panel."""
+"""API module exports with lazy imports.
 
-from . import documents
-from . import chunks
-from . import processing
-from . import strategies
-from . import settings
-from . import schema
-from . import health
-from . import pdf_viewer
-from . import feedback
-from . import maintenance
-from . import agent_studio_custom
-from . import pdf_jobs
+Importing specific API modules in tests should not eagerly import the full API
+package graph, since some modules pull in heavier optional dependencies.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
 
 __all__ = [
     "documents",
@@ -27,3 +24,11 @@ __all__ = [
     "agent_studio_custom",
     "pdf_jobs",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(f"{__name__}.{name}")
+    globals()[name] = module
+    return module

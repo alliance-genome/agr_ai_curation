@@ -45,6 +45,7 @@ from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
 )
+from ..lib.document_cleanup import cleanup_document_curation_dependencies
 from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeService,
@@ -297,6 +298,7 @@ async def cleanup_phantom_documents(user: Dict[str, Any]) -> int:
                         except Exception as fs_err:
                             logger.warning('[Phantom Check] Failed to cleanup files for phantom %s: %s', phantom_id, fs_err)
 
+                        cleanup_document_curation_dependencies(session, phantom_doc.id)
                         session.delete(phantom_doc)
                         cleaned_count += 1
                         logger.info('[Phantom Check] Deleted phantom PG record %s (%s)', phantom_id, phantom_doc.filename)
@@ -1025,24 +1027,33 @@ async def delete_document_endpoint(
 
     # Only proceed with Weaviate query if ownership verified
     try:
-        document = await get_document(user["sub"], document_id)
-
-        if not document:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Document with ID {document_id} not found"
-            )
-
-        doc_payload = document.get("document", {})
-        document_processing_status = _extract_document_processing_status(doc_payload)
         latest_job = pdf_job_service.get_latest_job_for_document(
             document_id=document_id,
             user_id=pg_doc.user_id,
             reconcile_stale=True,
         )
-        active_job_status = latest_job.status if latest_job else None
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+        active_job_status = latest_job.status if latest_job else None
         pipeline_is_active = _is_pipeline_status_active(pipeline_status)
+
+        document = None
+        document_processing_status = "missing"
+        document_missing_in_weaviate = False
+        try:
+            document = await get_document(user["sub"], document_id)
+        except ValueError as exc:
+            if "not found" in str(exc).lower():
+                document_missing_in_weaviate = True
+                logger.warning(
+                    "Document %s exists in PostgreSQL but is missing in Weaviate; proceeding with stale-record delete checks.",
+                    document_id,
+                )
+            else:
+                raise
+
+        if document:
+            doc_payload = document.get("document", {})
+            document_processing_status = _extract_document_processing_status(doc_payload)
 
         if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
             job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
@@ -1076,7 +1087,9 @@ async def delete_document_endpoint(
                     ),
                 )
 
-        result = await delete_document(user["sub"], document_id)
+        result = {"success": True, "chunks_deleted": 0}
+        if not document_missing_in_weaviate:
+            result = await delete_document(user["sub"], document_id)
 
         if not result.get("success"):
             raise HTTPException(
@@ -1093,6 +1106,7 @@ async def delete_document_endpoint(
             ).scalars().first()
 
             if doc_to_delete:
+                cleanup_document_curation_dependencies(cleanup_session, doc_to_delete.id)
                 # Delete physical files
                 try:
                     from ..config import get_pdf_storage_path

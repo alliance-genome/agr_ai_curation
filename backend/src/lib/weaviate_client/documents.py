@@ -12,6 +12,7 @@ from weaviate.classes.query import Filter
 
 from .connection import get_connection, WeaviateConnection
 from ..weaviate_helpers import get_user_collections
+from ..document_cleanup import cleanup_document_curation_dependencies
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
 from sqlalchemy.orm import Session
@@ -627,6 +628,7 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                         if pdf_doc:
                             # T031: Verify ownership before deletion (FR-014)
                             if pdf_doc.user_id == db_user.id:
+                                cleanup_document_curation_dependencies(db, pdf_doc.id)
                                 db.delete(pdf_doc)
                                 db.commit()
                                 postgres_deleted = True

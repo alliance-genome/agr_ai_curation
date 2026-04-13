@@ -74,6 +74,8 @@ if [[ "$*" == *" logs "* ]]; then
   echo "stub logs for $*"
   exit 0
 fi
+
+printf 'docker_host=%s\n' "${DOCKER_HOST:-unset}" >> "${log_file}"
 EOF
 
   chmod +x "${stub_dir}/docker"
@@ -109,6 +111,7 @@ test_prepare_test_stack_retries_and_writes_env() {
   assert_contains "Weaviate host port: 18080" "${output}"
   assert_contains "Weaviate gRPC host port: 15051" "${output}"
   assert_count "2" "args=compose -f ${REPO_ROOT}/docker-compose.test.yml up -d --wait postgres-test reranker-transformers-test redis-test weaviate-test" "${docker_log}"
+  assert_contains "docker_host=unix:///run/user/$(id -u)/docker.sock" "${docker_log}"
   # Split the DATABASE_URL assertion to avoid TruffleHog false positive on test fixture credentials.
   local expected_db_url="postgresql://postgres:postgres"
   expected_db_url="${expected_db_url}@postgres-test:5432/ai_curation"
@@ -120,5 +123,32 @@ test_prepare_test_stack_retries_and_writes_env() {
 }
 
 test_prepare_test_stack_retries_and_writes_env
+
+test_prepare_test_stack_can_force_rootful_mode() {
+  local temp_root stub_dir output docker_log home_env
+  temp_root="$(mktemp -d)"
+  stub_dir="${temp_root}/stubbin"
+  output="${temp_root}/output.txt"
+  docker_log="${temp_root}/docker.log"
+  home_env="${temp_root}/test.env"
+
+  : > "${home_env}"
+  make_stub_docker "${stub_dir}"
+
+  (
+    cd "${REPO_ROOT}"
+    export PATH="${stub_dir}:${PATH}"
+    export DOCKER_STUB_LOG="${docker_log}"
+    export TEST_SECRETS_ENV_FILE="${home_env}"
+    export AI_CURATION_TEST_DOCKER_MODE=rootful
+    export TEST_STACK_START_RETRY_SLEEP_SECONDS=0
+    ./scripts/testing/prepare-test-stack.sh > "${output}" 2>&1
+  )
+
+  assert_contains "docker_host=unset" "${docker_log}"
+  rm -f "${REPO_ROOT}/.test-stack.env"
+}
+
+test_prepare_test_stack_can_force_rootful_mode
 
 echo "prepare_test_stack tests passed"

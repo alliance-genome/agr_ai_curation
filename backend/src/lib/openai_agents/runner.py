@@ -1143,6 +1143,12 @@ async def run_agent_streamed(
     document_name: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     active_groups: Optional[List[str]] = None,
+    supervisor_model: Optional[str] = None,
+    specialist_model: Optional[str] = None,
+    supervisor_temperature: Optional[float] = None,
+    specialist_temperature: Optional[float] = None,
+    supervisor_reasoning: Optional[str] = None,
+    specialist_reasoning: Optional[str] = None,
     agent: Optional[Agent] = None,
     doc_context: Optional["DocumentContext"] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -1170,6 +1176,12 @@ async def run_agent_streamed(
         conversation_history: Optional list of previous messages
         active_groups: Optional list of group IDs (e.g., ["MGI", "FB"]) for injecting
                        group-specific rules into agent prompts
+        supervisor_model: Optional override for the supervisor model id
+        specialist_model: Optional override for specialist model ids
+        supervisor_temperature: Optional override for supervisor temperature
+        specialist_temperature: Optional override for specialist temperature
+        supervisor_reasoning: Optional override for supervisor reasoning level
+        specialist_reasoning: Optional override for specialist reasoning level
         agent: Optional pre-built agent to use instead of creating a supervisor.
                Use this for flow execution with custom flow supervisors.
                If None, creates the standard supervisor agent.
@@ -1230,6 +1242,12 @@ async def run_agent_streamed(
             hierarchy=hierarchy,
             abstract=abstract,
             active_groups=active_groups,
+            model_override=supervisor_model,
+            temperature_override=supervisor_temperature,
+            reasoning_override=supervisor_reasoning,
+            specialist_model_override=specialist_model,
+            specialist_temperature_override=specialist_temperature,
+            specialist_reasoning_override=specialist_reasoning,
         )
         agent_name = agent.name
     else:

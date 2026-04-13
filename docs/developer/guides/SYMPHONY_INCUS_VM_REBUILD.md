@@ -2,7 +2,10 @@
 
 This guide is the tracked source of truth for rebuilding the `symphony-main`
 Incus VM without losing the baseline developer tooling that manual SSH sessions
-expect.
+expect. Host-side Incus helpers still fall back to the `default` project if
+`SYMPHONY_INCUS_PROJECT` is unset, but on Chris's workstation login shells now
+export `SYMPHONY_INCUS_PROJECT=user-1000` and bare `incus` uses a restricted
+localhost TLS remote pinned to that confined project.
 
 ## What Changed
 
@@ -34,6 +37,7 @@ Preview the rebuild first:
 
 ```bash
 ./scripts/utilities/symphony_rebuild_incus_vm.sh \
+  --project "${SYMPHONY_INCUS_PROJECT:-default}" \
   --ssh-key-file ~/.ssh/id_ed25519.pub \
   --dry-run
 ```
@@ -42,13 +46,14 @@ Rebuild the VM shell:
 
 ```bash
 ./scripts/utilities/symphony_rebuild_incus_vm.sh \
+  --project "${SYMPHONY_INCUS_PROJECT:-default}" \
   --ssh-key-file ~/.ssh/id_ed25519.pub \
   --replace
 ```
 
 What this does:
 
-- recreates the `symphony-main` Incus VM
+- recreates the `symphony-main` Incus VM in the selected Incus project
 - applies tracked cloud-init for the `ctabone` user
 - installs pinned `gitleaks` and `trufflehog` into `/usr/local/bin`
 - leaves repo restore, secrets restore, and Symphony restart as explicit

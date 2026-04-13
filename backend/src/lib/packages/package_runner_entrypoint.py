@@ -25,6 +25,8 @@ def main() -> int:
     protocol = _load_runner_protocol()
     try:
         request = protocol["decode_request"](sys.stdin.read())
+        _extend_sys_path(request)
+        _apply_backend_request_context(request.context)
         tool_target = _resolve_tool_target(request)
         result = _normalize_result(_execute_tool_target(tool_target, request))
         json.dumps(result)
@@ -117,6 +119,55 @@ def _resolve_tool_target(request) -> Any:
     if not callable(imported) and not hasattr(imported, "on_invoke_tool"):
         raise TypeError(f"Imported target '{request.import_path}' is not callable")
     return imported
+
+
+def _normalize_context_value(value: Any) -> str | None:
+    """Return a stripped string context value or None when absent."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _apply_backend_request_context(context: dict[str, Any]) -> None:
+    """Hydrate backend request context inside the package subprocess.
+
+    Static package tools execute in a fresh subprocess, so they cannot see the
+    host process contextvars directly. Re-apply the request metadata here so
+    runtime helpers such as file output persistence behave the same way they do
+    in host-process execution paths.
+    """
+
+    if not context:
+        return
+
+    try:
+        context_module = importlib.import_module("src.lib.context")
+    except ImportError:
+        return
+
+    clear_context = getattr(context_module, "clear_context", None)
+    if callable(clear_context):
+        clear_context()
+
+    trace_id = _normalize_context_value(context.get("trace_id"))
+    if trace_id is not None:
+        context_module.set_current_trace_id(trace_id)
+
+    session_id = _normalize_context_value(context.get("session_id"))
+    if session_id is not None:
+        context_module.set_current_session_id(session_id)
+
+    user_id = _normalize_context_value(context.get("user_id"))
+    if user_id is not None:
+        context_module.set_current_user_id(user_id)
+
+    output_filename_stem = _normalize_context_value(
+        context.get("output_filename_stem")
+    )
+    if output_filename_stem is not None:
+        context_module.set_current_output_filename_stem(output_filename_stem)
 
 
 def _execute_tool_target(target: Any, request) -> Any:

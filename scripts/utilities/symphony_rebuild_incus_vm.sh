@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 CLOUD_INIT_GENERATOR="${SCRIPT_DIR}/symphony_print_incus_vm_cloud_init.sh"
 
 VM_NAME="symphony-main"
+INCUS_PROJECT="${SYMPHONY_INCUS_PROJECT:-default}"
 VM_IMAGE="images:ubuntu/24.04/cloud"
 VM_CPU="8"
 VM_MEMORY="12GiB"
@@ -22,6 +23,7 @@ Usage:
   symphony_rebuild_incus_vm.sh [options]
 
 Options:
+  --project NAME       Incus project for the VM (default: default)
   --name NAME          Incus instance name (default: symphony-main)
   --image IMAGE        Incus image alias (default: images:ubuntu/24.04/cloud)
   --cpu COUNT          VM vCPU count (default: 8)
@@ -40,11 +42,15 @@ EOF
 }
 
 instance_exists() {
-  incus info "${VM_NAME}" >/dev/null 2>&1
+  "${incus_cmd[@]}" info "${VM_NAME}" >/dev/null 2>&1
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --project)
+      INCUS_PROJECT="${2:?--project requires a value}"
+      shift 2
+      ;;
     --name)
       VM_NAME="${2:?--name requires a value}"
       shift 2
@@ -97,6 +103,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "${INCUS_PROJECT}" ]]; then
+  echo "Incus project cannot be empty; pass --project or set SYMPHONY_INCUS_PROJECT." >&2
+  exit 2
+fi
+
+incus_cmd=(incus --project "${INCUS_PROJECT}")
+
 if [[ ! -x "${CLOUD_INIT_GENERATOR}" ]]; then
   echo "Missing cloud-init generator: ${CLOUD_INIT_GENERATOR}" >&2
   exit 1
@@ -124,7 +137,7 @@ if instance_exists; then
 fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
-  printf 'Would rebuild Incus VM %s from %s\n' "${VM_NAME}" "${VM_IMAGE}"
+  printf 'Would rebuild Incus VM %s in project %s from %s\n' "${VM_NAME}" "${INCUS_PROJECT}" "${VM_IMAGE}"
   printf '  cpu=%s memory=%s disk=%s user=%s\n' "${VM_CPU}" "${VM_MEMORY}" "${VM_DISK}" "${VM_USER}"
   if [[ "${instance_already_exists}" == "1" ]]; then
     printf '  existing instance detected: %s\n' "${VM_NAME}"
@@ -137,27 +150,27 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 if [[ "${instance_already_exists}" == "1" ]] && [[ "${REPLACE}" != "1" ]]; then
-  echo "Incus instance already exists: ${VM_NAME}" >&2
+  echo "Incus instance already exists in project ${INCUS_PROJECT}: ${VM_NAME}" >&2
   echo "Re-run with --replace to rebuild it." >&2
   exit 1
 fi
 
 if instance_exists; then
-  incus stop "${VM_NAME}" --force >/dev/null 2>&1 || true
-  incus delete "${VM_NAME}"
+  "${incus_cmd[@]}" stop "${VM_NAME}" --force >/dev/null 2>&1 || true
+  "${incus_cmd[@]}" delete "${VM_NAME}"
 fi
 
-incus init "${VM_IMAGE}" "${VM_NAME}" --vm \
+"${incus_cmd[@]}" init "${VM_IMAGE}" "${VM_NAME}" --vm \
   -c "limits.cpu=${VM_CPU}" \
   -c "limits.memory=${VM_MEMORY}" \
   -d "root,size=${VM_DISK}"
 
-incus config set "${VM_NAME}" boot.autostart=true
-incus config set "${VM_NAME}" cloud-init.user-data="$(cat "${cloud_init_file}")"
-incus start "${VM_NAME}"
+"${incus_cmd[@]}" config set "${VM_NAME}" boot.autostart=true
+"${incus_cmd[@]}" config set "${VM_NAME}" cloud-init.user-data="$(cat "${cloud_init_file}")"
+"${incus_cmd[@]}" start "${VM_NAME}"
 
 cat <<EOF
-Rebuilt Incus VM ${VM_NAME}.
+Rebuilt Incus VM ${VM_NAME} in project ${INCUS_PROJECT}.
 
 Fresh-VM follow-up still required:
   1. Restore repo checkout and local .symphony runtime support.

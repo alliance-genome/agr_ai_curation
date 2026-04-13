@@ -86,13 +86,14 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 
 ### Symphony deployment route for new/modified scripts
 
-Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of files with different deployment paths:
+Symphony runs inside an Incus VM (`symphony-main`) in the Incus project named by `SYMPHONY_INCUS_PROJECT`. Repo helpers still fall back to `default` if the variable is unset, but on Chris's workstation the live host and VM login profiles now export `SYMPHONY_INCUS_PROJECT=user-1000`. There are TWO categories of files with different deployment paths:
 
 - For full `symphony-main` rebuilds, the tracked source of truth is now:
   - `scripts/utilities/symphony_print_incus_vm_cloud_init.sh`
   - `scripts/utilities/symphony_rebuild_incus_vm.sh`
   - `docs/developer/guides/SYMPHONY_INCUS_VM_REBUILD.md`
 - That rebuild path installs pinned `gitleaks` and `trufflehog` during VM creation so interactive SSH work does not have to wait for repo bootstrap before secret-scanning hooks become real.
+- Host-side Incus helpers in this repo honor `SYMPHONY_INCUS_PROJECT`. On Chris's workstation, bare `incus` now uses a restricted localhost TLS remote pinned to the confined `user-1000` project, so login shells should already have `SYMPHONY_INCUS_PROJECT=user-1000`. If a shell does not source profiles, export it explicitly before manual `incus ...` commands.
 
 1. **Git-tracked scripts** (`scripts/utilities/symphony_*.sh`):
    - Committed to the repo and pushed to `origin/main`.
@@ -105,9 +106,9 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
    - Deployed by copying directly into the VM's local source root with `incus file push`.
    - Important: this category is not limited to `WORKFLOW.md`. If you changed local Symphony runtime code under `.symphony/elixir/`, push those files into the VM too.
    - Example:
-     `incus file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
+     `incus --project "${SYMPHONY_INCUS_PROJECT:-default}" file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
    - Example for runtime code:
-     `incus file push .symphony/elixir/lib/symphony_elixir/config.ex symphony-main/<repo-path>/.symphony/elixir/lib/symphony_elixir/config.ex`
+     `incus --project "${SYMPHONY_INCUS_PROJECT:-default}" file push .symphony/elixir/lib/symphony_elixir/config.ex symphony-main/<repo-path>/.symphony/elixir/lib/symphony_elixir/config.ex`
    - The `ensure_workspace_runtime.sh` hook then copies workflow/helper files from the local source root into per-issue workspaces; Elixir runtime changes are picked up after rebuild/restart in the VM source tree.
 
 ### Local sandbox sync rule
@@ -118,12 +119,12 @@ Symphony runs inside an Incus VM (`symphony-main`). There are TWO categories of 
 
 **Syncing the VM checkout** (required after pushing git-tracked changes):
 ```bash
-incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- sudo --login --user ctabone bash -lc \
   'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && git pull origin main'
 ```
 After syncing, restart Symphony so the new process picks up the updated source root:
 ```bash
-incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- sudo --login --user ctabone bash -lc \
   'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && pkill -f "./bin/symphony" || true; sleep 2; nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
 ```
 
@@ -132,13 +133,13 @@ incus exec symphony-main -- sudo --login --user ctabone bash -lc \
 - Symptom: `pkill -f "./bin/symphony"` from `sudo --login --user ctabone` fails with `Operation not permitted`, or the command returns no useful output and the old process keeps holding port `4000`.
 - If that happens, stop the old process from the VM root shell first, then start Symphony again as `ctabone`:
 ```bash
-incus exec symphony-main -- bash -lc 'pkill -f "./bin/symphony" || true; sleep 2; pgrep -af "[b]in/symphony" || true'
-incus exec symphony-main -- sudo --login --user ctabone bash -lc \
+incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- bash -lc 'pkill -f "./bin/symphony" || true; sleep 2; pgrep -af "[b]in/symphony" || true'
+incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- sudo --login --user ctabone bash -lc \
   'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
 ```
 - Verify both the VM listener and the host-side proxy after restart:
 ```bash
-incus exec symphony-main -- bash -lc 'ss -ltnp | grep :4000 || true'
+incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- bash -lc 'ss -ltnp | grep :4000 || true'
 curl -i -sS -m 5 http://127.0.0.1:4000/ | head -n 5
 ```
 - If the host check still gives `Empty reply from server`, wait a few seconds and retry before assuming the restart failed.

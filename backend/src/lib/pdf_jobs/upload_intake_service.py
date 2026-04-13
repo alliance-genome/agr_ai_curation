@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import get_pdf_storage_path
+from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.pdf_jobs.upload_execution_service import UploadExecutionRequest, UploadExecutionService
 from src.lib.pipeline.upload import PDFUploadHandler
 from src.lib.weaviate_client.documents import create_document, delete_document, get_document
@@ -83,6 +84,7 @@ class UploadIntakeService:
         delete_document_fn: Callable[[str, str], Any] = delete_document,
         create_job_fn: Callable[..., Any] = pdf_job_service.create_job,
         tenant_name_resolver: Callable[[str], str] = get_tenant_name,
+        cleanup_document_dependencies_fn: Callable[[Session, uuid.UUID], Any] = cleanup_document_curation_dependencies,
     ) -> None:
         self.upload_execution_service = upload_execution_service
         self._session_factory = session_factory
@@ -95,6 +97,7 @@ class UploadIntakeService:
         self._delete_document = delete_document_fn
         self._create_job = create_job_fn
         self._tenant_name_resolver = tenant_name_resolver
+        self._cleanup_document_dependencies = cleanup_document_dependencies_fn
 
     @staticmethod
     def _default_upload_handler_factory(storage_path: Path) -> PDFUploadHandler:
@@ -315,6 +318,7 @@ class UploadIntakeService:
                 "Phantom document detected (hash match in PG, missing in Weaviate): %s. Cleaning up old record.",
                 existing.id,
             )
+            self._cleanup_document_dependencies(session, existing.id)
             session.delete(existing)
             session.commit()
             return None
@@ -324,6 +328,7 @@ class UploadIntakeService:
                 existing.id,
                 not_found_err,
             )
+            self._cleanup_document_dependencies(session, existing.id)
             session.delete(existing)
             session.commit()
             return None

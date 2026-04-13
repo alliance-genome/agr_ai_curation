@@ -112,6 +112,74 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    obj1 = SimpleNamespace(
+        uuid="u1",
+        properties={
+            "content": "Chunk one content",
+            "contentPreview": "Preview one",
+            "pageNumber": 1,
+            "chunkIndex": 0,
+            "sectionTitle": "Intro",
+            "elementType": "NarrativeText",
+            "documentId": "doc-1",
+            "metadata": '{"x":1}',
+            "docItemProvenance": "[]",
+        },
+        metadata=SimpleNamespace(score=0.9, explain_score="ok"),
+        vector=[0.1, 0.2],
+    )
+    obj2 = SimpleNamespace(
+        uuid="u2",
+        properties={
+            "content": "Chunk two content",
+            "contentPreview": "Preview two",
+            "pageNumber": 2,
+            "chunkIndex": 1,
+            "sectionTitle": "Results",
+            "elementType": "NarrativeText",
+            "documentId": "doc-1",
+            "metadata": '{"y":2}',
+            "docItemProvenance": "[]",
+        },
+        metadata=SimpleNamespace(score=0.8, explain_score="ok"),
+        vector=[0.2, 0.3],
+    )
+    response = SimpleNamespace(objects=[obj1, obj2])
+    chunk_collection = MagicMock()
+    chunk_collection.query.hybrid.return_value = response
+    connection = _connection_with_client(MagicMock())
+
+    def _rerank(query, rows, *, top_n):
+        assert query == "gene expression in developing retina"
+        assert top_n == 2
+        assert rows[0]["content_preview"] == "Preview one"
+        return list(reversed(rows))
+
+    monkeypatch.setattr(chunks, "rerank_chunks", _rerank)
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
+        "src.lib.weaviate_helpers.get_user_collections",
+        return_value=(chunk_collection, MagicMock()),
+    ):
+        results = await chunks.hybrid_search_chunks(
+            document_id="doc-1",
+            query="gene expression in developing retina",
+            user_id="user-1",
+            limit=2,
+            initial_limit=2,
+            apply_reranking=True,
+            apply_mmr=False,
+        )
+
+    assert [chunk["id"] for chunk in results] == ["u2", "u1"]
+    assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
+    assert "_rerank_text" not in results[0]
+
+
+@pytest.mark.asyncio
 async def test_hybrid_search_chunks_guardrails(monkeypatch):
     _sync_to_thread(monkeypatch)
 

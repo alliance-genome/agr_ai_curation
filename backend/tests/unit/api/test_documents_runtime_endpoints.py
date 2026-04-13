@@ -34,12 +34,20 @@ class _FakeQuery:
 class _FakeExecuteResult:
     def __init__(self, doc):
         self._doc = doc
+        self.rowcount = 0
 
     def scalars(self):
         return self
 
     def first(self):
         return self._doc
+
+    def all(self):
+        if self._doc is None:
+            return []
+        if isinstance(self._doc, list):
+            return self._doc
+        return [self._doc]
 
 
 class _FakeSession:
@@ -340,6 +348,73 @@ async def test_delete_document_endpoint_allows_stale_processing_status_when_job_
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_allows_stale_postgres_only_document_cleanup(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    cleanup_doc = SimpleNamespace(
+        id=doc_id,
+        user_id=42,
+        file_path=None,
+        pdfx_json_path=None,
+        processed_json_path=None,
+    )
+    cleanup_session = _FakeSession(execute_doc=cleanup_doc)
+    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+
+    async def _missing_document(*_args, **_kwargs):
+        raise ValueError(f"Document {doc_id} not found")
+
+    monkeypatch.setattr(documents, "get_document", _missing_document)
+    monkeypatch.setattr(
+        documents,
+        "delete_document",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("delete_document should not run")),
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="completed", current_stage="completed"),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert result.success is True
+    assert result.document_id == doc_id
+    assert "0 chunks deleted" in result.message
+    assert cleanup_session.deleted == [cleanup_doc]
+    assert cleanup_session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_blocks_stale_postgres_only_document_with_active_job(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    _patch_session_factory(monkeypatch, [verify_session])
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+
+    async def _missing_document(*_args, **_kwargs):
+        raise ValueError(f"Document {doc_id} not found")
+
+    monkeypatch.setattr(documents, "get_document", _missing_document)
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert exc.value.status_code == 409
+    assert "job status" in str(exc.value.detail).lower()
 
 
 @pytest.mark.asyncio

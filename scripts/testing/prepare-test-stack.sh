@@ -47,7 +47,7 @@ resolve_published_port() {
   local container_port="$2"
   local published
 
-  published="$(docker compose -f "${COMPOSE_FILE}" port "${service_name}" "${container_port}" | head -n 1)"
+  published="$(test_stack_compose port "${service_name}" "${container_port}" | head -n 1)"
   if [[ -z "${published}" ]]; then
     echo "Unable to resolve published port for ${service_name}:${container_port}" >&2
     exit 1
@@ -57,7 +57,7 @@ resolve_published_port() {
 }
 
 test_stack_compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  "${SCRIPT_DIR}/docker-test-compose.sh" "$@"
 }
 
 print_test_stack_diagnostics() {

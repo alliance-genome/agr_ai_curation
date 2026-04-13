@@ -40,6 +40,7 @@ Start here for new developers:
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
 | [DOCKER_CLI_REMOVAL_VERIFICATION.md](guides/DOCKER_CLI_REMOVAL_VERIFICATION.md) | 2026-03-24 backend audit for Docker CLI/socket hardening and remaining Docker references |
+| [DEV_RELEASE_SMOKE_STRATEGY.md](DEV_RELEASE_SMOKE_STRATEGY.md) | Verbose source of truth for the deep dev release smoke gate: API coverage, gaps, evidence, rollout plan |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |

@@ -33,6 +33,7 @@ npm-debug.log*
 .npm
 .eslintcache
 frontend/dist/
+frontend/dist-codex-build-*/
 frontend/build/
 
 # Docker
@@ -74,6 +75,8 @@ langfuse_traces/
 # Claude Code
 CLAUDE.md
 CLAUDE.local.md
+.codex
+.codex/
 .playwright-mcp/
 
 # Local plans/designs (not committed)

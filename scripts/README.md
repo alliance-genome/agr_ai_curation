@@ -23,8 +23,10 @@ scripts/
 ├── maintenance_mode.sh          # Toggle maintenance mode banner
 │
 ├── testing/
+│   └── docker-test-compose.sh # Rootless-by-default wrapper for docker-compose.test.yml
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
+│   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, cleanup
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
@@ -435,6 +437,40 @@ make smoke-llm-local
 
 Outputs:
 - `file_outputs/temp/llm_provider_smoke_local_<timestamp>.json`
+
+### testing/dev_release_smoke.py
+
+Runs the deep deployed-backend smoke for dev release validation:
+
+- verifies backend health
+- checks/wakes the PDF extraction worker
+- uploads a real sample PDF through the backend API
+- waits for processing completion
+- verifies document download metadata
+- loads the document into chat context
+- asks one real OpenAI-backed question
+- creates a temporary custom agent
+- creates and executes a real flow over the SSE endpoint
+- uploads a second document
+- creates and validates a batch-compatible flow
+- runs a real two-document batch and downloads the ZIP results
+- cleans up temporary documents, flows, and custom agents
+- writes evidence JSON
+
+Typical usage on the dev host:
+
+```bash
+cd ~/agr_ai_curation
+python3 scripts/testing/dev_release_smoke.py --base-url http://localhost:8000
+```
+
+Notes:
+
+- The script auto-loads `TESTING_API_KEY` from `.env` when available.
+- Default PDFs come from `backend/tests/fixtures/`.
+- Use `--skip-chat`, `--skip-flow`, or `--skip-batch` to isolate one stage while debugging.
+- Evidence output:
+  - `/tmp/agr_ai_curation_dev_release_smoke/dev_release_smoke_<timestamp>.json`
 
 ## Code Analysis Utilities
 

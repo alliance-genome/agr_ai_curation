@@ -143,6 +143,104 @@ async def test_chat_endpoint_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
+    add_calls = []
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)))
+
+    async def _stream(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "intermediate answer"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final stabilized answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-2"),
+        {"sub": "user-1", "cognito:groups": []},
+    )
+
+    assert result.response == "final stabilized answer"
+    assert add_calls == [("user-1", "session-2", "hello", "final stabilized answer")]
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+
+    async def _stream(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer from overrides"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    await chat.chat_endpoint(
+        chat.ChatMessage(
+            message="hello",
+            session_id="session-override",
+            model="gpt-5.4-nano",
+            specialist_model="gpt-5.4-nano",
+            supervisor_temperature=0.0,
+            specialist_temperature=0.0,
+            supervisor_reasoning="minimal",
+            specialist_reasoning="minimal",
+        ),
+        {"sub": "user-1", "cognito:groups": []},
+    )
+
+    assert captured["supervisor_model"] == "gpt-5.4-nano"
+    assert captured["specialist_model"] == "gpt-5.4-nano"
+    assert captured["supervisor_temperature"] == 0.0
+    assert captured["specialist_temperature"] == 0.0
+    assert captured["supervisor_reasoning"] == "minimal"
+    assert captured["specialist_reasoning"] == "minimal"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+
+    async def _stream(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-defaults"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer from config defaults"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-defaults"),
+        {"sub": "user-1", "cognito:groups": []},
+    )
+
+    assert captured["supervisor_model"] is None
+    assert captured["specialist_model"] is None
+    assert captured["supervisor_temperature"] is None
+    assert captured["specialist_temperature"] is None
+    assert captured["supervisor_reasoning"] is None
+    assert captured["specialist_reasoning"] is None
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_raises_http_401_without_user_id():
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(chat.ChatMessage(message="hello"), {"cognito:groups": []})

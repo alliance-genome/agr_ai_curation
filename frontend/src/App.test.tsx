@@ -6,7 +6,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppContent, ProtectedRoutes } from './App';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
-import { LATEST_CHANGELOG_ENTRY } from './content/changelog';
+import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
 
@@ -84,7 +84,7 @@ describe('AppContent global notifications', () => {
     vi.clearAllMocks();
     localStorage.clear();
     sessionStorage.clear();
-    localStorage.setItem(`changelog:last-seen:user-1`, LATEST_CHANGELOG_ENTRY.id);
+    localStorage.setItem(`changelog:last-seen:user-1`, POPUP_CHANGELOG_ENTRY!.id);
     mockUseAuth.mockReturnValue({
       user: { uid: 'user-1', name: 'Test User' },
       logout: vi.fn().mockResolvedValue(undefined),
@@ -134,16 +134,16 @@ describe('AppContent global notifications', () => {
     });
 
     const firstRender = renderAppContent('/');
-    expect(await screen.findByText(`What's New: v${LATEST_CHANGELOG_ENTRY.version}`)).toBeInTheDocument();
+    expect(await screen.findByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => {
-      expect(localStorage.getItem('changelog:last-seen:user-1')).toBe(LATEST_CHANGELOG_ENTRY.id);
+      expect(localStorage.getItem('changelog:last-seen:user-1')).toBe(POPUP_CHANGELOG_ENTRY!.id);
     });
 
     firstRender.unmount();
     renderAppContent('/');
-    expect(screen.queryByText(`What's New: v${LATEST_CHANGELOG_ENTRY.version}`)).not.toBeInTheDocument();
+    expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
   });
 
   it('seeds existing PDF terminal jobs and only toasts new terminal updates on subsequent polls', async () => {

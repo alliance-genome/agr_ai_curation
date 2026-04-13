@@ -42,7 +42,8 @@ Avoid:
 
 ## VM / Symphony Note
 
-Because Symphony runs inside the `symphony-main` Incus VM:
+Because Symphony runs inside the `symphony-main` Incus VM (in the Incus
+project named by `SYMPHONY_INCUS_PROJECT`, default `default`):
 
 - changes to `.symphony/WORKFLOW.md` must be pushed into the VM source tree and picked up by the running Symphony process;
 - tracked repo docs such as `AGENTS.md` and this file only affect new workspaces after they are committed, pushed, and available from the source branch Symphony clones.

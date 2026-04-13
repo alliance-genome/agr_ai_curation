@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 
+from ..bedrock_reranker import get_rerank_provider, rerank_chunks
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -516,11 +517,9 @@ async def hybrid_search_chunks(
 
                 # Add reranking if available
                 if rerank_override if rerank_override is not None else apply_reranking:
-                    logger.info("V5: Enabling local transformer reranking on contentPreview field")
-                    from weaviate.classes.query import Rerank
-                    query_params["rerank"] = Rerank(
-                        prop="contentPreview",  # Use shortened field for reranker
-                        query=query
+                    logger.info(
+                        "V5: Post-search reranking enabled via provider=%s",
+                        get_rerank_provider(),
                     )
                 else:
                     logger.info("V5: Reranking disabled")
@@ -581,8 +580,16 @@ async def hybrid_search_chunks(
                         "id": chunk_uuid,
                         # ✅ CRITICAL: Use 'text' to match chat.py
                         "text": obj.properties.get("content") if obj.properties else None,
+                        "content_preview": (
+                            obj.properties.get("contentPreview") if obj.properties else None
+                        ),
                         "metadata": metadata_dict,
                         "score": obj.metadata.score if obj.metadata else 0.0,
+                        "_rerank_text": (
+                            obj.properties.get("contentPreview")
+                            or obj.properties.get("content")
+                            or ""
+                        ),
                     }
 
                     # Include vector only if needed for MMR
@@ -594,6 +601,13 @@ async def hybrid_search_chunks(
                         logger.debug("Score breakdown: %s", obj.metadata.explain_score)
 
                     chunks.append(chunk)
+
+                if rerank_override if rerank_override is not None else apply_reranking:
+                    logger.info("V5: Applying Bedrock reranking to %s chunks", len(chunks))
+                    chunks = rerank_chunks(query, chunks, top_n=len(chunks))
+                else:
+                    for chunk in chunks:
+                        chunk.pop("_rerank_text", None)
 
                 # Apply MMR if enabled and we have enough results
                 if (mmr_override if mmr_override is not None else apply_mmr) and len(chunks) > limit:
@@ -621,6 +635,9 @@ async def hybrid_search_chunks(
                     else:
                         logger.info("V5: Not enough chunks for MMR (%s <= %s)", len(chunks), limit)
                     chunks = chunks[:limit]
+
+                for chunk in chunks:
+                    chunk.pop("_rerank_text", None)
 
                 search_duration_ms = (time.monotonic() - search_start) * 1000
                 logger.info(
@@ -1721,10 +1738,16 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     if not isinstance(metadata, dict):
                         metadata = {}
 
-                    # Add default values for required fields if missing
+                    # Repair missing or null required fields before returning data
+                    # through the strict Pydantic response model.
                     content = obj.properties.get("content", "")
-                    metadata.setdefault("character_count", len(content))
-                    metadata.setdefault("word_count", len(content.split()))
+                    character_count = metadata.get("character_count")
+                    if not isinstance(character_count, int) or character_count < 0:
+                        metadata["character_count"] = len(content)
+
+                    word_count = metadata.get("word_count")
+                    if not isinstance(word_count, int) or word_count < 0:
+                        metadata["word_count"] = len(content.split())
 
                     # Convert UUID to string - Weaviate returns _WeaviateUUIDInt objects
                     chunk_id = str(obj.uuid) if hasattr(obj, 'uuid') else str(obj.properties.get("chunkIndex", 0))
@@ -1743,6 +1766,11 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                             logger.warning("Failed to parse docItemProvenance for chunk %s", chunk_id)
                             doc_items = []
 
+                    minimal_metadata = {
+                        "character_count": metadata["character_count"],
+                        "word_count": metadata["word_count"],
+                    }
+
                     chunk_data = {
                         "id": chunk_id,
                         "document_id": document_id,  # We know this from the filter
@@ -1752,7 +1780,9 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                         "element_type": obj.properties.get("elementType"),
                         "page_number": obj.properties.get("pageNumber"),
                         "sectionTitle": obj.properties.get("sectionTitle"),
-                        "metadata": metadata if include_metadata else {},  # Now properly parsed with required fields
+                        # The API schema always requires character/word counts even when
+                        # callers opt out of the heavier metadata payload.
+                        "metadata": metadata if include_metadata else minimal_metadata,
                         "doc_items": doc_items  # Include provenance data
                     }
                     chunks.append(chunk_data)

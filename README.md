@@ -180,6 +180,11 @@ behavior through additional packages under
 
 ### Running Tests
 
+Docker-backed test-stack commands now default to the rootless Docker daemon via
+`scripts/testing/docker-test-compose.sh`. Override with
+`AI_CURATION_TEST_DOCKER_MODE=rootful` or an explicit `--rootful` flag if you
+need the root daemon for a one-off run.
+
 ```bash
 # Run all healthy tests
 docker compose exec backend pytest tests/unit/ -v
@@ -189,6 +194,12 @@ docker compose exec backend pytest tests/unit/test_config.py -v
 
 # Run with coverage
 docker compose exec backend pytest tests/unit/ --cov=src --cov-report=html
+
+# Prepare isolated Docker test infra (rootless by default)
+make test-prepare
+
+# Run Dockerized backend unit tests (rootless by default)
+make test-unit
 ```
 
 ### Code Quality

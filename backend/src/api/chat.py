@@ -99,17 +99,17 @@ class ChatMessage(BaseModel):
     """
     message: str
     session_id: Optional[str] = None
-    model: Optional[str] = "gpt-4o"
-    specialist_model: Optional[str] = "gpt-4o-mini"
+    model: Optional[str] = None
+    specialist_model: Optional[str] = None
 
     # Temperature settings (0.0=deterministic, 1.0=creative)
-    supervisor_temperature: Optional[float] = 0.1  # Low for deterministic routing
-    specialist_temperature: Optional[float] = 0.3  # Slightly warmer for responses
+    supervisor_temperature: Optional[float] = None
+    specialist_temperature: Optional[float] = None
 
     # Reasoning effort for GPT-5 models ("minimal", "low", "medium", "high")
     # Only applies when using gpt-5 family models
-    supervisor_reasoning: Optional[str] = "medium"  # Thinking time for routing decisions
-    specialist_reasoning: Optional[str] = "low"  # Less thinking for direct answers
+    supervisor_reasoning: Optional[str] = None
+    specialist_reasoning: Optional[str] = None
 
 
 def _get_conversation_history_for_session(user_id: str, session_id: str) -> List[Dict[str, str]]:
@@ -734,6 +734,12 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             document_name=document_name,
             conversation_history=conversation_history,
             active_groups=active_groups,
+            supervisor_model=chat_message.model,
+            specialist_model=chat_message.specialist_model,
+            supervisor_temperature=chat_message.supervisor_temperature,
+            specialist_temperature=chat_message.specialist_temperature,
+            supervisor_reasoning=chat_message.supervisor_reasoning,
+            specialist_reasoning=chat_message.specialist_reasoning,
         ):
             event_type = event.get("type")
             event_data = event.get("data", {}) or {}
@@ -753,7 +759,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             if event_type == "RUN_FINISHED":
                 full_response = event_data.get("response", "")
                 run_finished = True
-                break
+                continue
             elif event_type == "RUN_ERROR":
                 # Capture error and stop processing
                 error_message = event_data.get("message", "Unknown error")
@@ -904,6 +910,12 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 document_name=document_name,
                 conversation_history=conversation_history,
                 active_groups=active_groups,
+                supervisor_model=chat_message.model,
+                specialist_model=chat_message.specialist_model,
+                supervisor_temperature=chat_message.supervisor_temperature,
+                specialist_temperature=chat_message.specialist_temperature,
+                supervisor_reasoning=chat_message.supervisor_reasoning,
+                specialist_reasoning=chat_message.specialist_reasoning,
             ):
                 # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):

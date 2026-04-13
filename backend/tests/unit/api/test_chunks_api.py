@@ -90,6 +90,52 @@ async def test_get_document_chunks_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_document_chunks_accepts_minimal_metadata_when_include_metadata_false(monkeypatch):
+    async def _get_chunks(document_id, pagination, user_id):
+        assert document_id == "doc-1"
+        assert pagination == {"page": 1, "page_size": 20, "include_metadata": False}
+        assert user_id == "user-1"
+        return {
+            "total": 1,
+            "chunks": [
+                {
+                    "id": "chunk-1",
+                    "document_id": document_id,
+                    "chunk_index": 0,
+                    "content": "Example chunk content",
+                    "element_type": "NarrativeText",
+                    "page_number": 1,
+                    "section_title": None,
+                    "section_path": None,
+                    "parent_section": None,
+                    "subsection": None,
+                    "is_top_level": None,
+                    "doc_items": [],
+                    "metadata": {
+                        "character_count": 21,
+                        "word_count": 3,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(chunks_api, "get_chunks", _get_chunks)
+
+    response = await chunks_api.get_document_chunks_endpoint(
+        document_id="doc-1",
+        page=1,
+        page_size=20,
+        include_metadata=False,
+        user={"sub": "user-1"},
+    )
+
+    assert response.document_id == "doc-1"
+    assert len(response.chunks) == 1
+    assert response.chunks[0].metadata.character_count == 21
+    assert response.chunks[0].metadata.word_count == 3
+
+
+@pytest.mark.asyncio
 async def test_get_document_chunks_maps_unexpected_errors_to_500(monkeypatch):
     async def _boom(_document_id, _pagination, _user_id):
         raise RuntimeError("downstream exploded")

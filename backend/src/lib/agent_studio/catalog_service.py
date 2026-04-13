@@ -1066,6 +1066,34 @@ def _binding_context_payload(
     }
 
 
+def _current_package_tool_request_context() -> Dict[str, Any]:
+    """Capture request-scoped runtime metadata for package tool subprocesses.
+
+    Package-backed tools run in a fresh subprocess, so backend contextvars do not
+    cross the process boundary automatically. This payload is sent alongside the
+    tool call and rehydrated inside the package runner entrypoint before the tool
+    executes.
+    """
+    from src.lib.context import (
+        get_current_output_filename_stem,
+        get_current_session_id,
+        get_current_trace_id,
+        get_current_user_id,
+    )
+
+    values = {
+        "trace_id": get_current_trace_id(),
+        "session_id": get_current_session_id(),
+        "user_id": get_current_user_id(),
+        "output_filename_stem": get_current_output_filename_stem(),
+    }
+    return {
+        key: value
+        for key, value in values.items()
+        if value not in (None, "")
+    }
+
+
 def _instantiate_package_tool(
     binding: Any,
     *,
@@ -1137,7 +1165,10 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
         decoded_kwargs = _decode_tool_input(tool_id, input_str)
         execute_kwargs = {
             "kwargs": decoded_kwargs,
-            "context": _binding_context_payload(binding, execution_context),
+            "context": {
+                **_binding_context_payload(binding, execution_context),
+                **_current_package_tool_request_context(),
+            },
         }
 
         try:
@@ -2160,7 +2191,13 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         canonical_tool_ids=canonical_tool_ids,
     )
 
-    reasoning_effort = db_agent.model_reasoning
+    model_id_override = str(kwargs.get("model_id_override") or "").strip()
+    effective_model_id = model_id_override or db_agent.model_id
+    if "model_temperature_override" in kwargs:
+        effective_temperature = kwargs.get("model_temperature_override")
+    else:
+        effective_temperature = db_agent.model_temperature
+    reasoning_effort = kwargs.get("model_reasoning_override", db_agent.model_reasoning)
     if isinstance(reasoning_effort, str) and not _REASONING_LEVEL_PATTERN.match(reasoning_effort):
         logger.warning(
             "[CatalogService] Ignoring invalid reasoning level '%s' for agent '%s'",
@@ -2172,11 +2209,11 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     if bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS):
         reasoning_effort = None
 
-    model_provider = resolve_model_provider(db_agent.model_id)
+    model_provider = resolve_model_provider(effective_model_id)
 
     model_settings = build_model_settings(
-        model=db_agent.model_id,
-        temperature=db_agent.model_temperature,
+        model=effective_model_id,
+        temperature=effective_temperature,
         reasoning_effort=reasoning_effort,
         tool_choice="auto" if tools else None,
         parallel_tool_calls=not bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS),
@@ -2189,7 +2226,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     return Agent(
         name=db_agent.name,
         instructions=instructions,
-        model=get_model_for_agent(db_agent.model_id, provider_override=model_provider),
+        model=get_model_for_agent(effective_model_id, provider_override=model_provider),
         model_settings=model_settings,
         tools=tools,
         output_type=output_schema,
@@ -2282,11 +2319,34 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     from src.lib.config.agent_loader import get_agent_definition
 
     agent_definition = get_agent_definition(agent_id)
-    curation_metadata = {
-        "adapter_key": agent_definition.curation.adapter_key,
-        "launchable": agent_definition.curation.launchable,
-    } if agent_definition is not None else None
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
+    curation_definition = agent_definition
+    if curation_definition is None and db_agent is not None:
+        tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
+        can_inherit_curation = (
+            bool(str(getattr(db_agent, "output_schema_key", "") or "").strip())
+            and "document_id" in _required_context_for_tool_ids(tool_ids)
+        )
+        if not can_inherit_curation:
+            curation_definition = None
+        for candidate_key in (
+            getattr(db_agent, "template_source", None),
+            getattr(db_agent, "group_rules_component", None),
+        ):
+            if not can_inherit_curation:
+                break
+            normalized_candidate = str(candidate_key or "").strip()
+            if not normalized_candidate:
+                continue
+            inherited_definition = get_agent_definition(normalized_candidate)
+            if inherited_definition is not None:
+                curation_definition = inherited_definition
+                break
+
+    curation_metadata = {
+        "adapter_key": curation_definition.curation.adapter_key,
+        "launchable": curation_definition.curation.launchable,
+    } if curation_definition is not None else None
     if db_agent is not None:
         tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
         required_params = _required_context_for_tool_ids(tool_ids)

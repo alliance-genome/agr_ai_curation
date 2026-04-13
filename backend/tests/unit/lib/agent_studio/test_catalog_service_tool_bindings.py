@@ -261,6 +261,56 @@ def test_get_agent_metadata_db_lookup_coerces_string_user_id(monkeypatch):
     assert metadata["required_params"] == []
 
 
+def test_get_agent_metadata_inherits_curation_from_custom_agent_template(monkeypatch):
+    fake_row = SimpleNamespace(
+        agent_key="ca_custom_gene_extractor",
+        name="Custom Gene Extractor",
+        description="Custom extraction agent",
+        tool_ids=["search_document"],
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        output_schema_key="GeneExtractionResultEnvelope",
+    )
+    fake_curation = SimpleNamespace(adapter_key="gene", launchable=True)
+    fake_definition = SimpleNamespace(curation=fake_curation)
+
+    monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _agent_id, _kwargs: fake_row)
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition",
+        lambda agent_id: fake_definition if agent_id == "gene_extractor" else None,
+    )
+
+    metadata = catalog_service.get_agent_metadata("ca_custom_gene_extractor")
+
+    assert metadata["display_name"] == "Custom Gene Extractor"
+    assert metadata["curation"] == {"adapter_key": "gene", "launchable": True}
+
+
+def test_get_agent_metadata_does_not_inherit_curation_when_custom_agent_no_longer_looks_extractable(monkeypatch):
+    fake_row = SimpleNamespace(
+        agent_key="ca_repurposed_gene_extractor",
+        name="Repurposed Agent",
+        description="No longer an extraction agent",
+        tool_ids=[],
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        output_schema_key=None,
+    )
+    fake_curation = SimpleNamespace(adapter_key="gene", launchable=True)
+    fake_definition = SimpleNamespace(curation=fake_curation)
+
+    monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _agent_id, _kwargs: fake_row)
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition",
+        lambda agent_id: fake_definition if agent_id == "gene_extractor" else None,
+    )
+
+    metadata = catalog_service.get_agent_metadata("ca_repurposed_gene_extractor")
+
+    assert metadata["display_name"] == "Repurposed Agent"
+    assert metadata["curation"] is None
+
+
 def test_create_db_agent_requires_agr_query_tool_call(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
@@ -445,6 +495,59 @@ async def test_resolve_package_tool_executes_through_package_runner(monkeypatch)
         "tool_id": "agr_curation_query",
         "kwargs": {"method": "search_genes"},
         "context": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_package_tool_forwards_runtime_request_context(monkeypatch):
+    fake_tool = _FakeFunctionTool(
+        name="save_json_file",
+        on_invoke_tool=None,
+    )
+    binding = SimpleNamespace(
+        tool_id="save_json_file",
+        required_context=(),
+    )
+    runner = SimpleNamespace(
+        execute_tool=lambda tool_id, **kwargs: SimpleNamespace(
+            ok=True,
+            result=kwargs.get("context"),
+            error=None,
+        )
+    )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
+    monkeypatch.setattr(
+        catalog_service,
+        "_instantiate_package_tool",
+        lambda _binding, execution_context=None: fake_tool,
+    )
+    monkeypatch.setattr(catalog_service, "_get_package_tool_runner", lambda: runner)
+    monkeypatch.setattr(
+        catalog_service,
+        "_current_package_tool_request_context",
+        lambda: {
+            "trace_id": "trace-123",
+            "session_id": "session-456",
+            "user_id": "runtime-user",
+            "output_filename_stem": "focus_genes_publication",
+        },
+    )
+
+    resolved = catalog_service._resolve_package_tool(
+        "save_json_file",
+        catalog_service.ToolExecutionContext(user_id="catalog-user"),
+    )
+
+    result = await resolved.on_invoke_tool(
+        None,
+        '{"data_json":"{\\"genes\\":[\\"crb\\"]}","filename":"ignored-by-flow"}',
+    )
+
+    assert result == {
+        "trace_id": "trace-123",
+        "session_id": "session-456",
+        "user_id": "runtime-user",
+        "output_filename_stem": "focus_genes_publication",
     }
 
 

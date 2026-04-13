@@ -181,29 +181,29 @@ logs-trace-review: ## Follow trace_review logs
 .PHONY: test
 test: ## Run all backend tests
 	@echo "$(GREEN)Running all tests...$(NC)"
-	@docker compose -f docker-compose.test.yml run --rm backend-tests
+	@./scripts/testing/docker-test-compose.sh run --rm backend-tests
 
 .PHONY: test-unit
 test-unit: ## Run unit tests only
 	@echo "$(GREEN)Running unit tests...$(NC)"
-	@docker compose -f docker-compose.test.yml run --rm backend-unit-tests
+	@./scripts/testing/docker-test-compose.sh run --rm backend-unit-tests
 
 .PHONY: test-integration
 test-integration: ## Run integration tests only
 	@echo "$(GREEN)Running integration tests...$(NC)"
 	@./scripts/testing/prepare-test-stack.sh
-	@docker compose -f docker-compose.test.yml run --rm backend-integration-tests
+	@./scripts/testing/docker-test-compose.sh run --rm backend-integration-tests
 
 .PHONY: test-contract
 test-contract: ## Run contract tests only
 	@echo "$(GREEN)Running contract tests...$(NC)"
 	@./scripts/testing/prepare-test-stack.sh
-	@docker compose -f docker-compose.test.yml run --rm backend-contract-tests
+	@./scripts/testing/docker-test-compose.sh run --rm backend-contract-tests
 
 .PHONY: test-build
 test-build: ## Build test image
 	@echo "$(GREEN)Building test image...$(NC)"
-	@docker compose -f docker-compose.test.yml build backend-tests
+	@./scripts/testing/docker-test-compose.sh build backend-tests
 
 .PHONY: test-prepare
 test-prepare: ## Start isolated test infra (postgres/weaviate) and run migrations
@@ -213,7 +213,7 @@ test-prepare: ## Start isolated test infra (postgres/weaviate) and run migration
 .PHONY: test-stack-down
 test-stack-down: ## Stop isolated test infrastructure
 	@echo "$(YELLOW)Stopping isolated test infrastructure...$(NC)"
-	@docker compose -f docker-compose.test.yml down
+	@./scripts/testing/docker-test-compose.sh down
 	@rm -f .test-stack.env
 
 .PHONY: smoke-llm-local

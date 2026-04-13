@@ -107,6 +107,142 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
 
 
+def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    captured = {}
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream", "model": "gpt-5.4-nano"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="hello",
+                session_id="session-stream-override",
+                model="gpt-5.4-nano",
+                specialist_model="gpt-5.4-nano",
+                supervisor_temperature=0.0,
+                specialist_temperature=0.0,
+                supervisor_reasoning="minimal",
+                specialist_reasoning="minimal",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert captured["supervisor_model"] == "gpt-5.4-nano"
+    assert captured["specialist_model"] == "gpt-5.4-nano"
+    assert captured["supervisor_temperature"] == 0.0
+    assert captured["specialist_temperature"] == 0.0
+    assert captured["supervisor_reasoning"] == "minimal"
+    assert captured["specialist_reasoning"] == "minimal"
+
+
+def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    captured = {}
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream-defaults"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="hello",
+                session_id="session-stream-defaults",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert captured["supervisor_model"] is None
+    assert captured["specialist_model"] is None
+    assert captured["supervisor_temperature"] is None
+    assert captured["specialist_temperature"] is None
+    assert captured["supervisor_reasoning"] is None
+    assert captured["specialist_reasoning"] is None
+
+
 def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()

@@ -96,6 +96,28 @@ def test_package_runner_executes_static_sdk_style_tool(monkeypatch, tmp_path):
     assert result.result == {"message": "static:hello?"}
 
 
+def test_package_runner_hydrates_backend_context_for_static_sdk_tool(monkeypatch, tmp_path):
+    runner = _build_runner(monkeypatch, tmp_path)
+
+    result = runner.execute_tool(
+        "sdk_static_context_probe",
+        context={
+            "trace_id": "trace-123",
+            "session_id": "session-456",
+            "user_id": "user-789",
+            "output_filename_stem": "focus_genes_publication",
+        },
+    )
+
+    assert result.ok is True
+    assert result.result == {
+        "trace_id": "trace-123",
+        "session_id": "session-456",
+        "user_id": "user-789",
+        "output_filename_stem": "focus_genes_publication",
+    }
+
+
 def test_package_runner_executes_context_factory_sdk_style_tool(monkeypatch, tmp_path):
     runner = _build_runner(monkeypatch, tmp_path)
 

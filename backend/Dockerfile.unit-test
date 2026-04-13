@@ -39,6 +39,7 @@ COPY backend/src/ ./src/
 COPY backend/tests/ ./tests/
 COPY backend/main.py ./
 COPY backend/pytest.ini ./
+COPY scripts/testing/dev_release_smoke.py /app/scripts/testing/dev_release_smoke.py
 
 # Copy config directories needed by config-driven architecture tests
 COPY config/ /app/config/

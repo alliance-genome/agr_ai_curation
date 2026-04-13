@@ -677,6 +677,9 @@ def _create_dynamic_specialist_tools(
     abstract: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     tool_specs: Optional[List[Dict[str, Any]]] = None,
+    specialist_model_override: Optional[str] = None,
+    specialist_temperature_override: Optional[float] = None,
+    specialist_reasoning_override: Optional[str] = None,
 ) -> List[Callable]:
     """
     Dynamically create specialist tools based on unified agent records.
@@ -725,6 +728,12 @@ def _create_dynamic_specialist_tools(
         # Group-aware agents (MODs, institutions, teams, etc.)
         if group_rules_enabled and active_groups:
             agent_kwargs["active_groups"] = active_groups
+        if specialist_model_override:
+            agent_kwargs["model_id_override"] = specialist_model_override
+        if specialist_temperature_override is not None:
+            agent_kwargs["model_temperature_override"] = specialist_temperature_override
+        if specialist_reasoning_override:
+            agent_kwargs["model_reasoning_override"] = specialist_reasoning_override
 
         try:
             # Create the agent instance from unified spec.
@@ -765,6 +774,12 @@ def create_supervisor_agent(
     abstract: Optional[str] = None,
     enable_guardrails: bool = False,  # Enable input guardrails (PII detection, topic check)
     active_groups: Optional[List[str]] = None,  # Group-specific rules to inject (e.g., ["MGI", "FB"])
+    model_override: Optional[str] = None,
+    temperature_override: Optional[float] = None,
+    reasoning_override: Optional[ReasoningEffort] = None,
+    specialist_model_override: Optional[str] = None,
+    specialist_temperature_override: Optional[float] = None,
+    specialist_reasoning_override: Optional[str] = None,
 ) -> Agent:
     """
     Create a Supervisor agent with dynamically discovered specialist tools.
@@ -809,16 +824,24 @@ def create_supervisor_agent(
     config = get_agent_config("supervisor")
     log_agent_config("Supervisor", config)
 
-    model_provider = resolve_model_provider(config.model)
+    effective_model = str(model_override or config.model).strip() or config.model
+    effective_temperature = (
+        temperature_override if temperature_override is not None else config.temperature
+    )
+    effective_reasoning = (
+        reasoning_override if reasoning_override is not None else config.reasoning
+    )
+
+    model_provider = resolve_model_provider(effective_model)
 
     # Get the model (returns LitellmModel for Gemini/Groq, string for OpenAI)
-    model = get_model_for_agent(config.model, provider_override=model_provider)
+    model = get_model_for_agent(effective_model, provider_override=model_provider)
 
     # Build model settings for supervisor
     supervisor_settings = _build_model_settings(
-        model=config.model,
-        temperature=config.temperature,
-        reasoning_effort=config.reasoning,
+        model=effective_model,
+        temperature=effective_temperature,
+        reasoning_effort=effective_reasoning,
         provider_override=model_provider,
     )
 
@@ -834,9 +857,9 @@ def create_supervisor_agent(
 
     logger.info(
         "Creating Supervisor agent with dynamic tool discovery, model=%s temp=%s reasoning=%s",
-        config.model,
-        config.temperature,
-        config.reasoning,
+        effective_model,
+        effective_temperature,
+        effective_reasoning,
         extra={"operation": "supervisor_routing_setup"},
     )
 
@@ -863,6 +886,9 @@ def create_supervisor_agent(
         abstract=abstract,
         active_groups=active_groups,
         tool_specs=tool_specs,
+        specialist_model_override=specialist_model_override,
+        specialist_temperature_override=specialist_temperature_override,
+        specialist_reasoning_override=specialist_reasoning_override,
     )
 
     routing_duration_ms = (time.monotonic() - route_start) * 1000
@@ -1009,7 +1035,7 @@ The tool returns file information including a download URL that will render as a
 
     logger.info(
         "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",
-        config.model,
+        effective_model,
         base_prompt.version,
         active_groups,
     )
@@ -1038,11 +1064,11 @@ The tool returns file information including a download URL that will render as a
     log_agent_config_to_langfuse(
         agent_name="Query Supervisor",
         instructions=instructions,
-        model=config.model,
+        model=effective_model,
         tools=tool_names,
         model_settings={
-            "temperature": config.temperature,
-            "reasoning": config.reasoning,
+            "temperature": effective_temperature,
+            "reasoning": effective_reasoning,
             "prompt_version": base_prompt.version,
         },
         metadata={

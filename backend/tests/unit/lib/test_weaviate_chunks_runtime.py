@@ -290,6 +290,91 @@ async def test_get_chunks_raises_when_query_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_chunks_include_metadata_false_returns_minimal_required_metadata(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    page_response = SimpleNamespace(
+        objects=[
+            SimpleNamespace(
+                uuid="chunk-uuid-1",
+                properties={
+                    "chunkIndex": 0,
+                    "content": "Alpha beta gamma",
+                    "contentPreview": "Alpha beta gamma",
+                    "elementType": "NarrativeText",
+                    "pageNumber": 1,
+                    "sectionTitle": "Intro",
+                    "metadata": '{"section_title":"Intro","character_count":16,"word_count":3,"content_type":"text"}',
+                    "docItemProvenance": "[]",
+                },
+            ),
+        ]
+    )
+    total_response = SimpleNamespace(objects=[SimpleNamespace()])
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.side_effect = [page_response, total_response]
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        result = await chunks.get_chunks(
+            "doc-1",
+            {"page": 1, "page_size": 10, "include_metadata": False},
+            "user-1",
+        )
+
+    assert result["total"] == 1
+    assert len(result["chunks"]) == 1
+    assert result["chunks"][0]["metadata"] == {
+        "character_count": 16,
+        "word_count": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_include_metadata_false_repairs_null_required_metadata(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    page_response = SimpleNamespace(
+        objects=[
+            SimpleNamespace(
+                uuid="chunk-uuid-1",
+                properties={
+                    "chunkIndex": 0,
+                    "content": "Alpha beta gamma",
+                    "contentPreview": "Alpha beta gamma",
+                    "elementType": "NarrativeText",
+                    "pageNumber": 1,
+                    "sectionTitle": "Intro",
+                    "metadata": '{"character_count": null, "word_count": null}',
+                    "docItemProvenance": "[]",
+                },
+            ),
+        ]
+    )
+    total_response = SimpleNamespace(objects=[SimpleNamespace()])
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.side_effect = [page_response, total_response]
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        result = await chunks.get_chunks(
+            "doc-1",
+            {"page": 1, "page_size": 10, "include_metadata": False},
+            "user-1",
+        )
+
+    assert result["total"] == 1
+    assert result["chunks"][0]["metadata"] == {
+        "character_count": 16,
+        "word_count": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_chunk_by_id_runs_inline_in_package_tool_subprocess(monkeypatch):
     monkeypatch.setenv("AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS", "1")
 

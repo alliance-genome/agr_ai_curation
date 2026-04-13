@@ -614,6 +614,69 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
 
 
+def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
+    captured_dynamic = {}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_agent_config",
+        lambda _name: SimpleNamespace(model="gpt-5.4", temperature=0.1, reasoning="medium"),
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_model_for_agent",
+        lambda model, provider_override=None: model,
+    )
+    monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_dynamic_specialist_tools",
+        lambda **kwargs: captured_dynamic.update(kwargs) or [],
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "get_prompt",
+        lambda _name: SimpleNamespace(content="Base prompt", version=12),
+    )
+    monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.langfuse_client.log_agent_config", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                fn,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "Agent",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    created = supervisor_agent.create_supervisor_agent(
+        document_id="doc-override",
+        user_id="user-override",
+        model_override="gpt-5.4-nano",
+        temperature_override=0.0,
+        reasoning_override="minimal",
+        specialist_model_override="gpt-5.4-nano",
+        specialist_temperature_override=0.0,
+        specialist_reasoning_override="minimal",
+    )
+
+    assert created.model == "gpt-5.4-nano"
+    assert created.model_settings["model"] == "gpt-5.4-nano"
+    assert created.model_settings["temperature"] == 0.0
+    assert created.model_settings["reasoning_effort"] == "minimal"
+    assert captured_dynamic["specialist_model_override"] == "gpt-5.4-nano"
+    assert captured_dynamic["specialist_temperature_override"] == 0.0
+    assert captured_dynamic["specialist_reasoning_override"] == "minimal"
+
+
 def test_is_explicit_curation_prep_confirmation_rejects_not_ready():
     assert supervisor_agent._is_explicit_curation_prep_confirmation("not ready") is False
 

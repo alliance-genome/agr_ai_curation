@@ -15,7 +15,7 @@ import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
-import { LATEST_CHANGELOG_ENTRY } from './content/changelog'
+import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
 import theme from './theme'
@@ -157,10 +157,10 @@ export function AppContent() {
   };
 
   const markLatestChangelogSeen = React.useCallback(() => {
-    if (!changelogStorageKey || !LATEST_CHANGELOG_ENTRY) {
+    if (!changelogStorageKey || !POPUP_CHANGELOG_ENTRY) {
       return;
     }
-    localStorage.setItem(changelogStorageKey, LATEST_CHANGELOG_ENTRY.id);
+    localStorage.setItem(changelogStorageKey, POPUP_CHANGELOG_ENTRY.id);
   }, [changelogStorageKey]);
 
   const handleChangelogDialogClose = React.useCallback(() => {
@@ -175,14 +175,14 @@ export function AppContent() {
   }, [markLatestChangelogSeen, navigate]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user?.uid || !LATEST_CHANGELOG_ENTRY) {
+    if (!isAuthenticated || !user?.uid || !POPUP_CHANGELOG_ENTRY) {
       setChangelogDialogOpen(false);
       return;
     }
 
     const key = `changelog:last-seen:${user.uid}`;
     const lastSeenId = localStorage.getItem(key);
-    if (lastSeenId !== LATEST_CHANGELOG_ENTRY.id) {
+    if (lastSeenId !== POPUP_CHANGELOG_ENTRY.id) {
       setChangelogDialogOpen(true);
     }
   }, [isAuthenticated, user?.uid]);
@@ -499,7 +499,7 @@ export function AppContent() {
       />
       <ChangelogDialog
         open={changelogDialogOpen}
-        entry={LATEST_CHANGELOG_ENTRY}
+        entry={POPUP_CHANGELOG_ENTRY}
         onClose={handleChangelogDialogClose}
         onViewAll={handleChangelogViewAll}
       />

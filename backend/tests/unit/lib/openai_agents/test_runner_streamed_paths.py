@@ -88,6 +88,50 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+
+    def _create_supervisor_agent(**kwargs):
+        captured["supervisor_kwargs"] = kwargs
+        return SimpleNamespace(name="Supervisor", model=kwargs["model_override"])
+
+    monkeypatch.setattr(runner, "create_supervisor_agent", _create_supervisor_agent)
+
+    async def _fake_run_agent_with_tracing(**kwargs):
+        captured["run_kwargs"] = kwargs
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response": "ok", "response_length": 2, "tool_calls": 0, "agents_used": ["Supervisor"]},
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            user_message="hello",
+            user_id="user-override",
+            supervisor_model="gpt-5.4-nano",
+            specialist_model="gpt-5.4-nano",
+            supervisor_temperature=0.0,
+            specialist_temperature=0.0,
+            supervisor_reasoning="minimal",
+            specialist_reasoning="minimal",
+        )
+    )
+
+    assert events[0]["type"] == "RUN_STARTED"
+    assert events[0]["data"]["model"] == "gpt-5.4-nano"
+    assert captured["supervisor_kwargs"]["model_override"] == "gpt-5.4-nano"
+    assert captured["supervisor_kwargs"]["specialist_model_override"] == "gpt-5.4-nano"
+    assert captured["supervisor_kwargs"]["temperature_override"] == 0.0
+    assert captured["supervisor_kwargs"]["specialist_temperature_override"] == 0.0
+    assert captured["supervisor_kwargs"]["reasoning_override"] == "minimal"
+    assert captured["supervisor_kwargs"]["specialist_reasoning_override"] == "minimal"
+
+
+@pytest.mark.asyncio
 async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     captured = {}
     _patch_common_runtime(monkeypatch, captured)

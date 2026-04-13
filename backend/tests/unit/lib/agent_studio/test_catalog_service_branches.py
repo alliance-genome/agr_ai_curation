@@ -493,3 +493,49 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     assert built.tools == ["csv-tool"]
     assert captured["settings"]["reasoning_effort"] is None
     assert captured["settings"]["parallel_tool_calls"] is False
+
+
+def test_create_db_agent_applies_model_overrides(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="gene",
+        instructions="BASE",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source=None,
+        model_id="gpt-5.4",
+        model_temperature=0.3,
+        model_reasoning="medium",
+        output_schema_key=None,
+        tool_ids=[],
+        name="Gene",
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    captured = {}
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(
+        agent_config,
+        "get_model_for_agent",
+        lambda model_id, **_kwargs: captured.setdefault("model_id", model_id) or model_id,
+    )
+    monkeypatch.setattr(
+        agent_config,
+        "build_model_settings",
+        lambda **kwargs: captured.setdefault("settings", kwargs) or kwargs,
+    )
+    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "INSTR")
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    built = catalog_service._create_db_agent(
+        fake_row,
+        model_id_override="gpt-5.4-nano",
+        model_temperature_override=0.0,
+        model_reasoning_override="minimal",
+    )
+
+    assert built.model == "gpt-5.4-nano"
+    assert captured["settings"]["model"] == "gpt-5.4-nano"
+    assert captured["settings"]["temperature"] == 0.0
+    assert captured["settings"]["reasoning_effort"] == "minimal"

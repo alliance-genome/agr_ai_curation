@@ -22,12 +22,20 @@ from src.lib.pdf_jobs.upload_intake_service import (
 class _ExecuteResult:
     def __init__(self, row):
         self._row = row
+        self.rowcount = 0
 
     def scalars(self):
         return self
 
     def first(self):
         return self._row
+
+    def all(self):
+        if self._row is None:
+            return []
+        if isinstance(self._row, list):
+            return self._row
+        return [self._row]
 
 
 class _FakeSession:
@@ -204,6 +212,7 @@ async def test_intake_upload_phantom_duplicate_is_deleted_and_intake_continues(t
     )
     session = _FakeSession(execute_row=existing)
     dispatch = _DispatchRecorder()
+    cleanup_dependency_calls = []
 
     async def _raise_not_found(*_args, **_kwargs):
         raise ValueError("missing in weaviate")
@@ -225,6 +234,9 @@ async def test_intake_upload_phantom_duplicate_is_deleted_and_intake_continues(t
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
         create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
         tenant_name_resolver=lambda _sub: "tenant-user-1",
+        cleanup_document_dependencies_fn=lambda session_arg, document_id: cleanup_dependency_calls.append(
+            (session_arg, document_id)
+        ),
     )
 
     result = await service.intake_upload(
@@ -236,6 +248,7 @@ async def test_intake_upload_phantom_duplicate_is_deleted_and_intake_continues(t
     assert result.job_id == "job-1"
     assert session.deleted == [existing]
     assert session.commit_calls == 2
+    assert cleanup_dependency_calls == [(session, existing.id)]
     assert create_document_calls and create_document_calls[0][0] == "user-1"
 
 
