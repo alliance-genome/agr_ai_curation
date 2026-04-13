@@ -456,6 +456,15 @@ export const loadDocumentForChat = async (documentId: string): Promise<Record<st
   return payload as Record<string, unknown>;
 };
 
-export const dispatchChatDocumentChanged = (payload: Record<string, unknown>) => {
-  window.dispatchEvent(new CustomEvent('chat-document-changed', { detail: payload }));
-};
+export const dispatchChatDocumentChanged = (
+  payload: Record<string, unknown>,
+  ownerToken: string = HOME_PDF_VIEWER_OWNER,
+) => {
+  window.dispatchEvent(new CustomEvent('chat-document-changed', {
+    detail: {
+      ...payload,
+      ownerToken,
+    },
+  }))
+}
+import { HOME_PDF_VIEWER_OWNER } from '@/components/pdfViewer/pdfEvents'

@@ -195,6 +195,7 @@ interface PdfEvidencePageTextCorpusCache {
 }
 
 export interface PdfViewerProps {
+  activeDocumentOwnerToken?: string
   pendingNavigation?: EvidenceNavigationCommand | null
   onNavigationComplete?: () => void
   onNavigationStateChange?: (result: PdfViewerNavigationResult | null) => void
@@ -2937,6 +2938,7 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
 }
 
 export function PdfViewer({
+  activeDocumentOwnerToken,
   pendingNavigation = null,
   onNavigationComplete,
   onNavigationStateChange,
@@ -2989,6 +2991,7 @@ export function PdfViewer({
   const evidencePageTextCacheKey = activeDocument
     ? `${activeDocument.documentId}:${activeDocument.loadedAt}`
     : null
+  const activeDocumentOwnerRef = useRef(activeDocumentOwnerToken)
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
     lastPdfEvidenceNavigationResult = result
@@ -2998,6 +3001,23 @@ export function PdfViewer({
     setNavigationResult(result)
     onNavigationStateChange?.(result)
   }, [onNavigationStateChange])
+
+  const resetViewerToIdle = useCallback(() => {
+    handledNavigationKeyRef.current = null
+    navigationRequestIdRef.current += 1
+    viewerStateRef.current = {
+      ...DEFAULT_STATE,
+      lastInteraction: new Date().toISOString(),
+    }
+    highlightTermsRef.current = []
+    setActiveDocument(null)
+    setStatus('idle')
+    setError(null)
+    setHighlightTerms([])
+    setEvidenceHighlight(null)
+    commitNavigationResult(null)
+    localStorage.removeItem(SESSION_STORAGE_KEY)
+  }, [commitNavigationResult])
 
   /**
    * Signal that document loading is complete (whether success or failure).
@@ -4032,8 +4052,43 @@ export function PdfViewer({
   }, [])
 
   useEffect(() => {
+    if (activeDocumentOwnerRef.current === activeDocumentOwnerToken) {
+      return
+    }
+
+    // Owner changes redefine who may drive the shared host next, but they should
+    // not wipe the live PDF.js session on their own.
+    activeDocumentOwnerRef.current = activeDocumentOwnerToken
+  }, [activeDocumentOwnerToken])
+
+  useEffect(() => {
     const unregisterDocument = onPDFDocumentChanged((event: PDFViewerDocumentChangedEvent) => {
       console.debug('[PDF DEBUG] pdf-viewer-document-changed event received', event.detail)
+      if (
+        activeDocumentOwnerToken
+        && event.detail.ownerToken !== activeDocumentOwnerToken
+      ) {
+        console.debug('[PDF DEBUG] Ignoring document change for inactive owner', {
+          activeDocumentOwnerToken,
+          eventOwnerToken: event.detail.ownerToken ?? null,
+        })
+        return
+      }
+
+      const sameLoadedDocument = activeDocument
+        && activeDocument.documentId === event.detail.documentId
+        && activeDocument.viewerUrl === event.detail.viewerUrl
+        && activeDocument.pageCount === event.detail.pageCount
+        && activeDocument.filename === event.detail.filename
+
+      if (sameLoadedDocument && status !== 'error') {
+        console.debug('[PDF DEBUG] Ignoring redundant document change for already loaded document', {
+          documentId: event.detail.documentId,
+          ownerToken: event.detail.ownerToken ?? null,
+        })
+        return
+      }
+
       const nextDoc: ViewerDocument = {
         documentId: event.detail.documentId,
         viewerUrl: event.detail.viewerUrl,
@@ -4093,19 +4148,22 @@ export function PdfViewer({
       const customEvent = event as CustomEvent
       const detail = customEvent.detail || {}
 
+      if (
+        activeDocumentOwnerToken
+        && detail.ownerToken
+        && detail.ownerToken !== activeDocumentOwnerToken
+      ) {
+        console.debug('[PDF DEBUG] Ignoring chat document change for inactive owner', {
+          activeDocumentOwnerToken,
+          eventOwnerToken: detail.ownerToken,
+        })
+        return
+      }
+
       // If document is being unloaded (active=false), clear the viewer
       if (!detail?.active || !detail.document) {
         console.debug('[PDF DEBUG] Document unloaded via chat-document-changed event')
-        handledNavigationKeyRef.current = null
-        navigationRequestIdRef.current += 1
-        setActiveDocument(null)
-        setStatus('idle')
-        setError(null)
-        highlightTermsRef.current = []
-        setHighlightTerms([])
-        setEvidenceHighlight(null)
-        commitNavigationResult(null)
-        localStorage.removeItem(SESSION_STORAGE_KEY)
+        resetViewerToIdle()
       } else {
         // Document is being loaded - show loading state immediately
         console.debug('[PDF DEBUG] Document loading started via chat-document-changed event')
@@ -4121,7 +4179,16 @@ export function PdfViewer({
       unregisterSettings()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
-  }, [applyHighlights, beginDocumentLoad, clearAllHighlights, commitNavigationResult, signalLoadComplete])
+  }, [
+    activeDocument,
+    activeDocumentOwnerToken,
+    applyHighlights,
+    beginDocumentLoad,
+    clearAllHighlights,
+    resetViewerToIdle,
+    signalLoadComplete,
+    status,
+  ])
 
   useEffect(() => {
     return () => {

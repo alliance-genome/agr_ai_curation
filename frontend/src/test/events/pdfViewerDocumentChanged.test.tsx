@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  HOME_PDF_VIEWER_OWNER,
   dispatchPDFDocumentChanged,
   onPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
@@ -83,6 +84,30 @@ describe('pdf-viewer-document-changed event contract', () => {
       viewerState: {
         scrollPosition: 240,
       },
+    })
+
+    unsubscribe()
+  })
+
+  it('passes owner tokens through the document change event detail', () => {
+    const handler = vi.fn()
+    const unsubscribe = onPDFDocumentChanged((event) => {
+      handler(event.detail)
+    })
+
+    dispatchPDFDocumentChanged(
+      sampleEvent.documentId,
+      sampleEvent.viewerUrl,
+      sampleEvent.filename,
+      sampleEvent.pageCount,
+      {
+        ownerToken: HOME_PDF_VIEWER_OWNER,
+      },
+    )
+
+    expect(handler).toHaveBeenCalledWith({
+      ...sampleEvent,
+      ownerToken: HOME_PDF_VIEWER_OWNER,
     })
 
     unsubscribe()

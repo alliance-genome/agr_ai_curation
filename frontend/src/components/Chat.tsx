@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 
 import { debug } from '@/utils/env'
-import { dispatchClearHighlights, dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import {
+  HOME_PDF_VIEWER_OWNER,
+  dispatchClearHighlights,
+  dispatchPDFDocumentChanged,
+} from '@/components/pdfViewer/pdfEvents'
 import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
 import FileDownloadCard, { FileInfo } from '@/components/Chat/FileDownloadCard'
@@ -1063,6 +1067,8 @@ function Chat({
   // Just use the prop value directly
 
   useEffect(() => {
+    let isActive = true
+
     // Check Weaviate and Curation DB connection status
     const checkHealth = async () => {
       try {
@@ -1112,6 +1118,9 @@ function Chat({
         debug.log('[Chat] fetchActiveDocument response:', payload)
 
         if (payload?.active && payload.document) {
+          if (!isActive) {
+            return
+          }
           debug.log('[Chat] fetchActiveDocument: Found active document:', payload.document.filename)
           setActiveDocument(payload.document)
           localStorage.setItem('chat-active-document', JSON.stringify(payload.document))
@@ -1129,13 +1138,14 @@ function Chat({
               const urlData = await urlResponse.json()
               const viewerUrl = urlData.viewer_url
 
-              if (viewerUrl && detail) {
+              if (viewerUrl && detail && isActive) {
                 debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', payload.document.filename)
                 dispatchPDFDocumentChanged(
                   documentId,
                   viewerUrl,
                   detail.filename ?? payload.document.filename ?? 'Untitled',
-                  detail.page_count ?? detail.pageCount ?? 1
+                  detail.page_count ?? detail.pageCount ?? 1,
+                  { ownerToken: HOME_PDF_VIEWER_OWNER },
                 )
               }
             } else {
@@ -1154,6 +1164,9 @@ function Chat({
           if (localDoc) {
             debug.log('[Chat] fetchActiveDocument: But localStorage has a document, not clearing (event handler won)')
           } else {
+            if (!isActive) {
+              return
+            }
             debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
             setActiveDocument(null)
             localStorage.removeItem('chat-active-document')
@@ -1174,6 +1187,9 @@ function Chat({
       debug.log('[Chat] Event detail:', detail)
 
       if (detail?.active && detail.document) {
+        if (!isActive) {
+          return
+        }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
         localStorage.setItem('chat-active-document', JSON.stringify(detail.document))
@@ -1187,6 +1203,9 @@ function Chat({
           })
           if (resetResponse.ok) {
             const resetData = await resetResponse.json()
+            if (!isActive) {
+              return
+            }
             debug.log('[Chat] Conversation reset for new document:', resetData)
             // Propagate new session ID
             if (resetData.session_id && onSessionChange) {
@@ -1217,13 +1236,14 @@ function Chat({
             const urlData = await urlResponse.json()
             const viewerUrl = urlData.viewer_url
 
-            if (viewerUrl && pdfDetail) {
+            if (viewerUrl && pdfDetail && isActive) {
               debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
               dispatchPDFDocumentChanged(
                 documentId,
                 viewerUrl,
                 pdfDetail.filename ?? detail.document.filename ?? 'Untitled',
-                pdfDetail.page_count ?? pdfDetail.pageCount ?? 1
+                pdfDetail.page_count ?? pdfDetail.pageCount ?? 1,
+                { ownerToken: HOME_PDF_VIEWER_OWNER },
               )
             }
           } else {
@@ -1233,6 +1253,9 @@ function Chat({
           console.warn('[Chat] Unable to load PDF viewer after document change:', pdfError)
         }
       } else {
+        if (!isActive) {
+          return
+        }
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
         localStorage.removeItem('chat-active-document')
@@ -1243,6 +1266,7 @@ function Chat({
     window.addEventListener('chat-document-changed', documentChangeHandler)
 
     return () => {
+      isActive = false
       window.removeEventListener('chat-document-changed', documentChangeHandler)
       clearInterval(interval)
     }
@@ -1529,7 +1553,11 @@ function Chat({
         // Dispatch event to notify other components (like PDF viewer)
         window.dispatchEvent(
           new CustomEvent('chat-document-changed', {
-            detail: { active: false, document: null }
+            detail: {
+              active: false,
+              document: null,
+              ownerToken: HOME_PDF_VIEWER_OWNER,
+            },
           })
         )
       } else {

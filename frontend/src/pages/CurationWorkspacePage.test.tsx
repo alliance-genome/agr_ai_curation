@@ -41,12 +41,6 @@ vi.mock('@/components/pdfViewer/pdfEvents', async () => {
   }
 })
 
-vi.mock('@/components/pdfViewer/PdfViewer', () => ({
-  default: () => {
-    return <div data-testid="pdf-viewer">PDF viewer</div>
-  },
-}))
-
 function createDeferredPromise<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -396,7 +390,6 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByRole('region', { name: /entity table panel/i }),
     ).toBeInTheDocument()
-    expect(screen.getByTestId('pdf-viewer')).toBeInTheDocument()
 
     expect(screen.getAllByText('BRCA1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
@@ -430,7 +423,7 @@ describe('CurationWorkspacePage', () => {
         '/api/documents/document-1.pdf',
         'Workspace Document',
         5,
-        undefined,
+        { ownerToken: 'curation:session-1' },
       )
     })
   })

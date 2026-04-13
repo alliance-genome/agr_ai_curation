@@ -32,6 +32,7 @@ const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
 const CurationInventoryPage = lazy(() => import('./pages/CurationInventoryPage'))
 const CurationWorkspacePage = lazy(() => import('./pages/CurationWorkspacePage'))
+const PersistentPdfWorkspaceLayout = lazy(() => import('./components/pdfViewer/PersistentPdfWorkspaceLayout'))
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
 const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
@@ -506,20 +507,22 @@ export function AppContent() {
 
       <Box component="main" sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         <Routes>
-          <Route path="/" element={renderLazyRoute(<HomePage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
           <Route path="/viewer-settings" element={renderLazyRoute(<ViewerSettings />)} />
           <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />
-          <Route
-            path="/curation/:sessionId"
-            element={renderLazyRoute(<CurationWorkspacePage />)}
-          />
-          <Route
-            path="/curation/:sessionId/:candidateId"
-            element={renderLazyRoute(<CurationWorkspacePage />)}
-          />
+          <Route element={renderLazyRoute(<PersistentPdfWorkspaceLayout />)}>
+            <Route index element={renderLazyRoute(<HomePage />)} />
+            <Route
+              path="curation/:sessionId"
+              element={renderLazyRoute(<CurationWorkspacePage />)}
+            />
+            <Route
+              path="curation/:sessionId/:candidateId"
+              element={renderLazyRoute(<CurationWorkspacePage />)}
+            />
+          </Route>
           <Route path="/pdf-viewer" element={
             <Box sx={{
               width: '100%',

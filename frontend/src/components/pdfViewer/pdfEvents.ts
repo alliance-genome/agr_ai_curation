@@ -5,6 +5,7 @@ export interface PDFViewerDocumentChangedDetail {
   viewerUrl: string
   filename: string
   pageCount: number
+  ownerToken?: string
   viewerState?: {
     currentPage?: number
     scrollPosition?: number
@@ -49,12 +50,19 @@ export interface PDFViewerNavigateEvidenceDetail {
 export type PDFViewerNavigateEvidenceEvent =
   CustomEvent<PDFViewerNavigateEvidenceDetail>
 
+export const HOME_PDF_VIEWER_OWNER = 'home'
+
+export function buildCurationPDFViewerOwner(sessionId: string): string {
+  return `curation:${sessionId}`
+}
+
 export function dispatchPDFDocumentChanged(
   documentId: string,
   viewerUrl: string,
   filename: string,
   pageCount: number,
   options?: {
+    ownerToken?: string
     viewerState?: PDFViewerDocumentChangedDetail['viewerState']
   },
 ): void {
@@ -65,6 +73,7 @@ export function dispatchPDFDocumentChanged(
         viewerUrl,
         filename,
         pageCount,
+        ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },
     }),

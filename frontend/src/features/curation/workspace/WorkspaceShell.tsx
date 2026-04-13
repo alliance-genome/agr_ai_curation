@@ -2,16 +2,11 @@ import type { ReactNode } from 'react'
 
 import { Box, Stack, useMediaQuery } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
 export interface WorkspaceShellProps {
   headerSlot?: ReactNode
-  pdfSlot: ReactNode
   entityTableSlot: ReactNode
-  outerAutoSaveId?: string
 }
-
-const DEFAULT_OUTER_AUTO_SAVE_ID = 'curation-workspace-shell-panels'
 
 const ShellRoot = styled(Box)(() => ({
   flex: 1,
@@ -75,74 +70,6 @@ const MobilePanels = styled(Stack)(({ theme }) => ({
   paddingTop: theme.spacing(1.5),
 }))
 
-const ToolbarSurface = styled(PanelSurface)(({ theme }) => ({
-  flex: '0 0 auto',
-  minHeight: theme.spacing(7),
-}))
-
-const StyledResizeHandle = styled(PanelResizeHandle, {
-  shouldForwardProp: (prop) => prop !== 'groupDirection',
-})<{
-  groupDirection: 'horizontal' | 'vertical'
-}>(({ theme, groupDirection }) => ({
-  position: 'relative',
-  flex: '0 0 auto',
-  borderRadius: theme.shape.borderRadius,
-  backgroundColor: theme.palette.divider,
-  transition: 'background-color 0.2s ease',
-  ...(groupDirection === 'horizontal'
-    ? {
-        width: 4,
-        marginInline: theme.spacing(0.75),
-        cursor: 'col-resize',
-      }
-    : {
-        height: 4,
-        marginBlock: theme.spacing(0.75),
-        cursor: 'row-resize',
-      }),
-  '&:hover, &[data-resize-handle-active="true"]': {
-    backgroundColor: theme.palette.primary.main,
-  },
-  '&::after': {
-    content: '""',
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    borderRadius: 999,
-    pointerEvents: 'none',
-    backgroundColor: alpha(theme.palette.common.white, 0.45),
-    ...(groupDirection === 'horizontal'
-      ? {
-          width: 2,
-          height: 34,
-        }
-      : {
-          width: 34,
-          height: 2,
-        }),
-  },
-}))
-
-function WorkspaceResizeHandle({
-  groupDirection,
-  label,
-  testId,
-}: {
-  groupDirection: 'horizontal' | 'vertical'
-  label: string
-  testId: string
-}) {
-  return (
-    <StyledResizeHandle
-      aria-label={label}
-      data-testid={testId}
-      groupDirection={groupDirection}
-    />
-  )
-}
-
 function WorkspacePane({
   children,
   label,
@@ -161,9 +88,7 @@ function WorkspacePane({
 
 export default function WorkspaceShell({
   headerSlot,
-  pdfSlot,
   entityTableSlot,
-  outerAutoSaveId = DEFAULT_OUTER_AUTO_SAVE_ID,
 }: WorkspaceShellProps) {
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
@@ -176,41 +101,20 @@ export default function WorkspaceShell({
 
       {isCompactLayout ? (
         <MobilePanels spacing={1.5}>
-          <WorkspacePane label="PDF panel" testId="workspace-shell-pdf-panel">
-            {pdfSlot}
-          </WorkspacePane>
           <WorkspacePane label="Entity table panel" testId="workspace-shell-entity-table-panel">
             {entityTableSlot}
           </WorkspacePane>
         </MobilePanels>
       ) : (
         <DesktopPanels>
-          <PanelGroup autoSaveId={outerAutoSaveId} direction="horizontal">
-            <Panel defaultSize={45} minSize={28} order={1}>
-              <PanelSection>
-                <WorkspacePane label="PDF panel" testId="workspace-shell-pdf-panel">
-                  {pdfSlot}
-                </WorkspacePane>
-              </PanelSection>
-            </Panel>
-
-            <WorkspaceResizeHandle
-              groupDirection="horizontal"
-              label="Resize PDF and entity table panels"
-              testId="workspace-shell-handle-pdf-table"
-            />
-
-            <Panel defaultSize={55} minSize={30} order={2}>
-              <PanelSection>
-                <WorkspacePane
-                  label="Entity table panel"
-                  testId="workspace-shell-entity-table-panel"
-                >
-                  {entityTableSlot}
-                </WorkspacePane>
-              </PanelSection>
-            </Panel>
-          </PanelGroup>
+          <PanelSection>
+            <WorkspacePane
+              label="Entity table panel"
+              testId="workspace-shell-entity-table-panel"
+            >
+              {entityTableSlot}
+            </WorkspacePane>
+          </PanelSection>
         </DesktopPanels>
       )}
     </ShellRoot>

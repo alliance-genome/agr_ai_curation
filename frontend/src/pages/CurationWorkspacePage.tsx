@@ -10,8 +10,10 @@ import {
   Typography,
 } from '@mui/material'
 
-import PdfViewer from '@/components/pdfViewer/PdfViewer'
-import { dispatchPDFDocumentChanged } from '@/components/pdfViewer/pdfEvents'
+import {
+  buildCurationPDFViewerOwner,
+  dispatchPDFDocumentChanged,
+} from '@/components/pdfViewer/pdfEvents'
 import { EntityTagTable, type EntityTag } from '@/features/curation/entityTable'
 import {
   buildEntityTagFieldChanges,
@@ -94,6 +96,10 @@ function CurationWorkspacePageContent({
   const workspaceDocumentPageCount = workspaceDocument.page_count
   const workspaceDocumentTitle = workspaceDocument.title
   const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
+  const viewerOwnerToken = useMemo(
+    () => buildCurationPDFViewerOwner(workspace.session.session_id),
+    [workspace.session.session_id],
+  )
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const entityTags = workspace.entity_tags
@@ -118,8 +124,9 @@ function CurationWorkspacePageContent({
       workspaceDocumentTitle,
       workspaceDocumentPageCount ?? 1,
       hydration.restoredScrollPosition === null
-        ? undefined
+        ? { ownerToken: viewerOwnerToken }
         : {
+            ownerToken: viewerOwnerToken,
             viewerState: {
               scrollPosition: hydration.restoredScrollPosition,
             },
@@ -133,6 +140,7 @@ function CurationWorkspacePageContent({
     workspaceDocumentPdfUrl,
     workspaceDocumentTitle,
     workspaceDocumentViewerUrl,
+    viewerOwnerToken,
   ])
 
   const refreshWorkspace = useCallback(async (preferredActiveCandidateId: string | null) => {
@@ -333,7 +341,6 @@ function CurationWorkspacePageContent({
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
-        p: 2,
         overflow: 'hidden',
         gap: 2,
       }}
@@ -373,7 +380,6 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        pdfSlot={<PdfViewer />}
         entityTableSlot={(
           <EntityTagTable
             tags={entityTags}

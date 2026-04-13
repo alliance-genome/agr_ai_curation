@@ -42,6 +42,7 @@ Start here for new developers:
 | [DOCKER_CLI_REMOVAL_VERIFICATION.md](guides/DOCKER_CLI_REMOVAL_VERIFICATION.md) | 2026-03-24 backend audit for Docker CLI/socket hardening and remaining Docker references |
 | [DEV_RELEASE_SMOKE_STRATEGY.md](DEV_RELEASE_SMOKE_STRATEGY.md) | Verbose source of truth for the deep dev release smoke gate: API coverage, gaps, evidence, rollout plan |
 | [2026-04-13-chat-curation-evidence-alignment-plan.md](../design/2026-04-13-chat-curation-evidence-alignment-plan.md) | Deep-dive plan for aligning chat and curation PDF evidence navigation before the production hotfix |
+| [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
 | [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |

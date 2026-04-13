@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Outlet } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -50,6 +50,13 @@ vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</di
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));
 vi.mock('./pages/CurationInventoryPage', () => ({ default: () => <div>Curation Inventory Page</div> }));
+vi.mock('./components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
+  default: () => (
+    <div data-testid="persistent-pdf-workspace-layout">
+      <Outlet />
+    </div>
+  ),
+}));
 
 const theme = createTheme();
 

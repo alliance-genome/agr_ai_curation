@@ -5,17 +5,15 @@ import { alpha, styled } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
 import Chat from '@/components/Chat'
-import PdfViewer from '@/components/pdfViewer/PdfViewer'
 import RightPanel from '@/components/RightPanel'
 import { useChatStream } from '@/hooks/useChatStream'
 
-const Root = styled(Box)(({ theme }) => ({
+const Root = styled(Box)(() => ({
   flex: 1,
   display: 'flex',
   height: '100%',
+  minHeight: 0,
   overflow: 'hidden',
-  padding: theme.spacing(2),
-  paddingTop: theme.spacing(1.5),
 }))
 
 const PanelSection = styled(Box)(() => ({
@@ -265,18 +263,10 @@ function HomePage() {
     <Root>
       <PanelGroup
         direction="horizontal"
-        autoSaveId="home-panels"
+        autoSaveId="home-content-panels"
         style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
       >
-        <Panel defaultSize={33} minSize={20} maxSize={55}>
-          <PanelSection sx={{ pr: 1 }}>
-            <PdfViewer />
-          </PanelSection>
-        </Panel>
-
-        <ResizeHandle />
-
-        <Panel defaultSize={34} minSize={20} maxSize={60}>
+        <Panel defaultSize={50} minSize={24} maxSize={76}>
           <Box
             sx={{
               height: '100%',
@@ -299,7 +289,7 @@ function HomePage() {
 
         <ResizeHandle />
 
-        <Panel defaultSize={33} minSize={16} maxSize={45}>
+        <Panel defaultSize={50} minSize={20} maxSize={58}>
           <PanelSection sx={{ pl: 1 }}>
             <RightPanel
               sessionId={sessionId}
