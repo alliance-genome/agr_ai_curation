@@ -1,5 +1,6 @@
 """Additional tests for auth + EC2 runtime configuration helpers."""
 
+import os
 import sys
 from types import SimpleNamespace
 
@@ -131,20 +132,64 @@ def test_check_ec2_tag_paths(monkeypatch):
 
     monkeypatch.setattr(conf, "_get_ec2_instance_metadata", lambda: ("i-1", "us-east-1"))
     fake_boto3 = SimpleNamespace(
-        client=lambda service, region_name: SimpleNamespace(
-            describe_tags=lambda Filters: {
-                "Tags": [{"Key": "AllowDevMode", "Value": "true"}]
-            }
+        session=SimpleNamespace(
+            Session=lambda: SimpleNamespace(
+                client=lambda service, region_name: SimpleNamespace(
+                    describe_tags=lambda Filters: {
+                        "Tags": [{"Key": "AllowDevMode", "Value": "true"}]
+                    }
+                )
+            )
         )
     )
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     assert conf._check_ec2_tag("AllowDevMode", "true") is True
 
     fake_boto3_error = SimpleNamespace(
-        client=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("aws down"))
+        session=SimpleNamespace(
+            Session=lambda: SimpleNamespace(
+                client=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("aws down"))
+            )
+        )
     )
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3_error)
     assert conf._check_ec2_tag("AllowDevMode", "true") is False
+
+
+def test_check_ec2_tag_ignores_blank_aws_profile_env(monkeypatch):
+    monkeypatch.setattr(conf, "_get_ec2_instance_metadata", lambda: ("i-1", "us-east-1"))
+    monkeypatch.setenv("AWS_PROFILE", "")
+    monkeypatch.setenv("AWS_DEFAULT_PROFILE", " ")
+
+    observed = {}
+
+    def _client(service, region_name):
+        observed["service"] = service
+        observed["region_name"] = region_name
+        observed["aws_profile"] = os.environ.get("AWS_PROFILE")
+        observed["aws_default_profile"] = os.environ.get("AWS_DEFAULT_PROFILE")
+        return SimpleNamespace(
+            describe_tags=lambda Filters: {
+                "Tags": [{"Key": "AllowDevMode", "Value": "true"}]
+            }
+        )
+
+    fake_boto3 = SimpleNamespace(
+        session=SimpleNamespace(
+            Session=lambda: SimpleNamespace(client=_client)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert conf._check_ec2_tag("AllowDevMode", "true") is True
+    assert observed == {
+        "service": "ec2",
+        "region_name": "us-east-1",
+        "aws_profile": None,
+        "aws_default_profile": None,
+    }
+    assert os.environ["AWS_PROFILE"] == ""
+    assert os.environ["AWS_DEFAULT_PROFILE"] == " "
 
 
 def test_ec2_status_and_dev_mode_allowed_are_cached(monkeypatch):
