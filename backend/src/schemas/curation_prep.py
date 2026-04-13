@@ -324,6 +324,16 @@ class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
         ge=0,
         description="Total candidate annotations discussed in the current chat context",
     )
+    unscoped_candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of discussed candidates that did not retain adapter scope for prep",
+    )
+    preparable_candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of evidence-verified candidates currently available to prepare",
+    )
     extraction_result_count: int = Field(
         default=0,
         ge=0,
@@ -336,7 +346,11 @@ class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
     )
     adapter_keys: list[NonEmptyString] = Field(
         default_factory=list,
-        description="Adapters discovered from persisted extraction results",
+        description="Adapters that currently have evidence-verified candidates available to prepare",
+    )
+    discussed_adapter_keys: list[NonEmptyString] = Field(
+        default_factory=list,
+        description="Adapters discovered from persisted extraction results before evidence filtering",
     )
     blocking_reasons: list[str] = Field(
         default_factory=list,

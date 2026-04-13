@@ -9,3 +9,9 @@ export {
   type UseEvidenceNavigationOptions,
   type UseEvidenceNavigationReturn,
 } from './useEvidenceNavigation'
+export { default as EvidenceNavigationQuoteCard } from './EvidenceNavigationQuoteCard'
+export {
+  buildEvidenceLocationLabel,
+  dispatchEvidenceNavigationCommand,
+  normalizeEvidenceSectionHierarchy,
+} from './navigationPresentation'

@@ -4,9 +4,12 @@ export interface CurationPrepPreview {
   ready: boolean
   summary_text: string
   candidate_count: number
+  unscoped_candidate_count: number
+  preparable_candidate_count: number
   extraction_result_count: number
   conversation_message_count: number
   adapter_keys: string[]
+  discussed_adapter_keys: string[]
   blocking_reasons: string[]
 }
 

@@ -1708,7 +1708,7 @@ function Chat({
     Boolean(prepPreview)
     && !prepPreview?.ready
     && hasUnsupportedEvidenceMessages
-    && prepPreview.candidate_count === 0
+    && prepPreview.preparable_candidate_count === 0
     && prepPreview.extraction_result_count === 0
   const effectivePrepPreview = prepPreview
     ? {
@@ -2169,6 +2169,11 @@ function Chat({
       <PrepScopeConfirmationDialog
         open={prepDialogOpen}
         preview={effectivePrepPreview}
+        visibleConversationMessageCount={
+          messages.length > 0
+            ? messages.filter((message) => message.role === 'user' || message.role === 'assistant').length
+            : null
+        }
         supplementalNotice={prepSupplementalNotice}
         loading={isLoadingPrepPreview}
         submitting={isPreparingCuration}

@@ -42,9 +42,12 @@ function mockChatFetch(options?: {
     ready: boolean
     summary_text: string
     candidate_count: number
+    unscoped_candidate_count: number
+    preparable_candidate_count: number
     extraction_result_count: number
     conversation_message_count: number
     adapter_keys: string[]
+    discussed_adapter_keys: string[]
     blocking_reasons: string[]
   }
   prepRun?: {
@@ -100,9 +103,12 @@ function mockChatFetch(options?: {
           ready: false,
           summary_text: 'No candidate annotations are available from this chat yet.',
           candidate_count: 0,
+          unscoped_candidate_count: 0,
+          preparable_candidate_count: 0,
           extraction_result_count: 0,
           conversation_message_count: 0,
           adapter_keys: [],
+          discussed_adapter_keys: [],
           blocking_reasons: [
             'No candidate annotations are available from this chat yet.',
           ],
@@ -378,7 +384,9 @@ describe('Chat persistence', () => {
     fireEvent.click(screen.getByRole('button', { name: 'crumb 1' }))
 
     expect(
-      await screen.findByText('"Crumb is essential for maintaining epithelial polarity."')
+      await screen.findByRole('button', {
+        name: 'Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity.',
+      })
     ).toBeInTheDocument()
   })
 
@@ -562,9 +570,12 @@ describe('Chat persistence', () => {
         ready: true,
         summary_text: 'You discussed 4 candidate annotations. Prepare all for curation review?',
         candidate_count: 4,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 4,
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['disease'],
+        discussed_adapter_keys: ['disease'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -627,9 +638,12 @@ describe('Chat persistence', () => {
         ready: true,
         summary_text: 'You discussed 4 candidate annotations across gene and disease adapters. Prepare all for curation review?',
         candidate_count: 4,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 4,
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['gene', 'disease'],
+        discussed_adapter_keys: ['gene', 'disease'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -705,9 +719,12 @@ describe('Chat persistence', () => {
         ready: true,
         summary_text: 'You discussed 4 candidate annotations. Prepare all for curation review?',
         candidate_count: 4,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 4,
         extraction_result_count: 2,
         conversation_message_count: 6,
         adapter_keys: ['disease'],
+        discussed_adapter_keys: ['disease'],
         blocking_reasons: [],
       },
     })
@@ -770,9 +787,12 @@ describe('Chat persistence', () => {
         ready: false,
         summary_text: 'No candidate annotations are available from this chat yet.',
         candidate_count: 0,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 0,
         extraction_result_count: 0,
         conversation_message_count: 0,
         adapter_keys: [],
+        discussed_adapter_keys: [],
         blocking_reasons: ['No candidate annotations are available from this chat yet.'],
       },
     })
@@ -811,6 +831,36 @@ describe('Chat persistence', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows evidence-backed prep availability instead of contradictory discussed counts', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: false,
+        summary_text: 'No evidence-verified candidates were available to prepare for curation review.',
+        candidate_count: 5,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 0,
+        extraction_result_count: 2,
+        conversation_message_count: 0,
+        adapter_keys: [],
+        discussed_adapter_keys: ['gene', 'allele'],
+        blocking_reasons: ['No evidence-verified candidates were available to prepare for curation review.'],
+      },
+    })
+
+    renderChat()
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+
+    expect(
+      await screen.findByText('No evidence-verified candidates were available to prepare for curation review.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Ready candidates')).toBeInTheDocument()
+    expect(screen.getByText('Discussed')).toBeInTheDocument()
+    expect(screen.getByText('5')).toBeInTheDocument()
+    expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByRole('button', { name: /start prep/i })).toBeDisabled()
+  })
+
   it('opens the curation workspace after prep completes for an active document', async () => {
     openCurationWorkspaceMock
       .mockResolvedValueOnce('curation-session-1')
@@ -824,9 +874,12 @@ describe('Chat persistence', () => {
         ready: true,
         summary_text: 'You discussed 2 candidate annotations. Prepare all for curation review?',
         candidate_count: 2,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 2,
         extraction_result_count: 1,
         conversation_message_count: 4,
         adapter_keys: ['gene'],
+        discussed_adapter_keys: ['gene'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -891,9 +944,12 @@ describe('Chat persistence', () => {
         ready: true,
         summary_text: 'You discussed 1 candidate annotation. Prepare all for curation review?',
         candidate_count: 1,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 1,
         extraction_result_count: 1,
         conversation_message_count: 2,
         adapter_keys: ['gene'],
+        discussed_adapter_keys: ['gene'],
         blocking_reasons: [],
       },
       prepRun: {
@@ -991,7 +1047,11 @@ describe('Chat flow evidence rendering', () => {
 
     await user.click(screen.getByRole('button', { name: 'TP53 1' }))
 
-    expect(screen.getByText('"TP53 increased in the treated samples."')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Highlight evidence on PDF: TP53 increased in the treated samples.',
+      }),
+    ).toBeInTheDocument()
   })
 
   it('labels FLOW_STEP_EVIDENCE preview totals when the record list is capped', async () => {
@@ -1041,7 +1101,11 @@ describe('Chat flow evidence rendering', () => {
 
     await user.click(screen.getByRole('button', { name: 'TP53 1' }))
 
-    expect(screen.getByText('"TP53 increased in the treated samples."')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Highlight evidence on PDF: TP53 increased in the treated samples.',
+      }),
+    ).toBeInTheDocument()
   })
 
   it('ignores malformed FLOW_STEP_EVIDENCE events that omit required evidence counts', async () => {

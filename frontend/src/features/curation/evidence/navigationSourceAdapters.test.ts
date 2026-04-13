@@ -4,7 +4,6 @@ import type { EvidenceRecord, CurationEvidenceRecord } from '../types'
 import {
   buildNavigationCommandFromChatEvidenceRecord,
   buildNavigationCommandFromCurationEvidenceRecord,
-  buildNavigationCommandFromLegacyEntityTagEvidence,
 } from './navigationSourceAdapters'
 
 function makeChatEvidenceRecord(
@@ -129,22 +128,58 @@ describe('navigationSourceAdapters', () => {
     )
   })
 
-  it('still derives a command from legacy entity-tag evidence when richer records are absent', () => {
-    const command = buildNavigationCommandFromLegacyEntityTagEvidence(
-      'entity-tag:tag-1',
-      {
-        sentence_text: 'The daf-2 receptor regulates lifespan.',
-        page_number: 3,
-        section_title: 'Results',
-        chunk_ids: ['chunk-1'],
-      },
+  it('splits combined curation section paths into chat-like section and subsection fields', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(
+      makeCurationEvidenceRecord({
+        anchor: {
+          sentence_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          snippet_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          normalized_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          viewer_search_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          section_title:
+            '2. Results and Discussion > 2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          subsection_title: null,
+          page_number: 1,
+        },
+      }),
     )
 
-    expect(command?.anchorId).toBe('entity-tag:tag-1')
-    expect(command?.searchText).toBe('The daf-2 receptor regulates lifespan.')
-    expect(command?.anchor.anchor_kind).toBe('sentence')
-    expect(command?.anchor.viewer_search_text).toBe(
-      'The daf-2 receptor regulates lifespan.',
+    expect(command?.sectionTitle).toBe('2. Results and Discussion')
+    expect(command?.anchor.section_title).toBe('2. Results and Discussion')
+    expect(command?.anchor.subsection_title).toBe(
+      '2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+    )
+  })
+
+  it('normalizes mixed-shape curation hierarchy when the persisted section path already includes the subsection', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(
+      makeCurationEvidenceRecord({
+        anchor: {
+          sentence_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          snippet_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          normalized_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          viewer_search_text:
+            'Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          section_title:
+            '2. Results and Discussion > 2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          subsection_title:
+            '2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
+          page_number: 1,
+        },
+      }),
+    )
+
+    expect(command?.sectionTitle).toBe('2. Results and Discussion')
+    expect(command?.anchor.section_title).toBe('2. Results and Discussion')
+    expect(command?.anchor.subsection_title).toBe(
+      '2.6. Changes in Molecular Organization Following Abnormal PRC Development in crumbs Mutants',
     )
   })
 

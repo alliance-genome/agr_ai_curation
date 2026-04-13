@@ -198,23 +198,17 @@ describe('EntityTagTable', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText((_, element) =>
-          element?.tagName.toLowerCase() === 'p'
-          && (element.textContent?.includes('The daf-2 receptor regulates lifespan.') ?? false),
-        ),
+        screen.getByLabelText('Highlight evidence on PDF: The daf-2 receptor regulates lifespan.'),
       ).toBeInTheDocument()
     })
 
     expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName.toLowerCase() === 'p'
-        && (element.textContent?.includes('A second daf-2 evidence sentence.') ?? false),
-      ),
+      screen.getByLabelText('Highlight evidence on PDF: A second daf-2 evidence sentence.'),
     ).toBeInTheDocument()
   })
 
-  it('dispatches PDF navigation when a row is selected', async () => {
+  it('does not dispatch PDF navigation when a row is selected', () => {
     const listener = vi.fn()
     window.addEventListener('pdf-viewer-navigate-evidence', listener)
 
@@ -222,14 +216,30 @@ describe('EntityTagTable', () => {
 
     fireEvent.click(screen.getByText('daf-2'))
 
+    expect(listener).not.toHaveBeenCalled()
+
+    window.removeEventListener('pdf-viewer-navigate-evidence', listener)
+  })
+
+  it('dispatches PDF navigation when an evidence quote is clicked', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-navigate-evidence', listener)
+
+    render(<ControlledTable />, { wrapper })
+
+    fireEvent.click(screen.getByText('daf-2'))
+    fireEvent.click(
+      screen.getByLabelText('Highlight evidence on PDF: The daf-2 receptor regulates lifespan.'),
+    )
+
     await waitFor(() => {
-      expect(listener).toHaveBeenCalled()
+      expect(listener).toHaveBeenCalledTimes(1)
     })
 
     window.removeEventListener('pdf-viewer-navigate-evidence', listener)
   })
 
-  it('prefers richer workspace evidence over flattened row preview evidence when dispatching PDF navigation', async () => {
+  it('prefers richer workspace evidence over flattened row preview evidence when an evidence quote is clicked', async () => {
     const listener = vi.fn()
     window.addEventListener('pdf-viewer-navigate-evidence', listener)
 
@@ -262,8 +272,12 @@ describe('EntityTagTable', () => {
       { wrapper },
     )
 
+    fireEvent.click(
+      screen.getByLabelText('Highlight evidence on PDF: The daf-2 receptor regulates lifespan.'),
+    )
+
     await waitFor(() => {
-      expect(listener).toHaveBeenCalled()
+      expect(listener).toHaveBeenCalledTimes(1)
     })
 
     const event = listener.mock.calls.at(-1)?.[0] as CustomEvent<
@@ -277,52 +291,7 @@ describe('EntityTagTable', () => {
     window.removeEventListener('pdf-viewer-navigate-evidence', listener)
   })
 
-  it('does not redispatch PDF navigation when the selected tag object is refreshed with the same id', async () => {
-    const listener = vi.fn()
-    window.addEventListener('pdf-viewer-navigate-evidence', listener)
-
-    const initialTags = makeTags()
-    const { rerender } = render(
-      <EntityTagTable
-        tags={initialTags}
-        candidateEvidenceByTagId={makeEvidenceRecordsByTagId()}
-        selectedTagId="tag-1"
-        onSelectTag={vi.fn()}
-        onAcceptTag={vi.fn()}
-        onRejectTag={vi.fn()}
-        onAcceptAllValidated={vi.fn()}
-        onSaveTag={vi.fn()}
-        onCreateManualTag={vi.fn(async () => 'manual-1')}
-      />,
-      { wrapper },
-    )
-
-    await waitFor(() => {
-      expect(listener).toHaveBeenCalledTimes(1)
-    })
-
-    rerender(
-      <EntityTagTable
-        tags={initialTags.map((tag) => ({ ...tag }))}
-        candidateEvidenceByTagId={makeEvidenceRecordsByTagId()}
-        selectedTagId="tag-1"
-        onSelectTag={vi.fn()}
-        onAcceptTag={vi.fn()}
-        onRejectTag={vi.fn()}
-        onAcceptAllValidated={vi.fn()}
-        onSaveTag={vi.fn()}
-        onCreateManualTag={vi.fn(async () => 'manual-1')}
-      />,
-    )
-
-    await waitFor(() => {
-      expect(listener).toHaveBeenCalledTimes(1)
-    })
-
-    window.removeEventListener('pdf-viewer-navigate-evidence', listener)
-  })
-
-  it('redispatches PDF navigation when the selected anchor payload changes under the same anchor id', async () => {
+  it('dispatches updated evidence payload after workspace evidence changes under the same anchor id', async () => {
     const listener = vi.fn()
     window.addEventListener('pdf-viewer-navigate-evidence', listener)
 
@@ -342,11 +311,13 @@ describe('EntityTagTable', () => {
       { wrapper },
     )
 
+    fireEvent.click(
+      screen.getByLabelText('Highlight evidence on PDF: The daf-2 receptor regulates lifespan.'),
+    )
+
     await waitFor(() => {
       expect(listener).toHaveBeenCalledTimes(1)
     })
-
-    listener.mockClear()
 
     rerender(
       <EntityTagTable
@@ -375,6 +346,12 @@ describe('EntityTagTable', () => {
         onCreateManualTag={vi.fn(async () => 'manual-1')}
       />,
       { wrapper },
+    )
+
+    listener.mockClear()
+
+    fireEvent.click(
+      screen.getByLabelText('Highlight evidence on PDF: The updated daf-2 evidence sentence.'),
     )
 
     await waitFor(() => {

@@ -15,6 +15,7 @@ import type { CurationPrepPreview } from '@/features/curation/services/curationP
 interface PrepScopeConfirmationDialogProps {
   open: boolean
   preview: CurationPrepPreview | null
+  visibleConversationMessageCount?: number | null
   supplementalNotice?: string | null
   loading: boolean
   submitting: boolean
@@ -69,6 +70,7 @@ function ScopePill({ label, values }: { label: string; values: string[] }) {
 function PrepScopeConfirmationDialog({
   open,
   preview,
+  visibleConversationMessageCount = null,
   supplementalNotice = null,
   loading,
   submitting,
@@ -77,6 +79,19 @@ function PrepScopeConfirmationDialog({
   onConfirm,
 }: PrepScopeConfirmationDialogProps) {
   const confirmDisabled = loading || submitting || !preview?.ready
+  const showsPartialPrepScope = Boolean(
+    preview
+      && (
+        preview.preparable_candidate_count !== preview.candidate_count
+        || preview.unscoped_candidate_count > 0
+        || preview.adapter_keys.join(',') !== preview.discussed_adapter_keys.join(',')
+      ),
+  )
+  const displayedConversationMessageCount = (
+    typeof visibleConversationMessageCount === 'number'
+      ? visibleConversationMessageCount
+      : preview?.conversation_message_count ?? 0
+  )
 
   return (
     <Dialog
@@ -114,12 +129,32 @@ function PrepScopeConfirmationDialog({
               >
                 <Box>
                   <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
-                    Candidates
+                    {showsPartialPrepScope ? 'Ready candidates' : 'Candidates'}
                   </Typography>
                   <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
-                    {preview.candidate_count}
+                    {preview.preparable_candidate_count}
                   </Typography>
                 </Box>
+                {showsPartialPrepScope && (
+                  <Box>
+                    <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                      Discussed
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
+                      {preview.candidate_count}
+                    </Typography>
+                  </Box>
+                )}
+                {preview.unscoped_candidate_count > 0 && (
+                  <Box>
+                    <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                      Unscoped
+                    </Typography>
+                    <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
+                      {preview.unscoped_candidate_count}
+                    </Typography>
+                  </Box>
+                )}
                 <Box>
                   <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
                     Extraction runs
@@ -133,13 +168,19 @@ function PrepScopeConfirmationDialog({
                     Messages
                   </Typography>
                   <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
-                    {preview.conversation_message_count}
+                    {displayedConversationMessageCount}
                   </Typography>
                 </Box>
               </Box>
 
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                <ScopePill label="Adapters" values={preview.adapter_keys} />
+                <ScopePill
+                  label={showsPartialPrepScope ? 'Ready adapters' : 'Adapters'}
+                  values={preview.adapter_keys}
+                />
+                {showsPartialPrepScope ? (
+                  <ScopePill label="Discussed adapters" values={preview.discussed_adapter_keys} />
+                ) : null}
               </Box>
 
               {supplementalNotice ? (

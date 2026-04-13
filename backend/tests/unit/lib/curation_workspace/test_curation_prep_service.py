@@ -366,3 +366,155 @@ def test_candidate_conversation_summary_falls_back_to_generic_item_context():
         blueprints[0].conversation_context_summary
         == "Prepared deterministic observation candidate for Candidate Alpha."
     )
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_synthesizes_allele_candidates_from_specialized_payload(monkeypatch):
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-allele-1",
+            "document_id": "document-1",
+            "adapter_key": "allele",
+            "agent_key": "allele_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": 2,
+            "conversation_summary": None,
+            "payload_json": {
+                "items": [
+                    {
+                        "label": None,
+                        "entity_type": None,
+                        "normalized_id": None,
+                        "source_mentions": [],
+                        "evidence_record_ids": [],
+                    }
+                ],
+                "alleles": [
+                    {
+                        "mention": "crb11A22",
+                        "normalized_id": None,
+                        "normalized_symbol": None,
+                        "associated_gene": "Crumbs",
+                        "confidence": "high",
+                        "evidence_record_ids": ["evidence-1"],
+                    },
+                    {
+                        "mention": "crb8F105",
+                        "normalized_id": None,
+                        "normalized_symbol": None,
+                        "associated_gene": "Crumbs",
+                        "confidence": "high",
+                        "evidence_record_ids": ["evidence-2"],
+                    },
+                ],
+                "evidence_records": [
+                    _make_evidence_record(
+                        evidence_record_id="evidence-1",
+                        entity="crb11A22",
+                        verified_quote="crb11A22 has fused rhabdomeres.",
+                    ),
+                    _make_evidence_record(
+                        evidence_record_id="evidence-2",
+                        entity="crb8F105",
+                        verified_quote="crb8F105 truncates the protein.",
+                    ),
+                ],
+                "run_summary": {"candidate_count": 2},
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {},
+        }
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=["allele"],
+            notes=["User confirmed allele prep scope."],
+        ),
+    )
+
+    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
+        "crb11A22",
+        "crb8F105",
+    ]
+    assert prep_output.candidates[0].payload["entity_type"] == "allele"
+    assert prep_output.candidates[0].payload["source_mentions"] == ["crb11A22"]
+    assert prep_output.candidates[0].payload["associated_gene"] == "Crumbs"
+    assert prep_output.candidates[0].evidence_records[0].anchor.snippet_text == (
+        "crb11A22 has fused rhabdomeres."
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_synthesized_allele_candidates_still_require_evidence_ids(
+    monkeypatch,
+):
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-allele-2",
+            "document_id": "document-1",
+            "adapter_key": "allele",
+            "agent_key": "allele_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": 2,
+            "conversation_summary": None,
+            "payload_json": {
+                "items": [],
+                "alleles": [
+                    {
+                        "mention": "crb11A22",
+                        "associated_gene": "Crumbs",
+                        "confidence": "high",
+                        "evidence_record_ids": ["evidence-1"],
+                    },
+                    {
+                        "mention": "crb8F105",
+                        "associated_gene": "Crumbs",
+                        "confidence": "high",
+                        "evidence_record_ids": [],
+                    },
+                ],
+                "evidence_records": [
+                    _make_evidence_record(
+                        evidence_record_id="evidence-1",
+                        entity="crb11A22",
+                        verified_quote="crb11A22 has fused rhabdomeres.",
+                    ),
+                    _make_evidence_record(
+                        evidence_record_id="evidence-2",
+                        entity="crb8F105",
+                        verified_quote="crb8F105 truncates the protein.",
+                    ),
+                ],
+                "run_summary": {"candidate_count": 2},
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {},
+        }
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=["allele"],
+            notes=["User confirmed allele prep scope."],
+        ),
+    )
+
+    assert [candidate.payload["label"] for candidate in prep_output.candidates] == ["crb11A22"]
+    assert prep_output.run_metadata.warnings == ["Skipped 1 candidate without verified evidence."]

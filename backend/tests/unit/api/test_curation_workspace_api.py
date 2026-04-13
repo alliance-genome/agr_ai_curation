@@ -63,9 +63,12 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
             ready=True,
             summary_text="You discussed 2 candidate annotations. Prepare all for curation review?",
             candidate_count=2,
+            unscoped_candidate_count=0,
+            preparable_candidate_count=2,
             extraction_result_count=1,
             conversation_message_count=4,
             adapter_keys=["reference_adapter"],
+            discussed_adapter_keys=["reference_adapter"],
             blocking_reasons=[],
         ),
     )

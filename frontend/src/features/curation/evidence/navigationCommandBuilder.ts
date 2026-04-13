@@ -1,5 +1,6 @@
 import type { EvidenceAnchor } from '../contracts'
 import type { EvidenceNavigationCommand } from './types'
+import { normalizeEvidenceSectionHierarchy } from './navigationPresentation'
 
 function normalizeText(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? ''
@@ -26,6 +27,10 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   mode: EvidenceNavigationCommand['mode']
 }): EvidenceNavigationCommand {
   const quote = args.quote.trim()
+  const normalizedHierarchy = normalizeEvidenceSectionHierarchy(
+    args.anchor.section_title ?? null,
+    args.anchor.subsection_title ?? null,
+  )
   const anchor: EvidenceAnchor = {
     ...args.anchor,
     // Quote-centric viewer navigation should describe the command we are issuing
@@ -36,14 +41,15 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
     normalized_text: quote,
     viewer_search_text: quote,
     viewer_highlightable: args.anchor.viewer_highlightable ?? true,
+    section_title: normalizedHierarchy.sectionTitle,
+    subsection_title: normalizedHierarchy.subsectionTitle,
   }
-
   return {
     anchorId: args.anchorId,
     anchor,
     searchText: quote,
     pageNumber: args.pageNumber ?? anchor.page_number ?? null,
-    sectionTitle: normalizeText(args.sectionTitle ?? anchor.section_title),
+    sectionTitle: normalizeText(anchor.section_title),
     mode: args.mode,
   }
 }

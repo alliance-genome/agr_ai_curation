@@ -1,6 +1,8 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
+import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type { CurationEvidenceRecord } from '@/features/curation/types'
 import theme from '@/theme'
 import EvidencePreviewPane from './EvidencePreviewPane'
@@ -48,40 +50,60 @@ const makeEvidenceRecord = (
 
 describe('EvidencePreviewPane', () => {
   it('shows empty state when no tag is selected', () => {
-    render(<EvidencePreviewPane tag={null} onShowInPdf={vi.fn()} />, { wrapper })
+    render(<EvidencePreviewPane tag={null} />, { wrapper })
     expect(screen.getByText('Select a row to view evidence.')).toBeInTheDocument()
   })
 
   it('shows the sentence quote for a selected tag', () => {
-    render(<EvidencePreviewPane tag={makeTag()} onShowInPdf={vi.fn()} />, { wrapper })
+    render(<EvidencePreviewPane tag={makeTag()} />, { wrapper })
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName.toLowerCase() === 'p'
-        && (element.textContent?.includes('The daf-2 receptor regulates lifespan.') ?? false),
-      ),
+      screen.getByRole('button', {
+        name: /Highlight evidence on PDF: The daf-2 receptor regulates lifespan\./i,
+      }),
     ).toBeInTheDocument()
   })
 
   it('shows page and section metadata', () => {
-    render(<EvidencePreviewPane tag={makeTag()} onShowInPdf={vi.fn()} />, { wrapper })
-    expect(screen.getByText(/Page 3/)).toBeInTheDocument()
-    expect(screen.getByText(/Results/)).toBeInTheDocument()
+    render(<EvidencePreviewPane tag={makeTag()} />, { wrapper })
+    expect(screen.getByText('p. 3 · Results')).toBeInTheDocument()
   })
 
   it('shows db entity id when available', () => {
-    render(<EvidencePreviewPane tag={makeTag()} onShowInPdf={vi.fn()} />, { wrapper })
+    render(<EvidencePreviewPane tag={makeTag()} />, { wrapper })
     expect(screen.getByText(/WBGene00000898/)).toBeInTheDocument()
   })
 
-  it('calls onShowInPdf when link is clicked', () => {
-    const onShowInPdf = vi.fn()
-    render(<EvidencePreviewPane tag={makeTag()} onShowInPdf={onShowInPdf} />, { wrapper })
-    fireEvent.click(screen.getByText('Show in PDF'))
-    expect(onShowInPdf).toHaveBeenCalledWith(makeTag(), null)
+  it('dispatches PDF navigation when the evidence quote is clicked', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    render(<EvidencePreviewPane tag={makeTag()} />, { wrapper })
+    await user.click(
+      screen.getByRole('button', {
+        name: /Highlight evidence on PDF: The daf-2 receptor regulates lifespan\./i,
+      }),
+    )
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    expect(onNavigateEvidence.mock.calls[0][0].detail.command).toEqual(
+      expect.objectContaining({
+        pageNumber: 3,
+        sectionTitle: 'Results',
+        searchText: 'The daf-2 receptor regulates lifespan.',
+        anchor: expect.objectContaining({
+          snippet_text: 'The daf-2 receptor regulates lifespan.',
+          page_number: 3,
+          section_title: 'Results',
+        }),
+      }),
+    )
+
+    unsubscribe()
   })
 
   it('shows manual tag message when evidence is null', () => {
-    render(<EvidencePreviewPane tag={makeTag({ evidence: null, source: 'manual' })} onShowInPdf={vi.fn()} />, { wrapper })
+    render(<EvidencePreviewPane tag={makeTag({ evidence: null, source: 'manual' })} />, { wrapper })
     expect(screen.getByText(/No AI evidence/)).toBeInTheDocument()
   })
 
@@ -108,23 +130,23 @@ describe('EvidencePreviewPane', () => {
             },
           }),
         ]}
-        onShowInPdf={vi.fn()}
       />,
       { wrapper },
     )
 
     expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName.toLowerCase() === 'p'
-        && (element.textContent?.includes('A second daf-2 evidence sentence from the PDF.') ?? false),
-      ),
+      screen.getByRole('button', {
+        name: /Highlight evidence on PDF: A second daf-2 evidence sentence from the PDF\./i,
+      }),
     ).toBeInTheDocument()
-    expect(screen.getAllByText('Show in PDF')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /Highlight evidence on PDF:/i })).toHaveLength(2)
   })
 
-  it('passes the selected richer evidence record back to the review table when Show in PDF is clicked', () => {
-    const onShowInPdf = vi.fn()
+  it('dispatches the richer workspace evidence record when the quote is clicked', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
     const evidenceRecord = makeEvidenceRecord({
       anchor_id: 'anchor-rich-1',
       anchor: {
@@ -152,16 +174,33 @@ describe('EvidencePreviewPane', () => {
           },
         })}
         evidenceRecords={[evidenceRecord]}
-        onShowInPdf={onShowInPdf}
       />,
       { wrapper },
     )
 
-    fireEvent.click(screen.getByText('Show in PDF'))
-
-    expect(onShowInPdf).toHaveBeenCalledWith(
-      expect.objectContaining({ tag_id: 'tag-1' }),
-      evidenceRecord,
+    await user.click(
+      screen.getByRole('button', {
+        name: /Highlight evidence on PDF: The curated quote from the workspace evidence record\./i,
+      }),
     )
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    expect(onNavigateEvidence.mock.calls[0][0].detail.command).toEqual(
+      expect.objectContaining({
+        anchorId: 'anchor-rich-1',
+        pageNumber: 6,
+        sectionTitle: 'Results',
+        searchText: 'The curated quote from the workspace evidence record.',
+        anchor: expect.objectContaining({
+          locator_quality: 'exact_quote',
+          sentence_text: 'The curated quote from the workspace evidence record.',
+          snippet_text: 'The curated quote from the workspace evidence record.',
+          viewer_search_text: 'The curated quote from the workspace evidence record.',
+          chunk_ids: ['c-rich-1'],
+        }),
+      }),
+    )
+
+    unsubscribe()
   })
 })

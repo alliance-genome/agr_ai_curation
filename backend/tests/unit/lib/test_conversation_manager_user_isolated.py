@@ -421,6 +421,37 @@ class TestAddExchange:
         assert stats["memory_sizes"]["short_term"]["file_count"] == 0
 
 
+class TestPeekSessionStats:
+    """Tests for non-mutating session stat access."""
+
+    def test_peek_session_stats_returns_existing_session_without_creating(self, manager):
+        """Peek should report existing stats and leave session ordering intact."""
+        manager.max_sessions_per_user = 2
+        manager.add_exchange("user_a", "session1", "Hello", "Hi there")
+        manager.add_exchange("user_a", "session2", "Bonjour", "Salut")
+
+        before = manager.get_all_sessions_stats("user_a")["sessions"]
+        stats = manager.peek_session_stats("user_a", "session1")
+        after = manager.get_all_sessions_stats("user_a")["sessions"]
+
+        assert stats is not None
+        assert stats["exchange_count"] == 1
+        assert before == after == ["session1", "session2"]
+
+    def test_peek_session_stats_returns_none_for_missing_session(self, manager):
+        """Peek should stay read-only for unknown sessions."""
+        assert manager.peek_session_stats("user_a", "missing-session") is None
+        stats = manager.get_all_sessions_stats("user_a")
+        assert stats["total_sessions"] == 0
+
+    def test_peek_session_stats_raises_for_cross_user_access(self, manager):
+        """Peek should preserve ownership enforcement."""
+        manager.add_exchange("user_a", "private_session", "msg", "response")
+
+        with pytest.raises(SessionAccessError):
+            manager.peek_session_stats("user_b", "private_session")
+
+
 class TestClearSessionHistory:
     """Tests for clear_session_history method."""
 

@@ -58,6 +58,35 @@ That means the routes do **not** share:
 
 That split is the real source of route drift.
 
+## Post-Host Drift We Still Had
+
+The shared host solved the largest architectural problem, but it did not
+automatically guarantee identical user behavior.
+
+We still had smaller but important seams above the viewer:
+
+- chat evidence was navigated from an explicit quote click
+- curation evidence could still auto-drive the viewer from row selection
+- chat rendered one quote-card UI while curation rendered a different preview UI
+- curation could still carry combined section path strings like
+  `2. Results and Discussion > 2.6. ...` while chat carried section/subsection
+  separately
+
+That meant chat and curation could still feel different even though they were
+talking to the same live PDF.js host.
+
+The requirement is stricter than "same viewer eventually receives an event."
+
+The requirement is:
+
+- same user gesture
+- same navigation command shape
+- same section/subsection normalization
+- same quote-card interaction affordance
+- same viewer outcome
+
+So the persistent host is necessary, but it is not the whole fix.
+
 ## Secondary Ownership Seam
 
 Viewer drift is not the only route seam.
@@ -88,6 +117,10 @@ branches.
 
 Chat already represents the working baseline. This plan is about making
 curation use that same live PDF.js path, not inventing a third behavior.
+
+We are also not preserving curation-only auto-navigation semantics just because
+they existed before. If chat requires an explicit quote click, curation should
+not silently navigate on row selection.
 
 ## Key Architecture Finding
 
@@ -473,16 +506,93 @@ Status:
 - remaining work in this slice is manual dev validation of the long CRB quotes
   on the live shared host
 
-### Slice 5: Cleanup
+### Slice 5: Shared Evidence Interaction Semantics
 
 Goal:
 
-- remove code and docs that only existed to keep split viewers aligned
+- remove the remaining chat/curation interaction drift above the shared viewer
+
+Why this slice exists:
+
+- one shared `PdfViewer` is not enough if chat and curation still dispatch
+  different navigation events under different user gestures
+- the curation interface should not "helpfully" navigate in ways chat does not
+- users should learn one evidence interaction model and get the same result in
+  both places
+
+Work:
+
+- add a shared evidence quote-card component for both chat and curation
+- centralize evidence location-label formatting
+- centralize evidence-navigation event dispatch and debug logging
+- normalize combined curation section path strings into the same
+  `section + subsection` shape chat uses
+- remove curation row-selection auto-navigation so curation navigates on
+  explicit evidence clicks, just like chat
+- keep quote-centric navigation as the only acceptable interaction baseline
+
+Acceptance:
+
+- chat and curation both render clickable quote cards through the same
+  presentation layer
+- chat and curation both dispatch navigation through the same helper
+- row selection in curation reveals evidence but does not move the PDF
+- explicit quote clicks in curation move the PDF exactly like explicit quote
+  clicks in chat
+- combined curation section hierarchy strings are normalized before the viewer
+  sees them
+
+Tests:
+
+- chat quote-card tests pass unchanged in behavior, only updated for shared
+  markup semantics
+- curation entity-table tests prove row selection no longer dispatches PDF
+  navigation
+- curation entity-table tests prove explicit evidence clicks do dispatch PDF
+  navigation
+- navigation adapter tests prove combined curation section path strings are
+  split into chat-like `section` and `subsection` fields
+
+Review:
+
+- run `gpt-5.4 xhigh` review on the slice
+
+Status:
+
+- completed on April 13, 2026
+- shared quote-card/UI layer added for chat and curation evidence interactions
+- shared evidence label formatting and navigation dispatch helpers added
+- curation row-selection auto-navigation removed
+- curation explicit evidence clicks now go through the same shared card model as
+  chat
+- combined curation section path strings are now normalized into separate
+  section/subsection fields before navigation
+- curation preview quote text now derives from the same anchor fields the shared
+  navigation builder uses
+- flattened `EntityTag.evidence` is now adapted into a synthetic
+  `CurationEvidenceRecord` before navigation so curation no longer keeps a
+  second command-construction path alive at the edge
+- mixed-shape anchors with both a combined section path and explicit subsection
+  are now normalized before label rendering and navigation
+- focused frontend coverage is green for the shared interaction slice,
+  including a parity test that clicks equivalent chat and curation quotes and
+  asserts equivalent emitted viewer commands
+
+### Slice 6: Cleanup
+
+Goal:
+
+- remove code and docs that only existed to keep split viewers and split
+  interaction models aligned
 
 Potential cleanup:
 
 - obsolete viewer-ownership comments
 - dead two-viewer assumptions
+- dead curation-only "show in PDF" affordances that duplicate the quote click
+- dead curation-only auto-navigation helpers
+- dead chat-only quote-card assumptions where the shared quote-card is now the
+  baseline
 - temporary instrumentation used only for migration
 - any route-specific rescue logic that became unnecessary after one-host parity
 
@@ -501,6 +611,8 @@ Keep the existing viewer/navigation tests, but add architecture coverage for:
 - mount-count invariants
 - route transition persistence
 - Home and Curation sharing one viewer host
+- shared evidence quote-card behavior across chat and curation
+- normalized curation section/subsection command shape
 
 ### 2. Manual Dev Validation
 
@@ -511,6 +623,9 @@ Required manual checks:
 - click the same evidence sentence from curation
 - confirm the highlight behavior matches chat exactly
 - repeat with the long CRB quotes that previously drifted
+- confirm row selection alone does not move the PDF in curation
+- confirm explicit quote clicks are the only navigation gesture in both
+  surfaces
 - move quickly between Home and Curation while the document is still restoring
   and confirm the correct paper remains loaded
 - verify desktop resizing still feels correct on Home and Curation
@@ -530,8 +645,11 @@ The plan is complete only when all of the following are true:
 - Home and Curation no longer mount separate `PdfViewer` instances
 - the viewer-bearing routes share one live PDF.js host
 - curation does not rely on a distinct rendering path to "match" chat
+- curation does not rely on a distinct interaction model to "match" chat
 - the same quote on the same document highlights the same way from both
   surfaces
+- evidence navigation is triggered by the same explicit quote-click gesture in
+  both chat and curation
 - Home and Curation cannot overwrite each other's active document during route
   transitions
 - the fix is validated on dev before any further production rollout
@@ -545,6 +663,7 @@ We are moving to:
 - one stable viewer host
 - one live PDF.js instance
 - one route-layout ownership model
+- one shared evidence interaction model
 - one native highlight behavior shared by chat and curation
 
 That is the correct architectural fix for the drift problem.

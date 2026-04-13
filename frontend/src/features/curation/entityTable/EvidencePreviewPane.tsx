@@ -1,12 +1,14 @@
-import { Box, Link, Typography } from '@mui/material'
-import { alpha, useTheme } from '@mui/material/styles'
+import { Box, Typography } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
+import EvidenceNavigationQuoteCard from '@/features/curation/evidence/EvidenceNavigationQuoteCard'
+import { deriveNavigationQuoteFromAnchor } from '@/features/curation/evidence/navigationSourceAdapters'
 import type { CurationEvidenceRecord } from '@/features/curation/types'
+import { buildEntityTagNavigationCommand } from './entityTagNavigation'
 import type { EntityTag } from './types'
 
 interface EvidencePreviewPaneProps {
   tag: EntityTag | null
   evidenceRecords?: CurationEvidenceRecord[]
-  onShowInPdf: (tag: EntityTag, evidence?: CurationEvidenceRecord | null) => void
 }
 
 interface EvidencePreviewRecord {
@@ -45,7 +47,7 @@ function buildEvidencePreviewRecords(
   const records = [...evidenceRecords]
     .sort((left, right) => Number(right.is_primary) - Number(left.is_primary))
     .map((record) => {
-      const sentenceText = record.anchor.sentence_text?.trim() || record.anchor.snippet_text?.trim() || ''
+      const sentenceText = deriveNavigationQuoteFromAnchor(record.anchor) ?? ''
       if (!sentenceText) {
         return null
       }
@@ -82,7 +84,6 @@ function buildEvidencePreviewRecords(
 export default function EvidencePreviewPane({
   tag,
   evidenceRecords = [],
-  onShowInPdf,
 }: EvidencePreviewPaneProps) {
   const theme = useTheme()
 
@@ -122,33 +123,36 @@ export default function EvidencePreviewPane({
       </Box>
 
       {previewRecords.map((record) => (
-        <Box
-          key={record.id}
-          sx={{
-            backgroundColor: alpha(theme.palette.background.default, 0.5),
-            borderLeft: `3px solid ${theme.palette.primary.main}`,
-            borderRadius: '0 4px 4px 0',
-            p: 1.5,
-            mb: 1,
-          }}
-        >
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 0.75 }}>
-            <Typography variant="caption" color="text.secondary">
-              {record.pageNumber != null ? `Page ${record.pageNumber}` : 'Page unavailable'}
-              {record.sectionTitle ? ` · ${record.sectionTitle}` : ''}
-            </Typography>
-            <Link
-              component="button"
-              variant="caption"
-              onClick={() => onShowInPdf(tag, record.evidenceRecord)}
-              sx={{ fontSize: '0.7rem' }}
-            >
-              Show in PDF
-            </Link>
-          </Box>
-          <Typography variant="body2" sx={{ lineHeight: 1.6, fontSize: '0.8rem' }}>
-            &ldquo;{renderQuotedSentence(tag, record.sentenceText)}&rdquo;
-          </Typography>
+        <Box key={record.id} sx={{ mb: 1 }}>
+          {(() => {
+            const command = buildEntityTagNavigationCommand(tag, record.evidenceRecord)
+            if (!command) {
+              return (
+                <Typography variant="body2" sx={{ lineHeight: 1.6, fontSize: '0.8rem' }}>
+                  &ldquo;{renderQuotedSentence(tag, record.sentenceText)}&rdquo;
+                </Typography>
+              )
+            }
+
+            return (
+              <EvidenceNavigationQuoteCard
+                command={command}
+                quote={record.sentenceText}
+                quoteContent={renderQuotedSentence(tag, record.sentenceText)}
+                ariaLabel={`Highlight evidence on PDF: ${record.sentenceText}`}
+                appearance="workspace"
+                accentColor={theme.palette.primary.main}
+                debugContext={{
+                  source: 'curation-evidence-preview',
+                  tagId: tag.tag_id,
+                  anchorId: record.evidenceRecord?.anchor_id ?? null,
+                  pageNumber: record.pageNumber,
+                  sectionTitle: record.sectionTitle,
+                  quote: record.sentenceText,
+                }}
+              />
+            )
+          })()}
         </Box>
       ))}
 

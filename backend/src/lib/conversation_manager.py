@@ -279,6 +279,39 @@ Please consider this conversation history when generating your response.
             'history': list(history)
         }
 
+    def peek_session_stats(self, user_id: str, session_id: str) -> Optional[dict]:
+        """Get statistics for an existing session without creating or reordering it.
+
+        Args:
+            user_id: User identifier (Cognito sub claim)
+            session_id: Session identifier
+
+        Returns:
+            Session stats dict when the session already exists, otherwise None.
+
+        Raises:
+            SessionAccessError: If session belongs to different user
+        """
+        owner = self._validate_session_ownership(user_id, session_id)
+        if owner is not None and owner != user_id:
+            raise SessionAccessError(
+                f"Session {session_id} belongs to different user. Access denied."
+            )
+
+        with self._sessions_lock:
+            user_sessions = self._user_sessions.get(user_id)
+            if not user_sessions or session_id not in user_sessions:
+                return None
+
+            history = user_sessions[session_id]
+            return {
+                'session_id': session_id,
+                'user_id': user_id,
+                'exchange_count': len(history),
+                'max_exchanges': self.max_exchanges,
+                'history': list(history)
+            }
+
     def get_all_sessions_stats(self, user_id: str) -> dict:
         """Get statistics for all sessions belonging to user.
 

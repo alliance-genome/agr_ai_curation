@@ -79,6 +79,15 @@ class _DeterministicMapperResult:
     selected_extraction_results: list[CurationExtractionResultRecord]
 
 
+@dataclass(frozen=True)
+class CurationPrepScopeSummary:
+    """Evidence-backed prep availability for a requested extraction scope."""
+
+    candidate_count: int = 0
+    adapter_keys: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
 async def run_curation_prep(
     extraction_results: Sequence[CurationExtractionResultRecord],
     *,
@@ -136,6 +145,55 @@ async def run_curation_prep(
     )
 
     return prep_output
+
+
+def summarize_curation_prep_scope(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    *,
+    adapter_keys: Sequence[str] = (),
+) -> CurationPrepScopeSummary:
+    """Summarize which adapters currently have evidence-backed prep candidates."""
+
+    requested_adapter_keys = _unique_non_empty(adapter_keys)
+    if not requested_adapter_keys:
+        requested_adapter_keys = _unique_non_empty(
+            record.adapter_key for record in extraction_results
+        )
+
+    if not extraction_results or not requested_adapter_keys:
+        return CurationPrepScopeSummary()
+
+    total_candidate_count = 0
+    preparable_adapter_keys: list[str] = []
+    warnings: list[str] = []
+
+    for adapter_key in requested_adapter_keys:
+        scoped_results, scope_notes = _filter_extraction_results_for_scope(
+            extraction_results,
+            CurationPrepScopeConfirmation(
+                confirmed=True,
+                adapter_keys=[adapter_key],
+                notes=[],
+            ),
+        )
+        if not scoped_results:
+            continue
+
+        mapper_result = _map_extraction_results_to_candidates(
+            scoped_results,
+            scope_notes=scope_notes,
+        )
+        candidate_count = len(mapper_result.candidates)
+        if candidate_count > 0:
+            preparable_adapter_keys.append(adapter_key)
+            total_candidate_count += candidate_count
+        warnings.extend(mapper_result.warnings)
+
+    return CurationPrepScopeSummary(
+        candidate_count=total_candidate_count,
+        adapter_keys=preparable_adapter_keys,
+        warnings=_dedupe_strings(warnings),
+    )
 
 
 def _map_extraction_results_to_candidates(
@@ -275,11 +333,39 @@ def _candidate_blueprints(
     *,
     candidate_adapter_key: str,
 ) -> list[_CandidateBlueprint]:
-    raw_items = payload.get("items")
-    if not isinstance(raw_items, list):
-        return []
-
     evidence_records_by_id = _evidence_records_by_id(payload)
+    raw_items = payload.get("items")
+    blueprints = _build_candidate_blueprints_from_items(
+        extraction_result,
+        raw_items if isinstance(raw_items, list) else [],
+        evidence_records_by_id=evidence_records_by_id,
+        candidate_adapter_key=candidate_adapter_key,
+    )
+    if blueprints or not isinstance(raw_items, list):
+        return blueprints
+
+    specialized_items = _specialized_source_items(
+        payload,
+        candidate_adapter_key=candidate_adapter_key,
+    )
+    if not specialized_items:
+        return blueprints
+
+    return _build_candidate_blueprints_from_items(
+        extraction_result,
+        specialized_items,
+        evidence_records_by_id=evidence_records_by_id,
+        candidate_adapter_key=candidate_adapter_key,
+    )
+
+
+def _build_candidate_blueprints_from_items(
+    extraction_result: CurationExtractionResultRecord,
+    raw_items: Sequence[Mapping[str, Any]],
+    *,
+    evidence_records_by_id: Mapping[str, Mapping[str, Any]],
+    candidate_adapter_key: str,
+) -> list[_CandidateBlueprint]:
     blueprints: list[_CandidateBlueprint] = []
 
     for candidate_index, raw_item in enumerate(raw_items, start=1):
@@ -307,6 +393,69 @@ def _candidate_blueprints(
         )
 
     return blueprints
+
+
+def _specialized_source_items(
+    payload: Mapping[str, Any],
+    *,
+    candidate_adapter_key: str,
+) -> list[dict[str, Any]]:
+    if candidate_adapter_key == "allele":
+        return _specialized_items_from_collection(
+            payload.get("alleles"),
+            entity_type="allele",
+            label_keys=("normalized_symbol", "mention"),
+            passthrough_keys=(
+                "mention",
+                "associated_gene",
+                "normalized_symbol",
+                "confidence",
+            ),
+        )
+    return []
+
+
+def _specialized_items_from_collection(
+    raw_collection: Any,
+    *,
+    entity_type: str,
+    label_keys: Sequence[str],
+    passthrough_keys: Sequence[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_collection, list):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for raw_item in raw_collection:
+        if not isinstance(raw_item, Mapping):
+            continue
+        mention = _normalized_optional_string(raw_item.get("mention"))
+        label = _first_non_empty_string(raw_item, *label_keys)
+        evidence_record_ids = _normalized_evidence_record_ids(raw_item.get("evidence_record_ids"))
+
+        synthesized_item = {
+            "label": label or mention,
+            "entity_type": entity_type,
+            "normalized_id": raw_item.get("normalized_id"),
+            "source_mentions": [mention] if mention else [],
+            "evidence_record_ids": evidence_record_ids,
+        }
+        for key in passthrough_keys:
+            if key in {"mention", "normalized_id"}:
+                synthesized_item[key] = raw_item.get(key)
+                continue
+            synthesized_item[key] = raw_item.get(key)
+        items.append(synthesized_item)
+
+    return items
+
+
+def _first_non_empty_string(raw_item: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = _normalized_optional_string(raw_item.get(key))
+        if value:
+            return value
+    return None
 
 
 def _candidate_payload_from_item(
@@ -708,5 +857,7 @@ def _dedupe_strings(values: Iterable[str]) -> list[str]:
 
 __all__ = [
     "CurationPrepPersistenceContext",
+    "CurationPrepScopeSummary",
     "run_curation_prep",
+    "summarize_curation_prep_scope",
 ]

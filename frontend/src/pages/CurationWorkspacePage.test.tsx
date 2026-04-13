@@ -443,22 +443,20 @@ describe('CurationWorkspacePage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText((_, element) =>
-          element?.tagName.toLowerCase() === 'p' &&
-          (element.textContent?.includes('APOE evidence sentence') ?? false),
-        ),
+        screen.getByRole('button', {
+          name: /Highlight evidence on PDF: APOE evidence sentence/i,
+        }),
       ).toBeInTheDocument()
     })
 
     expect(screen.getByText(/Evidence for/i)).toBeInTheDocument()
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName.toLowerCase() === 'p'
-        && (element.textContent?.includes('APOE follow-up evidence sentence') ?? false),
-      ),
+      screen.getByRole('button', {
+        name: /Highlight evidence on PDF: APOE follow-up evidence sentence/i,
+      }),
     ).toBeInTheDocument()
     expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
-    expect(screen.getAllByText('Show in PDF')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /Highlight evidence on PDF:/i })).toHaveLength(2)
   })
 
   it('submits inline accept actions through the workspace decision service', async () => {

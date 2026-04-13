@@ -5,13 +5,7 @@ import {
   buildQuoteCentricEvidenceNavigationCommand,
   normalizeEvidenceNavigationText,
 } from './navigationCommandBuilder'
-
-export interface LegacyEntityTagEvidenceNavigationSource {
-  sentence_text: string | null
-  page_number?: number | null
-  section_title?: string | null
-  chunk_ids?: string[] | null
-}
+import { normalizeEvidenceSectionHierarchy } from './navigationPresentation'
 
 function buildAnchorToken(value: string, fallback: string): string {
   const normalized = value
@@ -34,7 +28,7 @@ function buildChatEvidenceAnchorId(evidenceRecord: EvidenceRecord): string {
   ].join(':')
 }
 
-function deriveNavigationQuoteFromAnchor(
+export function deriveNavigationQuoteFromAnchor(
   anchor: Pick<
     EvidenceAnchor,
     'sentence_text' | 'snippet_text' | 'normalized_text' | 'viewer_search_text'
@@ -51,9 +45,13 @@ function buildAnchorContextNavigationCommand(args: {
   anchor: EvidenceAnchor
   mode: EvidenceNavigationCommand['mode']
 }): EvidenceNavigationCommand | null {
+  const normalizedHierarchy = normalizeEvidenceSectionHierarchy(
+    args.anchor.section_title,
+    args.anchor.subsection_title,
+  )
   const searchText = normalizeEvidenceNavigationText(args.anchor.viewer_search_text)
   const pageNumber = args.anchor.page_number ?? null
-  const sectionTitle = normalizeEvidenceNavigationText(args.anchor.section_title)
+  const sectionTitle = normalizedHierarchy.sectionTitle
   const hasNavigableContext = searchText !== null
     || pageNumber !== null
     || sectionTitle !== null
@@ -65,7 +63,11 @@ function buildAnchorContextNavigationCommand(args: {
 
   return {
     anchorId: args.anchorId,
-    anchor: args.anchor,
+    anchor: {
+      ...args.anchor,
+      section_title: normalizedHierarchy.sectionTitle,
+      subsection_title: normalizedHierarchy.subsectionTitle,
+    },
     searchText,
     pageNumber,
     sectionTitle,
@@ -118,32 +120,6 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
     quote,
     pageNumber: evidenceRecord.anchor.page_number ?? null,
     sectionTitle: evidenceRecord.anchor.section_title ?? null,
-    mode,
-  })
-}
-
-export function buildNavigationCommandFromLegacyEntityTagEvidence(
-  anchorId: string,
-  evidence: LegacyEntityTagEvidenceNavigationSource,
-  mode: EvidenceNavigationCommand['mode'] = 'select',
-): EvidenceNavigationCommand | null {
-  const quote = normalizeEvidenceNavigationText(evidence.sentence_text)
-  if (!quote) return null
-
-  return buildQuoteCentricEvidenceNavigationCommand({
-    anchorId,
-    anchor: {
-      anchor_kind: 'sentence',
-      locator_quality: 'exact_quote',
-      supports_decision: 'supports',
-      viewer_highlightable: true,
-      page_number: evidence.page_number ?? null,
-      section_title: evidence.section_title ?? null,
-      chunk_ids: evidence.chunk_ids ?? [],
-    },
-    quote,
-    pageNumber: evidence.page_number ?? null,
-    sectionTitle: evidence.section_title ?? null,
     mode,
   })
 }
