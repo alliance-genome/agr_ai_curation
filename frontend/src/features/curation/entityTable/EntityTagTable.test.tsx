@@ -229,6 +229,54 @@ describe('EntityTagTable', () => {
     window.removeEventListener('pdf-viewer-navigate-evidence', listener)
   })
 
+  it('prefers richer workspace evidence over flattened row preview evidence when dispatching PDF navigation', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-navigate-evidence', listener)
+
+    const tagsWithNoisyPreview = makeTags().map((tag) => (
+      tag.tag_id === 'tag-1'
+        ? {
+            ...tag,
+            evidence: {
+              sentence_text: 'Results: The daf-2 receptor regulates lifespan.',
+              page_number: 3,
+              section_title: 'Results',
+              chunk_ids: ['c1'],
+            },
+          }
+        : tag
+    ))
+
+    render(
+      <EntityTagTable
+        tags={tagsWithNoisyPreview}
+        candidateEvidenceByTagId={makeEvidenceRecordsByTagId()}
+        selectedTagId="tag-1"
+        onSelectTag={vi.fn()}
+        onAcceptTag={vi.fn()}
+        onRejectTag={vi.fn()}
+        onAcceptAllValidated={vi.fn()}
+        onSaveTag={vi.fn()}
+        onCreateManualTag={vi.fn(async () => 'manual-1')}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalled()
+    })
+
+    const event = listener.mock.calls.at(-1)?.[0] as CustomEvent<
+      { command: { searchText: string; anchorId: string } }
+    >
+    expect(event.detail.command.anchorId).toBe('anchor-1')
+    expect(event.detail.command.searchText).toBe(
+      'The daf-2 receptor regulates lifespan.',
+    )
+
+    window.removeEventListener('pdf-viewer-navigate-evidence', listener)
+  })
+
   it('does not redispatch PDF navigation when the selected tag object is refreshed with the same id', async () => {
     const listener = vi.fn()
     window.addEventListener('pdf-viewer-navigate-evidence', listener)
@@ -270,6 +318,75 @@ describe('EntityTagTable', () => {
     await waitFor(() => {
       expect(listener).toHaveBeenCalledTimes(1)
     })
+
+    window.removeEventListener('pdf-viewer-navigate-evidence', listener)
+  })
+
+  it('redispatches PDF navigation when the selected anchor payload changes under the same anchor id', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-navigate-evidence', listener)
+
+    const evidenceByTagId = makeEvidenceRecordsByTagId()
+    const { rerender } = render(
+      <EntityTagTable
+        tags={makeTags()}
+        candidateEvidenceByTagId={evidenceByTagId}
+        selectedTagId="tag-1"
+        onSelectTag={vi.fn()}
+        onAcceptTag={vi.fn()}
+        onRejectTag={vi.fn()}
+        onAcceptAllValidated={vi.fn()}
+        onSaveTag={vi.fn()}
+        onCreateManualTag={vi.fn(async () => 'manual-1')}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    listener.mockClear()
+
+    rerender(
+      <EntityTagTable
+        tags={makeTags()}
+        candidateEvidenceByTagId={{
+          ...evidenceByTagId,
+          'tag-1': [
+            {
+              ...evidenceByTagId['tag-1'][0]!,
+              anchor: {
+                ...evidenceByTagId['tag-1'][0]!.anchor,
+                sentence_text: 'The updated daf-2 evidence sentence.',
+                snippet_text: 'The updated daf-2 evidence sentence.',
+                viewer_search_text: 'Results: The updated daf-2 evidence sentence.',
+              },
+            },
+            ...evidenceByTagId['tag-1'].slice(1),
+          ],
+        }}
+        selectedTagId="tag-1"
+        onSelectTag={vi.fn()}
+        onAcceptTag={vi.fn()}
+        onRejectTag={vi.fn()}
+        onAcceptAllValidated={vi.fn()}
+        onSaveTag={vi.fn()}
+        onCreateManualTag={vi.fn(async () => 'manual-1')}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    const event = listener.mock.calls.at(-1)?.[0] as CustomEvent<
+      { command: { searchText: string } }
+    >
+    expect(event.detail.command.searchText).toBe(
+      'The updated daf-2 evidence sentence.',
+    )
 
     window.removeEventListener('pdf-viewer-navigate-evidence', listener)
   })

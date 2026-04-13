@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useReducer, useRef } from 'react'
 
 import type { CurationEvidenceRecord } from '../types'
+import { buildNavigationCommandFromCurationEvidenceRecord } from './navigationSourceAdapters'
 import type {
   EvidenceNavigationCommand,
   EvidenceNavigationState,
@@ -42,15 +43,8 @@ const INITIAL_NAVIGATION_STATE: EvidenceNavigationRuntimeState = {
 function buildNavigationCommand(
   evidence: CurationEvidenceRecord,
   mode: EvidenceNavigationCommand['mode']
-): EvidenceNavigationCommand {
-  return {
-    anchorId: evidence.anchor_id,
-    anchor: evidence.anchor,
-    searchText: evidence.anchor.viewer_search_text ?? null,
-    pageNumber: evidence.anchor.page_number ?? null,
-    sectionTitle: evidence.anchor.section_title ?? null,
-    mode,
-  }
+): EvidenceNavigationCommand | null {
+  return buildNavigationCommandFromCurationEvidenceRecord(evidence, mode)
 }
 
 function isSameEvidence(
@@ -81,11 +75,11 @@ function evidenceNavigationReducer(
         }
       }
 
-      return {
-        selectedEvidence: action.evidence,
-        hoveredEvidence: null,
-        pendingNavigation: buildNavigationCommand(action.evidence, 'select'),
-      }
+        return {
+          selectedEvidence: action.evidence,
+          hoveredEvidence: null,
+          pendingNavigation: buildNavigationCommand(action.evidence, 'select'),
+        }
     case 'hover':
       if (action.evidence === null) {
         if (state.hoveredEvidence === null) {

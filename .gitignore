@@ -33,7 +33,7 @@ npm-debug.log*
 .npm
 .eslintcache
 frontend/dist/
-frontend/dist-codex-build-*/
+frontend/dist-codex-*/
 frontend/build/
 
 # Docker

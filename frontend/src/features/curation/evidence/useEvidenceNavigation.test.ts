@@ -27,7 +27,8 @@ function createEvidenceRecord(
       anchor_kind: 'snippet',
       locator_quality: 'exact_quote',
       supports_decision: 'supports',
-      snippet_text: `Snippet for ${anchorId}`,
+      sentence_text: `Search text for ${anchorId}`,
+      snippet_text: `Search text for ${anchorId}`,
       viewer_search_text: `Search text for ${anchorId}`,
       page_number: 3,
       section_title: 'Results',
@@ -114,7 +115,11 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
-      anchor: evidence.anchor,
+      anchor: expect.objectContaining({
+        ...evidence.anchor,
+        normalized_text: 'Search text for anchor-1',
+        viewer_highlightable: true,
+      }),
       searchText: 'Search text for anchor-1',
       pageNumber: 3,
       sectionTitle: 'Results',
@@ -146,7 +151,11 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.hoveredEvidence).toBe(hoveredEvidence)
     expect(result.current.pendingNavigation).toEqual({
       anchorId: hoveredEvidence.anchor_id,
-      anchor: hoveredEvidence.anchor,
+      anchor: expect.objectContaining({
+        ...hoveredEvidence.anchor,
+        normalized_text: 'Search text for anchor-2',
+        viewer_highlightable: true,
+      }),
       searchText: 'Search text for anchor-2',
       pageNumber: 8,
       sectionTitle: 'Discussion',
@@ -160,7 +169,11 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
       anchorId: selectedEvidence.anchor_id,
-      anchor: selectedEvidence.anchor,
+      anchor: expect.objectContaining({
+        ...selectedEvidence.anchor,
+        normalized_text: 'Search text for anchor-1',
+        viewer_highlightable: true,
+      }),
       searchText: 'Search text for anchor-1',
       pageNumber: 3,
       sectionTitle: 'Results',
@@ -215,8 +228,13 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.hoveredEvidence).toBeNull()
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
-      anchor: evidence.anchor,
-      searchText: null,
+      anchor: expect.objectContaining({
+        ...evidence.anchor,
+        normalized_text: 'Search text for anchor-1',
+        viewer_highlightable: true,
+        viewer_search_text: 'Search text for anchor-1',
+      }),
+      searchText: 'Search text for anchor-1',
       pageNumber: 5,
       sectionTitle: null,
       mode: 'select',
@@ -320,5 +338,69 @@ describe('useEvidenceNavigation', () => {
     expect(getLatestHookValue().selectedEvidence).toBeNull()
     expect(getLatestHookValue().hoveredEvidence).toBeNull()
     expect(getLatestHookValue().pendingNavigation).toBeNull()
+  })
+
+  it('prefers the human-visible sentence quote over noisier persisted viewer search text', () => {
+    const evidence = createEvidenceRecord('anchor-quote-priority', {
+      anchor: {
+        sentence_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+        snippet_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+        viewer_search_text: '2.3. crb accumulated to a higher molar abundance in mutant fly eyes.',
+      },
+    })
+    const evidenceRecords = [evidence]
+
+    const { result } = renderHook(() =>
+      useEvidenceNavigation({ evidence: evidenceRecords })
+    )
+
+    act(() => {
+      result.current.navigateToEvidence(evidence)
+    })
+
+    expect(result.current.pendingNavigation).toEqual({
+      anchorId: evidence.anchor_id,
+      anchor: expect.objectContaining({
+        locator_quality: 'exact_quote',
+        sentence_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+        snippet_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+        viewer_search_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+      }),
+      searchText: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
+      pageNumber: 3,
+      sectionTitle: 'Results',
+      mode: 'select',
+    })
+  })
+
+  it('keeps degraded non-quote anchors navigable through section and page context', () => {
+    const evidence = createEvidenceRecord('anchor-section-only', {
+      anchor: {
+        locator_quality: 'section_only',
+        sentence_text: null,
+        snippet_text: null,
+        viewer_search_text: null,
+        page_number: 9,
+        section_title: 'Discussion',
+      },
+    })
+    const evidenceRecords = [evidence]
+
+    const { result } = renderHook(() =>
+      useEvidenceNavigation({ evidence: evidenceRecords })
+    )
+
+    act(() => {
+      result.current.navigateToEvidence(evidence)
+    })
+
+    expect(result.current.pendingNavigation).toEqual({
+      anchorId: evidence.anchor_id,
+      anchor: evidence.anchor,
+      searchText: null,
+      pageNumber: 9,
+      sectionTitle: 'Discussion',
+      mode: 'select',
+    })
   })
 })

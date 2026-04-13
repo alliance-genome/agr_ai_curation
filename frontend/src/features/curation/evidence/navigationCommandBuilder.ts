@@ -28,6 +28,9 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   const quote = args.quote.trim()
   const anchor: EvidenceAnchor = {
     ...args.anchor,
+    // Quote-centric viewer navigation should describe the command we are issuing
+    // now, not preserve historical anchor-quality metadata from persistence.
+    locator_quality: 'exact_quote',
     snippet_text: quote,
     sentence_text: quote,
     normalized_text: quote,

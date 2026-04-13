@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '../../test/test-utils'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import {
+  buildNavigationCommandFromChatEvidenceRecord,
+  buildNavigationCommandFromCurationEvidenceRecord,
+} from '@/features/curation/evidence/navigationSourceAdapters'
+import {
   fuzzyMatchPdfEvidenceQuote,
   type PdfEvidenceFuzzyMatchRequest,
   type PdfEvidenceFuzzyMatchResult,
@@ -1294,6 +1298,151 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(getNativeSelectedHighlights(iframe).length).toBeGreaterThan(0)
     expect(eventBus.findbarCloseCount).toBe(1)
+  })
+
+  it('matches equivalent chat and curation evidence commands the same way in the shared viewer', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+    const crbQuote =
+      'these, crb 11A22 (null allele) and crb 8F105 (point mutation encoding a truncated protein lacking 23 amino acids), display abnormal PRC morphology in adult eyes, with bulky and closely apposed rhabdomeres'
+
+    render(
+      <PdfViewer
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    dispatchPDFDocumentChanged('doc-equivalent', '/fixtures/sample.pdf', 'equivalent.pdf', 9)
+    await waitFor(() => {
+      expect(screen.getByText('equivalent.pdf')).toBeInTheDocument()
+    })
+
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: (query) => ({
+        state: query === crbQuote ? 0 : 1,
+        total: query === crbQuote ? 1 : 0,
+        current: query === crbQuote ? 1 : 0,
+        pageIdx: query === crbQuote ? 6 : null,
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Introduction'] },
+        { pageNumber: 2, textSegments: ['Methods'] },
+        { pageNumber: 3, textSegments: ['Background'] },
+        { pageNumber: 4, textSegments: ['Controls'] },
+        { pageNumber: 5, textSegments: ['Additional results'] },
+        { pageNumber: 6, textSegments: ['Discussion'] },
+        { pageNumber: 7, textSegments: [crbQuote] },
+      ],
+    })
+
+    fireEvent.load(iframe)
+    window.setTimeout(() => {
+      const iframeDocument = iframe.contentWindow?.document
+      const textLayer = iframeDocument?.querySelector<HTMLElement>(
+        '.page[data-page-number="7"] .textLayer',
+      )
+      if (!iframeDocument || !textLayer) {
+        return
+      }
+
+      const nativeHighlight = iframeDocument.createElement('span')
+      nativeHighlight.className = 'highlight selected'
+      nativeHighlight.textContent = crbQuote
+      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (6 * 900) + 72, 520, 20)
+      textLayer.appendChild(nativeHighlight)
+      eventBus.dispatch('updatetextlayermatches', { pageIndex: 6 })
+    }, 150)
+
+    const chatCommand = buildNavigationCommandFromChatEvidenceRecord({
+      entity: 'crb',
+      verified_quote: crbQuote,
+      page: 7,
+      section: 'Results',
+      subsection: 'Photoreceptor Morphology',
+      chunk_id: 'chunk-crb-7',
+      figure_reference: 'Figure 2',
+    })
+    const curationCommand = buildNavigationCommandFromCurationEvidenceRecord({
+      anchor_id: 'anchor-crb-7',
+      candidate_id: 'candidate-1',
+      source: 'extracted',
+      field_keys: ['gene_symbol'],
+      field_group_keys: ['identity'],
+      is_primary: true,
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        sentence_text: crbQuote,
+        snippet_text: crbQuote,
+        normalized_text: crbQuote,
+        viewer_search_text: `Results: ${crbQuote}`,
+        viewer_highlightable: true,
+        page_number: 7,
+        section_title: 'Results',
+        subsection_title: 'Photoreceptor Morphology',
+        figure_reference: 'Figure 2',
+        chunk_ids: ['chunk-crb-7'],
+      },
+      created_at: '2026-04-13T00:00:00Z',
+      updated_at: '2026-04-13T00:00:00Z',
+      warnings: [],
+    })
+
+    expect(curationCommand).not.toBeNull()
+
+    dispatchPDFViewerNavigateEvidence(chatCommand)
+
+    await waitFor(() => {
+      expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+        status: 'matched',
+        degraded: false,
+        matchedPage: 7,
+        matchedQuery: crbQuote,
+      }))
+    })
+
+    const chatNavigationState = onNavigationStateChange.mock.calls.at(-1)?.[0]
+    onNavigationComplete.mockClear()
+    onNavigationStateChange.mockClear()
+
+    dispatchPDFViewerNavigateEvidence(curationCommand!)
+
+    await waitFor(() => {
+      expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+        status: 'matched',
+        degraded: false,
+        matchedPage: 7,
+        matchedQuery: crbQuote,
+      }))
+    })
+
+    const curationNavigationState = onNavigationStateChange.mock.calls.at(-1)?.[0]
+
+    expect(eventBus.findQueries).toEqual([crbQuote, crbQuote])
+    expect(chatNavigationState).toEqual(expect.objectContaining({
+      status: 'matched',
+      degraded: false,
+      matchedPage: 7,
+      matchedQuery: crbQuote,
+    }))
+    expect(curationNavigationState).toEqual(expect.objectContaining({
+      status: 'matched',
+      degraded: false,
+      matchedPage: 7,
+      matchedQuery: crbQuote,
+    }))
+    expect(curationNavigationState?.locatorQuality).toBe(
+      chatNavigationState?.locatorQuality,
+    )
+    expect(curationNavigationState?.attemptedQueries).toEqual(
+      chatNavigationState?.attemptedQueries,
+    )
+    expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    expect(getNativeSelectedHighlights(iframe).length).toBeGreaterThan(0)
   })
 
   it('reports document-global match counts when reusing an existing native PDF.js highlight', async () => {

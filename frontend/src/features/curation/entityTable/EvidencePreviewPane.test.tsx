@@ -122,4 +122,46 @@ describe('EvidencePreviewPane', () => {
     ).toBeInTheDocument()
     expect(screen.getAllByText('Show in PDF')).toHaveLength(2)
   })
+
+  it('passes the selected richer evidence record back to the review table when Show in PDF is clicked', () => {
+    const onShowInPdf = vi.fn()
+    const evidenceRecord = makeEvidenceRecord({
+      anchor_id: 'anchor-rich-1',
+      anchor: {
+        anchor_kind: 'snippet',
+        locator_quality: 'normalized_quote',
+        supports_decision: 'supports',
+        sentence_text: 'The curated quote from the workspace evidence record.',
+        snippet_text: 'The curated quote from the workspace evidence record.',
+        viewer_search_text: 'Results: The curated quote from the workspace evidence record.',
+        viewer_highlightable: true,
+        page_number: 6,
+        section_title: 'Results',
+        chunk_ids: ['c-rich-1'],
+      },
+    })
+
+    render(
+      <EvidencePreviewPane
+        tag={makeTag({
+          evidence: {
+            sentence_text: 'Results: The curated quote from the row preview.',
+            page_number: 6,
+            section_title: 'Results',
+            chunk_ids: ['c-rich-1'],
+          },
+        })}
+        evidenceRecords={[evidenceRecord]}
+        onShowInPdf={onShowInPdf}
+      />,
+      { wrapper },
+    )
+
+    fireEvent.click(screen.getByText('Show in PDF'))
+
+    expect(onShowInPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_id: 'tag-1' }),
+      evidenceRecord,
+    )
+  })
 })

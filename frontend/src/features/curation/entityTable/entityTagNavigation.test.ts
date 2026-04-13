@@ -119,6 +119,6 @@ describe('buildEntityTagNavigationCommand', () => {
     expect(command?.anchor.sentence_text).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
     expect(command?.anchor.viewer_search_text).toBe('crb accumulated to a higher molar abundance in mutant fly eyes.')
     expect(command?.anchor.subsection_title).toBe('The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes')
-    expect(command?.anchor.locator_quality).toBe('normalized_quote')
+    expect(command?.anchor.locator_quality).toBe('exact_quote')
   })
 })
